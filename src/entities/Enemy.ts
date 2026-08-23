@@ -29,6 +29,10 @@ export class Enemy {
   private legR!: THREE.Mesh;
   private armL!: THREE.Group;
   private armR!: THREE.Group;
+  /** Forearm groups, pivoted at the elbows. */
+  private foreL!: THREE.Group;
+  private foreR!: THREE.Group;
+  private static woundMat: THREE.MeshBasicMaterial | null = null;
   private head!: THREE.Mesh;
   private torso!: THREE.Mesh;
   private rifle!: THREE.Group;
@@ -236,23 +240,30 @@ export class Enemy {
     }
 
     // Arms: suit sleeves, white cuff, black gloves (pivot at shoulders)
-    const mkArm = (side: number): THREE.Group => {
+    // Upper arm pivots at the shoulder; forearm (cuff + glove) pivots at the elbow
+    const mkArm = (side: number): [THREE.Group, THREE.Group] => {
       const g = new THREE.Group();
       g.position.set(side * 0.29, 1.4, 0);
-      const arm = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.58, 0.14), suit), 'arm');
-      arm.position.set(0, -0.26, 0);
-      g.add(arm);
+      const upper = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.29, 0.14), suit), 'arm');
+      upper.position.set(0, -0.145, 0);
+      g.add(upper);
+      const fore = new THREE.Group();
+      fore.position.set(0, -0.29, 0); // elbow
+      const lower = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.29, 0.13), suit), 'arm');
+      lower.position.set(0, -0.145, 0);
+      fore.add(lower);
       const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.03, 0.145), shirt);
-      cuff.position.set(0, -0.53, 0);
-      g.add(cuff);
+      cuff.position.set(0, -0.24, 0);
+      fore.add(cuff);
       const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.1), glove);
-      hand.position.set(0, -0.6, 0);
-      g.add(hand);
+      hand.position.set(0, -0.31, 0);
+      fore.add(hand);
+      g.add(fore);
       this.root.add(g);
-      return g;
+      return [g, fore];
     };
-    this.armL = mkArm(-1);
-    this.armR = mkArm(1);
+    [this.armL, this.foreL] = mkArm(-1);
+    [this.armR, this.foreR] = mkArm(1);
 
     // Rifle held by the right arm
     this.rifle = new THREE.Group();
@@ -267,8 +278,8 @@ export class Enemy {
     this.rifle.add(stock);
     this.muzzle.position.set(0, 0.01, -0.36);
     this.rifle.add(this.muzzle);
-    this.rifle.position.set(-0.12, -0.5, -0.12);
-    this.armR.add(this.rifle);
+    this.rifle.position.set(-0.12, -0.21, -0.12); // held in the right hand (forearm frame, origin at the elbow)
+    this.foreR.add(this.rifle);
   }
 
   muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
@@ -333,8 +344,10 @@ export class Enemy {
     const limbs: Record<string, Limb> = {
       torso: { visual: this.torso, center: new THREE.Vector3(0, 1.13, 0), half: new THREE.Vector3(0.23, 0.31, 0.13), mass: 30 },
       head: { visual: this.head, center: new THREE.Vector3(0, 1.62, 0), half: new THREE.Vector3(0.12, 0.13, 0.12), mass: 5, sphere: 0.13 },
-      armL: { visual: this.armL, center: new THREE.Vector3(-0.29, 1.12, 0), half: new THREE.Vector3(0.06, 0.29, 0.07), mass: 4 },
-      armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.12, 0), half: new THREE.Vector3(0.06, 0.29, 0.07), mass: 5 },
+      armL: { visual: this.armL, center: new THREE.Vector3(-0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
+      armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
+      foreL: { visual: this.foreL, center: new THREE.Vector3(-0.29, 0.965, 0), half: new THREE.Vector3(0.055, 0.145, 0.065), mass: 1.8 },
+      foreR: { visual: this.foreR, center: new THREE.Vector3(0.29, 0.965, 0), half: new THREE.Vector3(0.055, 0.145, 0.065), mass: 2.5 },
       legL: { visual: this.legL, center: new THREE.Vector3(-0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 },
       legR: { visual: this.legR, center: new THREE.Vector3(0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 }
     };
@@ -361,7 +374,8 @@ export class Enemy {
       this.root.remove(limb.visual);
       limb.visual.position.set(0, 0, 0);
       limb.visual.rotation.set(0, 0, 0);
-      if (name === 'armL' || name === 'armR') limb.visual.position.y = 0.28; // shoulder pivot sits above the arm's centre
+      // Arm groups pivot at the shoulder / elbow; their bodies are centred 0.145 below that
+      if (name.startsWith('arm') || name.startsWith('fore')) limb.visual.position.y = 0.145;
       container.add(limb.visual);
       this.ragdoll.push({ body, container });
       this.ragdollByName.set(name, body);
@@ -380,6 +394,8 @@ export class Enemy {
     joint('torso', 'head', new THREE.Vector3(0, 1.47, 0));
     joint('torso', 'armL', new THREE.Vector3(-0.29, 1.4, 0));
     joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0));
+    joint('armL', 'foreL', new THREE.Vector3(-0.29, 1.11, 0)); // elbows
+    joint('armR', 'foreR', new THREE.Vector3(0.29, 1.11, 0));
     joint('torso', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
     joint('torso', 'legR', new THREE.Vector3(0.115, 0.82, 0));
 
@@ -439,11 +455,58 @@ export class Enemy {
       torsoB.angularVelocity.set(axis.x * 3 * hi, (r() - 0.5) * 3, axis.z * 3 * hi);
     }
     void headB;
+    // The wound itself: a bullet hole with blood, stuck to whichever limb was
+    // hit, facing back along the bullet — it rides with the ragdoll.
+    if (!Enemy.woundMat) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      g.clearRect(0, 0, 64, 64);
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.random() * 22;
+        const rr = 3 + Math.random() * 8;
+        g.fillStyle = `rgba(${100 + Math.random() * 60},6,8,${0.5 + Math.random() * 0.4})`;
+        g.beginPath();
+        g.ellipse(32 + Math.cos(a) * d, 32 + Math.sin(a) * d, rr, rr * 0.6, a, 0, Math.PI * 2);
+        g.fill();
+      }
+      const grad = g.createRadialGradient(32, 32, 1, 32, 32, 9);
+      grad.addColorStop(0, 'rgba(8,3,3,1)');
+      grad.addColorStop(0.6, 'rgba(40,6,6,0.95)');
+      grad.addColorStop(1, 'rgba(90,10,10,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      Enemy.woundMat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+        side: THREE.DoubleSide
+      });
+    }
+    const struckEntry = this.ragdoll.find((r) => r.body === struck);
+    if (struckEntry) {
+      const wound = new THREE.Mesh(new THREE.PlaneGeometry(0.16 + Math.random() * 0.08, 0.16 + Math.random() * 0.08), Enemy.woundMat);
+      const inward = bulletDir.clone().normalize();
+      // Entry point sits on the limb's surface; face the plane back at the shooter
+      wound.position.copy(hitPoint).addScaledVector(inward, -0.012);
+      wound.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), inward.clone().negate());
+      wound.rotateZ(Math.random() * Math.PI * 2);
+      struckEntry.container.updateWorldMatrix(true, false);
+      struckEntry.container.attach(wound); // keeps its world pose, now rides with the limb
+      wound.renderOrder = 3;
+    }
+
     // The rifle leaves their hands: it becomes its own body and clatters away
     this.rifle.updateWorldMatrix(true, false);
     const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());
     const gunQ = this.rifle.getWorldQuaternion(new THREE.Quaternion());
-    this.armR.remove(this.rifle);
+    this.foreR.remove(this.rifle);
     this.rifle.position.copy(gunPos);
     this.rifle.quaternion.copy(gunQ);
     parent.add(this.rifle);
@@ -506,6 +569,9 @@ export class Enemy {
     this.armR.rotation.x = raise + armSwing * (1 - this.aimBlend);
     this.armL.rotation.x = raise * 0.9 - armSwing * (1 - this.aimBlend);
     this.armL.rotation.z = 0.35 * this.aimBlend;
+    // Elbows: bent to hold the rifle when aiming, loose swing while walking
+    this.foreR.rotation.x = -0.55 * this.aimBlend - Math.max(0, armSwing) * 0.6 * (1 - this.aimBlend);
+    this.foreL.rotation.x = -0.9 * this.aimBlend - Math.max(0, -armSwing) * 0.6 * (1 - this.aimBlend);
 
     // Subtle idle breathing
     this.torso.position.y = 1.13 + Math.sin(this.walkPhase * 0.3) * 0.008;

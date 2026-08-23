@@ -31,6 +31,10 @@ export class MainMenuScene implements GameScene {
   private guardHead!: THREE.Mesh;
   private guardFoot!: THREE.Mesh;
   private tubeLight!: THREE.PointLight;
+  private headHole!: THREE.Mesh;
+  private puddle!: THREE.Mesh;
+  private holeWorld: THREE.Vector3 | null = null;
+  private drops: { mesh: THREE.Mesh; t: number }[] = [];
   private tubeMat!: THREE.MeshStandardMaterial;
   private mouse = { x: 0, y: 0 };
   private mouseHandler = (e: MouseEvent): void => {
@@ -125,14 +129,20 @@ export class MainMenuScene implements GameScene {
     s.add(this.guardHead);
     // The reason he's so relaxed: a neat hole in the forehead
     const blood = new THREE.MeshBasicMaterial({ color: 0x4a0708 });
-    const hole = new THREE.Mesh(new THREE.CircleGeometry(0.016, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
-    hole.position.set(0.02, 0.05, -0.131);
-    hole.rotation.y = Math.PI;
-    this.guardHead.add(hole);
-    const ring = new THREE.Mesh(new THREE.CircleGeometry(0.03, 12), blood);
-    ring.position.set(0.02, 0.05, -0.1305);
-    ring.rotation.y = Math.PI;
+    // (…in the BACK of the head — the side facing us as he lies back)
+    this.headHole = new THREE.Mesh(new THREE.CircleGeometry(0.018, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
+    this.headHole.position.set(0.02, 0.02, 0.131);
+    this.guardHead.add(this.headHole);
+    const ring = new THREE.Mesh(new THREE.CircleGeometry(0.04, 12), blood);
+    ring.position.set(0.02, 0.02, 0.1305);
     this.guardHead.add(ring);
+    // Drops that fall from the hole to the floor, over and over
+    for (let i = 0; i < 4; i++) {
+      const drop = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 5), blood);
+      drop.scale.y = 1.6;
+      s.add(drop);
+      this.drops.push({ mesh: drop, t: -i * 0.9 });
+    }
     // Exit at the back: a run of blood down the chair back…
     const streak = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.72), blood);
     streak.position.set(0.03, -0.05, 0.062);
@@ -144,6 +154,7 @@ export class MainMenuScene implements GameScene {
     const puddle = new THREE.Mesh(new THREE.CircleGeometry(0.2, 20), blood);
     puddle.rotation.x = -Math.PI / 2;
     puddle.position.set(0.42, 0.004, 0.3);
+    this.puddle = puddle;
     puddle.scale.set(1, 0.7, 1);
     s.add(puddle);
     for (let i = 0; i < 5; i++) {
@@ -152,17 +163,20 @@ export class MainMenuScene implements GameScene {
       drop.position.set(0.42 + (Math.random() - 0.5) * 0.45, 0.004, 0.3 + (Math.random() - 0.5) * 0.4);
       s.add(drop);
     }
-    // Headphones: band + ear cups
+    // Headphones: knocked off, lying on the floor beside the chair, still playing
+    const phones = new THREE.Group();
     const band = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.028, 8, 16, Math.PI), lam(0x14161a));
     band.position.set(0, 0.05, 0);
-    band.rotation.z = 0;
-    this.guardHead.add(band);
+    phones.add(band);
     for (const side of [-1, 1]) {
       const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.05, 12), lam(0x14161a));
       cup.rotation.z = Math.PI / 2;
       cup.position.set(side * 0.155, 0, 0);
-      this.guardHead.add(cup);
+      phones.add(cup);
     }
+    phones.rotation.set(Math.PI / 2, 0.6, 0); // on their side on the floor
+    phones.position.set(-0.25, 0.08, 0.35);
+    s.add(phones);
     // Legs kicked up on the desk, arms hanging
     // Legs: thighs angle up from the chair seat (y≈0.6), calves lie flat on
     // the desk top (y=1.0) so the ankles rest ON the desk, not inside it.
@@ -358,7 +372,37 @@ export class MainMenuScene implements GameScene {
     }
 
     // The guard doesn't move. He's not going to.
-    void this.guardHead;
+    // Blood drips from the exit wound straight down into the puddle
+    if (!this.holeWorld) {
+      this.guardHead.updateWorldMatrix(true, false);
+      this.holeWorld = this.headHole.getWorldPosition(new THREE.Vector3());
+      this.puddle.position.set(this.holeWorld.x, 0.004, this.holeWorld.z);
+    }
+    const fallH = this.holeWorld.y - 0.01;
+    const fallT = Math.sqrt((2 * fallH) / 9.8);
+    for (const d of this.drops) {
+      d.t += dt;
+      const cycle = 3.6; // seconds between drops from this one
+      if (d.t < 0) {
+        d.mesh.visible = false;
+        continue;
+      }
+      const phase = d.t % cycle;
+      if (phase < 1.2) {
+        // Bead swelling at the hole
+        d.mesh.visible = true;
+        const k = phase / 1.2;
+        d.mesh.position.copy(this.holeWorld).add(new THREE.Vector3(0, -0.012 * k, 0));
+        d.mesh.scale.set(0.4 + 0.6 * k, 0.6 + 1.0 * k, 0.4 + 0.6 * k);
+      } else if (phase < 1.2 + fallT) {
+        const tt = phase - 1.2;
+        d.mesh.visible = true;
+        d.mesh.position.set(this.holeWorld.x, this.holeWorld.y - 0.5 * 9.8 * tt * tt, this.holeWorld.z);
+        d.mesh.scale.set(1, 1.6, 1);
+      } else {
+        d.mesh.visible = false; // landed in the puddle
+      }
+    }
     void this.guardFoot;
 
     // Tired fluorescent: a faint mains hum in the brightness, the odd sputter

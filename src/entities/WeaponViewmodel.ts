@@ -25,7 +25,7 @@ export class WeaponViewmodel {
   private aimPos = new THREE.Vector3(0, -0.073, -0.3);
   /** Sprint pose: gun dropped and canted diagonally across the body. */
   private sprintPos = new THREE.Vector3(0.1, -0.27, -0.36);
-  private sprintRot = new THREE.Euler(-0.45, 0.75, -0.55); // muzzle down and swung to the LEFT
+  private sprintRot = new THREE.Euler(-0.45, 0.75, 0.55); // muzzle down, swung left, canted IN toward the body
 
   /** 0..1 — how far into aim-down-sights we are (for FOV zoom + spread). */
   aimBlend = 0;

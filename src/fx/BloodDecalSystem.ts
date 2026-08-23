@@ -35,8 +35,8 @@ export class BloodDecalSystem {
   private growing: Growing[] = [];
   private geo = new THREE.PlaneGeometry(1, 1);
   private dripGeo: THREE.PlaneGeometry;
-  private max = 160;
-  private maxDrips = 40;
+  private max = 900; // blood stays for the whole shift; only the very oldest is recycled past this
+  private maxDrips = 300;
 
   constructor(private scene: THREE.Scene) {
     for (let i = 0; i < 4; i++) this.bloodMats.push(this.makeMaterial(this.drawSplatter(i * 7 + 1, false)));
@@ -300,16 +300,11 @@ export class BloodDecalSystem {
   update(dt: number): void {
     for (let i = this.drips.length - 1; i >= 0; i--) {
       const d = this.drips[i];
-      d.life -= dt;
       if (d.length < d.maxLength) {
         // Slows as it runs and thins out
         d.length = Math.min(d.maxLength, d.length + d.speed * dt * (1 - 0.5 * (d.length / d.maxLength)));
         d.mesh.scale.y = d.length;
         d.bead.position.copy(d.mesh.position).add(new THREE.Vector3(0, -d.length, 0));
-      }
-      if (d.life <= 0) {
-        this.scene.remove(d.mesh, d.bead);
-        this.drips.splice(i, 1);
       }
     }
     for (let i = this.growing.length - 1; i >= 0; i--) {

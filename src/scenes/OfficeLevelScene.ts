@@ -434,8 +434,7 @@ export class OfficeLevelScene implements GameScene {
       // ---- A corpse: it still takes the bullet — jolts, bleeds, gains a wound
       if (enemyRef && !enemyRef.alive) {
         enemyRef.hitCorpse(point, dir);
-        const ground = this.surfaceBelow(point, 4);
-        this.particles.bloodSpray(point, dir, false, ground ? ground.point.y + 0.02 : -1);
+        this.spatter(point, dir, false); // same exit jet + splatter fan as a kill, a little smaller
         this.ctx.audio.fleshHit();
         if (shooter === null) this.ctx.bus.emit(Events.HitMarker, { lethal: false });
         return point;
@@ -504,11 +503,31 @@ export class OfficeLevelScene implements GameScene {
       bus.emit(Events.HitMarker, { lethal: true });
     }
 
+    this.spatter(point, dir, true);
+
+    bus.emit(Events.EnemyKilled, {
+      name: enemy.name,
+      remaining: this.remaining,
+      headshot,
+      by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
+    });
+
+    if (this.remaining <= 0) {
+      this.over = true;
+      this.won = true;
+      bus.emit(Events.LevelComplete);
+      // Let the last one hit the floor before the shift-complete card (3 s)
+      window.setTimeout(() => this.ctx.input.exitPointerLock(), 3000);
+    }
+  }
+
+  /** Blood for a hit at point along dir: exit jet particles, stretched splatter fan on what's behind, drip below. */
+  private spatter(point: THREE.Vector3, dir: THREE.Vector3, big: boolean): void {
     // Gore. Every splatter is projected onto a real surface found by raycast;
     // if there's nothing there (over the mezzanine void, etc.) nothing is drawn.
     const ground = this.surfaceBelow(point, 6);
     // Spray particles settle on the true surface under the wound, or never settle
-    this.particles.bloodSpray(point, dir, true, ground ? ground.point.y + 0.02 : -1);
+    this.particles.bloodSpray(point, dir, big, ground ? ground.point.y + 0.02 : -1);
     // Exit splatter: the bullet carries blood THROUGH the body and throws it
     // on whatever's behind, in that direction. One main streak along the
     // exact exit line plus a fan of smaller spatter around it, each cast
@@ -527,8 +546,8 @@ export class OfficeLevelScene implements GameScene {
       const falloff = Math.max(0.35, 1 - hit.distance / maxDist);
       this.decals.place('blood', hit.point, n, size * falloff, d, stretch, hit.object);
     };
-    castSplat(dir, 0.9 + Math.random() * 0.8, 2.2 + Math.random() * 1.2, 7);
-    const fan = 4 + Math.floor(Math.random() * 4);
+    castSplat(dir, (big ? 0.9 : 0.5) + Math.random() * 0.8, 2.2 + Math.random() * 1.2, 7);
+    const fan = (big ? 4 : 2) + Math.floor(Math.random() * 4);
     for (let i = 0; i < fan; i++) {
       const d = dir
         .clone()
@@ -540,20 +559,5 @@ export class OfficeLevelScene implements GameScene {
     }
     // Drip splash on the surface directly below the wound
     if (ground) this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
-
-    bus.emit(Events.EnemyKilled, {
-      name: enemy.name,
-      remaining: this.remaining,
-      headshot,
-      by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
-    });
-
-    if (this.remaining <= 0) {
-      this.over = true;
-      this.won = true;
-      bus.emit(Events.LevelComplete);
-      // Let the last one hit the floor before the shift-complete card (3 s)
-      window.setTimeout(() => this.ctx.input.exitPointerLock(), 3000);
-    }
   }
 }

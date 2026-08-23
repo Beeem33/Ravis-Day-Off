@@ -285,7 +285,7 @@ export class Enemy {
       const lower = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.2, 4, 12), suit), 'arm');
       lower.position.set(0, -0.145, 0);
       fore.add(lower);
-      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.03, 0.145), shirt);
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.03, 14), shirt);
       cuff.position.set(0, -0.24, 0);
       fore.add(cuff);
       const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), glove);
@@ -470,7 +470,7 @@ export class Enemy {
       }
     }
     const punch = (body: CANNON.Body, scale: number) => {
-      const mag = (90 + Math.random() * 50) * scale * (body.mass / 30);
+      const mag = (125 + Math.random() * 65) * scale * (body.mass / 30);
       const impulse = new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.4 + 12 * scale, bulletDir.z * mag);
       const rel = new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z);
       body.applyImpulse(impulse, rel);
@@ -731,7 +731,7 @@ export class Enemy {
       }
     }
     for (const { body } of this.ragdoll) body.wakeUp();
-    const mag = (70 + Math.random() * 40) * (struck.mass / 18);
+    const mag = (95 + Math.random() * 55) * (struck.mass / 18);
     struck.applyImpulse(
       new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.5 + 4, bulletDir.z * mag),
       new CANNON.Vec3(hitPoint.x - struck.position.x, hitPoint.y - struck.position.y, hitPoint.z - struck.position.z)

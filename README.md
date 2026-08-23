@@ -5,6 +5,7 @@
 </p>
 
 **[▶ Play Game](https://beeem33.github.io/ravis-day-off/)** — runs in any desktop browser, no install. (Click the game to lock your mouse; Esc releases it.)
+
 A fast-paced, one-shot-kill first-person shooter set in a two-storey call center. Built with **Three.js + cannon-es + Vite/TypeScript** — no game engine, no asset files (all geometry, textures and audio are procedural).
 
 ## Run

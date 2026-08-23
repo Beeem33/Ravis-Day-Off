@@ -42,6 +42,7 @@ export class Enemy {
   /** Jointed ragdoll pieces once dead. */
   private ragdoll: { body: CANNON.Body; container: THREE.Group }[] = [];
   private ragdollByName = new Map<string, CANNON.Body>();
+  private gunBody: CANNON.Body | null = null;
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
@@ -265,6 +266,30 @@ export class Enemy {
     };
     punch(struck, 1);
     if (struck !== this.ragdollByName.get('torso')) punch(this.ragdollByName.get('torso')!, 0.6);
+    // The rifle leaves their hands: it becomes its own body and clatters away
+    this.rifle.updateWorldMatrix(true, false);
+    const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());
+    const gunQ = this.rifle.getWorldQuaternion(new THREE.Quaternion());
+    this.armR.remove(this.rifle);
+    this.rifle.position.copy(gunPos);
+    this.rifle.quaternion.copy(gunQ);
+    parent.add(this.rifle);
+    this.gunBody = new CANNON.Body({
+      mass: 3.5,
+      shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.045, 0.31)),
+      position: new CANNON.Vec3(gunPos.x, gunPos.y, gunPos.z),
+      linearDamping: 0.1,
+      angularDamping: 0.3
+    });
+    this.gunBody.quaternion.set(gunQ.x, gunQ.y, gunQ.z, gunQ.w);
+    this.gunBody.velocity.set(
+      bulletDir.x * 1.5 + (Math.random() - 0.5) * 2,
+      1 + Math.random() * 1.5,
+      bulletDir.z * 1.5 + (Math.random() - 0.5) * 2
+    );
+    this.gunBody.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+    world.addBody(this.gunBody);
+
     // Limbs let go: arms fling outward from the shoulders, legs kick apart,
     // and everything gets a hard random spin so the body tumbles, sprawls
     // and catches on whatever it falls over instead of dropping as a unit.
@@ -325,9 +350,17 @@ export class Enemy {
     // Every limb's visual tracks its own physics body
     let speed = 0;
     for (const { body, container } of this.ragdoll) {
+      // Cap limb speed: a huge impulse can tunnel a thin arm into a wall and jam it
+      const v = body.velocity.length();
+      if (v > 9) body.velocity.scale(9 / v, body.velocity);
       container.position.set(body.position.x, body.position.y, body.position.z);
       container.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-      speed += body.velocity.length() + body.angularVelocity.length() * 0.5;
+      speed += v + body.angularVelocity.length() * 0.5;
+    }
+    if (this.gunBody) {
+      const g = this.gunBody;
+      this.rifle.position.set(g.position.x, g.position.y, g.position.z);
+      this.rifle.quaternion.set(g.quaternion.x, g.quaternion.y, g.quaternion.z, g.quaternion.w);
     }
 
     // Settle once the whole body has stopped moving (or after a hard cap)
@@ -351,6 +384,10 @@ export class Enemy {
         if (this.ragdoll.some((r) => r.body === c.bodyA || r.body === c.bodyB)) this.world.removeConstraint(c);
       }
       for (const { body } of this.ragdoll) this.world.removeBody(body);
+      if (this.gunBody) {
+        this.world.removeBody(this.gunBody);
+        this.gunBody = null;
+      }
     }
     this.ragdoll.length = 0;
   }

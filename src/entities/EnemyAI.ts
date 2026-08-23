@@ -307,7 +307,7 @@ export class EnemyAI {
    */
   private resolveCollisions(): void {
     const p = this.enemy.position;
-    const R = 0.3;
+    const R = 0.42; // wide enough that the ragdoll arms never spawn inside a wall
     for (let pass = 0; pass < 2; pass++) {
       for (const c of this.deps.colliders) {
         if (c.disabled) continue;

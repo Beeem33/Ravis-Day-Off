@@ -219,7 +219,7 @@ export class OfficeLevelScene implements GameScene {
         // Pool goes on whatever the body is actually lying on (floor, desk,
         // stair landing…) — never on a guessed floor height.
         const under = this.surfaceBelow(base, 3);
-        if (under) this.decals.place('pool', under.point, under.normal);
+        if (under) this.decals.place('pool', under.point, under.normal, undefined, undefined, 1, under.object);
         this.ctx.audio.bodyThud(this.player.position.distanceTo(base));
       }
     }
@@ -229,6 +229,7 @@ export class OfficeLevelScene implements GameScene {
     for (const f of this.level.flickering) f.update(dt);
     for (const g of this.level.glassPanes) g.update(dt);
     this.updateDroppedMags(dt);
+    this.decals.update(dt);
     this.particles.update(dt);
     this.world.step(1 / 60, dt, 3);
 
@@ -245,7 +246,10 @@ export class OfficeLevelScene implements GameScene {
    * Nearest solid level surface straight down from a point (floors, desks,
    * stairs — not enemies or glass). Null over a void.
    */
-  private surfaceBelow(from: THREE.Vector3, maxDist: number): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+  private surfaceBelow(
+    from: THREE.Vector3,
+    maxDist: number
+  ): { point: THREE.Vector3; normal: THREE.Vector3; object: THREE.Object3D } | null {
     this.raycaster.set(from.clone().add(new THREE.Vector3(0, 0.05, 0)), new THREE.Vector3(0, -1, 0));
     this.raycaster.far = maxDist + 0.05;
     const hit = this.raycaster
@@ -255,7 +259,7 @@ export class OfficeLevelScene implements GameScene {
     const normal = (hit.face?.normal ?? new THREE.Vector3(0, 1, 0)).clone().transformDirection(hit.object.matrixWorld);
     // Only accept upward-facing surfaces; a wall edge isn't somewhere blood pools
     if (normal.y < 0.5) return null;
-    return { point: hit.point, normal };
+    return { point: hit.point, normal, object: hit.object };
   }
 
   // ---------------------------------------------------------- dropped mags
@@ -492,7 +496,7 @@ export class OfficeLevelScene implements GameScene {
       const n = (hit.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(hit.object.matrixWorld);
       // Farther surfaces get a thinner, longer spray; near ones a fat splash
       const falloff = Math.max(0.35, 1 - hit.distance / maxDist);
-      this.decals.place('blood', hit.point, n, size * falloff, d, stretch);
+      this.decals.place('blood', hit.point, n, size * falloff, d, stretch, hit.object);
     };
     castSplat(dir, 0.9 + Math.random() * 0.8, 2.2 + Math.random() * 1.2, 7);
     const fan = 4 + Math.floor(Math.random() * 4);
@@ -506,7 +510,7 @@ export class OfficeLevelScene implements GameScene {
       castSplat(d, 0.25 + Math.random() * 0.5, 1.3 + Math.random() * 1.2, 6);
     }
     // Drip splash on the surface directly below the wound
-    if (ground) this.decals.place('blood', ground.point, ground.normal);
+    if (ground) this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
 
     bus.emit(Events.EnemyKilled, {
       name: enemy.name,

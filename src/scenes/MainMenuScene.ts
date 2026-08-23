@@ -30,6 +30,8 @@ export class MainMenuScene implements GameScene {
   // Animated diorama bits
   private guardHead!: THREE.Mesh;
   private guardFoot!: THREE.Mesh;
+  private tubeLight!: THREE.PointLight;
+  private tubeMat!: THREE.MeshStandardMaterial;
   private mouse = { x: 0, y: 0 };
   private mouseHandler = (e: MouseEvent): void => {
     this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
@@ -183,6 +185,25 @@ export class MainMenuScene implements GameScene {
     poster.rotation.z = -0.04;
     this.scene.add(poster);
 
+    // Ceiling + a dim fluorescent tube right above the guard
+    const ceiling = new THREE.Mesh(new THREE.BoxGeometry(8, 0.2, 6), lam(0x1d2026));
+    ceiling.position.set(0, 3.5, 0);
+    s.add(ceiling);
+    const fixtureHousing = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.09, 0.36), lam(0x5a5e63));
+    fixtureHousing.position.set(0.4, 3.35, -0.5);
+    s.add(fixtureHousing);
+    this.tubeMat = new THREE.MeshStandardMaterial({
+      color: 0x9aa39c,
+      emissive: new THREE.Color(0xd6e6da),
+      emissiveIntensity: 0.9
+    });
+    const tube = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.14), this.tubeMat);
+    tube.position.set(0.4, 3.29, -0.5);
+    s.add(tube);
+    this.tubeLight = new THREE.PointLight(0xcfe3d6, 3.2, 7, 1.7);
+    this.tubeLight.position.set(0.4, 3.2, -0.5);
+    s.add(this.tubeLight);
+
     // Moody ambient
     s.add(new THREE.AmbientLight(0x25303c, 1.1));
     const overhead = new THREE.PointLight(0x9fb4cc, 2.5, 9, 1.6);
@@ -280,6 +301,12 @@ export class MainMenuScene implements GameScene {
     this.guardHead.rotation.x = 0.5 + Math.sin(beat) * 0.035;
     this.guardHead.rotation.z = Math.sin(beat * 0.5) * 0.02;
     this.guardFoot.rotation.x = Math.max(0, Math.sin(beat)) * 0.25;
+
+    // Tired fluorescent: a faint mains hum in the brightness, the odd sputter
+    const hum = 0.92 + 0.08 * Math.sin(time * 120);
+    const sputter = Math.sin(time * 0.7) > 0.985 ? 0.55 : 1;
+    this.tubeLight.intensity = 3.2 * hum * sputter;
+    this.tubeMat.emissiveIntensity = 0.9 * hum * sputter;
 
     // Feed loop: intruder paces… then gets "cleared"… then respawns. TV magic.
     this.feedCycle = (this.feedCycle + dt) % 7;

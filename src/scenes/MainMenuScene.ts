@@ -187,21 +187,21 @@ export class MainMenuScene implements GameScene {
 
     // Ceiling + a dim fluorescent tube right above the guard
     const ceiling = new THREE.Mesh(new THREE.BoxGeometry(8, 0.2, 6), lam(0x1d2026));
-    ceiling.position.set(0, 3.5, 0);
+    ceiling.position.set(0, 2.95, 0);
     s.add(ceiling);
     const fixtureHousing = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.09, 0.36), lam(0x5a5e63));
-    fixtureHousing.position.set(0.4, 3.35, -0.5);
+    fixtureHousing.position.set(0.4, 2.8, -0.5);
     s.add(fixtureHousing);
     this.tubeMat = new THREE.MeshStandardMaterial({
       color: 0x9aa39c,
       emissive: new THREE.Color(0xd6e6da),
-      emissiveIntensity: 0.9
+      emissiveIntensity: 1.6
     });
     const tube = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.14), this.tubeMat);
-    tube.position.set(0.4, 3.29, -0.5);
+    tube.position.set(0.4, 2.74, -0.5);
     s.add(tube);
-    this.tubeLight = new THREE.PointLight(0xcfe3d6, 3.2, 7, 1.7);
-    this.tubeLight.position.set(0.4, 3.2, -0.5);
+    this.tubeLight = new THREE.PointLight(0xcfe3d6, 11, 8, 1.7);
+    this.tubeLight.position.set(0.4, 2.65, -0.5);
     s.add(this.tubeLight);
 
     // Moody ambient
@@ -211,7 +211,7 @@ export class MainMenuScene implements GameScene {
     s.add(overhead);
 
     this.camera.position.set(-1.5, 1.65, 1.9);
-    this.camera.lookAt(0.3, 1.15, -1.6);
+    this.camera.lookAt(0.3, 1.45, -1.6);
   }
 
   /** Mini office corner rendered into the CRT feed texture. */
@@ -305,8 +305,8 @@ export class MainMenuScene implements GameScene {
     // Tired fluorescent: a faint mains hum in the brightness, the odd sputter
     const hum = 0.92 + 0.08 * Math.sin(time * 120);
     const sputter = Math.sin(time * 0.7) > 0.985 ? 0.55 : 1;
-    this.tubeLight.intensity = 3.2 * hum * sputter;
-    this.tubeMat.emissiveIntensity = 0.9 * hum * sputter;
+    this.tubeLight.intensity = 11 * hum * sputter;
+    this.tubeMat.emissiveIntensity = 1.6 * hum * sputter;
 
     // Feed loop: intruder paces… then gets "cleared"… then respawns. TV magic.
     this.feedCycle = (this.feedCycle + dt) % 7;
@@ -337,7 +337,7 @@ export class MainMenuScene implements GameScene {
     // Menu camera parallax
     this.camera.position.x = -1.5 + this.mouse.x * 0.12;
     this.camera.position.y = 1.65 - this.mouse.y * 0.07;
-    this.camera.lookAt(0.3, 1.15, -1.6);
+    this.camera.lookAt(0.3, 1.45, -1.6);
   }
 
   render(renderer: THREE.WebGLRenderer): void {

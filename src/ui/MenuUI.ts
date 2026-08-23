@@ -77,7 +77,7 @@ export class MenuUI {
             <tr><td>AIM</td><td>RIGHT CLICK (HOLD)</td></tr>
             <tr><td>RELOAD</td><td>R (10-ROUND MAG)</td></tr>
             <tr><td>SPRINT</td><td>SHIFT</td></tr>
-            <tr><td>CROUCH</td><td>CTRL / C</td></tr>
+            <tr><td>CROUCH</td><td>C (or CTRL — but CTRL+W closes the tab)</td></tr>
             <tr><td>JUMP</td><td>SPACE</td></tr>
             <tr><td>MENU</td><td>ESC</td></tr>
           </table>

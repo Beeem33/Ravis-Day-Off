@@ -40,6 +40,11 @@ export class OfficeLevelScene implements GameScene {
   private unsubs: (() => void)[] = [];
   private clickHandler = (): void => this.onOverlayClick();
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
+  private unloadGuard = (e: BeforeUnloadEvent): void => {
+    if (this.over) return; // shift's already finished, let them go
+    e.preventDefault();
+    e.returnValue = ''; // legacy browsers need this to show the prompt
+  };
   private pooledCorpses = new Set<Enemy>();
 
   constructor(private ctx: GameContext) {}
@@ -120,6 +125,9 @@ export class OfficeLevelScene implements GameScene {
 
     document.addEventListener('click', this.clickHandler);
     document.addEventListener('keydown', this.keyHandler);
+    // Ctrl+W / Ctrl+T mid-crouch can't be intercepted — at least make the
+    // browser ask before throwing the shift away.
+    window.addEventListener('beforeunload', this.unloadGuard);
     input.requestPointerLock();
   }
 
@@ -128,6 +136,7 @@ export class OfficeLevelScene implements GameScene {
     for (const ai of this.ais) ai.dispose();
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);
+    window.removeEventListener('beforeunload', this.unloadGuard);
     this.hud.destroy();
     this.ctx.input.exitPointerLock();
     // Free GPU resources

@@ -26,7 +26,7 @@ npm run build      # type-check + production bundle in dist/
 | Aim down sights | Hold right click |
 | Reload | R (10-round magazine) |
 | Sprint | Shift |
-| Crouch | Ctrl / C |
+| Crouch | C (Ctrl also works, but Ctrl+W closes the tab) |
 | Jump | Space |
 
 One shot kills an intruder. Ravi has 5 HP, takes 1 damage per bullet, and regenerates 1 HP every 30 seconds. Use cubicles as cover (bullets pierce one panel), shatter glass partitions, drop through the broken mezzanine railing, and listen: intruders investigate gunshots and sprinting footsteps.

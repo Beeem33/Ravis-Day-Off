@@ -21,8 +21,13 @@ export class InputManager {
       if (e.repeat) return;
       this.keysDown.add(e.code);
       this.keysPressed.add(e.code);
-      // Keep browser shortcuts from stealing game keys while locked.
-      if (this.pointerLocked && ['Space', 'ControlLeft', 'Tab'].includes(e.code)) e.preventDefault();
+      // Keep browser shortcuts from stealing game keys while locked: crouching
+      // on Ctrl while pressing D / S / R / A etc. would otherwise bookmark,
+      // save, reload or select-all. (Ctrl+W / Ctrl+T can't be blocked by a page;
+      // the level scene puts up a leave-page prompt for those.)
+      if (this.pointerLocked && (e.ctrlKey || e.altKey || e.metaKey || ['Space', 'Tab', 'F1', 'F3', 'F5'].includes(e.code))) {
+        e.preventDefault();
+      }
     });
     window.addEventListener('keyup', (e) => this.keysDown.delete(e.code));
     window.addEventListener('blur', () => {

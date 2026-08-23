@@ -67,7 +67,7 @@ export class FPSHUD {
       <div class="killfeed"></div>
       <div class="alert-banner">! CONTACT !</div>
       <div class="hud-bottom">
-        WASD move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; CTRL crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
+        WASD move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; C crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
       </div>
       <div id="death-overlay" class="fullscreen-overlay">
         <h2>YOU DIED</h2>

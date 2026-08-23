@@ -78,7 +78,7 @@ export class WeaponViewmodel {
     this.flashSprite.scale.setScalar(0.16);
     this.flashSprite.visible = false;
     this.muzzle.add(this.flashSprite);
-    this.flashLight = new THREE.PointLight(0xffb45e, 0, 8, 1.8);
+    this.flashLight = new THREE.PointLight(0xffb45e, 0, 4.5, 2.0);
     this.flashLight.visible = false;
     this.muzzle.add(this.flashLight);
   }
@@ -120,7 +120,7 @@ export class WeaponViewmodel {
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
     this.flashLight.visible = true;
-    this.flashLight.intensity = 14;
+    this.flashLight.intensity = 3.5;
   }
 
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number): void {
@@ -149,7 +149,7 @@ export class WeaponViewmodel {
     // ---- Muzzle flash decay
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
-      this.flashLight.intensity *= 0.75;
+      this.flashLight.intensity *= 0.6;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;
         this.flashLight.visible = false;

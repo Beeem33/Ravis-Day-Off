@@ -194,16 +194,6 @@ export class FPSHUD {
     }, 90);
   }
 
-  /** Near-miss / suppression flash. */
-  nearMiss(): void {
-    this.damageFlash.style.transition = 'none';
-    this.damageFlash.style.background = 'rgba(180,0,0,0.16)';
-    window.setTimeout(() => {
-      this.damageFlash.style.transition = 'background 0.3s';
-      this.damageFlash.style.background = 'rgba(180,0,0,0)';
-    }, 60);
-  }
-
   setAlert(on: boolean): void {
     this.alertBanner.classList.toggle('show', on);
   }

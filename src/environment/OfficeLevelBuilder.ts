@@ -114,6 +114,32 @@ const FLOOR_H = 3.3; // walk level of upper floor
 const WALL_H = 3.0; // clear height per storey
 const SLAB_T = 0.3;
 
+// Carpet and ceiling-tile textures are authored for the full 36.8 x 24.8
+// footprint; slabs of other sizes rescale their UVs against these.
+const SLAB_REPEAT_X = 18;
+const SLAB_REPEAT_Y = 12;
+/** Texture repeats per metre on floor/ceiling surfaces — one tile per 2m. */
+const SLAB_TILE_DENSITY = 0.5;
+
+/**
+ * BoxGeometry gives every face 0..1 UVs, so a shared texture with a fixed
+ * `repeat` is squashed by a different amount on every differently-sized
+ * slab — the narrow strips of upper floor smeared the ceiling grid across
+ * 2m instead of tiling it. Rescale the top and bottom face UVs so every
+ * slab tiles at the same world-space density.
+ */
+function normalizeSlabUVs(geo: THREE.BoxGeometry, w: number, d: number): void {
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  const su = (w * SLAB_TILE_DENSITY) / SLAB_REPEAT_X;
+  const sv = (d * SLAB_TILE_DENSITY) / SLAB_REPEAT_Y;
+  for (const face of [2, 3]) { // BoxGeometry face order: px nx py ny pz nz
+    for (let i = face * 4; i < face * 4 + 4; i++) {
+      uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+    }
+  }
+  uv.needsUpdate = true;
+}
+
 /**
  * OfficeLevelBuilder — constructs the whole two-storey call-center complex:
  * geometry, movement colliders, bullet/vision raycast sets, patrol waypoint
@@ -175,10 +201,12 @@ export class OfficeLevelBuilder {
   // ------------------------------------------------------------- materials
 
   private makeMaterials(): void {
-    this.carpetMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([46, 52, 64], 14), 18, 12) });
-    this.carpetUpMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([58, 52, 48], 12), 18, 12) });
+    const sx = SLAB_REPEAT_X;
+    const sy = SLAB_REPEAT_Y;
+    this.carpetMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([46, 52, 64], 14), sx, sy) });
+    this.carpetUpMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([58, 52, 48], 12), sx, sy) });
     this.wallMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([196, 192, 182], 7), 4, 2) });
-    this.ceilMat = new THREE.MeshLambertMaterial({ map: makeTex(ceilingTileCanvas(), 18, 12) });
+    this.ceilMat = new THREE.MeshLambertMaterial({ map: makeTex(ceilingTileCanvas(), sx, sy) });
     this.cubicleMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([96, 104, 116], 10), 2, 2) });
     this.deskMat = new THREE.MeshLambertMaterial({ color: 0x8a7358 });
     this.darkMetalMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
@@ -285,7 +313,9 @@ export class OfficeLevelBuilder {
   private slab(x0: number, x1: number, z0: number, z1: number, y: number, topMat: THREE.Material): void {
     const w = x1 - x0;
     const d = z1 - z0;
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, SLAB_T, d), [
+    const geo = new THREE.BoxGeometry(w, SLAB_T, d);
+    normalizeSlabUVs(geo, w, d);
+    const mesh = new THREE.Mesh(geo, [
       this.wallMat, this.wallMat, topMat, this.ceilMat, this.wallMat, this.wallMat
     ]);
     mesh.position.set((x0 + x1) / 2, y + SLAB_T / 2, (z0 + z1) / 2);
@@ -581,15 +611,34 @@ export class OfficeLevelBuilder {
     g.add(this.deskClutter(1.2, (Math.random() - 0.5) * 1.0));
   }
 
-  /** Glowing monitor at a position. */
+  /**
+   * A monitor: solid bezel shell, glowing face inset in the front, neck and
+   * base. Built as a group so it reads correctly from every angle — it used
+   * to be a bare single-sided plane that vanished when seen edge-on.
+   * `y` is the centre of the panel; the base lands 0.055 below it.
+   */
   private screen(w: number, h: number, x: number, y: number, z: number, yaw: number): void {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), this.screenMat);
-    m.position.set(x, y, z);
-    m.rotation.y = yaw;
-    this.group.add(m);
-    const stand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.08), this.darkMetalMat);
-    stand.position.set(x, y - h / 2 - 0.1, z);
-    this.group.add(stand);
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = yaw;
+    this.group.add(g);
+
+    // Shell — slightly larger than the picture, giving the bezel
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.045, h + 0.045, 0.042), this.plasticMat);
+    shell.position.z = -0.022;
+    g.add(shell);
+    // Glowing face, just proud of the shell front so it never z-fights
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), this.screenMat);
+    face.position.z = 0.0015;
+    g.add(face);
+
+    const bottom = -h / 2;
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.05), this.darkMetalMat);
+    neck.position.set(0, bottom - 0.0225, -0.02);
+    g.add(neck);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.014, 0.13), this.darkMetalMat);
+    base.position.set(0, bottom - 0.048, -0.02);
+    g.add(base);
   }
 
   private buildStairs(): void {

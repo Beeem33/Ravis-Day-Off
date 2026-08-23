@@ -6,6 +6,73 @@ const AMERICAN_NAMES = [
 ];
 
 /**
+ * One way to die. The ragdoll is a single rigid body, so the character comes
+ * from where the limbs settle and how the body is spun as it goes down —
+ * `spin` is extra angular velocity applied on top of the bullet impulse.
+ */
+interface DeathStyle {
+  /** [rotation.x, rotation.z] targets for each arm as it goes limp. */
+  armL: [number, number];
+  armR: [number, number];
+  legL: number;
+  legR: number;
+  head: [number, number]; // [rotation.x, rotation.z]
+  /** How fast the limbs give out — low is a slow slump, high is a hard drop. */
+  limpRate: number;
+  spin: [number, number, number];
+  /** Extra upward kick, for the ones that leave their feet. */
+  lift: number;
+}
+
+/** Ordinary collapses — used for body shots. */
+const BODY_DEATHS: DeathStyle[] = [
+  {
+    // Crumple: folds forward over the wound, arms hanging
+    armL: [0.9, 1.2], armR: [-0.6, -1.1], legL: 0.35, legR: -0.2,
+    head: [0.35, 0.5], limpRate: 3, spin: [-1.2, 0.4, 0], lift: 0
+  },
+  {
+    // Sprawl: thrown onto their back, limbs wide
+    armL: [-1.9, 1.5], armR: [-1.8, -1.6], legL: -0.5, legR: -0.35,
+    head: [-0.4, -0.2], limpRate: 2.2, spin: [2.4, -0.6, 0.3], lift: 40
+  },
+  {
+    // Twist: spun sideways, one arm across the chest
+    armL: [0.4, 2.0], armR: [-1.2, -0.3], legL: 0.6, legR: 0.15,
+    head: [0.1, 1.0], limpRate: 3.6, spin: [0.3, 3.2, 1.8], lift: 15
+  },
+  {
+    // Slump: knees buckle first, a slow sag straight down
+    armL: [0.6, 0.5], armR: [0.5, -0.45], legL: 1.1, legR: 0.85,
+    head: [0.6, 0.15], limpRate: 1.5, spin: [-0.4, 0.2, -0.2], lift: -20
+  },
+  {
+    // Face plant: pitched forward, arms trailing behind
+    armL: [1.8, 0.6], armR: [1.9, -0.5], legL: -0.3, legR: -0.45,
+    head: [0.5, -0.3], limpRate: 4, spin: [-2.8, 0.3, 0], lift: 10
+  }
+];
+
+/** Head shots — snappier, more violent. */
+const HEAD_DEATHS: DeathStyle[] = [
+  {
+    // Snap back: head whips, body follows straight down backwards
+    armL: [-1.4, 0.9], armR: [-1.5, -1.0], legL: -0.15, legR: 0.1,
+    head: [-1.1, 0.3], limpRate: 6, spin: [3.4, 0.2, 0.4], lift: 55
+  },
+  {
+    // Drop: everything lets go at once, straight to the floor
+    armL: [0.2, 0.35], armR: [0.15, -0.3], legL: 0.5, legR: 0.4,
+    head: [0.8, 0.9], limpRate: 8, spin: [0.2, -0.3, 0.1], lift: -40
+  },
+  {
+    // Pirouette: spun off their feet by the impact
+    armL: [-0.8, 1.7], armR: [-0.9, -1.8], legL: 0.25, legR: -0.6,
+    head: [0.2, -1.2], limpRate: 5, spin: [0.6, 4.5, 2.2], lift: 30
+  }
+];
+
+/**
  * Enemy — an armed intruder. Primitive-built humanoid with walk/aim
  * animation hooks; on a fatal hit it becomes a cannon-es ragdoll body that
  * takes the bullet impulse and tumbles, limbs going limp.
@@ -41,6 +108,7 @@ export class Enemy {
   private world: CANNON.World | null = null;
   private limpBlend = 0;
   private deadTimer = 0;
+  private death: DeathStyle = BODY_DEATHS[0];
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
@@ -178,13 +246,20 @@ export class Enemy {
   /**
    * Fatal hit: convert to a single-body ragdoll, apply the bullet impulse at
    * the hit point (so headshots snap back, gut shots fold) and let cannon
-   * tumble it to the floor.
+   * tumble it to the floor. A death style is drawn from the pool matching
+   * where they were hit, so no two go down the same way.
    */
   die(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, world: CANNON.World): void {
     if (!this.alive) return;
     this.alive = false;
     this.world = world;
     this.deadTimer = 0;
+
+    // Torso centre is y 0.95, the head sits around 1.62 — anything landing
+    // well above the chest counts as a head shot for animation purposes.
+    const highHit = hitPoint.y - this.root.position.y > 1.45;
+    const pool = highHit ? HEAD_DEATHS : BODY_DEATHS;
+    this.death = pool[Math.floor(Math.random() * pool.length)];
 
     // Re-root the group at the torso center so it can track the physics body.
     const center = new THREE.Vector3(0, 0.95, 0);
@@ -205,9 +280,20 @@ export class Enemy {
 
     // Impulse at the hit point: knocks the body along the bullet vector.
     const impulseMag = 260 + Math.random() * 120;
-    const impulse = new CANNON.Vec3(bulletDir.x * impulseMag, bulletDir.y * impulseMag * 0.4 + 60, bulletDir.z * impulseMag);
+    const impulse = new CANNON.Vec3(
+      bulletDir.x * impulseMag,
+      bulletDir.y * impulseMag * 0.4 + 60 + this.death.lift,
+      bulletDir.z * impulseMag
+    );
     const rel = new CANNON.Vec3(hitPoint.x - worldCenter.x, hitPoint.y - worldCenter.y, hitPoint.z - worldCenter.z);
     this.body.applyImpulse(impulse, rel);
+
+    // Style-specific tumble, rotated into the direction they were facing so
+    // "pitches forward" means forward for this enemy, not world -Z.
+    const spin = new THREE.Vector3(...this.death.spin).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+    const j = (): number => (Math.random() - 0.5) * 0.8; // no two are identical
+    this.body.angularVelocity.set(spin.x + j(), spin.y + j(), spin.z + j());
+
     world.addBody(this.body);
   }
 
@@ -256,16 +342,18 @@ export class Enemy {
       this.body.quaternion.w
     );
 
-    // Limbs go limp
-    this.limpBlend = Math.min(1, this.limpBlend + dt * 3);
+    // Limbs go limp towards this death's pose
+    const d = this.death;
+    this.limpBlend = Math.min(1, this.limpBlend + dt * d.limpRate);
     const l = this.limpBlend;
-    this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 0.9, l * 0.4);
-    this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, 1.2, l * 0.4);
-    this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, -0.6, l * 0.4);
-    this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -1.1, l * 0.4);
-    this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 0.35, l * 0.3);
-    this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, -0.2, l * 0.3);
-    this.head.rotation.z = THREE.MathUtils.lerp(this.head.rotation.z, 0.5, l * 0.3);
+    this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, d.armL[0], l * 0.4);
+    this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, d.armL[1], l * 0.4);
+    this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, d.armR[0], l * 0.4);
+    this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, d.armR[1], l * 0.4);
+    this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, d.legL, l * 0.3);
+    this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, d.legR, l * 0.3);
+    this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, d.head[0], l * 0.3);
+    this.head.rotation.z = THREE.MathUtils.lerp(this.head.rotation.z, d.head[1], l * 0.3);
 
     // Settle after tumbling
     const speed = this.body.velocity.length() + this.body.angularVelocity.length();

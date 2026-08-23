@@ -249,10 +249,8 @@ export class OfficeLevelScene implements GameScene {
       const dir = target.sub(muzzle).normalize();
       const end = this.castBullet(muzzle, dir, enemy);
       this.particles.tracer(muzzle, end, 0xffe0b0);
-      if (player.alive) {
-        audio.bulletWhiz();
-        this.hud.nearMiss();
-      }
+      // Misses are audible only — no screen flash, that reads as being hit
+      if (player.alive) audio.bulletWhiz();
     }
   }
 

@@ -21,6 +21,15 @@ export class WeaponViewmodel {
   private flashTimer = 0;
 
   private basePos = new THREE.Vector3(0.23, -0.21, -0.42);
+  /** Aim-down-sights pose: gun centered so the sights line up with the crosshair. */
+  private aimPos = new THREE.Vector3(0, -0.073, -0.3);
+  /** Sprint pose: gun dropped and canted diagonally across the body. */
+  private sprintPos = new THREE.Vector3(0.12, -0.27, -0.36);
+  private sprintRot = new THREE.Euler(0.45, -0.75, 0.55);
+
+  /** 0..1 — how far into aim-down-sights we are (for FOV zoom + spread). */
+  aimBlend = 0;
+  private sprintBlend = 0;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -123,27 +132,49 @@ export class WeaponViewmodel {
     this.flashLight.intensity = 3.5;
   }
 
-  update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number): void {
-    // ---- Sway follows inverse mouse motion, spring back
-    this.swayX += (-mouseDX * 0.00009 - this.swayX) * Math.min(1, dt * 10);
-    this.swayY += (mouseDY * 0.00009 - this.swayY) * Math.min(1, dt * 10);
+  update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
+    // ---- Pose blends: ADS snaps in fast, sprint pose is a touch lazier
+    const sprinting = player.sprinting && player.currentSpeed > 4.5;
+    this.aimBlend += ((aiming && !sprinting ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
+    this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
+    const a = this.aimBlend;
+    const sp = this.sprintBlend;
+
+    // ---- Sway follows inverse mouse motion, spring back (tighter when aiming)
+    const swayScale = 1 - 0.75 * a;
+    this.swayX += (-mouseDX * 0.00009 * swayScale - this.swayX) * Math.min(1, dt * 10);
+    this.swayY += (mouseDY * 0.00009 * swayScale - this.swayY) * Math.min(1, dt * 10);
 
     // ---- Movement bob (synced with the player's stride)
     const { phase, amount } = player.bob;
-    const bobX = Math.sin(phase) * 0.012 * amount;
-    const bobY = -Math.abs(Math.sin(phase)) * 0.012 * amount - (player.crouching ? 0.02 : 0);
+    const bobScale = (1 - 0.7 * a) * (1 + 1.6 * sp); // calmer aimed, heavier at a sprint
+    const bobX = Math.sin(phase) * 0.012 * amount * bobScale;
+    const bobY = -Math.abs(Math.sin(phase)) * 0.012 * amount * bobScale - (player.crouching ? 0.02 : 0) * (1 - a);
+    // Sprint: the gun pumps diagonally with the arms
+    const sprintSwayX = Math.sin(phase) * 0.035 * sp;
+    const sprintSwayY = Math.sin(phase * 2) * 0.018 * sp;
+    const sprintRoll = Math.sin(phase) * 0.08 * sp;
 
     // ---- Recoil spring
     this.recoil = Math.max(0, this.recoil - dt * 7);
     this.slideKick = Math.max(0, this.slideKick - dt * 14);
-    const r = this.recoil * this.recoil;
+    const r = this.recoil * this.recoil * (1 - 0.4 * a);
+
+    // Base pose = hip → ADS → sprint blend
+    const px = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.x, this.aimPos.x, a), this.sprintPos.x, sp);
+    const py = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.y, this.aimPos.y, a), this.sprintPos.y, sp);
+    const pz = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.z, this.aimPos.z, a), this.sprintPos.z, sp);
 
     this.root.position.set(
-      this.basePos.x + this.swayX + bobX,
-      this.basePos.y + this.swayY + bobY + r * 0.015,
-      this.basePos.z + r * 0.06
+      px + this.swayX + bobX + sprintSwayX,
+      py + this.swayY + bobY + sprintSwayY + r * 0.015,
+      pz + r * 0.06
     );
-    this.root.rotation.set(-r * 0.28 + this.swayY * 3, this.swayX * 3, this.swayX * 1.5);
+    this.root.rotation.set(
+      -r * 0.28 + this.swayY * 3 + this.sprintRot.x * sp,
+      this.swayX * 3 + this.sprintRot.y * sp,
+      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll
+    );
     this.slide.position.z = -0.03 + this.slideKick * 0.045;
 
     // ---- Muzzle flash decay

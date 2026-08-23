@@ -9,6 +9,8 @@ export class InputManager {
   private mouseDY = 0;
   private clickQueued = false;
   mouseHeld = false;
+  /** Right mouse button held (aim down sights). */
+  rightHeld = false;
   pointerLocked = false;
 
   /** Optional hook fired when pointer lock is lost (e.g. user pressed Esc). */
@@ -26,6 +28,7 @@ export class InputManager {
     window.addEventListener('blur', () => {
       this.keysDown.clear();
       this.mouseHeld = false;
+      this.rightHeld = false;
     });
 
     document.addEventListener('mousemove', (e) => {
@@ -34,13 +37,20 @@ export class InputManager {
       this.mouseDY += e.movementY;
     });
     document.addEventListener('mousedown', (e) => {
+      if (e.button === 2) {
+        this.rightHeld = true;
+        return;
+      }
       if (e.button !== 0) return;
       this.mouseHeld = true;
       if (this.pointerLocked) this.clickQueued = true;
     });
     document.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseHeld = false;
+      if (e.button === 2) this.rightHeld = false;
     });
+    // Right mouse = aim down sights; never show the browser context menu
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
 
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === this.element;

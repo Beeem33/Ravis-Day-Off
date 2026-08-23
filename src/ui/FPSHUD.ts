@@ -67,7 +67,7 @@ export class FPSHUD {
       <div class="killfeed"></div>
       <div class="alert-banner">! CONTACT !</div>
       <div class="hud-bottom">
-        WASD move &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; CTRL crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
+        WASD move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; CTRL crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
       </div>
       <div id="death-overlay" class="fullscreen-overlay">
         <h2>YOU DIED</h2>
@@ -192,6 +192,12 @@ export class FPSHUD {
       this.damageFlash.style.transition = 'background 0.55s';
       this.damageFlash.style.background = 'rgba(180,0,0,0)';
     }, 90);
+  }
+
+  /** Hide the crosshair while aiming down sights — the iron sights take over. */
+  setAiming(on: boolean): void {
+    const ch = this.hud.querySelector<HTMLElement>('.crosshair');
+    if (ch) ch.style.opacity = on ? '0' : '1';
   }
 
   setAlert(on: boolean): void {

@@ -150,8 +150,18 @@ export class OfficeLevelScene implements GameScene {
       input.requestPointerLock();
     }
 
+    // Aim down sights on right mouse (sprinting drops the aim)
+    const aiming = input.rightHeld && input.pointerLocked && this.player.alive && !this.over;
+    this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
-    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY);
+    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
+    // FOV zoom while aiming
+    const targetFov = 74 - 22 * this.weapon.aimBlend;
+    if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
+      this.player.camera.fov = targetFov;
+      this.player.camera.updateProjectionMatrix();
+    }
+    this.hud.setAiming(this.weapon.aimBlend > 0.5);
 
     // Player shooting (semi-auto)
     this.fireCooldown -= dt;
@@ -200,7 +210,8 @@ export class OfficeLevelScene implements GameScene {
 
     // Spread grows with movement, shrinks when crouched
     const speedFactor = this.player.currentSpeed / 6.6;
-    const spread = 0.0045 + speedFactor * 0.028 + (this.player.crouching ? -0.002 : 0);
+    let spread = 0.0045 + speedFactor * 0.028 + (this.player.crouching ? -0.002 : 0);
+    spread *= 1 - 0.8 * this.weapon.aimBlend; // sights in = tight groups
 
     const eye = this.player.eyePosition();
     const dir = new THREE.Vector3();

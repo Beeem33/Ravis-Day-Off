@@ -38,6 +38,8 @@ export class FPSPlayer {
   grounded = false;
   crouching = false;
   sprinting = false;
+  /** Aiming down sights (set by the scene from right-mouse). */
+  aiming = false;
 
   private height = STAND_HEIGHT;
   private bobPhase = 0;
@@ -157,8 +159,9 @@ export class FPSPlayer {
     if (input.isDown('KeyD')) strafe += 1;
     if (input.isDown('KeyA')) strafe -= 1;
     const moving = fwd !== 0 || strafe !== 0;
-    this.sprinting = input.isDown('ShiftLeft') && fwd > 0 && !this.crouching;
-    const maxSpeed = this.crouching ? CROUCH_SPEED : this.sprinting ? SPRINT_SPEED : WALK_SPEED;
+    this.sprinting = input.isDown('ShiftLeft') && fwd > 0 && !this.crouching && !this.aiming;
+    let maxSpeed = this.crouching ? CROUCH_SPEED : this.sprinting ? SPRINT_SPEED : WALK_SPEED;
+    if (this.aiming) maxSpeed *= 0.62; // ADS walk
 
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);

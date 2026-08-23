@@ -74,6 +74,7 @@ export class MenuUI {
             <tr><td>MOVE</td><td>W / A / S / D</td></tr>
             <tr><td>LOOK</td><td>MOUSE</td></tr>
             <tr><td>FIRE</td><td>LEFT CLICK</td></tr>
+            <tr><td>AIM</td><td>RIGHT CLICK (HOLD)</td></tr>
             <tr><td>SPRINT</td><td>SHIFT</td></tr>
             <tr><td>CROUCH</td><td>CTRL / C</td></tr>
             <tr><td>JUMP</td><td>SPACE</td></tr>

@@ -149,7 +149,7 @@ export class FPSHUD {
         this.winOverlay.querySelector('#win-time')!.textContent = `Shift cleared in ${mm}:${ss}`;
         window.setTimeout(() => {
           this.winOverlay.style.display = 'flex';
-        }, 1200);
+        }, 3000);
       })
     );
   }

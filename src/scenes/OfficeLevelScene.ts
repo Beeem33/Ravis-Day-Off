@@ -524,7 +524,8 @@ export class OfficeLevelScene implements GameScene {
       this.over = true;
       this.won = true;
       bus.emit(Events.LevelComplete);
-      this.ctx.input.exitPointerLock();
+      // Let the last one hit the floor before the shift-complete card (3 s)
+      window.setTimeout(() => this.ctx.input.exitPointerLock(), 3000);
     }
   }
 }

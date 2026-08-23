@@ -25,8 +25,10 @@ export class Enemy {
   readonly eyeHeight = 1.58;
   readonly parts: THREE.Mesh[] = [];
 
-  private legL!: THREE.Mesh;
-  private legR!: THREE.Mesh;
+  private legL!: THREE.Group; // thigh, pivots at the hip
+  private legR!: THREE.Group;
+  private shinL!: THREE.Group; // shin + shoe, pivots at the knee
+  private shinR!: THREE.Group;
   private armL!: THREE.Group;
   private armR!: THREE.Group;
   /** Forearm groups, pivoted at the elbows. */
@@ -156,17 +158,27 @@ export class Enemy {
 
     // Legs: suit trousers + polished shoes
     // (No clone(): Object3D.copy JSON-serializes userData, which holds a back-ref to this enemy.)
-    const legGeo = new THREE.BoxGeometry(0.17, 0.82, 0.19);
-    this.legL = this.addPart(new THREE.Mesh(legGeo, suit), 'leg');
-    this.legL.position.set(-0.115, 0.41, 0);
-    this.legR = this.addPart(new THREE.Mesh(legGeo, suit), 'leg');
-    this.legR.position.set(0.115, 0.41, 0);
-    for (const leg of [this.legL, this.legR]) {
+    // Thigh pivots at the hip; shin (+ shoe) pivots at the knee
+    const mkLeg = (side: number): [THREE.Group, THREE.Group] => {
+      const hip = new THREE.Group();
+      hip.position.set(side * 0.115, 0.82, 0);
+      const thigh = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.41, 0.19), suit), 'leg');
+      thigh.position.set(0, -0.205, 0);
+      hip.add(thigh);
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.41, 0);
+      const shin = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.41, 0.18), suit), 'leg');
+      shin.position.set(0, -0.205, 0);
+      knee.add(shin);
       const s = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.08, 0.27), shoe);
       s.position.set(0, -0.37, -0.04);
-      leg.add(s);
-    }
-    this.root.add(this.legL, this.legR);
+      knee.add(s);
+      hip.add(knee);
+      this.root.add(hip);
+      return [hip, knee];
+    };
+    [this.legL, this.shinL] = mkLeg(-1);
+    [this.legR, this.shinR] = mkLeg(1);
 
     // Torso: black jacket over a white shirt, tie, lapels, buttons
     this.torso = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.62, 0.26), suit), 'torso');
@@ -348,8 +360,10 @@ export class Enemy {
       armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
       foreL: { visual: this.foreL, center: new THREE.Vector3(-0.29, 0.965, 0), half: new THREE.Vector3(0.055, 0.145, 0.065), mass: 1.8 },
       foreR: { visual: this.foreR, center: new THREE.Vector3(0.29, 0.965, 0), half: new THREE.Vector3(0.055, 0.145, 0.065), mass: 2.5 },
-      legL: { visual: this.legL, center: new THREE.Vector3(-0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 },
-      legR: { visual: this.legR, center: new THREE.Vector3(0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 }
+      legL: { visual: this.legL, center: new THREE.Vector3(-0.115, 0.615, 0), half: new THREE.Vector3(0.085, 0.205, 0.095), mass: 6 },
+      legR: { visual: this.legR, center: new THREE.Vector3(0.115, 0.615, 0), half: new THREE.Vector3(0.085, 0.205, 0.095), mass: 6 },
+      shinL: { visual: this.shinL, center: new THREE.Vector3(-0.115, 0.205, 0), half: new THREE.Vector3(0.08, 0.205, 0.09), mass: 4 },
+      shinR: { visual: this.shinR, center: new THREE.Vector3(0.115, 0.205, 0), half: new THREE.Vector3(0.08, 0.205, 0.09), mass: 4 }
     };
 
     for (const [name, limb] of Object.entries(limbs)) {
@@ -376,6 +390,8 @@ export class Enemy {
       limb.visual.rotation.set(0, 0, 0);
       // Arm groups pivot at the shoulder / elbow; their bodies are centred 0.145 below that
       if (name.startsWith('arm') || name.startsWith('fore')) limb.visual.position.y = 0.145;
+      // Leg groups pivot at the hip / knee; their bodies are centred 0.205 below that
+      if (name.startsWith('leg') || name.startsWith('shin')) limb.visual.position.y = 0.205;
       container.add(limb.visual);
       this.ragdoll.push({ body, container });
       this.ragdollByName.set(name, body);
@@ -398,6 +414,8 @@ export class Enemy {
     joint('armR', 'foreR', new THREE.Vector3(0.29, 1.11, 0));
     joint('torso', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
     joint('torso', 'legR', new THREE.Vector3(0.115, 0.82, 0));
+    joint('legL', 'shinL', new THREE.Vector3(-0.115, 0.41, 0)); // knees
+    joint('legR', 'shinR', new THREE.Vector3(0.115, 0.41, 0));
 
     // The bullet's punch goes into whichever part it struck, plus a smaller
     // shove to the torso so the whole body goes with it.
@@ -561,17 +579,23 @@ export class Enemy {
     const swing = Math.sin(this.walkPhase) * 0.55 * this.walkSpeed;
     this.legL.rotation.x = swing;
     this.legR.rotation.x = -swing;
+    // Knees bend on the back-swing
+    this.shinL.rotation.x = Math.max(0, swing) * 0.9;
+    this.shinR.rotation.x = Math.max(0, -swing) * 0.9;
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
     this.aimBlend += (this.aimTarget - this.aimBlend) * Math.min(1, dt * 8);
     const armSwing = -swing * 0.7;
-    const raise = -1.25 * this.aimBlend;
+    // (+x rotation swings a hanging arm FORWARD — the old negative sign put them behind the back)
+    const raise = 1.25 * this.aimBlend;
     this.armR.rotation.x = raise + armSwing * (1 - this.aimBlend);
     this.armL.rotation.x = raise * 0.9 - armSwing * (1 - this.aimBlend);
     this.armL.rotation.z = 0.35 * this.aimBlend;
     // Elbows: bent to hold the rifle when aiming, loose swing while walking
-    this.foreR.rotation.x = -0.55 * this.aimBlend - Math.max(0, armSwing) * 0.6 * (1 - this.aimBlend);
-    this.foreL.rotation.x = -0.9 * this.aimBlend - Math.max(0, -armSwing) * 0.6 * (1 - this.aimBlend);
+    this.foreR.rotation.x = 0.45 * this.aimBlend + Math.max(0, armSwing) * 0.6 * (1 - this.aimBlend);
+    this.foreL.rotation.x = 0.8 * this.aimBlend + Math.max(0, -armSwing) * 0.6 * (1 - this.aimBlend);
+    // Rifle stays level and pointing forward whatever the arm does (slight dip when carried)
+    this.rifle.rotation.x = -(this.armR.rotation.x + this.foreR.rotation.x) - 0.15 * (1 - this.aimBlend);
 
     // Subtle idle breathing
     this.torso.position.y = 1.13 + Math.sin(this.walkPhase * 0.3) * 0.008;

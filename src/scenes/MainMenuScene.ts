@@ -135,12 +135,25 @@ export class MainMenuScene implements GameScene {
       this.guardHead.add(cup);
     }
     // Legs kicked up on the desk, arms hanging
-    const legs = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 1.05), lam(0x232c3f));
-    legs.position.set(0.4, 0.85, -1.15);
-    legs.rotation.x = 0.28;
-    s.add(legs);
+    // Legs: thighs angle up from the chair seat (y≈0.6), calves lie flat on
+    // the desk top (y=1.0) so the ankles rest ON the desk, not inside it.
+    const trousers = lam(0x232c3f);
+    const legSeg = (x: number, y0: number, z0: number, y1: number, z1: number) => {
+      const len = Math.hypot(y1 - y0, z1 - z0);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, len), trousers);
+      seg.position.set(x, (y0 + y1) / 2, (z0 + z1) / 2);
+      seg.rotation.x = Math.atan2(y1 - y0, -(z1 - z0)); // +x rotation lifts the -z end
+      s.add(seg);
+    };
+    for (const x of [0.28, 0.52]) {
+      legSeg(x, 0.66, -0.4, 0.98, -0.9); // thigh: hip → knee
+      legSeg(x, 1.08, -0.9, 1.13, -1.45); // calf: knee → ankle, underside just on the desk top
+    }
+    const leftFoot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.3), lam(0x17191c));
+    leftFoot.position.set(0.28, 1.07, -1.58);
+    s.add(leftFoot);
     this.guardFoot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.3), lam(0x17191c));
-    this.guardFoot.position.set(0.52, 1.06, -1.62);
+    this.guardFoot.position.set(0.52, 1.07, -1.58);
     s.add(this.guardFoot);
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.5, 0.14), uniform);
     arm.position.set(0.75, 0.72, -0.3);

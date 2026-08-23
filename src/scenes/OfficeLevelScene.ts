@@ -202,8 +202,10 @@ export class OfficeLevelScene implements GameScene {
         // Corpse has come to rest — pool of blood
         this.pooledCorpses.add(this.enemies[i]);
         const base = this.enemies[i].corpseBase();
-        const floorY = base.y < 2 ? 0 : 3.3;
-        this.decals.place('pool', new THREE.Vector3(base.x, floorY, base.z), new THREE.Vector3(0, 1, 0));
+        // Pool goes on whatever the body is actually lying on (floor, desk,
+        // stair landing…) — never on a guessed floor height.
+        const under = this.surfaceBelow(base, 3);
+        if (under) this.decals.place('pool', under.point, under.normal);
         this.ctx.audio.bodyThud(this.player.position.distanceTo(base));
       }
     }
@@ -222,6 +224,23 @@ export class OfficeLevelScene implements GameScene {
   }
 
   // -------------------------------------------------------------- ballistics
+
+  /**
+   * Nearest solid level surface straight down from a point (floors, desks,
+   * stairs — not enemies or glass). Null over a void.
+   */
+  private surfaceBelow(from: THREE.Vector3, maxDist: number): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    this.raycaster.set(from.clone().add(new THREE.Vector3(0, 0.05, 0)), new THREE.Vector3(0, -1, 0));
+    this.raycaster.far = maxDist + 0.05;
+    const hit = this.raycaster
+      .intersectObjects(this.level.shootables, false)
+      .find((h) => !h.object.userData.enemy && !h.object.userData.glass);
+    if (!hit) return null;
+    const normal = (hit.face?.normal ?? new THREE.Vector3(0, 1, 0)).clone().transformDirection(hit.object.matrixWorld);
+    // Only accept upward-facing surfaces; a wall edge isn't somewhere blood pools
+    if (normal.y < 0.5) return null;
+    return { point: hit.point, normal };
+  }
 
   private startReload(): void {
     if (this.weapon.startReload()) {
@@ -386,9 +405,12 @@ export class OfficeLevelScene implements GameScene {
       bus.emit(Events.HitMarker, { lethal: true });
     }
 
-    // Gore: spray from the wound + splatter projected on whatever is behind
-    const floorY = enemy.position.y < 2 ? 0 : 3.3;
-    this.particles.bloodSpray(point, dir, true, floorY + 0.02);
+    // Gore. Every splatter is projected onto a real surface found by raycast;
+    // if there's nothing there (over the mezzanine void, etc.) nothing is drawn.
+    const ground = this.surfaceBelow(point, 6);
+    // Spray particles settle on the true surface under the wound, or never settle
+    this.particles.bloodSpray(point, dir, true, ground ? ground.point.y + 0.02 : -1);
+    // Exit splatter on whatever is behind the victim along the bullet path
     this.raycaster.set(point.clone().addScaledVector(dir, 0.3), dir);
     this.raycaster.far = 7;
     const behind = this.raycaster
@@ -399,8 +421,8 @@ export class OfficeLevelScene implements GameScene {
       const n = (h.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(h.object.matrixWorld);
       this.decals.place('blood', h.point, n, 0.6 + Math.random() * 0.9);
     }
-    // A splash at the feet too
-    this.decals.place('blood', new THREE.Vector3(point.x, floorY, point.z), new THREE.Vector3(0, 1, 0));
+    // Drip splash on the surface directly below the wound
+    if (ground) this.decals.place('blood', ground.point, ground.normal);
 
     bus.emit(Events.EnemyKilled, {
       name: enemy.name,

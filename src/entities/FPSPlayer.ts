@@ -73,10 +73,32 @@ export class FPSPlayer {
     return out.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
   }
 
-  private box(height = this.height, pos = this.position): THREE.Box3 {
+  /**
+   * Player AABB. Box3.intersectsBox treats *touching* as intersecting, so
+   * horizontal tests lift the box slightly off the floor and vertical tests
+   * shrink it sideways — otherwise the floor blocks walking and walls you
+   * brush against read as ground.
+   */
+  private box(
+    height = this.height,
+    pos = this.position,
+    mode: 'horizontal' | 'vertical' = 'horizontal',
+    movingAxis: 0 | 2 | -1 = -1
+  ): THREE.Box3 {
+    const SKIN = 0.03;
+    if (mode === 'horizontal') {
+      // Inset the axis we're NOT moving along, so being flush against a wall
+      // doesn't block sliding along it.
+      const ix = movingAxis === 2 ? SKIN : 0;
+      const iz = movingAxis === 0 ? SKIN : 0;
+      return new THREE.Box3(
+        new THREE.Vector3(pos.x - RADIUS + ix, pos.y + SKIN, pos.z - RADIUS + iz),
+        new THREE.Vector3(pos.x + RADIUS - ix, pos.y + height - SKIN, pos.z + RADIUS - iz)
+      );
+    }
     return new THREE.Box3(
-      new THREE.Vector3(pos.x - RADIUS, pos.y, pos.z - RADIUS),
-      new THREE.Vector3(pos.x + RADIUS, pos.y + height, pos.z + RADIUS)
+      new THREE.Vector3(pos.x - RADIUS + SKIN, pos.y, pos.z - RADIUS + SKIN),
+      new THREE.Vector3(pos.x + RADIUS - SKIN, pos.y + height, pos.z + RADIUS - SKIN)
     );
   }
 
@@ -213,7 +235,7 @@ export class FPSPlayer {
     const pos = this.position;
     const key = axis === 0 ? 'x' : 'z';
     pos[key] += delta;
-    const box = this.box();
+    const box = this.box(this.height, pos, 'horizontal', axis);
     let blockedTop = -Infinity;
     let hit = false;
     for (const c of colliders) {
@@ -229,7 +251,7 @@ export class FPSPlayer {
     if (this.grounded && stepH > 0 && stepH <= STEP_UP) {
       const stepped = pos.clone();
       stepped.y = blockedTop + 0.001;
-      if (!this.collides(this.box(this.height, stepped), colliders)) {
+      if (!this.collides(this.box(this.height, stepped, 'horizontal', axis), colliders)) {
         pos.y = stepped.y;
         return;
       }
@@ -242,8 +264,8 @@ export class FPSPlayer {
   private moveVertical(delta: number, colliders: Collider[]): void {
     const pos = this.position;
     pos.y += delta;
-    const box = this.box();
-    let wasGrounded = this.grounded;
+    const box = this.box(this.height, pos, 'vertical');
+    const wasGrounded = this.grounded;
     this.grounded = false;
     for (const c of colliders) {
       if (c.disabled) continue;
@@ -260,7 +282,7 @@ export class FPSPlayer {
         this.velocity.y = 0;
       }
       // Recompute box after correction
-      box.copy(this.box());
+      box.copy(this.box(this.height, pos, 'vertical'));
     }
   }
 

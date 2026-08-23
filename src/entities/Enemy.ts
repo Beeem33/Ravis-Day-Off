@@ -397,7 +397,12 @@ export class Enemy {
           : new CANNON.Box(new CANNON.Vec3(limb.half.x, limb.half.y, limb.half.z)),
         position: new CANNON.Vec3(worldCenter.x, worldCenter.y, worldCenter.z),
         linearDamping: 0.04,
-        angularDamping: 0.12
+        angularDamping: 0.08,
+        // Ragdoll parts don't collide with EACH OTHER (group 2 only hits group 1:
+        // the level, mags, guns). Thigh/shin and arm boxes overlap at every
+        // joint, so self-collision was jamming the knees and elbows stiff.
+        collisionFilterGroup: 2,
+        collisionFilterMask: 1
       });
       body.quaternion.set(yawQ.x, yawQ.y, yawQ.z, yawQ.w);
       world.addBody(body);
@@ -425,9 +430,9 @@ export class Enemy {
       const B = this.ragdollByName.get(b)!;
       const pa = pivot.clone().sub(limbs[a].center);
       const pb = pivot.clone().sub(limbs[b].center);
-      world.addConstraint(
-        new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4)
-      );
+      const c = new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4);
+      c.collideConnected = false; // free hinge — no contact between the two halves of a joint
+      world.addConstraint(c);
     };
     // Neck: a cone-twist so the head nods/rolls but only swivels ±90° — no owl necks
     {
@@ -444,7 +449,8 @@ export class Enemy {
           axisB: new CANNON.Vec3(0, 1, 0),
           angle: 0.9, // nod / tilt range
           twistAngle: Math.PI / 2, // ±90° swivel = 180° total
-          maxForce: 1e4
+          maxForce: 1e4,
+          collideConnected: false
         })
       );
     }

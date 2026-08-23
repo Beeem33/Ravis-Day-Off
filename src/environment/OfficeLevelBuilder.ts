@@ -875,13 +875,21 @@ export class OfficeLevelBuilder {
       [5, y1, 4], // 23 lounge SE
       [0, y1, 8], // 24 lounge N center
       [-8, y1, 8], // 25 lounge NW
-      [-14, y1, 2] // 26 lounge W
+      [-14, y1, 2], // 26 lounge W
+      // Stairwell route — lets patrols cross between floors
+      [10.8, y0, -2.9], // 27 outside the stairwell door
+      [14.3, y0, -2.9], // 28 inside the stairwell
+      [17.1, y0, -3.0], // 29 foot of flight A
+      [17.1, y0 + 1.65, -7.4], // 30 landing, east end
+      [14.1, y0 + 1.65, -7.4], // 31 landing, west end (foot of flight B)
+      [14.1, y1, -4.2] // 32 top of flight B
     ];
     const links: [number, number][] = [
       [0, 1], [0, 2], [1, 8], [1, 13], [2, 3], [3, 12], [3, 4], [4, 6], [6, 5],
       [5, 7], [5, 10], [10, 12], [10, 9], [9, 13], [13, 8], [8, 11],
       [14, 15], [15, 16], [16, 17], [17, 18], [18, 19], [19, 20],
-      [16, 21], [15, 22], [16, 23], [23, 24], [24, 25], [25, 26], [26, 18]
+      [16, 21], [15, 22], [16, 23], [23, 24], [24, 25], [25, 26], [26, 18],
+      [3, 27], [4, 27], [27, 28], [28, 29], [29, 30], [30, 31], [31, 32], [32, 14]
     ];
     const wps: Waypoint[] = pts.map(([x, y, z]) => ({ pos: new THREE.Vector3(x, y, z), links: [] }));
     for (const [a, b] of links) {

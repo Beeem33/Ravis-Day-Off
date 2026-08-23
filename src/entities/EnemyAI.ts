@@ -34,6 +34,8 @@ export class EnemyAI {
   state: AIState = 'patrol';
   private awareness = 0; // 0..1 — fills while the player is in the cone
   private targetWp: number;
+  /** Remaining waypoints of the current patrol route. */
+  private path: number[] = [];
   private pauseTimer = 0;
   private investigatePos: THREE.Vector3 | null = null;
   private investigateTimer = 0;
@@ -216,13 +218,44 @@ export class EnemyAI {
     const wp = this.deps.waypoints[this.targetWp];
     const arrived = this.moveToward(wp.pos, PATROL_SPEED, dt);
     if (arrived) {
-      // Idle pause, then wander to a random linked waypoint on this floor
-      this.pauseTimer = 0.8 + Math.random() * 2.6;
-      const links = wp.links.filter(
-        (i) => Math.abs(this.deps.waypoints[i].pos.y - enemy.position.y) < 1.5
-      );
-      if (links.length > 0) this.targetWp = links[Math.floor(Math.random() * links.length)];
+      if (this.path.length > 0) {
+        // Next leg of the route — only a short breather at corners
+        this.targetWp = this.path.shift()!;
+        this.pauseTimer = Math.random() < 0.3 ? 0.4 + Math.random() * 1.2 : 0;
+      } else {
+        // Reached the destination: look around a while, then pick somewhere
+        // else in the building (either floor — the stairs are on the graph).
+        this.pauseTimer = 1.2 + Math.random() * 3;
+        this.planRoute();
+      }
     }
+  }
+
+  /** Breadth-first route across the waypoint graph to a random far-off node. */
+  private planRoute(): void {
+    const wps = this.deps.waypoints;
+    const start = this.targetWp;
+    let dest = Math.floor(Math.random() * wps.length);
+    for (let tries = 0; tries < 6 && wps[dest].pos.distanceTo(wps[start].pos) < 8; tries++) {
+      dest = Math.floor(Math.random() * wps.length);
+    }
+    const prev = new Map<number, number>([[start, -1]]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (cur === dest) break;
+      for (const n of wps[cur].links) {
+        if (!prev.has(n)) {
+          prev.set(n, cur);
+          queue.push(n);
+        }
+      }
+    }
+    if (!prev.has(dest)) return;
+    const route: number[] = [];
+    for (let n = dest; n !== start && n !== -1; n = prev.get(n)!) route.unshift(n);
+    this.path = route;
+    if (this.path.length > 0) this.targetWp = this.path.shift()!;
   }
 
   private updateSuspicious(dt: number, seen: boolean): void {
@@ -313,7 +346,8 @@ export class EnemyAI {
         if (c.disabled) continue;
         const b = c.box;
         // Horizontal slab of the enemy's capsule; skip floors (top below the knees)
-        if (b.max.y <= p.y + 0.25 || b.min.y >= p.y + 1.6) continue;
+        // Skip floors and anything below the knee (stair treads) so they can climb
+        if (b.max.y <= p.y + 0.5 || b.min.y >= p.y + 1.6) continue;
         const ox = Math.min(p.x + R - b.min.x, b.max.x - (p.x - R));
         const oz = Math.min(p.z + R - b.min.z, b.max.z - (p.z - R));
         if (ox <= 0 || oz <= 0) continue;
@@ -334,7 +368,10 @@ export class EnemyAI {
     }
     to.normalize();
     enemy.faceToward(target, dt, 6);
-    enemy.position.addScaledVector(to, Math.min(speed * dt, dist));
+    const step = Math.min(speed * dt, dist);
+    enemy.position.addScaledVector(to, step);
+    // Climb/descend with the link (stairs): height follows the progress along it
+    enemy.position.y += (target.y - enemy.position.y) * Math.min(1, step / Math.max(0.001, dist));
     this.resolveCollisions();
     enemy.setWalk(Math.min(1, speed / 2.5));
 

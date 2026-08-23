@@ -43,11 +43,14 @@ export class Enemy {
   private ragdoll: { body: CANNON.Body; container: THREE.Group }[] = [];
   private ragdollByName = new Map<string, CANNON.Body>();
   private gunBody: CANNON.Body | null = null;
+  /** Picks the suit/hair/tie look. */
+  private variant: number;
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
   constructor(spawn: THREE.Vector3, yaw: number, index: number) {
     this.name = AMERICAN_NAMES[index % AMERICAN_NAMES.length];
+    this.variant = index;
     this.root.position.copy(spawn);
     this.yaw = yaw;
     this.root.rotation.y = yaw;
@@ -70,50 +73,180 @@ export class Enemy {
     return mesh;
   }
 
-  private buildBody(): void {
-    const camo = this.mat(0x4a4738);
-    const denim = this.mat(0x39414e);
-    const skin = this.mat(0xc59a76);
-    const vest = this.mat(0x23261f);
-    const gunmetal = this.mat(0x1a1c20, 0.5);
+  /** Shared face textures: one mean, one very dead. */
+  private static faceAngry: THREE.MeshStandardMaterial | null = null;
+  private static faceDead: THREE.MeshStandardMaterial | null = null;
 
-    // Legs
+  private static drawFace(dead: boolean): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = dead ? '#b9957a' : '#c59a76';
+    g.fillRect(0, 0, 64, 64);
+    // Stubble
+    g.fillStyle = 'rgba(60,40,30,0.25)';
+    for (let i = 0; i < 90; i++) g.fillRect(10 + Math.random() * 44, 36 + Math.random() * 22, 1, 1);
+    g.strokeStyle = '#2a1d15';
+    g.lineCap = 'round';
+    if (!dead) {
+      // Heavy brows slanted inward, narrowed eyes, hard frown
+      g.lineWidth = 4;
+      g.beginPath();
+      g.moveTo(12, 20);
+      g.lineTo(27, 26);
+      g.moveTo(52, 20);
+      g.lineTo(37, 26);
+      g.stroke();
+      g.fillStyle = '#f2efe9';
+      g.fillRect(15, 28, 11, 5);
+      g.fillRect(38, 28, 11, 5);
+      g.fillStyle = '#1a1a1a';
+      g.fillRect(19, 29, 4, 4);
+      g.fillRect(42, 29, 4, 4);
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(22, 50);
+      g.quadraticCurveTo(32, 43, 42, 50);
+      g.stroke();
+    } else {
+      // X eyes, slack open mouth, a trickle from the nose
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(16, 26);
+      g.lineTo(26, 35);
+      g.moveTo(26, 26);
+      g.lineTo(16, 35);
+      g.moveTo(38, 26);
+      g.lineTo(48, 35);
+      g.moveTo(48, 26);
+      g.lineTo(38, 35);
+      g.stroke();
+      g.fillStyle = '#3a0c0c';
+      g.beginPath();
+      g.ellipse(32, 50, 6, 7, 0, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#7a1010';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(30, 40);
+      g.lineTo(28, 47);
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
+
+  private buildBody(): void {
+    const suit = this.mat(0x15161a, 0.8);
+    const shirt = this.mat(0xe9e6df, 0.9);
+    const skin = this.mat(0xc59a76);
+    const shoe = this.mat(0x0d0d10, 0.45);
+    const glove = this.mat(0x0f0f12, 0.9);
+    const gunmetal = this.mat(0x1a1c20, 0.5);
+    const tieColors = [0x8c1515, 0x111111, 0x1f2a6b, 0x5a1a6b, 0x8c1515, 0x2a2a2a];
+    const tie = this.mat(tieColors[this.variant % tieColors.length], 0.7);
+    const hairColors = [0x1b1410, 0x3a2a1c, 0x0d0d0d, 0x6b4a2b, 0x2b2b2b, 0x8a7a66];
+    const hair = this.mat(hairColors[this.variant % hairColors.length], 0.95);
+
+    // Legs: suit trousers + polished shoes
     // (No clone(): Object3D.copy JSON-serializes userData, which holds a back-ref to this enemy.)
     const legGeo = new THREE.BoxGeometry(0.17, 0.82, 0.19);
-    this.legL = this.addPart(new THREE.Mesh(legGeo, denim), 'leg');
+    this.legL = this.addPart(new THREE.Mesh(legGeo, suit), 'leg');
     this.legL.position.set(-0.115, 0.41, 0);
-    this.legR = this.addPart(new THREE.Mesh(legGeo, denim), 'leg');
+    this.legR = this.addPart(new THREE.Mesh(legGeo, suit), 'leg');
     this.legR.position.set(0.115, 0.41, 0);
+    for (const leg of [this.legL, this.legR]) {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.08, 0.27), shoe);
+      s.position.set(0, -0.37, -0.04);
+      leg.add(s);
+    }
     this.root.add(this.legL, this.legR);
 
-    // Torso + tactical vest
-    this.torso = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.62, 0.26), camo), 'torso');
+    // Torso: black jacket over a white shirt, tie, lapels, buttons
+    this.torso = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.62, 0.26), suit), 'torso');
     this.torso.position.set(0, 1.13, 0);
     this.root.add(this.torso);
-    const vestMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.42, 0.3), vest);
-    vestMesh.position.set(0, 0.02, 0);
-    this.torso.add(vestMesh);
+    const shirtFront = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.02), shirt);
+    shirtFront.position.set(0, 0.04, -0.135);
+    this.torso.add(shirtFront);
+    const tieMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.36, 0.015), tie);
+    tieMesh.position.set(0, 0.04, -0.15);
+    this.torso.add(tieMesh);
+    const knot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.02), tie);
+    knot.position.set(0, 0.25, -0.15);
+    this.torso.add(knot);
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.36, 0.015), suit);
+      lapel.position.set(side * 0.09, 0.1, -0.142);
+      lapel.rotation.z = side * 0.18;
+      this.torso.add(lapel);
+    }
+    for (const y of [-0.08, -0.16]) {
+      const btn = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.01), shoe);
+      btn.position.set(0.01, y, -0.145);
+      this.torso.add(btn);
+    }
 
-    // Head + cap
-    this.head = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.24), skin), 'head');
+    // Head: face texture on the front (-Z), hair by variant
+    if (!Enemy.faceAngry) Enemy.faceAngry = Enemy.drawFace(false);
+    if (!Enemy.faceDead) Enemy.faceDead = Enemy.drawFace(true);
+    this.head = this.addPart(
+      new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.24), [skin, skin, skin, skin, skin, Enemy.faceAngry]),
+      'head'
+    );
     this.head.position.set(0, 1.62, 0);
     this.root.add(this.head);
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.09, 0.26), this.mat(0x7a1f1f));
-    cap.position.set(0, 0.16, 0.02);
-    this.head.add(cap);
-    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 0.12), this.mat(0x7a1f1f));
-    brim.position.set(0, 0.11, -0.16);
-    this.head.add(brim);
+    const hairBox = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hair);
+      m.position.set(x, y, z);
+      this.head.add(m);
+    };
+    switch (this.variant % 6) {
+      case 0: // buzz cut
+        hairBox(0.245, 0.05, 0.245, 0, 0.135, 0);
+        break;
+      case 1: // side part — swept to one side with a fringe
+        hairBox(0.25, 0.08, 0.25, 0, 0.14, 0.01);
+        hairBox(0.13, 0.06, 0.06, -0.055, 0.1, -0.1);
+        break;
+      case 2: // slicked back
+        hairBox(0.25, 0.07, 0.2, 0, 0.145, 0.03);
+        hairBox(0.25, 0.12, 0.05, 0, 0.09, 0.105);
+        break;
+      case 3: // bald (just a shine of stubble at the back)
+        hairBox(0.245, 0.04, 0.03, 0, 0.06, 0.11);
+        break;
+      case 4: // mohawk
+        hairBox(0.06, 0.11, 0.24, 0, 0.17, 0);
+        break;
+      default: // long, past the ears
+        hairBox(0.26, 0.07, 0.26, 0, 0.14, 0);
+        hairBox(0.03, 0.22, 0.24, -0.125, -0.01, 0);
+        hairBox(0.03, 0.22, 0.24, 0.125, -0.01, 0);
+        hairBox(0.26, 0.22, 0.03, 0, -0.01, 0.115);
+        break;
+    }
+    // Sunglasses on a couple of them
+    if (this.variant % 3 === 1) {
+      const shades = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.045, 0.02), this.mat(0x050505, 0.2));
+      shades.position.set(0, 0.03, -0.125);
+      this.head.add(shades);
+    }
 
-    // Arms (pivot at shoulders so they can swing / raise)
+    // Arms: suit sleeves, white cuff, black gloves (pivot at shoulders)
     const mkArm = (side: number): THREE.Group => {
       const g = new THREE.Group();
       g.position.set(side * 0.29, 1.4, 0);
-      const arm = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.58, 0.14), camo), 'arm');
+      const arm = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.58, 0.14), suit), 'arm');
       arm.position.set(0, -0.26, 0);
       g.add(arm);
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.1), skin);
-      hand.position.set(0, -0.58, 0);
+      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.03, 0.145), shirt);
+      cuff.position.set(0, -0.53, 0);
+      g.add(cuff);
+      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.1), glove);
+      hand.position.set(0, -0.6, 0);
       g.add(hand);
       this.root.add(g);
       return g;
@@ -183,9 +316,12 @@ export class Enemy {
    * bullet impulse lands on whichever part was hit, and the whole thing
    * folds, flops and slides to rest on its own.
    */
-  die(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, world: CANNON.World): void {
+  die(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, world: CANNON.World, hitPart: string = 'torso'): void {
     if (!this.alive) return;
     this.alive = false;
+    // The lights go out behind the eyes
+    const mats = this.head.material as THREE.Material[];
+    if (Array.isArray(mats) && Enemy.faceDead) mats[5] = Enemy.faceDead;
     this.world = world;
     this.deadTimer = 0;
     this.root.updateMatrixWorld(true);
@@ -264,8 +400,45 @@ export class Enemy {
       const rel = new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z);
       body.applyImpulse(impulse, rel);
     };
-    punch(struck, 1);
-    if (struck !== this.ragdollByName.get('torso')) punch(this.ragdollByName.get('torso')!, 0.6);
+    // Where the bullet landed decides how they go down.
+    const torsoB = this.ragdollByName.get('torso')!;
+    const headB = this.ragdollByName.get('head')!;
+    const fwdDir = this.forwardDir(new THREE.Vector3());
+    const r = () => Math.random();
+    const nudge = (b: CANNON.Body, v: THREE.Vector3) => b.velocity.vadd(new CANNON.Vec3(v.x, v.y, v.z), b.velocity);
+    if (hitPart === 'head') {
+      // Head shot: the head whips back hard, knees go, body follows it down backwards
+      punch(headB, 1.6);
+      punch(torsoB, 0.25);
+      torsoB.angularVelocity.set(-fwdDir.z * 0, 0, 0);
+      // Pitch the torso over backwards relative to the bullet
+      const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), bulletDir).normalize();
+      torsoB.angularVelocity.set(axis.x * 5, 0, axis.z * 5);
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * 1.2, -1.5, bulletDir.z * 1.2));
+    } else if (hitPart === 'arm') {
+      // Arm hit: yanks the shoulder round — they spin on the spot and corkscrew down
+      punch(struck, 1.3);
+      punch(torsoB, 0.3);
+      const side = Math.sign((struck.position.x - torsoB.position.x) * fwdDir.z - (struck.position.z - torsoB.position.z) * fwdDir.x) || 1;
+      torsoB.angularVelocity.set(0, side * (6 + r() * 4), 0);
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * 0.8, 0.4, bulletDir.z * 0.8));
+    } else if (hitPart === 'leg') {
+      // Leg shot: that knee buckles first, they drop straight down and topple
+      punch(struck, 1.2);
+      nudge(struck, new THREE.Vector3(0, -2, 0));
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * 0.3, -3, bulletDir.z * 0.3));
+      const lean = r() < 0.5 ? 1 : -1; // forward or back
+      torsoB.angularVelocity.set(fwdDir.z * lean * 2.5, (r() - 0.5) * 2, -fwdDir.x * lean * 2.5);
+    } else {
+      // Body shot: knocked back off their feet, folding around the wound
+      punch(struck, 1);
+      if (struck !== torsoB) punch(torsoB, 0.6);
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * (1.5 + r()), 0.5, bulletDir.z * (1.5 + r())));
+      const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), bulletDir).normalize();
+      const hi = hitPoint.y - this.root.position.y > 1.2 ? -1 : 1; // high chest: head snaps back; gut: folds forward
+      torsoB.angularVelocity.set(axis.x * 3 * hi, (r() - 0.5) * 3, axis.z * 3 * hi);
+    }
+    void headB;
     // The rifle leaves their hands: it becomes its own body and clatters away
     this.rifle.updateWorldMatrix(true, false);
     const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());

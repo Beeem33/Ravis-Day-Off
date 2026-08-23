@@ -416,7 +416,7 @@ export class OfficeLevelScene implements GameScene {
       // ---- Lethal hit on an intruder
       if (enemyRef) {
         const headshot = obj.userData.part === 'head';
-        this.killEnemy(enemyRef, point, dir, shooter === null, headshot);
+        this.killEnemy(enemyRef, point, dir, shooter === null, headshot, (obj.userData.part as string) ?? 'torso');
         return point;
       }
 
@@ -463,10 +463,11 @@ export class OfficeLevelScene implements GameScene {
     point: THREE.Vector3,
     dir: THREE.Vector3,
     byPlayer: boolean,
-    headshot: boolean
+    headshot: boolean,
+    hitPart = 'torso'
   ): void {
     const { audio, bus } = this.ctx;
-    enemy.die(point, dir, this.world);
+    enemy.die(point, dir, this.world, hitPart);
     this.remaining--;
 
     audio.fleshHit();

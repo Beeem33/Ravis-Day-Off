@@ -3,10 +3,12 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'README.md' # the link-bump commit below must not retrigger a deploy
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -41,3 +43,24 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Give every release a fresh Play Game URL (?v=<commit>) so nobody's
+  # browser can serve a stale cached build from the README button.
+  bump-play-link:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Rewrite Play Game link with the deployed commit
+        run: |
+          SHA="${GITHUB_SHA::7}"
+          sed -i -E "s#(beeem33\.github\.io/Ravis-Day-Off/)(\?v=[0-9a-f]+)?#\1?v=${SHA}#g" README.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet && echo "link unchanged" || {
+            git commit -m "Play Game link → build ${SHA}"
+            git push
+          }

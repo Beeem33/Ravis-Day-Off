@@ -91,15 +91,18 @@ export class WeaponViewmodel {
     let rotX = 0.15 * inBlend;
     let rotY = 0.25 * inBlend;
 
-    // Roll schedule: 0 → +1.45 (well faces right) → +4.6 (flipped, well faces left) → 0
+    // Roll schedule: 0 → +1.45 (well faces right) → −1.69 (flipped the DOWNWARD
+    // way, well faces left) → 0. Same end orientations as before; the 180° now
+    // swings the gun and forearm down through the bottom instead of up.
+    const flipped = 1.45 - Math.PI;
     let roll: number;
     if (t < 0.22) roll = 1.45 * ease(c01(t / 0.22));
     else if (t < 0.5) roll = 1.45;
-    else if (t < 0.78) roll = 1.45 + Math.PI * ease(c01((t - 0.5) / 0.28));
-    else if (t < 1.12) roll = 1.45 + Math.PI;
-    else if (t < 1.3) roll = (1.45 + Math.PI) * (1 - ease(c01((t - 1.12) / 0.18))) + Math.PI * 2 * ease(c01((t - 1.12) / 0.18));
-    else roll = Math.PI * 2;
-    const rotZ = roll === Math.PI * 2 ? 0 : roll;
+    else if (t < 0.78) roll = 1.45 - Math.PI * ease(c01((t - 0.5) / 0.28));
+    else if (t < 1.12) roll = flipped;
+    else if (t < 1.3) roll = flipped * (1 - ease(c01((t - 1.12) / 0.18)));
+    else roll = 0;
+    const rotZ = roll;
 
     const offscreen = new THREE.Vector3(-0.32, -0.42, 0.1); // where the left hand goes to fetch a mag
 

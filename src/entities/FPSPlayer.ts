@@ -50,6 +50,27 @@ export class FPSPlayer {
 
   /** Horizontal speed of last frame, used by AI accuracy + weapon spread. */
   currentSpeed = 0;
+  /** >0 while vaulting: step-up limit is raised and glass ahead gets smashed. */
+  private vaultTimer = 0;
+  /** Scene hook: shatter this glass collider (the player is crashing through it). */
+  onVaultGlass: ((c: Collider) => void) | null = null;
+
+  /** Is there something vaultable right in front of us? (waist-high obstacle, or any glass) */
+  private canVault(colliders: Collider[]): boolean {
+    const f = this.forwardDir();
+    const probe = new THREE.Box3(
+      new THREE.Vector3(this.position.x + f.x * 0.55 - 0.3, this.position.y + 0.3, this.position.z + f.z * 0.55 - 0.3),
+      new THREE.Vector3(this.position.x + f.x * 0.55 + 0.3, this.position.y + 1.4, this.position.z + f.z * 0.55 + 0.3)
+    );
+    for (const c of colliders) {
+      if (c.disabled || !probe.intersectsBox(c.box)) continue;
+      if (c.glass) return true;
+      const top = c.box.max.y - this.position.y;
+      if (top >= 0.45 && top <= 1.3) return true;
+    }
+    return false;
+  }
+
   /** Raw mouse delta of the last frame (consumed here, shared with the viewmodel). */
   lastMouseDX = 0;
   lastMouseDY = 0;
@@ -192,9 +213,19 @@ export class FPSPlayer {
 
     // ---- Jump / gravity
     if (this.grounded && input.wasPressed('Space')) {
-      this.velocity.y = JUMP_SPEED;
+      // Something waist-high (a sill, a desk) or a pane of glass right ahead? Vault it.
+      if (this.canVault(colliders)) {
+        this.vaultTimer = 0.7;
+        this.velocity.y = 4.4;
+        const f = this.forwardDir();
+        this.velocity.x += f.x * 3.2;
+        this.velocity.z += f.z * 3.2;
+      } else {
+        this.velocity.y = JUMP_SPEED;
+      }
       this.grounded = false;
     }
+    if (this.vaultTimer > 0) this.vaultTimer -= dt;
     this.velocity.y -= GRAVITY * dt;
 
     // ---- Move with collision (axis separated, with step-up on X/Z)
@@ -265,14 +296,20 @@ export class FPSPlayer {
     for (const c of colliders) {
       if (c.disabled) continue;
       if (box.intersectsBox(c.box)) {
+        // Mid-vault, glass in the way gets crashed through rather than stopping us
+        if (c.glass && this.vaultTimer > 0 && this.onVaultGlass) {
+          this.onVaultGlass(c);
+          if (c.disabled) continue;
+        }
         hit = true;
         blockedTop = Math.max(blockedTop, c.box.max.y);
       }
     }
     if (!hit) return;
-    // Attempt step-up (stairs / thresholds)
+    // Attempt step-up (stairs / thresholds; much higher while vaulting)
     const stepH = blockedTop - pos.y;
-    if (this.grounded && stepH > 0 && stepH <= STEP_UP) {
+    const stepLimit = this.vaultTimer > 0 ? 1.25 : STEP_UP;
+    if ((this.grounded || this.vaultTimer > 0) && stepH > 0 && stepH <= stepLimit) {
       const stepped = pos.clone();
       stepped.y = blockedTop + 0.001;
       if (!this.collides(this.box(this.height, stepped, 'horizontal', axis), colliders)) {

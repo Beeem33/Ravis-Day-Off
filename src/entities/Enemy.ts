@@ -185,15 +185,16 @@ export class Enemy {
     // Torso: black jacket over a white shirt, tie, lapels, buttons
     // Two-piece torso: chest (shoulders/neck hang off it) and pelvis (hips hang
     // off it), joined at the stomach so the body can fold in the middle.
-    this.torso = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.36, 0.26, 4, 0.09), suit), 'torso');
+    // Jacket visual hangs below the chest body so it covers the waist seam;
+    // the pelvis body underneath just shows as the trouser top.
+    const jacketGeo = new RoundedBoxGeometry(0.46, 0.5, 0.26, 4, 0.09);
+    jacketGeo.translate(0, -0.07, 0);
+    this.torso = this.addPart(new THREE.Mesh(jacketGeo, suit), 'torso');
     this.torso.position.set(0, 1.27, 0);
     this.root.add(this.torso);
-    this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.3, 0.24, 4, 0.08), suit), 'torso');
+    this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.36, 0.28, 0.22, 4, 0.07), suit), 'torso');
     this.pelvis.position.set(0, 0.96, 0);
     this.root.add(this.pelvis);
-    const belt = new THREE.Mesh(new RoundedBoxGeometry(0.45, 0.04, 0.25, 2, 0.015), shoe);
-    belt.position.set(0, 0.13, 0);
-    this.pelvis.add(belt);
     // Shirt, tie and lapels are flush skins on the chest surface (z = -0.13),
     // not blocks. The tie starts at the collar — the top of the chest — and
     // runs down; the pelvis carries its tail so it reads as one piece.
@@ -209,10 +210,6 @@ export class Enemy {
     knot.position.set(0, 0.16, -0.133);
     knot.rotation.y = Math.PI;
     this.torso.add(knot);
-    const tieTail = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.12), tie);
-    tieTail.position.set(0, 0.08, -0.1215);
-    tieTail.rotation.y = Math.PI;
-    this.pelvis.add(tieTail);
     for (const side of [-1, 1]) {
       const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.3), suit);
       lapel.rotation.y = Math.PI;
@@ -233,7 +230,10 @@ export class Enemy {
       new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.27, 0.24, 5, 0.075), [skin, skin, skin, skin, skin, Enemy.faceAngry]),
       'head'
     );
-    this.head.position.set(0, 1.62, 0);
+    this.head.position.set(0, 1.585, 0); // sits on the collar, not hovering above it
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.08, 10), skin);
+    neck.position.set(0, -0.12, 0);
+    this.head.add(neck);
     this.root.add(this.head);
     const hairBox = (w: number, h: number, d: number, x: number, y: number, z: number) => {
       const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 3, Math.min(w, h, d) * 0.4), hair);
@@ -377,7 +377,7 @@ export class Enemy {
     const limbs: Record<string, Limb> = {
       torso: { visual: this.torso, center: new THREE.Vector3(0, 1.27, 0), half: new THREE.Vector3(0.23, 0.18, 0.13), mass: 18 },
       pelvis: { visual: this.pelvis, center: new THREE.Vector3(0, 0.96, 0), half: new THREE.Vector3(0.22, 0.15, 0.12), mass: 14 },
-      head: { visual: this.head, center: new THREE.Vector3(0, 1.62, 0), half: new THREE.Vector3(0.12, 0.13, 0.12), mass: 5, sphere: 0.13 },
+      head: { visual: this.head, center: new THREE.Vector3(0, 1.585, 0), half: new THREE.Vector3(0.12, 0.13, 0.12), mass: 5, sphere: 0.13 },
       armL: { visual: this.armL, center: new THREE.Vector3(-0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
       armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
       foreL: { visual: this.foreL, center: new THREE.Vector3(-0.29, 0.965, 0), half: new THREE.Vector3(0.055, 0.145, 0.065), mass: 1.8 },
@@ -731,12 +731,20 @@ export class Enemy {
       }
     }
     for (const { body } of this.ragdoll) body.wakeUp();
-    const mag = (35 + Math.random() * 25) * (struck.mass / 18);
+    const mag = (70 + Math.random() * 40) * (struck.mass / 18);
     struck.applyImpulse(
       new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.5 + 4, bulletDir.z * mag),
       new CANNON.Vec3(hitPoint.x - struck.position.x, hitPoint.y - struck.position.y, hitPoint.z - struck.position.z)
     );
     this.addWound(hitPoint, bulletDir, struck);
+    // The whole corpse shifts with the round, not just the bit that was hit
+    for (const { body } of this.ragdoll) {
+      if (body === struck) continue;
+      const near = Math.max(0.2, 1 - body.position.distanceTo(struck.position) / 1.2);
+      body.velocity.x += bulletDir.x * 1.6 * near;
+      body.velocity.y += 0.3 * near;
+      body.velocity.z += bulletDir.z * 1.6 * near;
+    }
     // Keep tracking the bodies until they come to rest again
     this.settled = false;
     this.deadTimer = 0;

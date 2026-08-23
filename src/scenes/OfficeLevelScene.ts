@@ -82,6 +82,20 @@ export class OfficeLevelScene implements GameScene {
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
     this.scene.add(this.player.camera);
+    // Vaulting through a window: smash the pane and keep going
+    this.player.onVaultGlass = (c) => {
+      const pane = c.glass;
+      if (!pane || pane.broken) {
+        c.disabled = true;
+        return;
+      }
+      const dir = this.player.forwardDir();
+      pane.shatter(pane.center(), dir, this.particles, audio, this.player.position);
+      c.disabled = true;
+      const idx = this.level.shootables.indexOf(pane.mesh);
+      if (idx >= 0) this.level.shootables.splice(idx, 1);
+      bus.emit(Events.Sound, { position: pane.center(), radius: 18, kind: 'glass' });
+    };
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.weapon.onReloadEvent = (e) => {
       if (e === 'magOut') audio.magOut();
@@ -202,11 +216,11 @@ export class OfficeLevelScene implements GameScene {
         this.playerShoot();
       } else {
         this.ctx.audio.dryFire();
-        this.startReload();
+        if (!this.player.sprinting) this.startReload();
       }
     }
     // Manual reload on R (only if the mag isn't already full)
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE) this.startReload();
+    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting) this.startReload();
     this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
 
     // Enemies + AI

@@ -135,6 +135,11 @@ export class OfficeLevelBuilder {
   private deskMat!: THREE.MeshLambertMaterial;
   private darkMetalMat!: THREE.MeshLambertMaterial;
   private screenMat!: THREE.MeshBasicMaterial;
+  private paperMat!: THREE.MeshLambertMaterial;
+  private plasticMat!: THREE.MeshLambertMaterial;
+  private beigeMat!: THREE.MeshLambertMaterial;
+  private accentMats!: THREE.MeshLambertMaterial[];
+  private stickyMats!: THREE.MeshLambertMaterial[];
 
   build(): LevelData {
     this.makeMaterials();
@@ -178,6 +183,45 @@ export class OfficeLevelBuilder {
     this.deskMat = new THREE.MeshLambertMaterial({ color: 0x8a7358 });
     this.darkMetalMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
     this.screenMat = new THREE.MeshBasicMaterial({ map: makeTex(spreadsheetCanvas()) });
+    this.paperMat = new THREE.MeshLambertMaterial({ color: 0xe9e7dd });
+    this.plasticMat = new THREE.MeshLambertMaterial({ color: 0x24272c });
+    this.beigeMat = new THREE.MeshLambertMaterial({ color: 0xc8c2ad }); // old office plastic
+    this.accentMats = [0xb4463c, 0x2f6f9e, 0x3f8a55, 0xd8a13a, 0x7a4f8c].map(
+      (c) => new THREE.MeshLambertMaterial({ color: c })
+    );
+    this.stickyMats = [0xe8d86a, 0xe6a8b8, 0x9fd9a8].map((c) => new THREE.MeshLambertMaterial({ color: c }));
+  }
+
+  /** Decorative box. `y` is the BASE, matching `solid`. No collider, not shootable. */
+  private prop(
+    parent: THREE.Object3D,
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+    mat: THREE.Material,
+    yaw = 0
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y + h / 2, z);
+    m.rotation.y = yaw;
+    parent.add(m);
+    return m;
+  }
+
+  /** Decorative cylinder (mugs, cups, pen holders). `y` is the BASE. */
+  private cyl(
+    parent: THREE.Object3D,
+    r: number, h: number,
+    x: number, y: number, z: number,
+    mat: THREE.Material
+  ): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.88, h, 10), mat);
+    m.position.set(x, y + h / 2, z);
+    parent.add(m);
+    return m;
+  }
+
+  private pick<T>(arr: T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
   }
 
   // --------------------------------------------------------------- helpers
@@ -414,9 +458,11 @@ export class OfficeLevelBuilder {
     this.solid(0.08, panelH, 1.8, cx - 1.5, 0, cz, this.cubicleMat, { surface: 'cubicle', pierce: true });
     this.solid(0.08, panelH, 1.8, cx + 1.5, 0, cz, this.cubicleMat, { surface: 'cubicle', pierce: true });
     // Desk slab along the back
-    this.solid(2.7, 0.72, 0.6, cx, 0, cz + 0.55 * s, this.deskMat, { surface: 'wood', occlude: false });
-    // Monitor
-    this.screen(0.55, 0.35, cx + (Math.random() - 0.5) * 1.4, 0.95, cz + 0.6 * s, facing);
+    const deskZ = cz + 0.55 * s;
+    this.solid(2.7, 0.72, 0.6, cx, 0, deskZ, this.deskMat, { surface: 'wood', occlude: false });
+    // Monitor, offset along the desk — the workstation is built around it
+    const seatX = cx + (Math.random() - 0.5) * 1.4;
+    this.screen(0.55, 0.35, seatX, 0.95, cz + 0.6 * s, facing);
     // Office chair
     const chair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.5), this.darkMetalMat);
     chair.position.set(cx + (Math.random() - 0.5) * 0.8, 0.45, cz - 0.2 * s);
@@ -424,6 +470,90 @@ export class OfficeLevelBuilder {
     const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.1), this.darkMetalMat);
     back.position.set(chair.position.x, 0.85, chair.position.z - 0.22 * s);
     this.group.add(back);
+
+    // Clutter, built in desk-local space then turned to face the same way
+    const clutter = this.deskClutter(1.35, seatX - cx);
+    clutter.position.set(cx, 0, deskZ);
+    clutter.rotation.y = s > 0 ? 0 : Math.PI;
+    this.group.add(clutter);
+
+    this.panelClutter(cx, 0, cz + 0.85 * s, s);
+  }
+
+  /**
+   * The usual workstation debris — tower, keyboard and mouse, paper, a mug,
+   * phone, pen cup, letter tray — returned in DESK-LOCAL space: origin at the
+   * desk centre on the floor, +X along the desk, +Z towards the back of it.
+   * Purely decorative: no colliders and not shootable, so bullets still fly
+   * over desks exactly as before.
+   */
+  private deskClutter(halfW: number, seatOffX: number): THREE.Group {
+    const g = new THREE.Group();
+    const top = 0.72; // desk surface
+    const near = -0.16; // towards the chair
+    const far = 0.18; // towards the back
+    // Keep props on the desk even when the seat sits near an end
+    const sx = THREE.MathUtils.clamp(seatOffX, -halfW + 0.45, halfW - 0.45);
+    const jitter = (a: number): number => (Math.random() - 0.5) * a;
+    const awayFromSeat = sx > 0 ? -1 : 1;
+
+    // Keyboard + mouse in front of the monitor
+    this.prop(g, 0.44, 0.022, 0.15, sx, top, near, this.plasticMat, jitter(0.25));
+    this.prop(g, 0.062, 0.028, 0.095, sx + 0.34, top, near + 0.02, this.plasticMat, jitter(0.5));
+    // Tower on the floor, tucked under the far end of the desk
+    this.prop(g, 0.2, 0.44, 0.46, awayFromSeat * (halfW - 0.35), 0, 0.05, this.beigeMat);
+
+    // Loose sheets, plus a stack of printouts
+    for (let i = 0; i < 2 + Math.floor(Math.random() * 3); i++) {
+      const px = sx + (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * Math.max(0.1, halfW - 0.6));
+      this.prop(g, 0.21, 0.004, 0.28, THREE.MathUtils.clamp(px, -halfW + 0.15, halfW - 0.15), top, jitter(0.3), this.paperMat, jitter(1.4));
+    }
+    if (Math.random() < 0.75) {
+      this.prop(g, 0.22, 0.045, 0.29, awayFromSeat * (0.55 + Math.random() * 0.4), top, far, this.paperMat, jitter(0.5));
+    }
+
+    // Mug, pen cup, desk phone, letter tray — each desk gets its own mix
+    if (Math.random() < 0.8) {
+      this.cyl(g, 0.042, 0.1, sx - 0.36 + jitter(0.1), top, near + jitter(0.08), this.pick(this.accentMats));
+    }
+    if (Math.random() < 0.6) {
+      const px = THREE.MathUtils.clamp(sx + 0.5, -halfW + 0.1, halfW - 0.1);
+      this.cyl(g, 0.038, 0.1, px, top, far, this.plasticMat);
+      for (let i = 0; i < 3; i++) {
+        this.prop(g, 0.008, 0.14, 0.008, px + jitter(0.04), top + 0.04, far + jitter(0.04), this.pick(this.accentMats));
+      }
+    }
+    if (Math.random() < 0.65) {
+      const px = awayFromSeat * (0.7 + Math.random() * 0.3);
+      this.prop(g, 0.17, 0.05, 0.21, px, top, far, this.beigeMat);
+      this.prop(g, 0.16, 0.045, 0.06, px, top + 0.05, far - 0.06, this.beigeMat); // handset
+    }
+    // Stacking letter tray: base shelf, a wad of paper, upper shelf
+    if (Math.random() < 0.5) {
+      const px = awayFromSeat * (halfW - 0.2);
+      this.prop(g, 0.3, 0.012, 0.24, px, top, far, this.plasticMat);
+      this.prop(g, 0.27, 0.05, 0.21, px, top + 0.012, far, this.paperMat);
+      this.prop(g, 0.3, 0.012, 0.24, px, top + 0.062, far, this.plasticMat);
+    }
+    return g;
+  }
+
+  /** Sticky notes and a pinned memo on the fabric back panel of a cubicle. */
+  private panelClutter(cx: number, baseY: number, faceZ: number, s: number): void {
+    const yaw = s > 0 ? Math.PI : 0; // face the inside of the pod
+    const count = 2 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < count; i++) {
+      const note = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.09), this.pick(this.stickyMats));
+      note.position.set(cx + (Math.random() - 0.5) * 2.4, baseY + 1.0 + Math.random() * 0.34, faceZ);
+      note.rotation.set(0, yaw, (Math.random() - 0.5) * 0.3);
+      this.group.add(note);
+    }
+    if (Math.random() < 0.7) {
+      const memo = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.29), this.paperMat);
+      memo.position.set(cx + (Math.random() - 0.5) * 2.0, baseY + 1.16, faceZ);
+      memo.rotation.set(0, yaw, (Math.random() - 0.5) * 0.14);
+      this.group.add(memo);
+    }
   }
 
   /** Freestanding pair of desks used in the back office / exec suites. */
@@ -445,6 +575,10 @@ export class OfficeLevelBuilder {
       box: new THREE.Box3(new THREE.Vector3(cx - w / 2, 0, cz - d / 2), new THREE.Vector3(cx + w / 2, 0.72, cz + d / 2))
     });
     this.screen(0.55, 0.35, cx, 0.95, cz, rot + Math.PI);
+
+    // `g` already carries the desk's position and rotation, so the clutter
+    // group goes in at its local origin.
+    g.add(this.deskClutter(1.2, (Math.random() - 0.5) * 1.0));
   }
 
   /** Glowing monitor at a position. */
@@ -543,6 +677,48 @@ export class OfficeLevelBuilder {
       box: new THREE.Box3(new THREE.Vector3(cx - 1.2, y, cz - 0.55), new THREE.Vector3(cx + 1.2, y + 0.72, cz + 0.55))
     });
     this.screen(0.55, 0.35, cx, y + 0.95, cz, rot);
+
+    const clutter = this.deskClutter(1.2, (Math.random() - 0.5) * 1.0);
+    clutter.position.set(cx, y, cz);
+    clutter.rotation.y = rot;
+    this.group.add(clutter);
+  }
+
+  /**
+   * Underside of whatever is overhead at a ground-floor point: normally the
+   * upper-floor slab, but the roof where that slab is cut away (the
+   * mezzanine void over the cubicle farm, and the stairwell void).
+   */
+  private groundCeilingY(x: number, z: number): number {
+    const mezzanineVoid = x > -10 && x < 0 && z > -2 && z < 3;
+    const stairwellVoid = x > 13.4 && z > -9 && z < -4;
+    return mezzanineVoid || stairwellVoid ? FLOOR_H + WALL_H : FLOOR_H - SLAB_T;
+  }
+
+  /**
+   * Mounting hardware so a fixture is attached to something: a short canopy
+   * where the ceiling is right above, or a pair of drop rods where the
+   * fixture hangs in open air below the roof.
+   */
+  private mountFixture(x: number, z: number, top: number, ceilY: number): void {
+    const drop = ceilY - top;
+    if (drop <= 0.01) return; // already flush against the tile
+
+    if (drop < 0.3) {
+      const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.42, drop, 0.16), this.darkMetalMat);
+      canopy.position.set(x, top + drop / 2, z);
+      this.group.add(canopy);
+      return;
+    }
+    // Suspended pendant: a rod at each end, capped with a ceiling canopy
+    for (const off of [-0.45, 0.45]) {
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, drop, 6), this.darkMetalMat);
+      rod.position.set(x + off, top + drop / 2, z);
+      this.group.add(rod);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 8), this.darkMetalMat);
+      cap.position.set(x + off, ceilY - 0.025, z);
+      this.group.add(cap);
+    }
   }
 
   private buildLighting(): void {
@@ -560,6 +736,24 @@ export class OfficeLevelBuilder {
       );
       fix.position.set(x, y + 0.12, z);
       g.add(fix);
+      const ceilY = y > FLOOR_H ? FLOOR_H + WALL_H : this.groundCeilingY(x, z);
+      this.mountFixture(x, z, y + 0.155, ceilY); // fixture box: centered y+0.12, 0.07 tall
+    };
+
+    /** Sconce bolted flat to a wall face, for the enclosed stairwell. */
+    const addSconce = (x: number, y: number, z: number, faceX: number, intensity: number) => {
+      const l = new THREE.PointLight(0xfff2dc, intensity, 9, 1.6);
+      l.position.set(x + faceX * 0.3, y, z);
+      g.add(l);
+      const fix = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.34, 0.9),
+        new THREE.MeshStandardMaterial({ color: 0x999999, emissive: 0xfff6e0, emissiveIntensity: 1.2 })
+      );
+      fix.position.set(x + faceX * 0.06, y, z);
+      g.add(fix);
+      const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.16), this.darkMetalMat);
+      bracket.position.set(x, y + 0.2, z);
+      g.add(bracket);
     };
 
     // Ground floor (ceiling ~2.95)
@@ -569,10 +763,15 @@ export class OfficeLevelBuilder {
     addLight(0, 2.8, -8, 8); // back office
     addLight(-13, 2.8, -8.5, 7); // breakroom
     addLight(-16.5, 2.8, 3, 6); // west strip
-    addLight(15.5, 2.9, -7, 6); // stairwell
+    // Stairwell: the void runs up to the roof and the middle is filled by the
+    // divider wall, so light it from sconces on both faces of that wall. Each
+    // sits head-height above the flight it lights, and the flights are at
+    // different heights at this z.
+    addSconce(15.0, 4.3, -5.6, -1, 5); // west face → flight B (upper)
+    addSconce(16.2, 2.8, -5.6, 1, 5); // east face → flight A (lower)
 
     // Ground east corridor — flickering (dark hallway)
-    this.flickering.push(new FlickeringLight(g, new THREE.Vector3(9.5, 2.8, -3), 8, 10));
+    this.addFlickering(9.5, 2.8, -3, 8, 10);
 
     // Upper floor (ceiling ~6.2)
     addLight(0, 6.15, 8); // lounge center
@@ -583,8 +782,15 @@ export class OfficeLevelBuilder {
     addLight(9.5, 6.15, -8, 7); // office B
 
     // Upper hallway — the two flickering tubes
-    this.flickering.push(new FlickeringLight(g, new THREE.Vector3(1, 6.15, -2.9), 9, 9));
-    this.flickering.push(new FlickeringLight(g, new THREE.Vector3(-6, 6.15, -2.9), 9, 9));
+    this.addFlickering(1, 6.15, -2.9, 9, 9);
+    this.addFlickering(-6, 6.15, -2.9, 9, 9);
+  }
+
+  /** Flickering tube plus the hardware holding it to the ceiling. */
+  private addFlickering(x: number, y: number, z: number, intensity: number, dist: number): void {
+    this.flickering.push(new FlickeringLight(this.group, new THREE.Vector3(x, y, z), intensity, dist));
+    const ceilY = y > FLOOR_H ? FLOOR_H + WALL_H : this.groundCeilingY(x, z);
+    this.mountFixture(x, z, y + 0.115, ceilY); // fixture box: centered y+0.08, 0.07 tall
   }
 
   // ------------------------------------------------------------- waypoints

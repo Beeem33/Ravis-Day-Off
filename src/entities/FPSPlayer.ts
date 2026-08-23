@@ -16,11 +16,13 @@ const CROUCH_HEIGHT = 1.05;
 const RADIUS = 0.34;
 const STEP_UP = 0.42; // auto-step height for stairs
 const EYE_INSET = 0.12;
+const MAX_HEALTH = 5;
+const REGEN_SECONDS = 30; // seconds of being hurt before you claw back 1 HP
 
 /**
  * FPSPlayer — pointer-lock mouse look, WASD + sprint/jump/crouch movement,
- * swept AABB collision with auto-stepping (stairs), head bob and one-shot
- * mortality. Position is at the FEET.
+ * swept AABB collision with auto-stepping (stairs), head bob, and health
+ * with slow regeneration. Position is at the FEET.
  */
 export class FPSPlayer {
   readonly camera: THREE.PerspectiveCamera;
@@ -30,6 +32,9 @@ export class FPSPlayer {
   pitch = 0;
   sensitivity = 0.0021;
   alive = true;
+  readonly maxHealth = MAX_HEALTH;
+  health = MAX_HEALTH;
+  private regenTimer = 0;
   grounded = false;
   crouching = false;
   sprinting = false;
@@ -62,6 +67,11 @@ export class FPSPlayer {
 
   get eyeHeight(): number {
     return this.height - EYE_INSET;
+  }
+
+  /** 0..1 progress towards the next regenerated HP (0 when at full health). */
+  get regenProgress(): number {
+    return this.health >= MAX_HEALTH ? 0 : this.regenTimer / REGEN_SECONDS;
   }
 
   /** World-space eye position. */
@@ -108,6 +118,17 @@ export class FPSPlayer {
       return;
     }
     const input = this.input;
+
+    // ---- Slow regeneration: 1 HP per REGEN_SECONDS spent below full health
+    if (this.health < MAX_HEALTH) {
+      this.regenTimer += dt;
+      if (this.regenTimer >= REGEN_SECONDS) {
+        this.regenTimer -= REGEN_SECONDS;
+        this.health++;
+      }
+    } else {
+      this.regenTimer = 0;
+    }
 
     // ---- Mouse look
     const { dx, dy } = input.consumeMouseDelta();
@@ -287,6 +308,14 @@ export class FPSPlayer {
   }
 
   // ------------------------------------------------------------------ death
+
+  /** Take a hit from `killerName`; dies once health runs out. */
+  hit(killerName: string): void {
+    if (!this.alive) return;
+    this.health = Math.max(0, this.health - 1);
+    this.bus.emit(Events.PlayerDamaged, { health: this.health, maxHealth: this.maxHealth });
+    if (this.health <= 0) this.kill(killerName);
+  }
 
   kill(killerName: string): void {
     if (!this.alive) return;

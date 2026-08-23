@@ -96,7 +96,7 @@ export class OfficeLevelScene implements GameScene {
     });
     this.remaining = this.enemies.length;
 
-    this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining);
+    this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
     this.hud.show();
 
     this.unsubs.push(
@@ -177,6 +177,7 @@ export class OfficeLevelScene implements GameScene {
       }
     }
     this.hud.setAlert(anyAttacking && this.player.alive);
+    this.hud.setHealth(this.player.health, this.player.regenProgress);
 
     for (const f of this.level.flickering) f.update(dt);
     this.particles.update(dt);
@@ -222,8 +223,8 @@ export class OfficeLevelScene implements GameScene {
     bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 25, kind: 'gunshot' });
 
     const muzzle = enemy.muzzleWorld();
-    // One-shot lethality with a fairness roll: distance, your speed and
-    // crouching all make you harder to hit.
+    // Fairness roll for whether they hit you at all: distance, your speed
+    // and crouching all make you harder to hit. A hit costs one health.
     const speedFactor = Math.min(1, player.currentSpeed / 6.6);
     let hitChance = 0.65 - dist * 0.03 - speedFactor * 0.3 - (player.crouching ? 0.12 : 0);
     hitChance = THREE.MathUtils.clamp(hitChance, 0.1, 0.9);
@@ -233,7 +234,7 @@ export class OfficeLevelScene implements GameScene {
         new THREE.Vector3((Math.random() - 0.5) * 0.2, -0.2 - Math.random() * 0.4, (Math.random() - 0.5) * 0.2)
       );
       this.particles.tracer(muzzle, target, 0xffe0b0);
-      player.kill(enemy.name);
+      player.hit(enemy.name);
     } else {
       // Miss: bullet streaks past and lands somewhere behind the player
       const target = player.eyePosition();

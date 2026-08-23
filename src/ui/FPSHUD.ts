@@ -16,6 +16,12 @@ export class FPSHUD {
   private winOverlay!: HTMLElement;
   private vignette!: HTMLElement;
   private damageFlash!: HTMLElement;
+  private healthBar!: HTMLElement;
+  private healthFill!: HTMLElement;
+  private healthRegen!: HTMLElement;
+  private healthNum!: HTMLElement;
+  private shownHealth = -1;
+  private shownRegen = -1;
   private unsubs: (() => void)[] = [];
   private hitmarkerTimer: number | null = null;
   private startTime = 0;
@@ -23,7 +29,8 @@ export class FPSHUD {
   constructor(
     uiRoot: HTMLElement,
     private bus: EventBus,
-    private totalEnemies: number
+    private totalEnemies: number,
+    private maxHealth: number
   ) {
     this.root = uiRoot;
     this.build();
@@ -47,6 +54,15 @@ export class FPSHUD {
       </div>
       <div class="hud-topleft">
         INTRUDERS REMAINING<br /><span class="big">${this.totalEnemies}</span>
+      </div>
+      <div class="hud-health">
+        <span class="hp-label">VITALS</span>
+        <div class="hp-track">
+          <div class="hp-regen"></div>
+          <div class="hp-fill"></div>
+          <div class="hp-ticks">${'<span></span>'.repeat(Math.max(0, this.maxHealth - 1))}</div>
+        </div>
+        <span class="hp-num"></span>
       </div>
       <div class="killfeed"></div>
       <div class="alert-banner">! CONTACT !</div>
@@ -75,6 +91,36 @@ export class FPSHUD {
     this.winOverlay = el.querySelector('#win-overlay')!;
     this.vignette = el.querySelector('#vignette')!;
     this.damageFlash = el.querySelector('#damage-flash')!;
+    this.healthBar = el.querySelector('.hud-health')!;
+    this.healthFill = el.querySelector('.hp-fill')!;
+    this.healthRegen = el.querySelector('.hp-regen')!;
+    this.healthNum = el.querySelector('.hp-num')!;
+    this.setHealth(this.maxHealth);
+  }
+
+  /**
+   * Health bar: a solid fill for current HP, a dimmer fill creeping in behind
+   * it for regeneration progress, and one tick per HP so the discrete hits
+   * stay readable.
+   */
+  setHealth(health: number, regenProgress = 0): void {
+    if (health === this.shownHealth && Math.abs(regenProgress - this.shownRegen) < 0.005) return;
+    if (health > this.shownHealth && this.shownHealth >= 0) this.pulseHeal();
+    this.shownHealth = health;
+    this.shownRegen = regenProgress;
+
+    const pct = (health / this.maxHealth) * 100;
+    const regenPct = health < this.maxHealth ? ((health + regenProgress) / this.maxHealth) * 100 : pct;
+    this.healthFill.style.width = `${pct}%`;
+    this.healthRegen.style.width = `${regenPct}%`;
+    this.healthNum.textContent = `${health} / ${this.maxHealth}`;
+    this.healthBar.classList.toggle('critical', health > 0 && health <= 2);
+  }
+
+  private pulseHeal(): void {
+    this.healthBar.classList.remove('healed');
+    void this.healthBar.offsetWidth; // restart the animation
+    this.healthBar.classList.add('healed');
   }
 
   private wire(): void {
@@ -84,9 +130,14 @@ export class FPSHUD {
         this.counter.textContent = String(e.remaining);
         this.addKillFeed(`<span class="you">${e.by ?? 'RAVI'}</span> ${e.headshot ? '⌖' : '✚'} ${e.name.toUpperCase()}`);
       }),
+      // The bar itself is driven per-frame from the scene; the event is just
+      // the impact cue.
+      this.bus.on<{ health: number; maxHealth: number }>(Events.PlayerDamaged, (e) => {
+        if (e.health > 0) this.takeHit();
+      }),
       this.bus.on<{ killer: string }>(Events.PlayerDied, (e) => {
         const cause = this.deathOverlay.querySelector('#death-cause')!;
-        cause.textContent = `${e.killer.toUpperCase()} got you. One shot is all it takes.`;
+        cause.textContent = `${e.killer.toUpperCase()} put you down. Ravi's shift ends here.`;
         window.setTimeout(() => {
           this.deathOverlay.style.display = 'flex';
         }, 900);
@@ -133,12 +184,23 @@ export class FPSHUD {
     while (this.killfeed.children.length > 6) this.killfeed.lastChild?.remove();
   }
 
+  /** Took real damage — heavier flash than a near miss. */
+  private takeHit(): void {
+    this.damageFlash.style.transition = 'none';
+    this.damageFlash.style.background = 'rgba(200,0,0,0.5)';
+    window.setTimeout(() => {
+      this.damageFlash.style.transition = 'background 0.55s';
+      this.damageFlash.style.background = 'rgba(180,0,0,0)';
+    }, 90);
+  }
+
   /** Near-miss / suppression flash. */
   nearMiss(): void {
+    this.damageFlash.style.transition = 'none';
     this.damageFlash.style.background = 'rgba(180,0,0,0.16)';
     window.setTimeout(() => {
-      this.damageFlash.style.background = 'rgba(180,0,0,0)';
       this.damageFlash.style.transition = 'background 0.3s';
+      this.damageFlash.style.background = 'rgba(180,0,0,0)';
     }, 60);
   }
 

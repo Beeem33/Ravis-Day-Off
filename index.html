@@ -67,6 +67,47 @@
       letter-spacing: 1.5px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
     }
     .hud-topleft .big { font-size: 26px; color: #ff5941; font-weight: bold; }
+    .hud-health {
+      position: absolute; left: 24px; bottom: 44px; display: flex; align-items: center; gap: 10px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+    .hud-health .hp-label {
+      color: rgba(232,244,236,0.75); font-size: 12px; letter-spacing: 1.5px;
+    }
+    .hud-health .hp-track {
+      position: relative; width: 186px; height: 13px; overflow: hidden;
+      background: rgba(6,10,8,0.72); border: 1px solid rgba(232,244,236,0.34);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    }
+    .hud-health .hp-fill, .hud-health .hp-regen {
+      position: absolute; left: 0; top: 0; height: 100%;
+      transition: width 0.22s ease-out, background 0.25s, box-shadow 0.25s;
+    }
+    .hud-health .hp-fill {
+      background: linear-gradient(#8dffb8, #43d477);
+      box-shadow: 0 0 9px rgba(108,245,154,0.5);
+    }
+    /* Regen creeps in behind the solid fill */
+    .hud-health .hp-regen { background: rgba(108,245,154,0.22); transition: width 0.35s linear; }
+    .hud-health .hp-ticks { position: absolute; inset: 0; display: flex; }
+    .hud-health .hp-ticks span {
+      flex: 1; border-right: 1px solid rgba(6,10,8,0.75);
+    }
+    .hud-health .hp-ticks span:last-child { border-right: none; }
+    .hud-health .hp-num {
+      color: rgba(232,244,236,0.85); font-size: 12px; letter-spacing: 1px; min-width: 42px;
+    }
+    .hud-health.critical .hp-fill {
+      background: linear-gradient(#ff7a6a, #e02020); box-shadow: 0 0 10px rgba(255,59,59,0.65);
+    }
+    .hud-health.critical .hp-regen { background: rgba(255,90,70,0.22); }
+    .hud-health.critical .hp-label, .hud-health.critical .hp-num { color: #ff8a7a; }
+    .hud-health.healed .hp-track { animation: hp-heal 0.5s ease-out; }
+    @keyframes hp-heal {
+      0% { box-shadow: 0 0 0 rgba(160,255,200,0); }
+      35% { box-shadow: 0 0 14px rgba(160,255,200,0.9); }
+      100% { box-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+    }
     .killfeed {
       position: absolute; right: 24px; top: 20px; text-align: right; font-size: 12.5px;
       color: #ffd9d0; text-shadow: 0 1px 3px rgba(0,0,0,0.9);

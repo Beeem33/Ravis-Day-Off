@@ -80,7 +80,7 @@ export class MenuUI {
             <tr><td>MENU</td><td>ESC</td></tr>
           </table>
           <div class="divider"></div>
-          <div>ONE SHOT KILLS — YOU AND THEM.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>
+          <div>ONE SHOT KILLS THEM. YOU HAVE 5 HP<br/>AND HEAL 1 EVERY 30s.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>
         </div>
         <div class="divider"></div>
         <button class="menu-item" data-act="back">BACK</button>

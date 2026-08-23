@@ -50,6 +50,8 @@ export const Events = {
   EnemyKilled: 'enemy-killed',
   /** {killer: string} */
   PlayerDied: 'player-died',
+  /** {health: number, maxHealth: number} */
+  PlayerDamaged: 'player-damaged',
   LevelComplete: 'level-complete',
   StartGame: 'start-game',
   ReturnToMenu: 'return-menu',

@@ -6,7 +6,7 @@
 
 **[▶ Play Game](https://beeem33.github.io/Ravis-Day-Off/)** — runs in any desktop browser, no install. (Click the game to lock your mouse; Esc releases it.)
 
-A fast-paced, one-shot-kill first-person shooter set in a two-storey call center. Built with **Three.js + cannon-es + Vite/TypeScript** — no game engine, no asset files (all geometry, textures and audio are procedural).
+A fast-paced, lethal first-person shooter set in a two-storey call center. Built with **Three.js + cannon-es + Vite/TypeScript** — no game engine, no asset files (all geometry, textures and audio are procedural).
 
 ## Run
 
@@ -27,7 +27,7 @@ npm run build      # type-check + production bundle in dist/
 | Crouch | Ctrl / C |
 | Jump | Space |
 
-One shot kills — you and them. Use cubicles as cover (bullets pierce one panel), shatter glass partitions, drop through the broken mezzanine railing, and listen: intruders investigate gunshots and sprinting footsteps.
+One shot kills an intruder. Ravi has 5 HP, takes 1 damage per bullet, and regenerates 1 HP every 30 seconds. Use cubicles as cover (bullets pierce one panel), shatter glass partitions, drop through the broken mezzanine railing, and listen: intruders investigate gunshots and sprinting footsteps.
 
 ## Architecture
 

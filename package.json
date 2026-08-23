@@ -1,0 +1,20 @@
+{
+  "name": "ravis-day-off",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 8180 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 8180"
+  },
+  "dependencies": {
+    "three": "^0.168.0",
+    "cannon-es": "^0.20.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.168.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6"
+  }
+}

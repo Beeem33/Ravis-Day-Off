@@ -103,7 +103,15 @@ export class BloodDecalSystem {
    * @param point  world hit point
    * @param normal world surface normal
    */
-  place(kind: DecalKind, point: THREE.Vector3, normal: THREE.Vector3, size?: number): void {
+  place(
+    kind: DecalKind,
+    point: THREE.Vector3,
+    normal: THREE.Vector3,
+    size?: number,
+    /** Optional travel direction: the splatter is stretched along it (projected onto the surface). */
+    stretchDir?: THREE.Vector3,
+    stretch = 1
+  ): void {
     let mat: THREE.MeshBasicMaterial;
     let scale: number;
     if (kind === 'blood') {
@@ -122,7 +130,19 @@ export class BloodDecalSystem {
     const n = normal.clone().normalize();
     mesh.position.copy(point).addScaledVector(n, 0.012 + Math.random() * 0.006);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-    mesh.rotateZ(Math.random() * Math.PI * 2);
+    const proj = stretchDir ? stretchDir.clone().addScaledVector(n, -stretchDir.dot(n)) : null;
+    if (proj && proj.lengthSq() > 1e-4 && stretch > 1) {
+      // Align the decal's local X with the bullet's direction across the surface
+      proj.normalize();
+      const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(mesh.quaternion);
+      const angle = Math.atan2(localX.clone().cross(proj).dot(n), localX.dot(proj));
+      mesh.rotateZ(angle);
+      mesh.scale.set(scale * stretch, scale * (0.55 + Math.random() * 0.25), 1);
+      // Shift the streak so it trails away from the impact point
+      mesh.position.addScaledVector(proj, scale * stretch * 0.3);
+    } else {
+      mesh.rotateZ(Math.random() * Math.PI * 2);
+    }
     mesh.renderOrder = 2;
     this.scene.add(mesh);
     this.decals.push(mesh);

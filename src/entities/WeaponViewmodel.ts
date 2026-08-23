@@ -38,7 +38,7 @@ export class WeaponViewmodel {
   reloading = false;
   private reloadT = 0;
   private reloadFired = new Set<string>();
-  static readonly RELOAD_TIME = 1.75;
+  static readonly RELOAD_TIME = 1.63;
   private slidePull = 0; // 0..1 while the left hand racks the slide
   /** Hook for the scene: 'magOut' | 'magIn' | 'rack' | 'done'. */
   onReloadEvent: ((e: 'magOut' | 'magIn' | 'rack' | 'done') => void) | null = null;
@@ -97,10 +97,10 @@ export class WeaponViewmodel {
     const flipped = 1.45 - Math.PI;
     let roll: number;
     if (t < 0.22) roll = 1.45 * ease(c01(t / 0.22));
-    else if (t < 0.5) roll = 1.45;
-    else if (t < 0.78) roll = 1.45 - Math.PI * ease(c01((t - 0.5) / 0.28));
-    else if (t < 1.12) roll = flipped;
-    else if (t < 1.3) roll = flipped * (1 - ease(c01((t - 1.12) / 0.18)));
+    else if (t < 0.38) roll = 1.45;
+    else if (t < 0.66) roll = 1.45 - Math.PI * ease(c01((t - 0.38) / 0.28));
+    else if (t < 1.0) roll = flipped;
+    else if (t < 1.18) roll = flipped * (1 - ease(c01((t - 1.0) / 0.18)));
     else roll = 0;
     const rotZ = roll;
 
@@ -109,22 +109,22 @@ export class WeaponViewmodel {
     if (t < 0.22) {
       // Well swinging to the right; left hand already letting go
       this.supportHand.position.lerpVectors(this.handHome, offscreen, ease(c01(t / 0.22)));
-    } else if (t < 0.5) {
+    } else if (t < 0.38) {
       // Mag shot out the well (gun-local -y, which now points screen-right)
-      const k = c01((t - 0.22) / 0.28);
+      const k = c01((t - 0.22) / 0.16);
       this.reloadEvent('magOut');
       const fly = k * k * 1.6 + k * 0.3;
       this.magazine.position.set(0, -fly, 0.02 * k);
       this.magazine.rotation.set(2.5 * k, 0, 0.6 * k);
       if (k > 0.75) this.magazine.visible = false;
       this.supportHand.position.copy(offscreen);
-    } else if (t < 0.78) {
+    } else if (t < 0.66) {
       // Flipping the gun over; hand is off-screen grabbing the fresh mag
       this.magazine.visible = false;
       this.supportHand.position.copy(offscreen);
-    } else if (t < 1.12) {
+    } else if (t < 1.0) {
       // Fresh mag rides in along the well (gun-local -y, now screen-left)
-      const k = ease(c01((t - 0.78) / 0.34));
+      const k = ease(c01((t - 0.66) / 0.34));
       this.magazine.visible = true;
       this.magazine.position.set(0, -0.34 * (1 - k), 0.04 * (1 - k));
       this.magazine.rotation.set(0.5 * (1 - k), 0, 0);
@@ -132,9 +132,9 @@ export class WeaponViewmodel {
       this.supportHand.position.copy(this.magazine.position).add(new THREE.Vector3(-0.005, -0.14, 0.085));
       this.supportHand.rotation.set(0, 0, 0.2);
       if (k > 0.98) this.reloadEvent('magIn');
-    } else if (t < 1.3) {
+    } else if (t < 1.18) {
       // Seated: roll upright, slap the baseplate, gun jolts
-      const k = ease(c01((t - 1.12) / 0.18));
+      const k = ease(c01((t - 1.0) / 0.18));
       this.magazine.position.set(0, 0, 0);
       this.magazine.rotation.set(0, 0, 0);
       this.supportHand.position.lerpVectors(
@@ -143,9 +143,9 @@ export class WeaponViewmodel {
         k
       );
       rotX += -0.12 * Math.sin(k * Math.PI);
-    } else if (t < 1.55) {
+    } else if (t < 1.43) {
       // Rack: left hand grips the slide, hauls it back, lets it snap forward
-      const k = c01((t - 1.3) / 0.25);
+      const k = c01((t - 1.18) / 0.25);
       const pull = k < 0.5 ? ease(k / 0.5) : 1 - ease((k - 0.5) / 0.5) ** 0.35; // slow pull, fast release
       this.slidePull = pull;
       this.supportHand.position.set(-0.02, 0.085, 0.0 + pull * 0.06);
@@ -153,7 +153,7 @@ export class WeaponViewmodel {
       if (k > 0.55) this.reloadEvent('rack');
     } else {
       // Hand back to the support grip, done
-      const k = ease(c01((t - 1.55) / 0.18));
+      const k = ease(c01((t - 1.43) / 0.18));
       this.slidePull = 0;
       this.supportHand.position.lerpVectors(new THREE.Vector3(-0.02, 0.085, 0.0), this.handHome, k);
       this.supportHand.rotation.set(0, 0, 0.4 * k);

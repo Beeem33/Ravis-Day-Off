@@ -421,16 +421,34 @@ export class OfficeLevelScene implements GameScene {
     const ground = this.surfaceBelow(point, 6);
     // Spray particles settle on the true surface under the wound, or never settle
     this.particles.bloodSpray(point, dir, true, ground ? ground.point.y + 0.02 : -1);
-    // Exit splatter on whatever is behind the victim along the bullet path
-    this.raycaster.set(point.clone().addScaledVector(dir, 0.3), dir);
-    this.raycaster.far = 7;
-    const behind = this.raycaster
-      .intersectObjects(this.level.shootables, false)
-      .filter((h) => !h.object.userData.enemy && !h.object.userData.glass);
-    if (behind.length > 0) {
-      const h = behind[0];
-      const n = (h.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(h.object.matrixWorld);
-      this.decals.place('blood', h.point, n, 0.6 + Math.random() * 0.9);
+    // Exit splatter: the bullet carries blood THROUGH the body and throws it
+    // on whatever's behind, in that direction. One main streak along the
+    // exact exit line plus a fan of smaller spatter around it, each cast
+    // separately so they land on the real surfaces they'd hit. Every cast
+    // is randomised, so no two kills paint the same pattern.
+    const exitFrom = point.clone().addScaledVector(dir, 0.3);
+    const castSplat = (d: THREE.Vector3, size: number, stretch: number, maxDist: number): void => {
+      this.raycaster.set(exitFrom, d);
+      this.raycaster.far = maxDist;
+      const hit = this.raycaster
+        .intersectObjects(this.level.shootables, false)
+        .find((h) => !h.object.userData.enemy && !h.object.userData.glass);
+      if (!hit) return;
+      const n = (hit.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(hit.object.matrixWorld);
+      // Farther surfaces get a thinner, longer spray; near ones a fat splash
+      const falloff = Math.max(0.35, 1 - hit.distance / maxDist);
+      this.decals.place('blood', hit.point, n, size * falloff, d, stretch);
+    };
+    castSplat(dir, 0.9 + Math.random() * 0.8, 2.2 + Math.random() * 1.2, 7);
+    const fan = 4 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < fan; i++) {
+      const d = dir
+        .clone()
+        .add(
+          new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.45, (Math.random() - 0.5) * 0.5)
+        )
+        .normalize();
+      castSplat(d, 0.25 + Math.random() * 0.5, 1.3 + Math.random() * 1.2, 6);
     }
     // Drip splash on the surface directly below the wound
     if (ground) this.decals.place('blood', ground.point, ground.normal);

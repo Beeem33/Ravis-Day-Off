@@ -130,7 +130,9 @@ export class BreakableGlass {
 
     const c = this.center();
     audio.glassShatter(c.distanceTo(listenerPos));
-    this.floorY = c.y - this.height / 2;
+    // Shards fall to the storey's FLOOR, not the pane's bottom edge (windows
+    // sit on a sill, and glass doesn't hover at sill height).
+    this.floorY = Math.floor((c.y - this.height / 2 + 0.05) / 3.3) * 3.3;
     // Fine glittering dust from the impact point
     particles.glassShards(hitPoint, bulletDir, this.floorY);
 

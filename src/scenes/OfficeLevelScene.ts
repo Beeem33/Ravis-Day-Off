@@ -165,7 +165,9 @@ export class OfficeLevelScene implements GameScene {
 
     // Player shooting (semi-auto)
     this.fireCooldown -= dt;
-    if (input.consumeClick() && this.player.alive && this.fireCooldown <= 0 && input.pointerLocked) {
+    // (no firing at a sprint — the gun is down by your hip; let go of Shift first)
+    const canFire = this.player.alive && this.fireCooldown <= 0 && input.pointerLocked && !this.player.sprinting;
+    if (input.consumeClick() && canFire) {
       this.fireCooldown = FIRE_COOLDOWN;
       this.playerShoot();
     }

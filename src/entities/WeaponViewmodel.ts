@@ -24,8 +24,8 @@ export class WeaponViewmodel {
   /** Aim-down-sights pose: gun centered so the sights line up with the crosshair. */
   private aimPos = new THREE.Vector3(0, -0.073, -0.3);
   /** Sprint pose: gun dropped and canted diagonally across the body. */
-  private sprintPos = new THREE.Vector3(0.12, -0.27, -0.36);
-  private sprintRot = new THREE.Euler(0.45, -0.75, 0.55);
+  private sprintPos = new THREE.Vector3(0.1, -0.27, -0.36);
+  private sprintRot = new THREE.Euler(0.45, 0.75, -0.55); // muzzle swings to the LEFT
 
   /** 0..1 — how far into aim-down-sights we are (for FOV zoom + spread). */
   aimBlend = 0;
@@ -221,7 +221,7 @@ export class WeaponViewmodel {
     // Sprint: the gun pumps diagonally with the arms
     const sprintSwayX = Math.sin(phase) * 0.035 * sp;
     const sprintSwayY = Math.sin(phase * 2) * 0.018 * sp;
-    const sprintRoll = Math.sin(phase) * 0.08 * sp;
+    const sprintRoll = -Math.sin(phase) * 0.08 * sp;
 
     // ---- Recoil spring
     this.recoil = Math.max(0, this.recoil - dt * 7);

@@ -463,23 +463,18 @@ export class Enemy {
     this.gunBody.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
     world.addBody(this.gunBody);
 
-    // Limbs let go: arms fling outward from the shoulders, legs kick apart,
-    // and everything gets a hard random spin so the body tumbles, sprawls
-    // and catches on whatever it falls over instead of dropping as a unit.
-    const side = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw)); // enemy's right
-    const fling = (name: string, dirX: number, up: number, mag: number) => {
-      const b = this.ragdollByName.get(name)!;
-      b.velocity.x += side.x * dirX * mag;
-      b.velocity.z += side.z * dirX * mag;
-      b.velocity.y += up;
-    };
-    fling('armL', -1, 1.5 + Math.random() * 2, 2.5 + Math.random() * 2);
-    fling('armR', 1, 1.5 + Math.random() * 2, 2.5 + Math.random() * 2);
-    fling('legL', -1, 0.5, 1 + Math.random() * 1.5);
-    fling('legR', 1, 0.5, 1 + Math.random() * 1.5);
-    fling('head', Math.random() - 0.5, 1, 2);
+    // Limbs just let go. Nothing is posed: every limb simply inherits a
+    // share of the bullet's momentum (a bit more the closer it is to the
+    // wound) plus a small random tumble, and the joints + physics do the rest.
+    const hitV = new CANNON.Vec3(hitPoint.x, hitPoint.y, hitPoint.z);
     for (const { body } of this.ragdoll) {
-      const s = body === this.ragdollByName.get('torso') ? 4 : 9;
+      if (body === struck) continue;
+      const near = Math.max(0.15, 1 - body.position.distanceTo(hitV) / 1.4);
+      const carry = (0.6 + Math.random() * 1.4) * near;
+      body.velocity.x += bulletDir.x * carry + (Math.random() - 0.5) * 0.9;
+      body.velocity.y += bulletDir.y * carry * 0.5 + (Math.random() - 0.5) * 0.6;
+      body.velocity.z += bulletDir.z * carry + (Math.random() - 0.5) * 0.9;
+      const s = 2 + near * 5;
       body.angularVelocity.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
     }
   }

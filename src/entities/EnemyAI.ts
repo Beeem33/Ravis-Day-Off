@@ -36,6 +36,8 @@ export class EnemyAI {
   private targetWp: number;
   /** Remaining waypoints of the current patrol route. */
   private path: number[] = [];
+  /** True while Suspicious is walking a stair route to a sound on the other floor. */
+  private routing = false;
   private pauseTimer = 0;
   private investigatePos: THREE.Vector3 | null = null;
   private investigateTimer = 0;
@@ -103,10 +105,13 @@ export class EnemyAI {
         this.deps.audio.radioChirp(this.playerDistance());
       }
     } else {
-      // Heard trouble on the other floor — go on edge where you stand
+      // Heard trouble on the other floor — head for the stairs and go look
+      // (Suspicious routes via the waypoint graph when the target is off-floor)
       this.state = 'suspicious';
-      this.investigateTimer = Math.max(this.investigateTimer, 3);
-      if (!this.investigatePos) this.investigatePos = this.enemy.position.clone();
+      this.investigateTimer = Math.max(this.investigateTimer, 12);
+      this.investigatePos = s.position.clone();
+      this.routing = false;
+      this.path = [];
     }
     this.awareness = Math.min(1, this.awareness + (s.kind === 'gunshot' ? 0.5 : 0.25));
   }
@@ -216,7 +221,7 @@ export class EnemyAI {
     }
 
     const wp = this.deps.waypoints[this.targetWp];
-    const arrived = this.moveToward(wp.pos, PATROL_SPEED, dt);
+    const arrived = this.moveToward(wp.pos, PATROL_SPEED, dt, 0.35, true);
     if (arrived) {
       if (this.path.length > 0) {
         // Next leg of the route — only a short breather at corners
@@ -267,7 +272,17 @@ export class EnemyAI {
       return;
     }
 
-    if (this.investigatePos) {
+    if (this.investigatePos && Math.abs(this.investigatePos.y - enemy.position.y) > 1.2) {
+      // Sound came from the other floor: take the stairs toward it
+      if (this.path.length === 0 && !this.routing) {
+        this.routing = this.routeTo(this.investigatePos);
+        if (!this.routing) this.investigatePos.y = enemy.position.y; // no route — just listen from here
+      }
+      if (this.routing && this.followRoute(INVESTIGATE_SPEED, dt)) {
+        this.routing = false;
+        this.investigatePos.y = enemy.position.y;
+      }
+    } else if (this.investigatePos) {
       const arrived = this.moveToward(this.investigatePos, INVESTIGATE_SPEED, dt, 1.1);
       if (arrived) {
         enemy.setWalk(0);
@@ -283,6 +298,8 @@ export class EnemyAI {
     if (this.investigateTimer <= 0 && this.awareness < 0.3) {
       this.state = 'patrol';
       this.investigatePos = null;
+      this.routing = false;
+      this.path = [];
       this.targetWp = this.nearestWaypoint();
     }
   }
@@ -321,13 +338,16 @@ export class EnemyAI {
       }
     } else {
       this.lostSightTimer += dt;
-      // Push toward the last known position
-      const arrived = this.moveToward(this.lastKnownPlayerPos, INVESTIGATE_SPEED, dt, 1.4);
+      const otherFloor = Math.abs(this.lastKnownPlayerPos.y - enemy.position.y) > 1.2;
+      // Push toward the last known position — same floor only; if Ravi was
+      // seen on the other floor, hand off to Suspicious, which takes the stairs.
+      const arrived = otherFloor ? true : this.moveToward(this.lastKnownPlayerPos, INVESTIGATE_SPEED, dt, 1.4);
       if (arrived || this.lostSightTimer > 4) {
         this.state = 'suspicious';
         this.investigatePos = this.lastKnownPlayerPos.clone();
-        this.investigatePos.y = enemy.position.y;
-        this.investigateTimer = 5;
+        this.routing = false;
+        this.path = [];
+        this.investigateTimer = otherFloor ? 12 : 5;
         this.reactionTimer = REACTION_TIME * 0.6; // faster the second time
       }
     }
@@ -358,7 +378,60 @@ export class EnemyAI {
   }
 
   /** Straight-line steering used along waypoint links. Returns true on arrival. */
-  private moveToward(target: THREE.Vector3, speed: number, dt: number, arriveDist = 0.35): boolean {
+  /**
+   * Route via the waypoint graph toward a position (possibly on another
+   * floor). Used whenever a target isn't on this floor: enemies take the
+   * stairs, never the shortcut through the slab.
+   */
+  private routeTo(target: THREE.Vector3): boolean {
+    const wps = this.deps.waypoints;
+    const nearest = (p: THREE.Vector3, y: number): number => {
+      let best = -1;
+      let bestD = Infinity;
+      for (let i = 0; i < wps.length; i++) {
+        if (Math.abs(wps[i].pos.y - y) > 1.5) continue;
+        const d = wps[i].pos.distanceToSquared(p);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      return best;
+    };
+    const start = nearest(this.enemy.position, this.enemy.position.y);
+    const dest = nearest(target, target.y);
+    if (start < 0 || dest < 0) return false;
+    const prev = new Map<number, number>([[start, -1]]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (cur === dest) break;
+      for (const n of wps[cur].links) {
+        if (!prev.has(n)) {
+          prev.set(n, cur);
+          queue.push(n);
+        }
+      }
+    }
+    if (!prev.has(dest)) return false;
+    const route: number[] = [];
+    for (let n = dest; n !== -1; n = prev.get(n)!) route.unshift(n);
+    this.path = route;
+    this.targetWp = this.path.shift()!;
+    return true;
+  }
+
+  /** Follow the planned route one leg at a time. Returns true when the route is done. */
+  private followRoute(speed: number, dt: number): boolean {
+    const wp = this.deps.waypoints[this.targetWp];
+    if (this.moveToward(wp.pos, speed, dt, 0.4, true)) {
+      if (this.path.length === 0) return true;
+      this.targetWp = this.path.shift()!;
+    }
+    return false;
+  }
+
+  private moveToward(target: THREE.Vector3, speed: number, dt: number, arriveDist = 0.35, followY = false): boolean {
     const enemy = this.enemy;
     const to = EnemyAI.tmpA.set(target.x - enemy.position.x, 0, target.z - enemy.position.z);
     const dist = to.length();
@@ -370,8 +443,9 @@ export class EnemyAI {
     enemy.faceToward(target, dt, 6);
     const step = Math.min(speed * dt, dist);
     enemy.position.addScaledVector(to, step);
-    // Climb/descend with the link (stairs): height follows the progress along it
-    enemy.position.y += (target.y - enemy.position.y) * Math.min(1, step / Math.max(0.001, dist));
+    // Climb/descend ONLY along waypoint links (the stairs). Chasing a target
+    // on another floor never changes height — that's what routeTo is for.
+    if (followY) enemy.position.y += (target.y - enemy.position.y) * Math.min(1, step / Math.max(0.001, dist));
     this.resolveCollisions();
     enemy.setWalk(Math.min(1, speed / 2.5));
 

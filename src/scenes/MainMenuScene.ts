@@ -120,9 +120,38 @@ export class MainMenuScene implements GameScene {
     torso.rotation.x = -0.42; // slouch
     s.add(torso);
     this.guardHead = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.28, 0.26), lam(0xc09a72));
-    this.guardHead.position.set(0.4, 1.36, -0.05);
-    this.guardHead.rotation.x = 0.5; // chin on chest
+    this.guardHead.position.set(0.4, 1.4, 0.02);
+    this.guardHead.rotation.x = -0.65; // lolled back over the chair, out cold… permanently
     s.add(this.guardHead);
+    // The reason he's so relaxed: a neat hole in the forehead
+    const blood = new THREE.MeshBasicMaterial({ color: 0x4a0708 });
+    const hole = new THREE.Mesh(new THREE.CircleGeometry(0.016, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
+    hole.position.set(0.02, 0.05, -0.131);
+    hole.rotation.y = Math.PI;
+    this.guardHead.add(hole);
+    const ring = new THREE.Mesh(new THREE.CircleGeometry(0.03, 12), blood);
+    ring.position.set(0.02, 0.05, -0.1305);
+    ring.rotation.y = Math.PI;
+    this.guardHead.add(ring);
+    // Exit at the back: a run of blood down the chair back…
+    const streak = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.72), blood);
+    streak.position.set(0.03, -0.05, 0.062);
+    chairBack.add(streak);
+    const streak2 = new THREE.Mesh(new THREE.PlaneGeometry(0.035, 0.5), blood);
+    streak2.position.set(-0.06, -0.12, 0.062);
+    chairBack.add(streak2);
+    // …and a small puddle gathering on the floor behind the chair
+    const puddle = new THREE.Mesh(new THREE.CircleGeometry(0.2, 20), blood);
+    puddle.rotation.x = -Math.PI / 2;
+    puddle.position.set(0.42, 0.004, 0.3);
+    puddle.scale.set(1, 0.7, 1);
+    s.add(puddle);
+    for (let i = 0; i < 5; i++) {
+      const drop = new THREE.Mesh(new THREE.CircleGeometry(0.012 + Math.random() * 0.02, 8), blood);
+      drop.rotation.x = -Math.PI / 2;
+      drop.position.set(0.42 + (Math.random() - 0.5) * 0.45, 0.004, 0.3 + (Math.random() - 0.5) * 0.4);
+      s.add(drop);
+    }
     // Headphones: band + ear cups
     const band = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.028, 8, 16, Math.PI), lam(0x14161a));
     band.position.set(0, 0.05, 0);
@@ -161,8 +190,27 @@ export class MainMenuScene implements GameScene {
     s.add(arm);
 
     // Coffee mug + lamp
+    // Mug knocked over, coffee spreading across the desk
     const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.12, 10), lam(0xb04438));
-    mug.position.set(-0.6, 1.06, -1.35);
+    mug.position.set(-0.6, 1.055, -1.35);
+    mug.rotation.z = Math.PI / 2 + 0.08;
+    mug.rotation.y = 0.5;
+    const coffee = new THREE.MeshBasicMaterial({ color: 0x3b2314 });
+    const spill = new THREE.Mesh(new THREE.CircleGeometry(0.17, 24), coffee);
+    spill.rotation.x = -Math.PI / 2;
+    spill.position.set(-0.78, 1.003, -1.33);
+    spill.scale.set(1.4, 0.8, 1);
+    s.add(spill);
+    const spill2 = new THREE.Mesh(new THREE.CircleGeometry(0.08, 16), coffee);
+    spill2.rotation.x = -Math.PI / 2;
+    spill2.position.set(-0.98, 1.003, -1.42);
+    s.add(spill2);
+    // Dribble running out of the rim
+    const dribble = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.14), coffee);
+    dribble.rotation.x = -Math.PI / 2;
+    dribble.position.set(-0.69, 1.004, -1.34);
+    dribble.rotation.z = 0.3;
+    s.add(dribble);
     s.add(mug);
     const lampArm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.6, 0.05), lam(0x222));
     lampArm.position.set(1.9, 1.3, -1.9);
@@ -309,11 +357,9 @@ export class MainMenuScene implements GameScene {
       this.musicStarted = true;
     }
 
-    // Guard vibing in his sleep: head nod + foot tap at 72 BPM
-    const beat = time * (72 / 60) * Math.PI * 2;
-    this.guardHead.rotation.x = 0.5 + Math.sin(beat) * 0.035;
-    this.guardHead.rotation.z = Math.sin(beat * 0.5) * 0.02;
-    this.guardFoot.rotation.x = Math.max(0, Math.sin(beat)) * 0.25;
+    // The guard doesn't move. He's not going to.
+    void this.guardHead;
+    void this.guardFoot;
 
     // Tired fluorescent: a faint mains hum in the brightness, the odd sputter
     const hum = 0.92 + 0.08 * Math.sin(time * 120);

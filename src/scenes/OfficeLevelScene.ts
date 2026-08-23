@@ -13,6 +13,7 @@ import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { FPSHUD } from '../ui/FPSHUD';
 
 const FIRE_COOLDOWN = 0.17;
+const MAG_SIZE = 10;
 
 /**
  * OfficeLevelScene — the playable shift. Owns the level, the player, all
@@ -31,6 +32,7 @@ export class OfficeLevelScene implements GameScene {
   private hud!: FPSHUD;
   private world!: CANNON.World;
   private fireCooldown = 0;
+  private ammo = MAG_SIZE;
   private remaining = 0;
   private over = false;
   private won = false;
@@ -73,6 +75,12 @@ export class OfficeLevelScene implements GameScene {
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
     this.scene.add(this.player.camera);
     this.weapon = new WeaponViewmodel(this.player.camera);
+    this.weapon.onReloadEvent = (e) => {
+      if (e === 'magOut') audio.magOut();
+      else if (e === 'magIn') audio.magIn();
+      else if (e === 'rack') audio.slideRack();
+      else if (e === 'done') this.ammo = MAG_SIZE;
+    };
 
     this.particles = new ParticleManager(this.scene);
     this.decals = new BloodDecalSystem(this.scene);
@@ -151,7 +159,7 @@ export class OfficeLevelScene implements GameScene {
     }
 
     // Aim down sights on right mouse (sprinting drops the aim)
-    const aiming = input.rightHeld && input.pointerLocked && this.player.alive && !this.over;
+    const aiming = input.rightHeld && input.pointerLocked && this.player.alive && !this.over && !this.weapon.reloading;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
@@ -166,11 +174,22 @@ export class OfficeLevelScene implements GameScene {
     // Player shooting (semi-auto)
     this.fireCooldown -= dt;
     // (no firing at a sprint — the gun is down by your hip; let go of Shift first)
-    const canFire = this.player.alive && this.fireCooldown <= 0 && input.pointerLocked && !this.player.sprinting;
-    if (input.consumeClick() && canFire) {
-      this.fireCooldown = FIRE_COOLDOWN;
-      this.playerShoot();
+    const canFire =
+      this.player.alive && this.fireCooldown <= 0 && input.pointerLocked && !this.player.sprinting && !this.weapon.reloading;
+    const clicked = input.consumeClick();
+    if (clicked && canFire) {
+      if (this.ammo > 0) {
+        this.fireCooldown = FIRE_COOLDOWN;
+        this.ammo--;
+        this.playerShoot();
+      } else {
+        this.ctx.audio.dryFire();
+        this.startReload();
+      }
     }
+    // Manual reload on R (only if the mag isn't already full)
+    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE) this.startReload();
+    this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
 
     // Enemies + AI
     let anyAttacking = false;
@@ -203,6 +222,12 @@ export class OfficeLevelScene implements GameScene {
   }
 
   // -------------------------------------------------------------- ballistics
+
+  private startReload(): void {
+    if (this.weapon.startReload()) {
+      this.player.aiming = false;
+    }
+  }
 
   private playerShoot(): void {
     const { audio, bus } = this.ctx;

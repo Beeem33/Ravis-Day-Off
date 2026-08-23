@@ -31,6 +31,103 @@ export class WeaponViewmodel {
   aimBlend = 0;
   private sprintBlend = 0;
 
+  // ---- Reload (John Wick style: flick the empty mag out left, slam a new one in)
+  private supportHand!: THREE.Mesh;
+  private magazine = new THREE.Group();
+  private handHome = new THREE.Vector3(-0.015, -0.1, 0.03);
+  reloading = false;
+  private reloadT = 0;
+  private reloadFired = new Set<string>();
+  static readonly RELOAD_TIME = 1.15;
+  /** Hook for the scene: 'magOut' | 'magIn' | 'rack' | 'done'. */
+  onReloadEvent: ((e: 'magOut' | 'magIn' | 'rack' | 'done') => void) | null = null;
+
+  /** Begin the reload animation. Returns false if one is already running. */
+  startReload(): boolean {
+    if (this.reloading) return false;
+    this.reloading = true;
+    this.reloadT = 0;
+    this.reloadFired.clear();
+    return true;
+  }
+
+  private reloadEvent(name: 'magOut' | 'magIn' | 'rack' | 'done'): void {
+    if (this.reloadFired.has(name)) return;
+    this.reloadFired.add(name);
+    this.onReloadEvent?.(name);
+  }
+
+  /**
+   * Drives the magazine + support hand through the reload. Returns the gun
+   * body's extra [rotX, rotY, rotZ, posY] offsets for this frame.
+   */
+  private updateReload(dt: number): [number, number, number, number] {
+    if (!this.reloading) {
+      this.magazine.position.set(0, 0, 0);
+      this.magazine.rotation.set(0, 0, 0);
+      this.magazine.visible = true;
+      this.supportHand.position.copy(this.handHome);
+      return [0, 0, 0, 0];
+    }
+    this.reloadT += dt;
+    const t = this.reloadT;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+    // Gun cants over to the right so the mag well faces the left hand
+    const cantIn = ease(clamp01(t / 0.18));
+    const cantOut = ease(clamp01((t - 0.85) / 0.25));
+    const cant = cantIn * (1 - cantOut);
+    let rotX = 0.25 * cant;
+    let rotY = 0.35 * cant;
+    let rotZ = -0.55 * cant;
+    let posY = -0.03 * cant;
+
+    if (t < 0.22) {
+      // Flick: the empty mag drops and spins out to the left of the screen
+      const k = ease(clamp01(t / 0.22));
+      this.magazine.position.set(-0.45 * k * k, -0.12 * k - 0.25 * k * k, 0.05 * k);
+      this.magazine.rotation.set(0.4 * k, 0, 1.8 * k);
+      if (t > 0.04) this.reloadEvent('magOut');
+      // Support hand drops away to fetch the next mag
+      this.supportHand.position.lerpVectors(this.handHome, new THREE.Vector3(-0.22, -0.38, 0.06), k);
+    } else if (t < 0.4) {
+      // Mag gone; hand off-screen grabbing a fresh one
+      this.magazine.visible = false;
+      this.supportHand.position.set(-0.22, -0.38, 0.06);
+    } else if (t < 0.78) {
+      // Fresh mag rides in with the left hand from the bottom-left and seats
+      const k = ease(clamp01((t - 0.4) / 0.38));
+      this.magazine.visible = true;
+      const start = new THREE.Vector3(-0.24, -0.34, 0.06);
+      this.magazine.position.lerpVectors(start, new THREE.Vector3(0, 0, 0), k);
+      this.magazine.rotation.set(0, 0, 0.9 * (1 - k));
+      // Hand cups the baseplate the whole way in
+      this.supportHand.position.copy(this.magazine.position).add(new THREE.Vector3(-0.01, -0.135, 0.085));
+      if (k > 0.985) this.reloadEvent('magIn');
+    } else if (t < 0.9) {
+      // Seated: palm slap on the baseplate, gun jolts up
+      const k = ease(clamp01((t - 0.78) / 0.12));
+      this.magazine.position.set(0, 0, 0);
+      this.magazine.rotation.set(0, 0, 0);
+      this.supportHand.position.lerpVectors(new THREE.Vector3(-0.01, -0.135, 0.085), this.handHome, k);
+      posY += 0.012 * Math.sin(k * Math.PI);
+      rotX += -0.12 * Math.sin(k * Math.PI);
+    } else {
+      // Rack the slide, back to the ready position
+      if (t > 0.92) {
+        if (!this.reloadFired.has('rack')) this.slideKick = 1;
+        this.reloadEvent('rack');
+      }
+      this.supportHand.position.copy(this.handHome);
+      if (t >= WeaponViewmodel.RELOAD_TIME) {
+        this.reloading = false;
+        this.reloadEvent('done');
+      }
+    }
+    return [rotX, rotY, rotZ, posY];
+  }
+
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
     this.root.position.copy(this.basePos);
@@ -70,10 +167,10 @@ export class WeaponViewmodel {
     hand.position.set(0, -0.075, 0.075);
     hand.rotation.x = 0.22;
     this.gun.add(hand);
-    const supportHand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), skin);
-    supportHand.position.set(-0.015, -0.1, 0.03);
-    supportHand.rotation.z = 0.4;
-    this.gun.add(supportHand);
+    this.supportHand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), skin);
+    this.supportHand.position.copy(this.handHome);
+    this.supportHand.rotation.z = 0.4;
+    this.gun.add(this.supportHand);
 
     // ---- Cosmetic detail (no gameplay effect) ----
     const steel = new THREE.MeshStandardMaterial({ color: 0x6c7077, roughness: 0.35, metalness: 0.9 });
@@ -122,11 +219,22 @@ export class WeaponViewmodel {
       panel.rotation.x = 0.22;
       this.gun.add(panel);
     }
-    // Magazine baseplate below the grip
+    // Magazine: body inside the grip + baseplate below it. Grouped so the
+    // reload can flick the whole thing out and seat a fresh one.
+    const magBody = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.1, 0.04), polymer);
+    magBody.position.set(0, -0.075, 0.078);
+    magBody.rotation.x = 0.22;
+    this.magazine.add(magBody);
     const baseplate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
     baseplate.position.set(0, -0.128, 0.082);
     baseplate.rotation.x = 0.22;
-    this.gun.add(baseplate);
+    this.magazine.add(baseplate);
+    // Brass peeking out the top of a fresh mag
+    const round = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.018, 8), new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.8, roughness: 0.35 }));
+    round.rotation.x = Math.PI / 2;
+    round.position.set(0, -0.02, 0.07);
+    this.magazine.add(round);
+    this.gun.add(this.magazine);
     // Accessory rail under the frame
     for (let i = 0; i < 3; i++) {
       const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.008), polymer);
@@ -203,7 +311,8 @@ export class WeaponViewmodel {
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
     // ---- Pose blends: ADS snaps in fast, sprint pose is a touch lazier
     const sprinting = player.sprinting && player.currentSpeed > 4.5;
-    this.aimBlend += ((aiming && !sprinting ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
+    const [rlX, rlY, rlZ, rlPosY] = this.updateReload(dt);
+    this.aimBlend += ((aiming && !sprinting && !this.reloading ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
     this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
     const a = this.aimBlend;
     const sp = this.sprintBlend;
@@ -235,13 +344,13 @@ export class WeaponViewmodel {
 
     this.root.position.set(
       px + this.swayX + bobX + sprintSwayX,
-      py + this.swayY + bobY + sprintSwayY + r * 0.015,
+      py + this.swayY + bobY + sprintSwayY + r * 0.015 + rlPosY,
       pz + r * 0.06
     );
     this.root.rotation.set(
-      -r * 0.28 + this.swayY * 3 + this.sprintRot.x * sp,
-      this.swayX * 3 + this.sprintRot.y * sp,
-      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll
+      -r * 0.28 + this.swayY * 3 + this.sprintRot.x * sp + rlX,
+      this.swayX * 3 + this.sprintRot.y * sp + rlY,
+      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
     );
     this.slide.position.z = -0.03 + this.slideKick * 0.045;
 

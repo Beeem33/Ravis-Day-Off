@@ -222,6 +222,30 @@ export class AudioManager {
     this.noise(0.08, 'bandpass', 2100, 0.05 * a, true, 4);
   }
 
+  /** Magazine release: a light click and the mag sliding free. */
+  magOut(): void {
+    this.tone('square', 900, 300, 0.04, 0.12);
+    this.noise(0.08, 'bandpass', 1800, 0.08, true, 2);
+  }
+
+  /** Fresh mag slammed home: solid plastic-on-metal thunk. */
+  magIn(): void {
+    this.noise(0.05, 'lowpass', 900, 0.35);
+    this.tone('square', 420, 150, 0.06, 0.2);
+  }
+
+  /** Slide racking forward. */
+  slideRack(): void {
+    this.noise(0.04, 'highpass', 2500, 0.2);
+    this.tone('square', 1400, 500, 0.05, 0.12);
+    this.noise(0.06, 'lowpass', 700, 0.22);
+  }
+
+  /** Trigger pull on an empty chamber. */
+  dryFire(): void {
+    this.tone('square', 1100, 700, 0.03, 0.1);
+  }
+
   uiBeep(high = false): void {
     this.tone('square', high ? 1150 : 740, high ? 1150 : 740, 0.06, 0.06);
   }

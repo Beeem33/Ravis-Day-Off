@@ -194,6 +194,25 @@ export class FPSHUD {
     }, 90);
   }
 
+  private ammoEl: HTMLElement | null = null;
+  private shownAmmo = '';
+
+  /** Rounds left in the magazine; blinks while reloading. */
+  setAmmo(rounds: number, magSize: number, reloading: boolean): void {
+    if (!this.ammoEl) {
+      this.ammoEl = document.createElement('div');
+      this.ammoEl.className = 'hud-ammo';
+      this.ammoEl.innerHTML = `<div class="rounds"></div><div>/ ${magSize} &nbsp;·&nbsp; R RELOAD</div>`;
+      this.hud.appendChild(this.ammoEl);
+    }
+    const key = `${rounds}|${reloading}`;
+    if (key === this.shownAmmo) return;
+    this.shownAmmo = key;
+    this.ammoEl.querySelector('.rounds')!.textContent = reloading ? '--' : String(rounds);
+    this.ammoEl.classList.toggle('low', !reloading && rounds <= 3);
+    this.ammoEl.classList.toggle('reloading', reloading);
+  }
+
   /** Hide the crosshair while aiming down sights — the iron sights take over. */
   setAiming(on: boolean): void {
     const ch = this.hud.querySelector<HTMLElement>('.crosshair');

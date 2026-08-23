@@ -24,6 +24,7 @@ npm run build      # type-check + production bundle in dist/
 | Look | Mouse (pointer lock) |
 | Fire | Left click |
 | Aim down sights | Hold right click |
+| Reload | R (10-round magazine) |
 | Sprint | Shift |
 | Crouch | Ctrl / C |
 | Jump | Space |

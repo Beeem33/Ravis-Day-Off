@@ -164,24 +164,61 @@ export class AudioManager {
     if (Math.random() < 0.35) this.tone('sine', 2600 + Math.random() * 1200, 400, 0.25, 0.06 * a);
   }
 
+  /**
+   * Pane shatter: a hard initial crack, a bright splintering burst, then a
+   * cascade of shards tinkling onto the floor over the next second.
+   */
   glassShatter(distance: number): void {
     if (!this.ctx) return;
+    const ctx = this.ctx;
     const a = this.atten(distance, 35) * 0.9 + 0.1;
-    this.noise(0.35, 'highpass', 3200, 0.5 * a);
-    // Sprinkle of chimes as shards land
-    for (let i = 0; i < 7; i++) {
-      const t = this.ctx.currentTime + 0.04 + Math.random() * 0.4;
-      const osc = this.ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = 2000 + Math.random() * 4500;
-      const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.0001, this.ctx.currentTime);
-      g.gain.setValueAtTime(0.05 * a, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
-      osc.connect(g).connect(this.sfxBus);
-      osc.start(t);
-      osc.stop(t + 0.2);
+    const now = ctx.currentTime;
+
+    // 1. The crack — short, loud, full-band with a resonant ping
+    this.noise(0.05, 'highpass', 1800, 0.7 * a);
+    this.noise(0.12, 'bandpass', 5200, 0.45 * a, true, 1.2);
+    this.tone('triangle', 3600, 2400, 0.09, 0.18 * a);
+
+    // 2. Splintering: the pane breaking up — a crackling burst of tiny clicks
+    for (let i = 0; i < 14; i++) {
+      const t = now + 0.01 + Math.random() * 0.18;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.playbackRate.value = 1.5 + Math.random();
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 4000 + Math.random() * 5000;
+      f.Q.value = 6;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.setValueAtTime((0.12 + Math.random() * 0.1) * a, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02 + Math.random() * 0.03);
+      src.connect(f).connect(g).connect(this.sfxBus);
+      src.start(t, Math.random());
+      src.stop(t + 0.08);
     }
+
+    // 3. Shards raining down: inharmonic glassy chimes, denser early, thinning out
+    for (let i = 0; i < 26; i++) {
+      const t = now + 0.08 + Math.pow(Math.random(), 0.6) * 1.1;
+      const base = 2200 + Math.random() * 6000;
+      for (const ratio of [1, 2.76, 5.4]) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = base * ratio;
+        const g = ctx.createGain();
+        const vol = (0.035 / ratio) * a * (1 - (t - now) / 1.5);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.setValueAtTime(Math.max(0.0002, vol), t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08 + Math.random() * 0.2);
+        osc.connect(g).connect(this.sfxBus);
+        osc.start(t);
+        osc.stop(t + 0.35);
+      }
+    }
+
+    // 4. Body of the pane folding — a low whump underneath it all
+    this.noise(0.18, 'lowpass', 260, 0.3 * a);
   }
 
   footstep(sprinting: boolean, crouching: boolean): void {

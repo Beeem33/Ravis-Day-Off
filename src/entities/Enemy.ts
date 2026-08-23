@@ -6,73 +6,6 @@ const AMERICAN_NAMES = [
 ];
 
 /**
- * One way to die. The ragdoll is a single rigid body, so the character comes
- * from where the limbs settle and how the body is spun as it goes down —
- * `spin` is extra angular velocity applied on top of the bullet impulse.
- */
-interface DeathStyle {
-  /** [rotation.x, rotation.z] targets for each arm as it goes limp. */
-  armL: [number, number];
-  armR: [number, number];
-  legL: number;
-  legR: number;
-  head: [number, number]; // [rotation.x, rotation.z]
-  /** How fast the limbs give out — low is a slow slump, high is a hard drop. */
-  limpRate: number;
-  spin: [number, number, number];
-  /** Extra upward kick, for the ones that leave their feet. */
-  lift: number;
-}
-
-/** Ordinary collapses — used for body shots. */
-const BODY_DEATHS: DeathStyle[] = [
-  {
-    // Crumple: folds forward over the wound, arms hanging
-    armL: [0.9, 1.2], armR: [-0.6, -1.1], legL: 0.35, legR: -0.2,
-    head: [0.35, 0.5], limpRate: 3, spin: [-1.2, 0.4, 0], lift: 0
-  },
-  {
-    // Sprawl: thrown onto their back, limbs wide
-    armL: [-1.9, 1.5], armR: [-1.8, -1.6], legL: -0.5, legR: -0.35,
-    head: [-0.4, -0.2], limpRate: 2.2, spin: [2.4, -0.6, 0.3], lift: 40
-  },
-  {
-    // Twist: spun sideways, one arm across the chest
-    armL: [0.4, 2.0], armR: [-1.2, -0.3], legL: 0.6, legR: 0.15,
-    head: [0.1, 1.0], limpRate: 3.6, spin: [0.3, 3.2, 1.8], lift: 15
-  },
-  {
-    // Slump: knees buckle first, a slow sag straight down
-    armL: [0.6, 0.5], armR: [0.5, -0.45], legL: 1.1, legR: 0.85,
-    head: [0.6, 0.15], limpRate: 1.5, spin: [-0.4, 0.2, -0.2], lift: -20
-  },
-  {
-    // Face plant: pitched forward, arms trailing behind
-    armL: [1.8, 0.6], armR: [1.9, -0.5], legL: -0.3, legR: -0.45,
-    head: [0.5, -0.3], limpRate: 4, spin: [-2.8, 0.3, 0], lift: 10
-  }
-];
-
-/** Head shots — snappier, more violent. */
-const HEAD_DEATHS: DeathStyle[] = [
-  {
-    // Snap back: head whips, body follows straight down backwards
-    armL: [-1.4, 0.9], armR: [-1.5, -1.0], legL: -0.15, legR: 0.1,
-    head: [-1.1, 0.3], limpRate: 6, spin: [3.4, 0.2, 0.4], lift: 55
-  },
-  {
-    // Drop: everything lets go at once, straight to the floor
-    armL: [0.2, 0.35], armR: [0.15, -0.3], legL: 0.5, legR: 0.4,
-    head: [0.8, 0.9], limpRate: 8, spin: [0.2, -0.3, 0.1], lift: -40
-  },
-  {
-    // Pirouette: spun off their feet by the impact
-    armL: [-0.8, 1.7], armR: [-0.9, -1.8], legL: 0.25, legR: -0.6,
-    head: [0.2, -1.2], limpRate: 5, spin: [0.6, 4.5, 2.2], lift: 30
-  }
-];
-
-/**
  * Enemy — an armed intruder. Primitive-built humanoid with walk/aim
  * animation hooks; on a fatal hit it becomes a cannon-es ragdoll body that
  * takes the bullet impulse and tumbles, limbs going limp.
@@ -104,11 +37,11 @@ export class Enemy {
   private walkPhase = 0;
   private walkSpeed = 0; // 0 idle .. 1 full stride
   private aimBlend = 0; // 0 relaxed .. 1 weapon raised
-  private body: CANNON.Body | null = null;
   private world: CANNON.World | null = null;
-  private limpBlend = 0;
   private deadTimer = 0;
-  private death: DeathStyle = BODY_DEATHS[0];
+  /** Jointed ragdoll pieces once dead. */
+  private ragdoll: { body: CANNON.Body; container: THREE.Group }[] = [];
+  private ragdollByName = new Map<string, CANNON.Body>();
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
@@ -244,57 +177,98 @@ export class Enemy {
   // ------------------------------------------------------------------ death
 
   /**
-   * Fatal hit: convert to a single-body ragdoll, apply the bullet impulse at
-   * the hit point (so headshots snap back, gut shots fold) and let cannon
-   * tumble it to the floor. A death style is drawn from the pool matching
-   * where they were hit, so no two go down the same way.
+   * Fatal hit: the figure becomes a jointed ragdoll — torso, head, two arms
+   * and two legs as separate cannon bodies linked by ball joints — the
+   * bullet impulse lands on whichever part was hit, and the whole thing
+   * folds, flops and slides to rest on its own.
    */
   die(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, world: CANNON.World): void {
     if (!this.alive) return;
     this.alive = false;
     this.world = world;
     this.deadTimer = 0;
+    this.root.updateMatrixWorld(true);
+    const parent = this.root.parent ?? this.root;
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
 
-    // Torso centre is y 0.95, the head sits around 1.62 — anything landing
-    // well above the chest counts as a head shot for animation purposes.
-    const highHit = hitPoint.y - this.root.position.y > 1.45;
-    const pool = highHit ? HEAD_DEATHS : BODY_DEATHS;
-    this.death = pool[Math.floor(Math.random() * pool.length)];
+    // Each limb: visual node, its local centre (root space), body half-extents, mass.
+    type Limb = { visual: THREE.Object3D; center: THREE.Vector3; half: THREE.Vector3; mass: number; sphere?: number };
+    const limbs: Record<string, Limb> = {
+      torso: { visual: this.torso, center: new THREE.Vector3(0, 1.13, 0), half: new THREE.Vector3(0.23, 0.31, 0.13), mass: 30 },
+      head: { visual: this.head, center: new THREE.Vector3(0, 1.62, 0), half: new THREE.Vector3(0.12, 0.13, 0.12), mass: 5, sphere: 0.13 },
+      armL: { visual: this.armL, center: new THREE.Vector3(-0.29, 1.12, 0), half: new THREE.Vector3(0.06, 0.29, 0.07), mass: 4 },
+      armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.12, 0), half: new THREE.Vector3(0.06, 0.29, 0.07), mass: 5 },
+      legL: { visual: this.legL, center: new THREE.Vector3(-0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 },
+      legR: { visual: this.legR, center: new THREE.Vector3(0.115, 0.41, 0), half: new THREE.Vector3(0.085, 0.41, 0.095), mass: 10 }
+    };
 
-    // Re-root the group at the torso center so it can track the physics body.
-    const center = new THREE.Vector3(0, 0.95, 0);
-    for (const child of [...this.root.children]) {
-      child.position.sub(center);
+    for (const [name, limb] of Object.entries(limbs)) {
+      const worldCenter = this.root.localToWorld(limb.center.clone());
+      const body = new CANNON.Body({
+        mass: limb.mass,
+        shape: limb.sphere
+          ? new CANNON.Sphere(limb.sphere)
+          : new CANNON.Box(new CANNON.Vec3(limb.half.x, limb.half.y, limb.half.z)),
+        position: new CANNON.Vec3(worldCenter.x, worldCenter.y, worldCenter.z),
+        linearDamping: 0.25,
+        angularDamping: 0.5
+      });
+      body.quaternion.set(yawQ.x, yawQ.y, yawQ.z, yawQ.w);
+      world.addBody(body);
+
+      // Re-home the visual under a container that will track this body.
+      const container = new THREE.Group();
+      container.position.copy(worldCenter);
+      container.quaternion.copy(yawQ);
+      parent.add(container);
+      this.root.remove(limb.visual);
+      limb.visual.position.set(0, 0, 0);
+      limb.visual.rotation.set(0, 0, 0);
+      if (name === 'armL' || name === 'armR') limb.visual.position.y = 0.28; // shoulder pivot sits above the arm's centre
+      container.add(limb.visual);
+      this.ragdoll.push({ body, container });
+      this.ragdollByName.set(name, body);
     }
-    const worldCenter = center.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.root.position);
-    this.root.position.copy(worldCenter);
 
-    this.body = new CANNON.Body({
-      mass: 80,
-      shape: new CANNON.Box(new CANNON.Vec3(0.24, 0.8, 0.2)),
-      position: new CANNON.Vec3(worldCenter.x, worldCenter.y, worldCenter.z),
-      angularDamping: 0.35,
-      linearDamping: 0.12
-    });
-    this.body.quaternion.setFromEuler(0, this.yaw, 0);
+    // Ball joints: neck, shoulders, hips. (Pivots in each body's local frame.)
+    const joint = (a: string, b: string, pivot: THREE.Vector3) => {
+      const A = this.ragdollByName.get(a)!;
+      const B = this.ragdollByName.get(b)!;
+      const pa = pivot.clone().sub(limbs[a].center);
+      const pb = pivot.clone().sub(limbs[b].center);
+      world.addConstraint(
+        new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4)
+      );
+    };
+    joint('torso', 'head', new THREE.Vector3(0, 1.47, 0));
+    joint('torso', 'armL', new THREE.Vector3(-0.29, 1.4, 0));
+    joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0));
+    joint('torso', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
+    joint('torso', 'legR', new THREE.Vector3(0.115, 0.82, 0));
 
-    // Impulse at the hit point: knocks the body along the bullet vector.
-    const impulseMag = 260 + Math.random() * 120;
-    const impulse = new CANNON.Vec3(
-      bulletDir.x * impulseMag,
-      bulletDir.y * impulseMag * 0.4 + 60 + this.death.lift,
-      bulletDir.z * impulseMag
-    );
-    const rel = new CANNON.Vec3(hitPoint.x - worldCenter.x, hitPoint.y - worldCenter.y, hitPoint.z - worldCenter.z);
-    this.body.applyImpulse(impulse, rel);
-
-    // Style-specific tumble, rotated into the direction they were facing so
-    // "pitches forward" means forward for this enemy, not world -Z.
-    const spin = new THREE.Vector3(...this.death.spin).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
-    const j = (): number => (Math.random() - 0.5) * 0.8; // no two are identical
-    this.body.angularVelocity.set(spin.x + j(), spin.y + j(), spin.z + j());
-
-    world.addBody(this.body);
+    // The bullet's punch goes into whichever part it struck, plus a smaller
+    // shove to the torso so the whole body goes with it.
+    let struck = this.ragdollByName.get('torso')!;
+    let best = Infinity;
+    for (const { body } of this.ragdoll) {
+      const d = body.position.distanceTo(new CANNON.Vec3(hitPoint.x, hitPoint.y, hitPoint.z));
+      if (d < best) {
+        best = d;
+        struck = body;
+      }
+    }
+    const punch = (body: CANNON.Body, scale: number) => {
+      const mag = (90 + Math.random() * 50) * scale * (body.mass / 30);
+      const impulse = new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.4 + 12 * scale, bulletDir.z * mag);
+      const rel = new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z);
+      body.applyImpulse(impulse, rel);
+    };
+    punch(struck, 1);
+    if (struck !== this.ragdollByName.get('torso')) punch(this.ragdollByName.get('torso')!, 0.6);
+    // Knees buckle: a little random spin so no two fall alike
+    for (const { body } of this.ragdoll) {
+      body.angularVelocity.set((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2);
+    }
   }
 
   update(dt: number): void {
@@ -330,52 +304,39 @@ export class Enemy {
   }
 
   private updateDead(dt: number): void {
-    if (!this.body || this.settled) return;
+    if (this.ragdoll.length === 0 || this.settled) return;
     this.deadTimer += dt;
 
-    // Track the physics body
-    this.root.position.set(this.body.position.x, this.body.position.y, this.body.position.z);
-    this.root.quaternion.set(
-      this.body.quaternion.x,
-      this.body.quaternion.y,
-      this.body.quaternion.z,
-      this.body.quaternion.w
-    );
-
-    // Limbs go limp towards this death's pose
-    const d = this.death;
-    this.limpBlend = Math.min(1, this.limpBlend + dt * d.limpRate);
-    const l = this.limpBlend;
-    this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, d.armL[0], l * 0.4);
-    this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, d.armL[1], l * 0.4);
-    this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, d.armR[0], l * 0.4);
-    this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, d.armR[1], l * 0.4);
-    this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, d.legL, l * 0.3);
-    this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, d.legR, l * 0.3);
-    this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, d.head[0], l * 0.3);
-    this.head.rotation.z = THREE.MathUtils.lerp(this.head.rotation.z, d.head[1], l * 0.3);
-
-    // Settle after tumbling
-    const speed = this.body.velocity.length() + this.body.angularVelocity.length();
-    if (this.deadTimer > 1.2 && speed < 0.35) {
-      this.settle();
-    } else if (this.deadTimer > 6) {
-      this.settle();
+    // Every limb's visual tracks its own physics body
+    let speed = 0;
+    for (const { body, container } of this.ragdoll) {
+      container.position.set(body.position.x, body.position.y, body.position.z);
+      container.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+      speed += body.velocity.length() + body.angularVelocity.length() * 0.5;
     }
+
+    // Settle once the whole body has stopped moving (or after a hard cap)
+    if ((this.deadTimer > 1.5 && speed < 0.6) || this.deadTimer > 8) this.settle();
   }
 
   /** Corpse bottom in world space (for the blood pool decal). */
   corpseBase(): THREE.Vector3 {
-    const p = this.root.position.clone();
-    p.y -= 0.35;
+    const torso = this.ragdollByName.get('torso');
+    const p = torso
+      ? new THREE.Vector3(torso.position.x, torso.position.y, torso.position.z)
+      : this.root.position.clone();
+    p.y -= 0.2;
     return p;
   }
 
   private settle(): void {
     this.settled = true;
-    if (this.body && this.world) {
-      this.world.removeBody(this.body);
-      this.body = null;
+    if (this.world) {
+      for (const c of [...this.world.constraints]) {
+        if (this.ragdoll.some((r) => r.body === c.bodyA || r.body === c.bodyB)) this.world.removeConstraint(c);
+      }
+      for (const { body } of this.ragdoll) this.world.removeBody(body);
     }
+    this.ragdoll.length = 0;
   }
 }

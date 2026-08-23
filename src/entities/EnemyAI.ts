@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Enemy } from './Enemy';
 import type { FPSPlayer } from './FPSPlayer';
-import type { Waypoint } from '../environment/OfficeLevelBuilder';
+import type { Waypoint, Collider } from '../environment/OfficeLevelBuilder';
 import { EventBus, Events } from '../core/EventBus';
 import type { AudioManager } from '../core/AudioManager';
 
@@ -17,6 +17,8 @@ export interface AIDeps {
   player: FPSPlayer;
   waypoints: Waypoint[];
   occluders: THREE.Object3D[];
+  /** Level movement colliders — enemies slide along walls like the player does. */
+  colliders: Collider[];
   bus: EventBus;
   audio: AudioManager;
   /** Scene-level ballistics: the enemy pulls the trigger. */
@@ -130,8 +132,13 @@ export class EnemyAI {
     // Raycast against occluding geometry (glass intentionally excluded)
     this.raycaster.set(eye, toPlayer);
     this.raycaster.far = dist - 0.1;
-    const hits = this.raycaster.intersectObjects(occluders, false);
-    return hits.length === 0;
+    if (this.raycaster.intersectObjects(occluders, false).length > 0) return false;
+    // …and back the other way. Meshes are single-sided, so a ray that starts
+    // inside a wall sails straight out of it; the reverse ray from the
+    // player's side always meets the wall's front face. Both must be clear.
+    this.raycaster.set(target, toPlayer.clone().negate());
+    this.raycaster.far = dist - 0.1;
+    return this.raycaster.intersectObjects(occluders, false).length === 0;
   }
 
   // ---------------------------------------------------------------- update
@@ -267,6 +274,7 @@ export class EnemyAI {
       const strafe = Math.sin(this.strafePhase * 1.7);
       const side = EnemyAI.tmpA.set(Math.cos(enemy.yaw), 0, -Math.sin(enemy.yaw));
       enemy.position.addScaledVector(side, strafe * dt * 0.6);
+      this.resolveCollisions();
       enemy.setWalk(0.3);
 
       if (this.reactionTimer > 0) {
@@ -292,6 +300,29 @@ export class EnemyAI {
     }
   }
 
+  /**
+   * Push the enemy out of any level collider it overlaps (walls, cubicles,
+   * desks, unbroken glass) along the axis of least penetration, so they
+   * slide along surfaces instead of walking into them.
+   */
+  private resolveCollisions(): void {
+    const p = this.enemy.position;
+    const R = 0.3;
+    for (let pass = 0; pass < 2; pass++) {
+      for (const c of this.deps.colliders) {
+        if (c.disabled) continue;
+        const b = c.box;
+        // Horizontal slab of the enemy's capsule; skip floors (top below the knees)
+        if (b.max.y <= p.y + 0.25 || b.min.y >= p.y + 1.6) continue;
+        const ox = Math.min(p.x + R - b.min.x, b.max.x - (p.x - R));
+        const oz = Math.min(p.z + R - b.min.z, b.max.z - (p.z - R));
+        if (ox <= 0 || oz <= 0) continue;
+        if (ox < oz) p.x += p.x < (b.min.x + b.max.x) / 2 ? -ox : ox;
+        else p.z += p.z < (b.min.z + b.max.z) / 2 ? -oz : oz;
+      }
+    }
+  }
+
   /** Straight-line steering used along waypoint links. Returns true on arrival. */
   private moveToward(target: THREE.Vector3, speed: number, dt: number, arriveDist = 0.35): boolean {
     const enemy = this.enemy;
@@ -304,6 +335,7 @@ export class EnemyAI {
     to.normalize();
     enemy.faceToward(target, dt, 6);
     enemy.position.addScaledVector(to, Math.min(speed * dt, dist));
+    this.resolveCollisions();
     enemy.setWalk(Math.min(1, speed / 2.5));
 
     // Footstep noise for the player to track

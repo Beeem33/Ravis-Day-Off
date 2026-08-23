@@ -96,6 +96,7 @@ export class OfficeLevelScene implements GameScene {
           player: this.player,
           waypoints: this.level.waypoints,
           occluders: this.level.occluders,
+          colliders: this.level.colliders,
           bus,
           audio,
           enemyFire: (e) => this.enemyFire(e)
@@ -213,6 +214,7 @@ export class OfficeLevelScene implements GameScene {
     this.hud.setHealth(this.player.health, this.player.regenProgress);
 
     for (const f of this.level.flickering) f.update(dt);
+    for (const g of this.level.glassPanes) g.update(dt);
     this.particles.update(dt);
     this.world.step(1 / 60, dt, 3);
 

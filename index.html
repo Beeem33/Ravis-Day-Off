@@ -45,12 +45,10 @@
     .crosshair {
       position: absolute; left: 50%; top: 50%; width: 0; height: 0;
     }
-    .crosshair span { position: absolute; background: rgba(230, 255, 235, 0.9); box-shadow: 0 0 3px rgba(0,0,0,0.9); }
-    .ch-t { width: 2px; height: 7px; left: -1px; top: -13px; }
-    .ch-b { width: 2px; height: 7px; left: -1px; top: 6px; }
-    .ch-l { width: 7px; height: 2px; left: -13px; top: -1px; }
-    .ch-r { width: 7px; height: 2px; left: 6px; top: -1px; }
-    .ch-dot { width: 2px; height: 2px; left: -1px; top: -1px; }
+    .crosshair span { position: absolute; background: #ffffff; box-shadow: 0 0 3px rgba(0,0,0,0.9); }
+    /* Plain white dot — the arms are kept in the markup but hidden */
+    .ch-t, .ch-b, .ch-l, .ch-r { display: none; }
+    .ch-dot { width: 4px; height: 4px; left: -2px; top: -2px; border-radius: 50%; }
     .hitmarker {
       position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0;
     }

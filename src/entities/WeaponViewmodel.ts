@@ -75,6 +75,74 @@ export class WeaponViewmodel {
     supportHand.rotation.z = 0.4;
     this.gun.add(supportHand);
 
+    // ---- Cosmetic detail (no gameplay effect) ----
+    const steel = new THREE.MeshStandardMaterial({ color: 0x6c7077, roughness: 0.35, metalness: 0.9 });
+    const polymer = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x9a9a9a, roughness: 0.6 });
+
+    // Exposed barrel crown at the slide's mouth
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 10), steel);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.045, -0.155);
+    this.gun.add(barrel);
+    // Rear slide serrations — grip cuts on both sides
+    // (children of the slide, so they travel with it when it cycles)
+    for (let i = 0; i < 5; i++) {
+      for (const side of [-1, 1]) {
+        const cut = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.03, 0.004), polymer);
+        cut.position.set(side * 0.0205, 0, 0.065 + i * 0.011);
+        this.slide.add(cut);
+      }
+    }
+    // Ejection port (right side)
+    const port = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.016, 0.04), polymer);
+    port.position.set(0.021, 0.008, -0.005);
+    this.slide.add(port);
+    // Hammer peeking out the back of the slide
+    const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.018, 0.01), steel);
+    hammer.position.set(0, 0.03, 0.095);
+    hammer.rotation.x = -0.5;
+    this.gun.add(hammer);
+    // Trigger inside the guard
+    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.024, 0.006), steel);
+    trigger.position.set(0, -0.03, 0.02);
+    trigger.rotation.x = 0.35;
+    this.gun.add(trigger);
+    // Slide release + thumb safety levers (left side)
+    const release = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.008, 0.03), steel);
+    release.position.set(-0.02, 0.012, 0.03);
+    this.gun.add(release);
+    const safety = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.01, 0.012), steel);
+    safety.position.set(-0.02, 0.02, 0.085);
+    this.gun.add(safety);
+    // Stippled grip panels, slightly proud of the frame
+    for (const side of [-1, 1]) {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.08, 0.036), polymer);
+      panel.position.set(side * 0.019, -0.07, 0.072);
+      panel.rotation.x = 0.22;
+      this.gun.add(panel);
+    }
+    // Magazine baseplate below the grip
+    const baseplate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
+    baseplate.position.set(0, -0.128, 0.082);
+    baseplate.rotation.x = 0.22;
+    this.gun.add(baseplate);
+    // Accessory rail under the frame
+    for (let i = 0; i < 3; i++) {
+      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.008), polymer);
+      slot.position.set(0, -0.028, -0.06 - i * 0.02);
+      this.gun.add(slot);
+    }
+    // Three-dot sights: white dots you can actually line up when aiming
+    const fDot = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.003, 0.002), white);
+    fDot.position.set(0, 0.075, -0.1405);
+    this.gun.add(fDot);
+    for (const side of [-1, 1]) {
+      const rDot = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.003, 0.002), white);
+      rDot.position.set(side * 0.007, 0.073, 0.0815);
+      this.gun.add(rDot);
+    }
+
     // Muzzle anchor at barrel tip
     this.muzzle.position.set(0, 0.045, -0.16);
     this.gun.add(this.muzzle);

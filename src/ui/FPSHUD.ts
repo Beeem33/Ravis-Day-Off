@@ -78,7 +78,7 @@ export class FPSHUD {
         <h2>SHIFT COMPLETE</h2>
         <p>All intruders neutralized. Ravi clocks out.</p>
         <p id="win-time"></p>
-        <p class="overlay-hint">[ CLICK ] RETURN TO SECURITY OFFICE</p>
+        <p class="overlay-hint">[ P ] PLAY AGAIN &nbsp;&nbsp;&nbsp; [ ESC ] SECURITY OFFICE</p>
       </div>
     `;
     this.root.appendChild(el);

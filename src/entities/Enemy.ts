@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 const AMERICAN_NAMES = [
   'Chuck', 'Randy', 'Brad', 'Kyle', 'Dale', 'Hank', 'Wayne', 'Earl', 'Gary', 'Todd', 'Bubba', 'Cody'
@@ -36,7 +37,8 @@ export class Enemy {
   private foreR!: THREE.Group;
   private static woundMat: THREE.MeshBasicMaterial | null = null;
   private head!: THREE.Mesh;
-  private torso!: THREE.Mesh;
+  private torso!: THREE.Mesh; // chest
+  private pelvis!: THREE.Mesh;
   private rifle!: THREE.Group;
   private muzzle = new THREE.Object3D();
 
@@ -162,15 +164,15 @@ export class Enemy {
     const mkLeg = (side: number): [THREE.Group, THREE.Group] => {
       const hip = new THREE.Group();
       hip.position.set(side * 0.115, 0.82, 0);
-      const thigh = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.41, 0.19), suit), 'leg');
+      const thigh = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.28, 4, 12), suit), 'leg');
       thigh.position.set(0, -0.205, 0);
       hip.add(thigh);
       const knee = new THREE.Group();
       knee.position.set(0, -0.41, 0);
-      const shin = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.41, 0.18), suit), 'leg');
+      const shin = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.3, 4, 12), suit), 'leg');
       shin.position.set(0, -0.205, 0);
       knee.add(shin);
-      const s = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.08, 0.27), shoe);
+      const s = new THREE.Mesh(new RoundedBoxGeometry(0.16, 0.08, 0.27, 3, 0.035), shoe);
       s.position.set(0, -0.37, -0.04);
       knee.add(s);
       hip.add(knee);
@@ -181,9 +183,17 @@ export class Enemy {
     [this.legR, this.shinR] = mkLeg(1);
 
     // Torso: black jacket over a white shirt, tie, lapels, buttons
-    this.torso = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.62, 0.26), suit), 'torso');
-    this.torso.position.set(0, 1.13, 0);
+    // Two-piece torso: chest (shoulders/neck hang off it) and pelvis (hips hang
+    // off it), joined at the stomach so the body can fold in the middle.
+    this.torso = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.36, 0.26, 4, 0.09), suit), 'torso');
+    this.torso.position.set(0, 1.27, 0);
     this.root.add(this.torso);
+    this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.3, 0.24, 4, 0.08), suit), 'torso');
+    this.pelvis.position.set(0, 0.96, 0);
+    this.root.add(this.pelvis);
+    const belt = new THREE.Mesh(new RoundedBoxGeometry(0.45, 0.04, 0.25, 2, 0.015), shoe);
+    belt.position.set(0, 0.13, 0);
+    this.pelvis.add(belt);
     const shirtFront = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.02), shirt);
     shirtFront.position.set(0, 0.04, -0.135);
     this.torso.add(shirtFront);
@@ -209,13 +219,13 @@ export class Enemy {
     if (!Enemy.faceAngry) Enemy.faceAngry = Enemy.drawFace(false);
     if (!Enemy.faceDead) Enemy.faceDead = Enemy.drawFace(true);
     this.head = this.addPart(
-      new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.24), [skin, skin, skin, skin, skin, Enemy.faceAngry]),
+      new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.27, 0.24, 5, 0.075), [skin, skin, skin, skin, skin, Enemy.faceAngry]),
       'head'
     );
     this.head.position.set(0, 1.62, 0);
     this.root.add(this.head);
     const hairBox = (w: number, h: number, d: number, x: number, y: number, z: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hair);
+      const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 3, Math.min(w, h, d) * 0.4), hair);
       m.position.set(x, y, z);
       this.head.add(m);
     };
@@ -256,18 +266,18 @@ export class Enemy {
     const mkArm = (side: number): [THREE.Group, THREE.Group] => {
       const g = new THREE.Group();
       g.position.set(side * 0.29, 1.4, 0);
-      const upper = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.29, 0.14), suit), 'arm');
+      const upper = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.2, 4, 12), suit), 'arm');
       upper.position.set(0, -0.145, 0);
       g.add(upper);
       const fore = new THREE.Group();
       fore.position.set(0, -0.29, 0); // elbow
-      const lower = this.addPart(new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.29, 0.13), suit), 'arm');
+      const lower = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.2, 4, 12), suit), 'arm');
       lower.position.set(0, -0.145, 0);
       fore.add(lower);
       const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.03, 0.145), shirt);
       cuff.position.set(0, -0.24, 0);
       fore.add(cuff);
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.1), glove);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), glove);
       hand.position.set(0, -0.31, 0);
       fore.add(hand);
       g.add(fore);
@@ -354,7 +364,8 @@ export class Enemy {
     // Each limb: visual node, its local centre (root space), body half-extents, mass.
     type Limb = { visual: THREE.Object3D; center: THREE.Vector3; half: THREE.Vector3; mass: number; sphere?: number };
     const limbs: Record<string, Limb> = {
-      torso: { visual: this.torso, center: new THREE.Vector3(0, 1.13, 0), half: new THREE.Vector3(0.23, 0.31, 0.13), mass: 30 },
+      torso: { visual: this.torso, center: new THREE.Vector3(0, 1.27, 0), half: new THREE.Vector3(0.23, 0.18, 0.13), mass: 18 },
+      pelvis: { visual: this.pelvis, center: new THREE.Vector3(0, 0.96, 0), half: new THREE.Vector3(0.22, 0.15, 0.12), mass: 14 },
       head: { visual: this.head, center: new THREE.Vector3(0, 1.62, 0), half: new THREE.Vector3(0.12, 0.13, 0.12), mass: 5, sphere: 0.13 },
       armL: { visual: this.armL, center: new THREE.Vector3(-0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
       armR: { visual: this.armR, center: new THREE.Vector3(0.29, 1.255, 0), half: new THREE.Vector3(0.06, 0.145, 0.07), mass: 2.5 },
@@ -412,8 +423,9 @@ export class Enemy {
     joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0));
     joint('armL', 'foreL', new THREE.Vector3(-0.29, 1.11, 0)); // elbows
     joint('armR', 'foreR', new THREE.Vector3(0.29, 1.11, 0));
-    joint('torso', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
-    joint('torso', 'legR', new THREE.Vector3(0.115, 0.82, 0));
+    joint('torso', 'pelvis', new THREE.Vector3(0, 1.1, 0)); // stomach — lets them fold at the waist
+    joint('pelvis', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
+    joint('pelvis', 'legR', new THREE.Vector3(0.115, 0.82, 0));
     joint('legL', 'shinL', new THREE.Vector3(-0.115, 0.41, 0)); // knees
     joint('legR', 'shinR', new THREE.Vector3(0.115, 0.41, 0));
 
@@ -598,7 +610,7 @@ export class Enemy {
     this.rifle.rotation.x = -(this.armR.rotation.x + this.foreR.rotation.x) - 0.15 * (1 - this.aimBlend);
 
     // Subtle idle breathing
-    this.torso.position.y = 1.13 + Math.sin(this.walkPhase * 0.3) * 0.008;
+    this.torso.position.y = 1.27 + Math.sin(this.walkPhase * 0.3) * 0.008;
   }
 
   private updateDead(dt: number): void {

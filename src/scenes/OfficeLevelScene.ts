@@ -152,12 +152,16 @@ export class OfficeLevelScene implements GameScene {
 
   private onOverlayClick(): void {
     if (!this.over) return;
-    if (this.won) this.ctx.bus.emit(Events.ReturnToMenu);
+    if (this.won) return; // shift complete: P restarts, Esc goes to the office
     else this.ctx.bus.emit(Events.RestartLevel);
   }
 
   private onKey(e: KeyboardEvent): void {
-    if (e.code === 'Escape' && this.over && !this.won) {
+    if (e.code === 'KeyP' && this.over && this.won) {
+      this.ctx.bus.emit(Events.RestartLevel);
+      return;
+    }
+    if (e.code === 'Escape' && this.over) {
       this.ctx.bus.emit(Events.ReturnToMenu);
     }
   }

@@ -25,7 +25,7 @@ export class WeaponViewmodel {
   private aimPos = new THREE.Vector3(0, -0.073, -0.3);
   /** Sprint pose: gun dropped and canted diagonally across the body. */
   private sprintPos = new THREE.Vector3(0.1, -0.27, -0.36);
-  private sprintRot = new THREE.Euler(0.45, 0.75, -0.55); // muzzle swings to the LEFT
+  private sprintRot = new THREE.Euler(-0.45, 0.75, -0.55); // muzzle swings LEFT and DOWN
 
   /** 0..1 — how far into aim-down-sights we are (for FOV zoom + spread). */
   aimBlend = 0;
@@ -40,8 +40,22 @@ export class WeaponViewmodel {
   private reloadFired = new Set<string>();
   static readonly RELOAD_TIME = 1.63;
   private slidePull = 0; // 0..1 while the left hand racks the slide
-  /** Hook for the scene: 'magOut' | 'magIn' | 'rack' | 'done'. */
-  onReloadEvent: ((e: 'magOut' | 'magIn' | 'rack' | 'done') => void) | null = null;
+  /** Hook for the scene: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done'. */
+  onReloadEvent: ((e: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done') => void) | null = null;
+
+  /**
+   * World-space pose of the magazine right now plus the direction it's
+   * flying (gun-local −Y), so the scene can spawn a physical copy that
+   * lands in the level when the viewmodel's mag is hidden.
+   */
+  ejectedMagPose(): { position: THREE.Vector3; quaternion: THREE.Quaternion; direction: THREE.Vector3 } {
+    this.magazine.updateWorldMatrix(true, false);
+    const position = this.magazine.getWorldPosition(new THREE.Vector3());
+    const quaternion = this.magazine.getWorldQuaternion(new THREE.Quaternion());
+    const gunQ = this.gun.getWorldQuaternion(new THREE.Quaternion());
+    const direction = new THREE.Vector3(0, -1, 0).applyQuaternion(gunQ).normalize();
+    return { position, quaternion, direction };
+  }
 
   /** Begin the reload animation. Returns false if one is already running. */
   startReload(): boolean {
@@ -52,7 +66,7 @@ export class WeaponViewmodel {
     return true;
   }
 
-  private reloadEvent(name: 'magOut' | 'magIn' | 'rack' | 'done'): void {
+  private reloadEvent(name: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done'): void {
     if (this.reloadFired.has(name)) return;
     this.reloadFired.add(name);
     this.onReloadEvent?.(name);
@@ -116,7 +130,10 @@ export class WeaponViewmodel {
       const fly = k * k * 1.6 + k * 0.3;
       this.magazine.position.set(0, -fly, 0.02 * k);
       this.magazine.rotation.set(2.5 * k, 0, 0.6 * k);
-      if (k > 0.75) this.magazine.visible = false;
+      if (k > 0.75) {
+        if (this.magazine.visible) this.reloadEvent('magDrop'); // hand the mag over to the world
+        this.magazine.visible = false;
+      }
       this.supportHand.position.copy(offscreen);
     } else if (t < 0.66) {
       // Flipping the gun over; hand is off-screen grabbing the fresh mag

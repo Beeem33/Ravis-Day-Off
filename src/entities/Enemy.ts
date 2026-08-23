@@ -210,8 +210,8 @@ export class Enemy {
           ? new CANNON.Sphere(limb.sphere)
           : new CANNON.Box(new CANNON.Vec3(limb.half.x, limb.half.y, limb.half.z)),
         position: new CANNON.Vec3(worldCenter.x, worldCenter.y, worldCenter.z),
-        linearDamping: 0.25,
-        angularDamping: 0.5
+        linearDamping: 0.04,
+        angularDamping: 0.12
       });
       body.quaternion.set(yawQ.x, yawQ.y, yawQ.z, yawQ.w);
       world.addBody(body);
@@ -265,9 +265,24 @@ export class Enemy {
     };
     punch(struck, 1);
     if (struck !== this.ragdollByName.get('torso')) punch(this.ragdollByName.get('torso')!, 0.6);
-    // Knees buckle: a little random spin so no two fall alike
+    // Limbs let go: arms fling outward from the shoulders, legs kick apart,
+    // and everything gets a hard random spin so the body tumbles, sprawls
+    // and catches on whatever it falls over instead of dropping as a unit.
+    const side = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw)); // enemy's right
+    const fling = (name: string, dirX: number, up: number, mag: number) => {
+      const b = this.ragdollByName.get(name)!;
+      b.velocity.x += side.x * dirX * mag;
+      b.velocity.z += side.z * dirX * mag;
+      b.velocity.y += up;
+    };
+    fling('armL', -1, 1.5 + Math.random() * 2, 2.5 + Math.random() * 2);
+    fling('armR', 1, 1.5 + Math.random() * 2, 2.5 + Math.random() * 2);
+    fling('legL', -1, 0.5, 1 + Math.random() * 1.5);
+    fling('legR', 1, 0.5, 1 + Math.random() * 1.5);
+    fling('head', Math.random() - 0.5, 1, 2);
     for (const { body } of this.ragdoll) {
-      body.angularVelocity.set((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2);
+      const s = body === this.ragdollByName.get('torso') ? 4 : 9;
+      body.angularVelocity.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
     }
   }
 
@@ -316,7 +331,7 @@ export class Enemy {
     }
 
     // Settle once the whole body has stopped moving (or after a hard cap)
-    if ((this.deadTimer > 1.5 && speed < 0.6) || this.deadTimer > 8) this.settle();
+    if ((this.deadTimer > 2.5 && speed < 0.3) || this.deadTimer > 11) this.settle();
   }
 
   /** Corpse bottom in world space (for the blood pool decal). */

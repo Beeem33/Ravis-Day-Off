@@ -63,6 +63,9 @@ export class OfficeLevelScene implements GameScene {
     this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -19, 0) });
     this.world.broadphase = new CANNON.SAPBroadphase(this.world);
     this.world.allowSleep = true;
+    // Bodies grip surfaces a bit and barely bounce — ragdolls drape, mags clatter
+    this.world.defaultContactMaterial.friction = 0.45;
+    this.world.defaultContactMaterial.restitution = 0.12;
     for (const c of this.level.colliders) {
       if (c.glass) continue; // glass may vanish; ragdolls can ignore it
       const size = new THREE.Vector3();
@@ -82,6 +85,7 @@ export class OfficeLevelScene implements GameScene {
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.weapon.onReloadEvent = (e) => {
       if (e === 'magOut') audio.magOut();
+      else if (e === 'magDrop') this.dropMagazine();
       else if (e === 'magIn') audio.magIn();
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
@@ -224,6 +228,7 @@ export class OfficeLevelScene implements GameScene {
 
     for (const f of this.level.flickering) f.update(dt);
     for (const g of this.level.glassPanes) g.update(dt);
+    this.updateDroppedMags(dt);
     this.particles.update(dt);
     this.world.step(1 / 60, dt, 3);
 
@@ -251,6 +256,56 @@ export class OfficeLevelScene implements GameScene {
     // Only accept upward-facing surfaces; a wall edge isn't somewhere blood pools
     if (normal.y < 0.5) return null;
     return { point: hit.point, normal };
+  }
+
+  // ---------------------------------------------------------- dropped mags
+
+  private droppedMags: { mesh: THREE.Group; body: CANNON.Body; life: number }[] = [];
+  private static MAG_LIFETIME = 60;
+
+  /** The ejected magazine becomes a real object: it flies, clatters, and lies where it lands. */
+  private dropMagazine(): void {
+    const { position, quaternion, direction } = this.weapon.ejectedMagPose();
+    const polymer = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 });
+    const mesh = new THREE.Group();
+    const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.1, 0.04), polymer);
+    mesh.add(bodyMesh);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
+    plate.position.set(0, -0.053, 0.004);
+    mesh.add(plate);
+    mesh.position.copy(position);
+    mesh.quaternion.copy(quaternion);
+    this.scene.add(mesh);
+
+    const body = new CANNON.Body({
+      mass: 0.15,
+      shape: new CANNON.Box(new CANNON.Vec3(0.013, 0.056, 0.02)),
+      position: new CANNON.Vec3(position.x, position.y, position.z),
+      linearDamping: 0.05,
+      angularDamping: 0.2
+    });
+    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+    // Spring-ejected along the well, plus whatever Ravi's moving at
+    const v = direction.clone().multiplyScalar(3.2 + Math.random()).add(this.player.velocity);
+    body.velocity.set(v.x, v.y, v.z);
+    body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+    this.world.addBody(body);
+    this.droppedMags.push({ mesh, body, life: OfficeLevelScene.MAG_LIFETIME });
+  }
+
+  private updateDroppedMags(dt: number): void {
+    for (let i = this.droppedMags.length - 1; i >= 0; i--) {
+      const m = this.droppedMags[i];
+      m.life -= dt;
+      m.mesh.position.set(m.body.position.x, m.body.position.y, m.body.position.z);
+      m.mesh.quaternion.set(m.body.quaternion.x, m.body.quaternion.y, m.body.quaternion.z, m.body.quaternion.w);
+      // Fell out of the world (void / through a gap)? Don't simulate forever.
+      if (m.life <= 0 || m.body.position.y < -5) {
+        this.world.removeBody(m.body);
+        this.scene.remove(m.mesh);
+        this.droppedMags.splice(i, 1);
+      }
+    }
   }
 
   private startReload(): void {

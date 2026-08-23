@@ -194,18 +194,29 @@ export class Enemy {
     const belt = new THREE.Mesh(new RoundedBoxGeometry(0.45, 0.04, 0.25, 2, 0.015), shoe);
     belt.position.set(0, 0.13, 0);
     this.pelvis.add(belt);
-    const shirtFront = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.02), shirt);
-    shirtFront.position.set(0, 0.04, -0.135);
+    // Shirt, tie and lapels are flush skins on the chest surface (z = -0.13),
+    // not blocks. The tie starts at the collar — the top of the chest — and
+    // runs down; the pelvis carries its tail so it reads as one piece.
+    const shirtFront = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.34), shirt);
+    shirtFront.position.set(0, 0, -0.1315);
+    shirtFront.rotation.y = Math.PI;
     this.torso.add(shirtFront);
-    const tieMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.36, 0.015), tie);
-    tieMesh.position.set(0, 0.04, -0.15);
+    const tieMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.3), tie);
+    tieMesh.position.set(0, -0.005, -0.1325);
+    tieMesh.rotation.y = Math.PI;
     this.torso.add(tieMesh);
-    const knot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.02), tie);
-    knot.position.set(0, 0.25, -0.15);
+    const knot = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.04, 1, 1), tie);
+    knot.position.set(0, 0.16, -0.133);
+    knot.rotation.y = Math.PI;
     this.torso.add(knot);
+    const tieTail = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.12), tie);
+    tieTail.position.set(0, 0.08, -0.1215);
+    tieTail.rotation.y = Math.PI;
+    this.pelvis.add(tieTail);
     for (const side of [-1, 1]) {
-      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.36, 0.015), suit);
-      lapel.position.set(side * 0.09, 0.1, -0.142);
+      const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.3), suit);
+      lapel.rotation.y = Math.PI;
+      lapel.position.set(side * 0.085, 0.01, -0.132);
       lapel.rotation.z = side * 0.18;
       this.torso.add(lapel);
     }
@@ -418,7 +429,25 @@ export class Enemy {
         new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4)
       );
     };
-    joint('torso', 'head', new THREE.Vector3(0, 1.47, 0));
+    // Neck: a cone-twist so the head nods/rolls but only swivels ±90° — no owl necks
+    {
+      const A = this.ragdollByName.get('torso')!;
+      const B = this.ragdollByName.get('head')!;
+      const pivot = new THREE.Vector3(0, 1.47, 0);
+      const pa = pivot.clone().sub(limbs.torso.center);
+      const pb = pivot.clone().sub(limbs.head.center);
+      world.addConstraint(
+        new CANNON.ConeTwistConstraint(A, B, {
+          pivotA: new CANNON.Vec3(pa.x, pa.y, pa.z),
+          pivotB: new CANNON.Vec3(pb.x, pb.y, pb.z),
+          axisA: new CANNON.Vec3(0, 1, 0),
+          axisB: new CANNON.Vec3(0, 1, 0),
+          angle: 0.9, // nod / tilt range
+          twistAngle: Math.PI / 2, // ±90° swivel = 180° total
+          maxForce: 1e4
+        })
+      );
+    }
     joint('torso', 'armL', new THREE.Vector3(-0.29, 1.4, 0));
     joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0));
     joint('armL', 'foreL', new THREE.Vector3(-0.29, 1.11, 0)); // elbows
@@ -446,45 +475,63 @@ export class Enemy {
       const rel = new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z);
       body.applyImpulse(impulse, rel);
     };
-    // Where the bullet landed decides how they go down.
+    // Where the bullet landed decides how they go down. Nothing here SETS a
+    // spin outright — the impulse is applied at the actual hit point (so an
+    // off-centre hit already twists the body naturally) and these only add
+    // a bias for the limb that was hit.
     const torsoB = this.ragdollByName.get('torso')!;
+    const pelvisB = this.ragdollByName.get('pelvis')!;
     const headB = this.ragdollByName.get('head')!;
     const fwdDir = this.forwardDir(new THREE.Vector3());
+    const rightDir = new THREE.Vector3(fwdDir.z === 0 && fwdDir.x === 0 ? 1 : -fwdDir.z, 0, fwdDir.x).normalize();
     const r = () => Math.random();
     const nudge = (b: CANNON.Body, v: THREE.Vector3) => b.velocity.vadd(new CANNON.Vec3(v.x, v.y, v.z), b.velocity);
+    const spin = (b: CANNON.Body, v: THREE.Vector3) => b.angularVelocity.vadd(new CANNON.Vec3(v.x, v.y, v.z), b.angularVelocity);
+    // Hit offset in the enemy's own frame: +side = their right, height above the feet
+    const rel = hitPoint.clone().sub(this.root.position);
+    const side = rel.dot(rightDir); // metres right (+) / left (−) of the spine
+    const sideSign = Math.sign(side) || (r() < 0.5 ? -1 : 1);
+    const lateral = Math.min(1, Math.abs(side) / 0.25); // 0 centre … 1 shoulder/hip edge
+    // Does the bullet push them back (front hit) or forward (shot in the back)?
+    const fromFront = bulletDir.dot(fwdDir) > 0 ? 1 : -1;
+
     if (hitPart === 'head') {
-      // Head shot: the head whips back hard, knees go, body follows it down backwards
+      // Head whips with the bullet, body follows it down
       punch(headB, 1.6);
       punch(torsoB, 0.25);
-      torsoB.angularVelocity.set(-fwdDir.z * 0, 0, 0);
-      // Pitch the torso over backwards relative to the bullet
-      const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), bulletDir).normalize();
-      torsoB.angularVelocity.set(axis.x * 5, 0, axis.z * 5);
-      nudge(torsoB, new THREE.Vector3(bulletDir.x * 1.2, -1.5, bulletDir.z * 1.2));
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * 1.2, -1.2, bulletDir.z * 1.2));
     } else if (hitPart === 'arm') {
-      // Arm hit: yanks the shoulder round — they spin on the spot and corkscrew down
+      // Shoulder/arm: that side is yanked round and they go down onto it
       punch(struck, 1.3);
       punch(torsoB, 0.3);
-      const side = Math.sign((struck.position.x - torsoB.position.x) * fwdDir.z - (struck.position.z - torsoB.position.z) * fwdDir.x) || 1;
-      torsoB.angularVelocity.set(0, side * (6 + r() * 4), 0);
-      nudge(torsoB, new THREE.Vector3(bulletDir.x * 0.8, 0.4, bulletDir.z * 0.8));
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * 0.8, 0.3, bulletDir.z * 0.8));
     } else if (hitPart === 'leg') {
-      // Leg shot: that knee buckles first, they drop straight down and topple
+      // Leg: knee buckles, they drop and topple over that leg
       punch(struck, 1.2);
       nudge(struck, new THREE.Vector3(0, -2, 0));
-      nudge(torsoB, new THREE.Vector3(bulletDir.x * 0.3, -3, bulletDir.z * 0.3));
-      const lean = r() < 0.5 ? 1 : -1; // forward or back
-      torsoB.angularVelocity.set(fwdDir.z * lean * 2.5, (r() - 0.5) * 2, -fwdDir.x * lean * 2.5);
+      nudge(pelvisB, new THREE.Vector3(bulletDir.x * 0.3, -2.5, bulletDir.z * 0.3));
+      nudge(torsoB, new THREE.Vector3(0, -1.5, 0));
     } else {
-      // Body shot: knocked back off their feet, folding around the wound
+      // Body: knocked off their feet, folding around the wound
       punch(struck, 1);
       if (struck !== torsoB) punch(torsoB, 0.6);
-      nudge(torsoB, new THREE.Vector3(bulletDir.x * (1.5 + r()), 0.5, bulletDir.z * (1.5 + r())));
-      const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), bulletDir).normalize();
-      const hi = hitPoint.y - this.root.position.y > 1.2 ? -1 : 1; // high chest: head snaps back; gut: folds forward
-      torsoB.angularVelocity.set(axis.x * 3 * hi, (r() - 0.5) * 3, axis.z * 3 * hi);
+      nudge(torsoB, new THREE.Vector3(bulletDir.x * (1.2 + r()), 0.4, bulletDir.z * (1.2 + r())));
+      // Gut shots fold forward at the waist, high chest hits rock the chest back
+      const gut = rel.y < 1.15 ? 1 : -0.5;
+      spin(torsoB, new THREE.Vector3(rightDir.x * 4 * gut * fromFront, 0, rightDir.z * 4 * gut * fromFront));
     }
-    void headB;
+
+    // Side reaction, for every hit type: the struck side is driven back, the
+    // body twists toward it and falls onto that side rather than straight back.
+    if (lateral > 0.15) {
+      const twist = -sideSign * fromFront * (3 + 5 * lateral); // yaw toward the hit side
+      spin(torsoB, new THREE.Vector3(0, twist, 0));
+      spin(pelvisB, new THREE.Vector3(0, twist * 0.6, 0));
+      // Lean/fall toward that side (roll about the forward axis)
+      spin(torsoB, new THREE.Vector3(fwdDir.x * sideSign * 2.5 * lateral, 0, fwdDir.z * sideSign * 2.5 * lateral));
+      nudge(torsoB, rightDir.clone().multiplyScalar(sideSign * (0.8 + 1.2 * lateral)));
+      nudge(pelvisB, rightDir.clone().multiplyScalar(sideSign * 0.5 * lateral));
+    }
     // The wound itself: a bullet hole with blood, stuck to whichever limb was
     // hit, facing back along the bullet — it rides with the ragdoll.
     if (!Enemy.woundMat) {
@@ -519,18 +566,7 @@ export class Enemy {
         side: THREE.DoubleSide
       });
     }
-    const struckEntry = this.ragdoll.find((r) => r.body === struck);
-    if (struckEntry) {
-      const wound = new THREE.Mesh(new THREE.PlaneGeometry(0.16 + Math.random() * 0.08, 0.16 + Math.random() * 0.08), Enemy.woundMat);
-      const inward = bulletDir.clone().normalize();
-      // Entry point sits on the limb's surface; face the plane back at the shooter
-      wound.position.copy(hitPoint).addScaledVector(inward, -0.012);
-      wound.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), inward.clone().negate());
-      wound.rotateZ(Math.random() * Math.PI * 2);
-      struckEntry.container.updateWorldMatrix(true, false);
-      struckEntry.container.attach(wound); // keeps its world pose, now rides with the limb
-      wound.renderOrder = 3;
-    }
+    this.addWound(hitPoint, bulletDir, struck);
 
     // The rifle leaves their hands: it becomes its own body and clatters away
     this.rifle.updateWorldMatrix(true, false);
@@ -614,7 +650,11 @@ export class Enemy {
   }
 
   private updateDead(dt: number): void {
-    if (this.ragdoll.length === 0 || this.settled) return;
+    if (this.ragdoll.length === 0) return;
+    if (this.settled) {
+      // Asleep; only sync if something woke them (a bullet, a body landing on them)
+      if (!this.ragdoll.some((r) => r.body.sleepState !== CANNON.Body.SLEEPING)) return;
+    }
     this.deadTimer += dt;
 
     // Every limb's visual tracks its own physics body
@@ -647,18 +687,58 @@ export class Enemy {
     return p;
   }
 
+  /** Bullet hole + blood stuck to a limb at the hit point, riding with it. */
+  private addWound(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, body: CANNON.Body): void {
+    const entry = this.ragdoll.find((r) => r.body === body);
+    if (!entry || !Enemy.woundMat) return;
+    const wound = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.14 + Math.random() * 0.08, 0.14 + Math.random() * 0.08),
+      Enemy.woundMat
+    );
+    const inward = bulletDir.clone().normalize();
+    wound.position.copy(hitPoint).addScaledVector(inward, -0.012);
+    wound.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), inward.clone().negate());
+    wound.rotateZ(Math.random() * Math.PI * 2);
+    entry.container.updateWorldMatrix(true, false);
+    entry.container.attach(wound); // keeps its world pose, now rides with the limb
+    wound.renderOrder = 3;
+  }
+
+  /**
+   * Come to rest. The bodies STAY in the world (asleep, so they cost
+   * nothing) — a corpse can still be shot and will jolt, bleed and shift.
+   */
   private settle(): void {
     this.settled = true;
-    if (this.world) {
-      for (const c of [...this.world.constraints]) {
-        if (this.ragdoll.some((r) => r.body === c.bodyA || r.body === c.bodyB)) this.world.removeConstraint(c);
-      }
-      for (const { body } of this.ragdoll) this.world.removeBody(body);
-      if (this.gunBody) {
-        this.world.removeBody(this.gunBody);
-        this.gunBody = null;
+    for (const { body } of this.ragdoll) body.sleep();
+    this.gunBody?.sleep();
+  }
+
+  /**
+   * A bullet into an already-dead body: wake the nearest limb, shove it
+   * along the bullet, and add another wound.
+   */
+  hitCorpse(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3): void {
+    if (this.ragdoll.length === 0) return;
+    const hv = new CANNON.Vec3(hitPoint.x, hitPoint.y, hitPoint.z);
+    let struck = this.ragdoll[0].body;
+    let best = Infinity;
+    for (const { body } of this.ragdoll) {
+      const d = body.position.distanceTo(hv);
+      if (d < best) {
+        best = d;
+        struck = body;
       }
     }
-    this.ragdoll.length = 0;
+    for (const { body } of this.ragdoll) body.wakeUp();
+    const mag = (35 + Math.random() * 25) * (struck.mass / 18);
+    struck.applyImpulse(
+      new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.5 + 4, bulletDir.z * mag),
+      new CANNON.Vec3(hitPoint.x - struck.position.x, hitPoint.y - struck.position.y, hitPoint.z - struck.position.z)
+    );
+    this.addWound(hitPoint, bulletDir, struck);
+    // Keep tracking the bodies until they come to rest again
+    this.settled = false;
+    this.deadTimer = 0;
   }
 }

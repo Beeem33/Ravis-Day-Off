@@ -405,7 +405,7 @@ export class OfficeLevelScene implements GameScene {
 
       const hit = hits.find((h) => {
         const enemyRef = h.object.userData.enemy as Enemy | undefined;
-        if (enemyRef && (enemyRef === shooter || !enemyRef.alive)) return false;
+        if (enemyRef && enemyRef === shooter) return false;
         return true;
       });
       if (!hit) return from.clone().addScaledVector(dir, remaining);
@@ -416,6 +416,16 @@ export class OfficeLevelScene implements GameScene {
         .clone()
         .transformDirection(obj.matrixWorld);
       const enemyRef = obj.userData.enemy as Enemy | undefined;
+
+      // ---- A corpse: it still takes the bullet — jolts, bleeds, gains a wound
+      if (enemyRef && !enemyRef.alive) {
+        enemyRef.hitCorpse(point, dir);
+        const ground = this.surfaceBelow(point, 4);
+        this.particles.bloodSpray(point, dir, false, ground ? ground.point.y + 0.02 : -1);
+        this.ctx.audio.fleshHit();
+        if (shooter === null) this.ctx.bus.emit(Events.HitMarker, { lethal: false });
+        return point;
+      }
 
       // ---- Lethal hit on an intruder
       if (enemyRef) {

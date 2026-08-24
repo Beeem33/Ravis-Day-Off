@@ -40,6 +40,12 @@ export class FPSPlayer {
   sprinting = false;
   /** Aiming down sights (set by the scene from right-mouse). */
   aiming = false;
+  /**
+   * Cutscene mode: input is ignored and the scene drives position/yaw/pitch
+   * directly. The camera is the same object either way, so handing control
+   * back is seamless — no cut, no re-parenting.
+   */
+  cinematic = false;
 
   private height = STAND_HEIGHT;
   private bobPhase = 0;
@@ -141,6 +147,19 @@ export class FPSPlayer {
       return;
     }
     const input = this.input;
+
+    if (this.cinematic) {
+      // Drop any buffered look so control doesn't jerk on handover
+      input.consumeMouseDelta();
+      this.lastMouseDX = 0;
+      this.lastMouseDY = 0;
+      this.currentSpeed = 0;
+      this.velocity.set(0, 0, 0);
+      this.bobAmount = Math.max(0, this.bobAmount - dt * 6);
+      this.height += ((this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT) - this.height) * Math.min(1, dt * 12);
+      this.applyCamera();
+      return;
+    }
 
     // ---- Slow regeneration: 1 HP per REGEN_SECONDS spent below full health
     if (this.health < MAX_HEALTH) {
@@ -259,6 +278,11 @@ export class FPSPlayer {
     } else {
       this.bobAmount = Math.max(0, this.bobAmount - dt * 6);
     }
+    this.applyCamera();
+  }
+
+  /** Write position/yaw/pitch (plus head bob) onto the camera. */
+  private applyCamera(): void {
     const bobY = Math.abs(Math.sin(this.bobPhase)) * 0.045 * this.bobAmount;
     const bobX = Math.sin(this.bobPhase) * 0.02 * this.bobAmount;
     const roll = Math.sin(this.bobPhase) * 0.006 * this.bobAmount;

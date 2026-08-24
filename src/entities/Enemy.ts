@@ -56,8 +56,8 @@ export class Enemy {
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
-  constructor(spawn: THREE.Vector3, yaw: number, index: number) {
-    this.name = AMERICAN_NAMES[index % AMERICAN_NAMES.length];
+  constructor(spawn: THREE.Vector3, yaw: number, index: number, nameOverride?: string) {
+    this.name = nameOverride ?? AMERICAN_NAMES[index % AMERICAN_NAMES.length];
     this.variant = index;
     this.root.position.copy(spawn);
     this.yaw = yaw;

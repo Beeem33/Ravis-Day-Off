@@ -56,6 +56,9 @@ export const Events = {
   StartGame: 'start-game',
   ReturnToMenu: 'return-menu',
   RestartLevel: 'restart-level',
+  /** Intro cleared — hand off to the main office level. */
+  IntroComplete: 'intro-complete',
+  RestartIntro: 'restart-intro',
   /** {lethal: boolean} */
   HitMarker: 'hit-marker',
   Resize: 'resize'

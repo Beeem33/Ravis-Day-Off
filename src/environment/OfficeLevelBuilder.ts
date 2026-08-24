@@ -40,7 +40,7 @@ export interface LevelData {
 
 // ---------------------------------------------------------------- textures
 
-function noiseCanvas(base: [number, number, number], variance: number, cells = 64): HTMLCanvasElement {
+export function noiseCanvas(base: [number, number, number], variance: number, cells = 64): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = cells;
   const g = c.getContext('2d')!;
@@ -54,7 +54,7 @@ function noiseCanvas(base: [number, number, number], variance: number, cells = 6
   return c;
 }
 
-function ceilingTileCanvas(): HTMLCanvasElement {
+export function ceilingTileCanvas(): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const g = c.getContext('2d')!;
@@ -72,7 +72,7 @@ function ceilingTileCanvas(): HTMLCanvasElement {
   return c;
 }
 
-function spreadsheetCanvas(): HTMLCanvasElement {
+export function spreadsheetCanvas(): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = 128;
   c.height = 96;
@@ -99,7 +99,7 @@ function spreadsheetCanvas(): HTMLCanvasElement {
   return c;
 }
 
-function makeTex(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): THREE.Texture {
+export function makeTex(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): THREE.Texture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeatX, repeatY);
@@ -113,6 +113,19 @@ function makeTex(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): THREE.Tex
 const FLOOR_H = 3.3; // walk level of upper floor
 const WALL_H = 3.0; // clear height per storey
 const SLAB_T = 0.3;
+
+// ---- Stairwell shaft: a switchback stair filling the east end of the
+// building. Every part of it keys off these so the enclosure walls, the
+// slab cutout, the flights and the guard rails stay flush with each other.
+const SHAFT_WALL_X = 13.3; // centre of the west enclosure wall (0.22 thick)
+const SHAFT_X0 = 13.41; // interior west face
+const SHAFT_X1 = 18.19; // interior east face (the exterior wall)
+const SHAFT_VOID_X = 13.19; // outer face of that wall — where the slab stops
+const DIVIDER_X0 = 15.35; // stair core between the two flights
+const DIVIDER_X1 = 16.25;
+const STAIR_Z_BOT = -4; // both flights run between these
+const STAIR_Z_TOP = -7;
+const LANDING_Z = -9; // half-landing occupies z LANDING_Z..STAIR_Z_TOP
 
 // Carpet and ceiling-tile textures are authored for the full 36.8 x 24.8
 // footprint; slabs of other sizes rescale their UVs against these.
@@ -406,10 +419,10 @@ export class OfficeLevelBuilder {
 
     // Upper floor slab with two openings:
     //  H1 mezzanine over the cubicle farm: x[-10,0] z[-2,3]
-    //  H2 stairwell void: x[13.4,18] z[-9,-4]
+    //  H2 stairwell void: x[SHAFT_VOID_X,18.4] z[-9,-4]
     const y = FLOOR_H - SLAB_T;
     this.slab(-18.4, 18.4, -12.4, -9, y, this.carpetUpMat);
-    this.slab(-18.4, 13.4, -9, -4, y, this.carpetUpMat);
+    this.slab(-18.4, SHAFT_VOID_X, -9, -4, y, this.carpetUpMat);
     this.slab(-18.4, 18.4, -4, -2, y, this.carpetUpMat);
     this.slab(-18.4, -10, -2, 3, y, this.carpetUpMat);
     this.slab(0, 18.4, -2, 3, y, this.carpetUpMat);
@@ -424,9 +437,11 @@ export class OfficeLevelBuilder {
     this.railing(0, 0, 0, 2, ry, true); // BROKEN section — jump down here
     this.railing(0, 2, 0, 3, ry); // east edge upper part
 
-    // Stairwell void railing (upper floor, keep player from falling in)
-    this.railing(13.4, -9, 13.4, -4, ry);
-    this.railing(14.9, -4, 18, -4, ry);
+    // Stairwell void: guard every upper-floor edge around it. The gap left
+    // at the south edge is where flight B arrives.
+    this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_VOID_X, STAIR_Z_BOT, ry); // west
+    this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_X1, LANDING_Z, ry); // north
+    this.railing(DIVIDER_X0, STAIR_Z_BOT, SHAFT_X1, STAIR_Z_BOT, ry); // south, east of the opening
   }
 
   private buildGroundFloor(): void {
@@ -473,9 +488,10 @@ export class OfficeLevelBuilder {
     this.deskCluster(2.5, -6.2, Math.PI / 2);
     this.solid(0.5, 1.1, 0.5, 11.2, 0, -10.5, this.darkMetalMat, { surface: 'metal', occlude: false }); // water cooler
 
-    // Stairwell enclosure: x[12,18] z[-12,-2], door on west wall
-    this.wallZDoor(-12.3, -2, 12, 0, WALL_H, -3.4, -2.4);
-    this.wallX(12, 18.3, -2, 0, WALL_H);
+    // Stairwell enclosure: door on the west wall, which sits directly under
+    // the cut edge of the slab above so the shaft is a clean rectangle.
+    this.wallZDoor(-12.3, -2, SHAFT_WALL_X, 0, WALL_H, -3.4, -2.4);
+    this.wallX(SHAFT_WALL_X, 18.3, -2, 0, WALL_H);
   }
 
   /** A 3m-wide cubicle pod: U-shaped fabric panels + desk + monitor + chair. */
@@ -641,26 +657,47 @@ export class OfficeLevelBuilder {
     g.add(base);
   }
 
+  /**
+   * Switchback stair filling the shaft: flight A up the east side to a
+   * half-landing, flight B back down the west side onto the upper floor.
+   * Both flights run wall-to-core with no slot either side, every tread is
+   * a solid column off the floor, and the landing spans the full width —
+   * which also seals the dead pocket at the north end of the shaft.
+   */
   private buildStairs(): void {
     const steps = 10;
     const rise = FLOOR_H / 2 / steps; // 0.165
-    // Flight A: x[16.4,17.8], climbs northward from z=-4 to z=-7
+    const going = 0.3; // tread depth
+    const flightW = DIVIDER_X0 - SHAFT_X0; // both flights are the same width
+    const flightAX = (DIVIDER_X1 + SHAFT_X1) / 2; // east flight centre
+    const flightBX = (SHAFT_X0 + DIVIDER_X0) / 2; // west flight centre
+    const tread = { surface: 'metal', occlude: false } as const;
+
+    // Flight A — east side, climbing north to the landing
     for (let i = 0; i < steps; i++) {
-      const z = -4 - 0.3 * i - 0.15;
-      this.solid(1.4, rise * (i + 1), 0.3, 17.1, 0, z, this.darkMetalMat, { surface: 'metal', occlude: false });
+      const z = STAIR_Z_BOT - going * i - going / 2;
+      this.solid(flightW, rise * (i + 1), going, flightAX, 0, z, this.darkMetalMat, tread);
     }
-    // Landing at y=1.65: x[13.4,17.8] z[-9,-7]
-    this.solid(4.4, 0.18, 2.0, 15.6, FLOOR_H / 2 - 0.18, -8, this.darkMetalMat, { surface: 'metal', occlude: false });
-    // Flight B: x[13.4,14.8], climbs southward from z=-7 to z=-4 (y 1.65 → 3.3)
+
+    // Half-landing, wall to wall
+    this.solid(
+      SHAFT_X1 - SHAFT_X0, FLOOR_H / 2, STAIR_Z_TOP - LANDING_Z,
+      (SHAFT_X0 + SHAFT_X1) / 2, 0, (LANDING_Z + STAIR_Z_TOP) / 2,
+      this.darkMetalMat, tread
+    );
+
+    // Flight B — west side, climbing south onto the upper floor
     for (let i = 0; i < steps; i++) {
-      const z = -7 + 0.3 * i + 0.15;
-      this.solid(1.4, FLOOR_H / 2 + rise * (i + 1), 0.3, 14.1, 0, z, this.darkMetalMat, { surface: 'metal', occlude: false });
+      const z = STAIR_Z_TOP + going * i + going / 2;
+      this.solid(flightW, FLOOR_H / 2 + rise * (i + 1), going, flightBX, 0, z, this.darkMetalMat, tread);
     }
-    // Center divider wall between flights
-    this.solid(1.2, 4.4, 4.6, 15.6, 0.2, -5.6, this.wallMat);
-    // Handrails
-    this.railing(16.4, -4, 16.4, -7, 1.0);
-    this.railing(14.8, -7, 14.8, -4, 2.6);
+
+    // Stair core between the flights — floor to just above the top flight
+    this.solid(
+      DIVIDER_X1 - DIVIDER_X0, FLOOR_H + 0.4, STAIR_Z_BOT - STAIR_Z_TOP,
+      (DIVIDER_X0 + DIVIDER_X1) / 2, 0, (STAIR_Z_BOT + STAIR_Z_TOP) / 2,
+      this.wallMat
+    );
   }
 
   private buildUpperFloor(): void {
@@ -740,7 +777,7 @@ export class OfficeLevelBuilder {
    */
   private groundCeilingY(x: number, z: number): number {
     const mezzanineVoid = x > -10 && x < 0 && z > -2 && z < 3;
-    const stairwellVoid = x > 13.4 && z > -9 && z < -4;
+    const stairwellVoid = x > SHAFT_VOID_X && z > LANDING_Z && z < STAIR_Z_BOT;
     return mezzanineVoid || stairwellVoid ? FLOOR_H + WALL_H : FLOOR_H - SLAB_T;
   }
 
@@ -816,8 +853,8 @@ export class OfficeLevelBuilder {
     // divider wall, so light it from sconces on both faces of that wall. Each
     // sits head-height above the flight it lights, and the flights are at
     // different heights at this z.
-    addSconce(15.0, 4.3, -5.6, -1, 5); // west face → flight B (upper)
-    addSconce(16.2, 2.8, -5.6, 1, 5); // east face → flight A (lower)
+    addSconce(DIVIDER_X0, 3.3, -5.5, -1, 5); // west face → flight B (upper)
+    addSconce(DIVIDER_X1, 2.4, -5.5, 1, 5); // east face → flight A (lower)
 
     // Ground east corridor — flickering (dark hallway)
     this.addFlickering(9.5, 2.8, -3, 8, 10);
@@ -877,12 +914,12 @@ export class OfficeLevelBuilder {
       [-8, y1, 8], // 25 lounge NW
       [-14, y1, 2], // 26 lounge W
       // Stairwell route — lets patrols cross between floors
-      [10.8, y0, -2.9], // 27 outside the stairwell door
-      [14.3, y0, -2.9], // 28 inside the stairwell
-      [17.1, y0, -3.0], // 29 foot of flight A
-      [17.1, y0 + 1.65, -7.4], // 30 landing, east end
-      [14.1, y0 + 1.65, -7.4], // 31 landing, west end (foot of flight B)
-      [14.1, y1, -4.2] // 32 top of flight B
+      [11.8, y0, -2.9], // 27 outside the stairwell door
+      [14.6, y0, -2.9], // 28 inside the stairwell, vestibule
+      [17.22, y0, -3.4], // 29 foot of flight A
+      [17.22, y0 + FLOOR_H / 2, -7.9], // 30 landing, east end
+      [14.38, y0 + FLOOR_H / 2, -7.9], // 31 landing, west end (foot of flight B)
+      [14.38, y1, -3.7] // 32 top of flight B, on the upper floor
     ];
     const links: [number, number][] = [
       [0, 1], [0, 2], [1, 8], [1, 13], [2, 3], [3, 12], [3, 4], [4, 6], [6, 5],

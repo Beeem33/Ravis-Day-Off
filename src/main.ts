@@ -1,8 +1,10 @@
+/// <reference types="vite/client" />
 import { GameEngine } from './core/GameEngine';
 import { EventBus, Events } from './core/EventBus';
 import { InputManager } from './core/InputManager';
 import { AudioManager } from './core/AudioManager';
 import { MainMenuScene } from './scenes/MainMenuScene';
+import { IntroLevelScene } from './scenes/IntroLevelScene';
 import { OfficeLevelScene } from './scenes/OfficeLevelScene';
 
 /** Shared services handed to every scene. */
@@ -34,8 +36,15 @@ document.addEventListener('pointerdown', unlockOnce);
 document.addEventListener('keydown', unlockOnce);
 
 // ---- Scene flow
+// A new game opens on the intro, which hands off to the call centre.
 bus.on(Events.StartGame, () => {
   audio.stopMenuMusic();
+  engine.setScene(new IntroLevelScene(ctx));
+});
+bus.on(Events.RestartIntro, () => {
+  engine.setScene(new IntroLevelScene(ctx));
+});
+bus.on(Events.IntroComplete, () => {
   engine.setScene(new OfficeLevelScene(ctx));
 });
 bus.on(Events.RestartLevel, () => {
@@ -47,3 +56,9 @@ bus.on(Events.ReturnToMenu, () => {
 
 engine.setScene(new MainMenuScene(ctx));
 engine.start();
+
+// Dev-only handle for poking at the running game from the console. Stripped
+// from production builds by the bundler.
+if (import.meta.env.DEV) {
+  (window as unknown as { game: GameContext }).game = ctx;
+}

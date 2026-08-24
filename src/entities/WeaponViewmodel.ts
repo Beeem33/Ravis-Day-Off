@@ -29,6 +29,11 @@ export class WeaponViewmodel {
 
   /** 0..1 — how far into aim-down-sights we are (for FOV zoom + spread). */
   aimBlend = 0;
+  /**
+   * 1 = stowed out of frame, 0 = fully in hand. The intro starts at 1 and
+   * eases to 0 as Ravi lifts the gun out of his desk drawer.
+   */
+  stow = 0;
   private sprintBlend = 0;
 
   // ---- Reload (John Wick style: flick the empty mag out left, slam a new one in)
@@ -425,6 +430,15 @@ export class WeaponViewmodel {
       this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
     );
     this.slide.position.z = -0.03 + this.slideKick * 0.045 + this.slidePull * 0.06;
+
+    // ---- Draw / stow: swing the whole gun down out of frame
+    if (this.stow > 0.0001) {
+      const s = this.stow;
+      this.root.position.y -= s * 0.5;
+      this.root.position.z += s * 0.14;
+      this.root.rotation.x -= s * 1.1;
+    }
+    this.root.visible = this.stow < 0.995;
 
     // ---- Muzzle flash decay
     if (this.flashTimer > 0) {

@@ -17,6 +17,8 @@ export interface IntroLevelData {
   coworkerSpawn: EnemySpawn;
   /** The agent who does the shooting, and the one target of the level. */
   agentSpawn: EnemySpawn;
+  /** Where he stops, two metres off her, before raising the rifle. */
+  agentFiringPos: THREE.Vector3;
   /** Walk in here (once the agent is down) to finish the level. */
   exitTrigger: THREE.Box3;
 }
@@ -24,17 +26,17 @@ export interface IntroLevelData {
 const WALL_H = 3.0;
 const T = 0.22; // wall thickness
 
-// ---- Footprint. Ravi's office is the west end; the floor his coworker dies
-// on is the middle; a corridor runs east to the door out.
+// ---- Footprint. Three spaces and nothing else: Ravi's office, the small
+// floor out front where his coworker works, and the corridor to the exit.
+// The office's north and south walls ARE the exterior walls, so there are
+// no leftover strips of corridor around it.
 const X0 = -9;
 const X1 = 14;
-const Z0 = -6;
-const Z1 = 6;
+const Z0 = -3; // north wall of the whole building
+const Z1 = 3; // south wall
 const OFFICE_X = -1; // glass wall between Ravi's office and the floor
 const DOOR_Z0 = -0.4; // doorway gap in that glass wall
 const DOOR_Z1 = 0.7;
-const OFFICE_Z0 = -3;
-const OFFICE_Z1 = 3;
 const HALL_Z0 = -1.5; // corridor east to the exit
 const HALL_Z1 = 1.5;
 const HALL_X = 7;
@@ -64,7 +66,7 @@ export class IntroOfficeBuilder {
   private screenMat!: THREE.MeshBasicMaterial;
   private paperMat!: THREE.MeshLambertMaterial;
   private plasticMat!: THREE.MeshLambertMaterial;
-  private cubicleMat!: THREE.MeshLambertMaterial;
+  private coolerMat!: THREE.MeshLambertMaterial;
 
   build(): IntroLevelData {
     this.makeMaterials();
@@ -85,8 +87,13 @@ export class IntroOfficeBuilder {
       // At his desk, facing the monitor against the north wall
       playerSpawn: new THREE.Vector3(-5, 0, -1.5),
       playerSpawnYaw: 0,
-      coworkerSpawn: { pos: new THREE.Vector3(2.5, 0, -1.5), yaw: -Math.PI / 2 },
-      agentSpawn: { pos: new THREE.Vector3(6.0, 0, -1.9), yaw: Math.PI / 2 },
+      // Staged side-on to Ravi: she is south, the agent walks in from the
+      // north, so the player sees both of them in profile with the rifle
+      // clearly pointed across the view rather than at the camera.
+      coworkerSpawn: { pos: new THREE.Vector3(3.2, 0, 1.4), yaw: 0 },
+      agentSpawn: { pos: new THREE.Vector3(3.2, 0, -2.3), yaw: Math.PI },
+      /** Where the agent stops before raising the rifle. */
+      agentFiringPos: new THREE.Vector3(3.2, 0, -0.7),
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(12.2, 0, -0.9),
         new THREE.Vector3(13.9, 2.2, 0.9)
@@ -105,7 +112,7 @@ export class IntroOfficeBuilder {
     this.screenMat = new THREE.MeshBasicMaterial({ map: makeTex(spreadsheetCanvas()) });
     this.paperMat = new THREE.MeshLambertMaterial({ color: 0xe9e7dd });
     this.plasticMat = new THREE.MeshLambertMaterial({ color: 0x24272c });
-    this.cubicleMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([96, 104, 116], 10), 2, 2) });
+    this.coolerMat = new THREE.MeshLambertMaterial({ color: 0xd8dde2 });
   }
 
   // --------------------------------------------------------------- helpers
@@ -199,42 +206,39 @@ export class IntroOfficeBuilder {
   // --------------------------------------------------------------- shell
 
   private buildShell(): void {
-    // Floor and ceiling
-    const w = X1 - X0;
-    const d = Z1 - Z0;
-    const cx = (X0 + X1) / 2;
+    // Floor and ceiling cover the office + front floor; the corridor gets its own
+    const w = HALL_X - X0;
+    const cx = (X0 + HALL_X) / 2;
     const cz = (Z0 + Z1) / 2;
-    this.solid(w, 0.3, d, cx, -0.3, cz, this.carpetMat, { surface: 'concrete' });
-    this.solid(w, 0.3, d, cx, WALL_H, cz, this.ceilMat, { surface: 'concrete' });
+    this.solid(w, 0.3, Z1 - Z0, cx, -0.3, cz, this.carpetMat, { surface: 'concrete' });
+    this.solid(w, 0.3, Z1 - Z0, cx, WALL_H, cz, this.ceilMat, { surface: 'concrete' });
+    const hw = X1 - HALL_X;
+    this.solid(hw, 0.3, HALL_Z1 - HALL_Z0, (HALL_X + X1) / 2, -0.3, 0, this.carpetMat, { surface: 'concrete' });
+    this.solid(hw, 0.3, HALL_Z1 - HALL_Z0, (HALL_X + X1) / 2, WALL_H, 0, this.ceilMat, { surface: 'concrete' });
 
-    // Exterior walls. The east wall has the doorway out.
-    this.wallX(X0, X1, Z0);
-    this.wallX(X0, X1, Z1);
+    // Outer walls of the office + front floor
+    this.wallX(X0, HALL_X, Z0);
+    this.wallX(X0, HALL_X, Z1);
     this.wallZ(Z0, Z1, X0);
-    this.wallZ(Z0, -0.9, X1);
-    this.wallZ(0.9, Z1, X1);
-    // Header over the exit doorway
-    this.solid(T, WALL_H - 2.2, 1.8, X1, 2.2, 0, this.wallMat, { collide: false });
+    // East end of the front floor, either side of the corridor mouth
+    this.wallZ(Z0, HALL_Z0, HALL_X);
+    this.wallZ(HALL_Z1, Z1, HALL_X);
   }
 
   // ------------------------------------------------------- Ravi's office
 
   private buildRavisOffice(): void {
-    // Office walls: north, south, and the glass partition on the east side
-    this.wallX(X0, OFFICE_X, OFFICE_Z0);
-    this.wallX(X0, OFFICE_X, OFFICE_Z1);
-
-    // Glass partition with an open doorway. Ravi watches it all happen
-    // through the pane south of the door.
-    this.glass('z', OFFICE_Z0, DOOR_Z0, OFFICE_X, 0, 2.6);
-    this.glass('z', DOOR_Z1, OFFICE_Z1, OFFICE_X, 0, 2.6);
-    // Frame: mullions either side of the doorway plus a header over it
+    // Glass partition, wall to wall, with an open doorway in it. Ravi watches
+    // it all happen through this.
+    this.glass('z', Z0 + T / 2, DOOR_Z0, OFFICE_X, 0, 2.6);
+    this.glass('z', DOOR_Z1, Z1 - T / 2, OFFICE_X, 0, 2.6);
+    // Frame: mullions either side of the doorway plus a header over the lot
     this.solid(0.09, 2.6, 0.09, OFFICE_X, 0, DOOR_Z0, this.darkMetalMat, { surface: 'metal', collide: false });
     this.solid(0.09, 2.6, 0.09, OFFICE_X, 0, DOOR_Z1, this.darkMetalMat, { surface: 'metal', collide: false });
-    this.solid(0.09, WALL_H - 2.6, OFFICE_Z1 - OFFICE_Z0, OFFICE_X, 2.6, (OFFICE_Z0 + OFFICE_Z1) / 2, this.wallMat);
+    this.solid(0.09, WALL_H - 2.6, Z1 - Z0, OFFICE_X, 2.6, 0, this.wallMat);
 
     // Ravi's desk against the north wall — he's facing it when it kicks off
-    const deskZ = OFFICE_Z0 + 0.55;
+    const deskZ = Z0 + 0.65;
     this.solid(2.6, 0.72, 0.7, -5, 0, deskZ, this.deskMat, { surface: 'wood', occlude: false });
     this.screen(0.6, 0.4, -5, 0.98, deskZ + 0.12, Math.PI); // faces south, towards Ravi
     const desk = new THREE.Group();
@@ -247,32 +251,114 @@ export class IntroOfficeBuilder {
     // The drawer the gun comes out of
     this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, deskZ - 0.36, this.darkMetalMat);
 
-    // Chair behind him, a filing cabinet, a couple of headsets
-    this.solid(0.55, 0.12, 0.55, -5, 0.44, -1.3, this.darkMetalMat, { collide: false, occlude: false });
+    // EMPLOYEE OF THE MONTH — her portrait, hanging over Ravi's desk. The
+    // first thing he's looking at, and the reason the body means something.
+    this.employeePhoto(-5, 1.95, Z0 + T / 2 + 0.02);
+
+    // Chair behind him and a filing cabinet
+    this.solid(0.55, 0.12, 0.55, -5, 0.44, deskZ + 0.95, this.darkMetalMat, { collide: false, occlude: false });
     this.solid(0.6, 1.4, 1.1, -8.3, 0, 1.6, this.darkMetalMat, { surface: 'metal' });
-    this.solid(1.2, 0.72, 0.6, -8.2, 0, -1.2, this.deskMat, { surface: 'wood', occlude: false });
+  }
+
+  /**
+   * Framed "Employee of the Month" photo of the coworker — same white shirt,
+   * blue cap and worried little face as the figure out on the floor, so the
+   * body is recognisable as someone Ravi knows.
+   */
+  private employeePhoto(x: number, y: number, z: number): void {
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 160;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#c8ced8'; // studio backdrop
+    g.fillRect(0, 0, 128, 160);
+    g.fillStyle = '#1d3f6e'; // banner
+    g.fillRect(0, 0, 128, 26);
+    g.fillStyle = '#f4f2ec';
+    g.font = 'bold 13px monospace';
+    g.textAlign = 'center';
+    g.fillText('EMPLOYEE OF', 64, 12);
+    g.fillText('THE MONTH', 64, 23);
+    // Shoulders in the white shirt
+    g.fillStyle = '#f4f2ec';
+    g.beginPath();
+    g.ellipse(64, 152, 42, 34, 0, 0, Math.PI * 2);
+    g.fill();
+    // Head
+    g.fillStyle = '#c99d78';
+    g.beginPath();
+    g.ellipse(64, 96, 26, 30, 0, 0, Math.PI * 2);
+    g.fill();
+    // The blue cap
+    g.fillStyle = '#1d3f6e';
+    g.beginPath();
+    g.ellipse(64, 76, 27, 20, 0, Math.PI, 0);
+    g.fill();
+    g.fillRect(37, 74, 54, 6);
+    g.fillRect(30, 78, 68, 5); // peak
+    // Face: same wide eyes, but smiling for the photo
+    g.fillStyle = '#f6f4ef';
+    g.beginPath();
+    g.ellipse(54, 96, 6, 5, 0, 0, Math.PI * 2);
+    g.ellipse(74, 96, 6, 5, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#17110c';
+    g.beginPath();
+    g.ellipse(54, 96, 2.6, 2.6, 0, 0, Math.PI * 2);
+    g.ellipse(74, 96, 2.6, 2.6, 0, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#7a4b3a';
+    g.lineWidth = 2.5;
+    g.beginPath();
+    g.arc(64, 108, 11, 0.25 * Math.PI, 0.75 * Math.PI);
+    g.stroke();
+    // Name plate
+    g.fillStyle = '#2b2b2b';
+    g.fillRect(18, 138, 92, 16);
+    g.fillStyle = '#e8e4d8';
+    g.font = 'bold 11px monospace';
+    g.fillText('PRIYA  ·  #1 CLOSER', 64, 150);
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.64, 0.04), this.darkMetalMat);
+    frame.position.set(x, y, z + 0.015);
+    this.group.add(frame);
+    const pic = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.46, 0.58),
+      new THREE.MeshLambertMaterial({ map: tex })
+    );
+    pic.position.set(x, y, z + 0.036);
+    this.group.add(pic);
+    // A little picture light so it reads in the gloom
+    const lamp = new THREE.PointLight(0xffe9c4, 2.2, 2.6, 1.8);
+    lamp.position.set(x, y + 0.45, z + 0.35);
+    this.group.add(lamp);
   }
 
   // ------------------------------------------------- the floor / bullpen
 
+  /**
+   * The small floor out front. Deliberately near-empty: the coworker's own
+   * workstation against the south wall and nothing else, so the staging of
+   * the shooting reads clearly from Ravi's desk.
+   */
   private buildFloor(): void {
-    // A short run of cubicle panels so the floor reads as a call centre,
-    // placed clear of the sightline from Ravi's desk to his coworker.
-    for (const cz of [2.6, 4.4]) {
-      this.solid(4.4, 1.4, 0.08, 2.4, 0, cz, this.cubicleMat, { surface: 'cubicle', pierce: true });
-    }
-    this.solid(0.08, 1.4, 1.8, 0.2, 0, 3.5, this.cubicleMat, { surface: 'cubicle', pierce: true });
-    this.solid(0.08, 1.4, 1.8, 4.6, 0, 3.5, this.cubicleMat, { surface: 'cubicle', pierce: true });
-    for (const [dx, dz] of [[1.3, 3.1], [3.6, 3.1]] as const) {
-      this.solid(1.9, 0.72, 0.6, dx, 0, dz, this.deskMat, { surface: 'wood', occlude: false });
-      this.screen(0.55, 0.35, dx, 0.98, dz + 0.1, Math.PI);
-    }
+    // Her desk, against the south wall and clear of the sightline
+    const dz = Z1 - 0.65;
+    this.solid(2.2, 0.72, 0.7, 4.0, 0, dz, this.deskMat, { surface: 'wood', occlude: false });
+    this.screen(0.55, 0.35, 4.0, 0.98, dz - 0.12, 0); // faces north, into the room
+    const d = new THREE.Group();
+    this.group.add(d);
+    this.prop(d, 0.44, 0.022, 0.15, 4.0, 0.72, dz - 0.26, this.plasticMat, -0.06);
+    this.prop(d, 0.062, 0.028, 0.095, 4.38, 0.72, dz - 0.24, this.plasticMat);
+    this.prop(d, 0.21, 0.004, 0.28, 3.25, 0.72, dz - 0.02, this.paperMat, 0.5);
+    this.prop(d, 0.2, 0.44, 0.46, 3.1, 0, dz, this.darkMetalMat);
+    // Her chair, pushed back — she stood up when they came through
+    this.solid(0.55, 0.12, 0.55, 4.3, 0.44, dz - 1.0, this.darkMetalMat, { collide: false, occlude: false });
 
-    // North side: a couple of desks and a water cooler for cover
-    this.solid(2.2, 0.72, 1.0, 3.2, 0, -4.4, this.deskMat, { surface: 'wood', occlude: false });
-    this.screen(0.55, 0.35, 3.2, 0.98, -4.4, 0);
-    this.solid(0.5, 1.1, 0.5, 6.2, 0, -5.1, this.darkMetalMat, { surface: 'metal', occlude: false });
-    this.solid(0.6, 1.5, 2.2, -0.2, 0, -4.6, this.darkMetalMat, { surface: 'metal' }); // cabinets
+    // A filing cabinet in the north-east corner, the only bit of cover
+    this.solid(0.6, 1.4, 1.0, 6.2, 0, Z0 + 0.7, this.darkMetalMat, { surface: 'metal' });
   }
 
   // -------------------------------------------------------- exit corridor
@@ -281,9 +367,12 @@ export class IntroOfficeBuilder {
     // Corridor walls, leaving the mouth open at x = HALL_X
     this.wallX(HALL_X, X1, HALL_Z0);
     this.wallX(HALL_X, X1, HALL_Z1);
-    // Return walls closing the floor off either side of the corridor mouth
-    this.wallZ(Z0, HALL_Z0, HALL_X);
-    this.wallZ(HALL_Z1, Z1, HALL_X);
+    // East end, either side of the exit doorway
+    this.wallZ(HALL_Z0, -0.9, X1);
+    this.wallZ(0.9, HALL_Z1, X1);
+    this.solid(T, WALL_H - 2.2, 1.8, X1, 2.2, 0, this.wallMat, { collide: false }); // header
+
+    this.waterCooler(9.4, HALL_Z0 + 0.42);
 
     // The door out — a real leaf in the opening, plus a lit EXIT sign
     const leaf = this.solid(0.1, 2.2, 1.7, X1 - 0.16, 0, 0, this.deskMat, {
@@ -303,6 +392,38 @@ export class IntroOfficeBuilder {
     const signLight = new THREE.PointLight(0x5cff92, 3, 4, 1.8);
     signLight.position.set(X1 - 0.8, 2.3, 0);
     this.group.add(signLight);
+  }
+
+  /** Water cooler: base cabinet, spigots, and the blue bottle on top. */
+  private waterCooler(x: number, z: number): void {
+    this.solid(0.42, 1.02, 0.42, x, 0, z, this.coolerMat, { surface: 'metal', occlude: false });
+    // Spigots and a drip tray on the front (facing +Z, into the corridor)
+    const g = new THREE.Group();
+    this.group.add(g);
+    for (const [dx, col] of [[-0.08, 0x2f6f9e], [0.08, 0xb4463c]] as const) {
+      const tap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.09, 0.05), new THREE.MeshLambertMaterial({ color: col }));
+      tap.position.set(x + dx, 0.78, z + 0.22);
+      g.add(tap);
+    }
+    this.prop(g, 0.24, 0.02, 0.06, x, 0.6, z + 0.21, this.darkMetalMat); // drip tray
+
+    // The bottle — a tapered cylinder of blue water with a neck
+    const bottle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.20, 0.46, 14),
+      new THREE.MeshLambertMaterial({ color: 0x7fc4e8, transparent: true, opacity: 0.72 })
+    );
+    bottle.position.set(x, 1.28, z);
+    this.group.add(bottle);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.14, 12), this.coolerMat);
+    neck.position.set(x, 1.02, z);
+    this.group.add(neck);
+    // Collider covers the bottle too, so you can't walk through it
+    this.colliders.push({
+      box: new THREE.Box3(
+        new THREE.Vector3(x - 0.21, 0, z - 0.21),
+        new THREE.Vector3(x + 0.21, 1.51, z + 0.21)
+      )
+    });
   }
 
   // ------------------------------------------------------------- lighting
@@ -328,12 +449,11 @@ export class IntroOfficeBuilder {
       g.add(canopy);
     };
 
-    addLight(-5, -1.2, 7); // Ravi's office
-    addLight(-5, 2.0, 5);
-    addLight(2.5, -2.0); // the floor, where it happens
-    addLight(2.5, 3.2);
-    addLight(6.0, -4.0, 6);
-    addLight(10.5, 0, 6, 9); // corridor
+    addLight(-6.4, -1.0, 6); // Ravi's office
+    addLight(-2.8, 1.0, 6);
+    addLight(3.0, -1.4, 8); // over the floor, where it happens
+    addLight(3.0, 1.6, 8);
+    addLight(11.0, 0, 6, 9); // corridor
 
     // One dying tube over the corridor, for mood on the walk out
     this.flickering.push(new FlickeringLight(g, new THREE.Vector3(8.6, 2.8, 0), 7, 8));
@@ -346,16 +466,18 @@ export class IntroOfficeBuilder {
 
   private makeWaypoints(): Waypoint[] {
     const pts: [number, number, number][] = [
-      [2.5, 0, -1.5], // 0 where the coworker falls
-      [5.0, 0, -2.0], // 1 the agent's ground
-      [5.0, 0, 1.5], // 2 south side of the floor
-      [1.5, 0, 0.5], // 3 outside Ravi's door
-      [6.0, 0, -4.6], // 4 north desks
-      [9.5, 0, 0], // 5 corridor mouth
-      [-3.0, 0, 0.2] // 6 inside Ravi's office
+      [3.2, 0, 0.4], // 0 where she falls
+      [1.4, 0, -1.8], // 1 north-west of the floor
+      [1.4, 0, 1.8], // 2 south-west of the floor
+      [5.6, 0, -1.8], // 3 north-east
+      [5.6, 0, 1.8], // 4 south-east
+      [0.2, 0, 0.2], // 5 outside Ravi's doorway
+      [8.6, 0, 0], // 6 corridor mouth
+      [-3.4, 0, 0.2] // 7 inside Ravi's office
     ];
     const links: [number, number][] = [
-      [0, 1], [0, 3], [1, 2], [1, 4], [2, 3], [2, 5], [4, 5], [3, 6]
+      [0, 1], [0, 2], [0, 3], [0, 4], [1, 2], [1, 3], [2, 4], [3, 4],
+      [1, 5], [2, 5], [5, 7], [3, 6], [4, 6]
     ];
     const wps: Waypoint[] = pts.map(([x, y, z]) => ({ pos: new THREE.Vector3(x, y, z), links: [] }));
     for (const [a, b] of links) {

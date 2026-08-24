@@ -17,13 +17,16 @@ const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
 
 // ---- Cutscene beats, in seconds from the top of the level
-const T_SHOTS = 1.7; // muffled gunfire somewhere out on the floor
-const T_TURN0 = 1.95; // Ravi starts to look up from his screen
-const T_TURN1 = 3.5; // ...and is facing the glass
-const T_EXEC = 3.9; // the agent fires; the coworker goes down
-const T_DRAW0 = 5.7; // Ravi looks down at the drawer
-const T_DRAW1 = 6.9; // the gun is in his hand
-const T_END = 7.7; // control passes to the player
+const T_SHOTS = 1.5; // gunfire somewhere out on the floor
+const T_TURN0 = 1.65; // Ravi starts to look up from his screen
+const T_TURN1 = 3.2; // ...and is facing the glass
+const T_WALK0 = 3.2; // the agent walks into view
+const T_WALK1 = 4.9; // ...and stops, two metres off her
+const T_RAISE = 5.0; // rifle comes up to the shoulder
+const T_EXEC = 6.0; // he fires; she goes down
+const T_DRAW0 = 7.6; // Ravi looks down at the drawer
+const T_DRAW1 = 8.8; // the gun is in his hand
+const T_END = 9.5; // control passes to the player
 
 /** Smoothstepped keyframe track: [time, value] pairs. */
 function track(keys: readonly (readonly [number, number])[], t: number): number {
@@ -130,23 +133,25 @@ export class IntroLevelScene implements GameScene {
     this.particles = new ParticleManager(this.scene);
     this.decals = new BloodDecalSystem(this.scene);
 
-    // The coworker — no AI, he is only here to die.
+    // The coworker — a civilian, no AI; she is only here to die.
     const cw = this.level.coworkerSpawn;
-    this.coworker = new Enemy(cw.pos, cw.yaw, 0, 'PRIYA');
+    this.coworker = new Enemy(cw.pos, cw.yaw, 0, { name: 'PRIYA', civilian: true });
     this.scene.add(this.coworker.root);
     for (const p of this.coworker.parts) this.level.shootables.push(p);
 
-    // The agent — AI is withheld until the cutscene is done.
+    // The agent — rifle stays down until he's in position, and AI is
+    // withheld until the cutscene is done.
     const ag = this.level.agentSpawn;
-    this.agent = new Enemy(ag.pos, ag.yaw, 1, 'FBI AGENT');
-    this.agent.setAiming(true);
+    this.agent = new Enemy(ag.pos, ag.yaw, 1, { name: 'FBI AGENT' });
     this.scene.add(this.agent.root);
     for (const p of this.agent.parts) this.level.shootables.push(p);
 
-    // Where Ravi ends up looking: straight at his coworker.
+    // Ravi ends up looking at the midpoint of the pair, so both of them are
+    // in frame side-on rather than one hidden behind the other.
+    const mid = cw.pos.clone().add(this.level.agentFiringPos).multiplyScalar(0.5);
     this.lookYaw = Math.atan2(
-      -(cw.pos.x - this.level.playerSpawn.x),
-      -(cw.pos.z - this.level.playerSpawn.z)
+      -(mid.x - this.level.playerSpawn.x),
+      -(mid.z - this.level.playerSpawn.z)
     );
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 1, this.player.maxHealth);
@@ -223,7 +228,7 @@ export class IntroLevelScene implements GameScene {
     this.player.yaw = track(
       [
         [0, 0], [T_TURN0, 0], [T_TURN1, this.lookYaw],
-        [T_DRAW0, this.lookYaw], [T_DRAW1, this.lookYaw * 0.5], [T_END, this.lookYaw * 0.8]
+        [T_DRAW0, this.lookYaw], [T_DRAW1, this.lookYaw * 0.5], [T_END, this.lookYaw * 0.85]
       ],
       this.t
     );
@@ -237,27 +242,30 @@ export class IntroLevelScene implements GameScene {
     this.weapon.stow = track([[0, 1], [T_DRAW0, 1], [T_DRAW1, 0]], this.t);
 
     // Beats
-    this.beat('shot1', T_SHOTS, () => {
-      audio.enemyGunshot(22);
-      this.setObjective('');
-    });
-    this.beat('shout', T_SHOTS + 0.35, () => audio.enemyShout(18));
+    this.beat('shot1', T_SHOTS, () => audio.enemyGunshot(22));
+    this.beat('shout', T_SHOTS + 0.35, () => audio.enemyShout(16));
     this.beat('shot2', T_SHOTS + 0.6, () => audio.enemyGunshot(20));
     this.beat('shot3', T_SHOTS + 0.95, () => audio.enemyGunshot(24));
-
-    this.beat('exec', T_EXEC, () => this.executeCoworker());
-    this.beat('exec2', T_EXEC + 0.55, () => {
-      this.agent.flashMuzzle();
-      audio.enemyGunshot(this.agent.position.distanceTo(this.player.position));
-      const p = this.coworker.corpseBase().add(new THREE.Vector3(0, 0.5, 0));
-      this.particles.tracer(this.agent.muzzleWorld(), p, 0xffe0b0);
-      this.spatter(p, new THREE.Vector3(-1, -0.15, 0.1).normalize(), false);
+    // She is already on her feet with her hands up when he walks in
+    this.beat('handsup', T_TURN0, () => this.coworker.setHandsUp(true));
+    this.beat('raise', T_RAISE, () => {
+      this.agent.setWalk(0);
+      this.agent.setAiming(true); // the rifle visibly comes up to the shoulder
     });
+    this.beat('exec', T_EXEC, () => this.executeCoworker());
     this.beat('drawer', T_DRAW0 + 0.15, () => audio.magOut());
     this.beat('rack', T_DRAW1 - 0.15, () => audio.slideRack());
 
-    // The agent keeps his rifle up on the body until it's over
-    this.agent.faceToward(this.coworker.position, dt, 3);
+    // The agent walks in from the north and stops short of her
+    if (this.t >= T_WALK0 && this.t <= T_WALK1) {
+      const u = (this.t - T_WALK0) / (T_WALK1 - T_WALK0);
+      const s = u * u * (3 - 2 * u);
+      this.agent.position.lerpVectors(this.level.agentSpawn.pos, this.level.agentFiringPos, s);
+      this.agent.setWalk(1);
+    }
+    // He tracks her the whole way in; she watches him
+    this.agent.faceToward(this.coworker.position, dt, 4);
+    if (this.coworker.alive) this.coworker.faceToward(this.agent.position, dt, 3);
 
     if (this.t >= T_END) this.beginPlay();
   }
@@ -296,12 +304,24 @@ export class IntroLevelScene implements GameScene {
       audio: this.ctx.audio,
       enemyFire: (e) => this.enemyFire(e)
     });
+    // Ravi just racked a slide one room away. Without this the agent starts
+    // on a patrol, drops the rifle off his shoulder and strolls off — he
+    // should already be turning towards the noise.
+    this.ctx.bus.emit(Events.Sound, {
+      position: this.player.position.clone(),
+      radius: 30,
+      kind: 'gunshot'
+    });
     this.ctx.input.requestPointerLock();
   }
 
   private skipCutscene(): void {
     if (this.phase !== 'cutscene') return;
-    // Fast-forward the beats that matter so the world is in the right state
+    // Fast-forward the world into the state the cutscene would have left it:
+    // agent in position with his rifle up, and her already down.
+    this.agent.position.copy(this.level.agentFiringPos);
+    this.agent.setWalk(0);
+    this.agent.setAiming(true);
     if (!this.beats.has('exec')) {
       this.beats.add('exec');
       this.executeCoworker();
@@ -339,6 +359,12 @@ export class IntroLevelScene implements GameScene {
       this.updateCutscene(dt);
       this.player.update(dt, this.level.colliders);
       this.weapon.update(dt, this.player, 0, 0, false);
+      // These have to run during the cutscene too, or the agent's rifle never
+      // leaves his hip and her ragdoll never falls — the pose only caught up
+      // once gameplay started ticking them.
+      this.agent.update(dt);
+      this.coworker.update(dt);
+      this.poolCorpse(this.coworker);
       this.stepWorld(dt);
       // Drain the click queue — otherwise the click that started the game (or
       // skipped the cutscene) is still latched and fires a round the instant

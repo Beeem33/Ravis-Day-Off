@@ -22,6 +22,10 @@ export interface IntroLevelData {
   agentSpawn: EnemySpawn;
   /** Where he stops, two metres off her, before raising the rifle. */
   agentFiringPos: THREE.Vector3;
+  /** Where the coworker ends up after standing from the desk. */
+  coworkerStandPos: THREE.Vector3;
+  /** The pistol on Ravi's desk; hidden once he picks it up. */
+  deskGun: THREE.Object3D;
   /** The side-entrance door, hinged: the scene kicks this open. */
   doorPivot: THREE.Group;
   /** Walk in here (once the agent is down) to finish the level. */
@@ -78,6 +82,7 @@ export class IntroOfficeBuilder {
   private coolerMat!: THREE.MeshLambertMaterial;
   private newsMat!: THREE.MeshBasicMaterial;
   private doorPivot!: THREE.Group;
+  private deskGun!: THREE.Group;
 
   /**
    * What is on Ravi's monitor when the level opens: a news story about the
@@ -163,16 +168,44 @@ export class IntroOfficeBuilder {
       // Staged side-on to Ravi: she is south, the agent walks in from the
       // north, so the player sees both of them in profile with the rifle
       // clearly pointed across the view rather than at the camera.
-      coworkerSpawn: { pos: new THREE.Vector3(3.2, 0, 1.4), yaw: 0 },
+      coworkerSpawn: { pos: new THREE.Vector3(4.15, 0, 1.35), yaw: Math.PI },
+      /** Where she backs to once she is on her feet with her hands up. */
+      coworkerStandPos: new THREE.Vector3(3.25, 0, 1.15),
       agentSpawn: { pos: new THREE.Vector3(3.2, 0, -4.0), yaw: Math.PI },
       /** Where the agent stops before raising the rifle. */
       agentFiringPos: new THREE.Vector3(3.2, 0, -0.7),
       doorPivot: this.doorPivot,
+      deskGun: this.deskGun,
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(12.2, 0, -0.9),
         new THREE.Vector3(13.9, 2.2, 0.9)
       )
     };
+  }
+
+  /**
+   * The pistol as a world object, lying flat. Same proportions as the
+   * viewmodel's so the hand-off doesn't change shape mid-grab.
+   */
+  private pistolProp(): THREE.Group {
+    const g = new THREE.Group();
+    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5 });
+    const grip = new THREE.MeshStandardMaterial({ color: 0x3a3228, roughness: 0.9 });
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.22), metal);
+    frame.position.set(0, 0.032, -0.02);
+    g.add(frame);
+    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.045, 0.24), dark);
+    slide.position.set(0, 0.077, -0.03);
+    g.add(slide);
+    const butt = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.11, 0.05), grip);
+    butt.position.set(0, 0.03, 0.075);
+    butt.rotation.x = -1.35; // laid over on its side, butt against the desk
+    g.add(butt);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.008, 0.06), metal);
+    guard.position.set(0, 0.012, 0.015);
+    g.add(guard);
+    return g;
   }
 
   /** Camera pitch that puts `target` in the middle of the view from `feet`. */
@@ -380,8 +413,16 @@ export class IntroOfficeBuilder {
     this.prop(desk, 0.44, 0.022, 0.15, -5, 0.72, front - 0.16, this.plasticMat, 0.05);
     this.prop(desk, 0.062, 0.028, 0.095, -4.6, 0.72, front - 0.14, this.plasticMat);
     this.prop(desk, 0.2, 0.44, 0.46, -6.2, 0, deskZ, this.darkMetalMat); // tower under the desk
-    // The drawer the gun comes out of — on the side facing him
-    this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, front - 0.02, this.darkMetalMat);
+    // The drawer it came out of, hanging open on the side facing him
+    this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, front + 0.14, this.darkMetalMat);
+    this.prop(desk, 0.5, 0.02, 0.3, -4.1, 0.42, front + 0.0, this.darkMetalMat);
+
+    // The pistol itself, lying on the desk. Ravi reaches out and takes this
+    // one — the viewmodel picks up from exactly where it sits.
+    this.deskGun = this.pistolProp();
+    this.deskGun.position.set(-4.06, 0.72, deskZ + 0.06);
+    this.deskGun.rotation.y = -0.5;
+    this.group.add(this.deskGun);
 
     // Paperwork, a can of DEADBULL, and a bin under the desk
     const pap = paperStack(8);
@@ -538,8 +579,8 @@ export class IntroOfficeBuilder {
     }
     // Her chair, rolled back — she stood up when they came through the door
     const chair = officeChair(0.46, new THREE.MeshLambertMaterial({ color: 0x3a3340 }));
-    chair.position.set(4.25, 0, dz - 1.05);
-    chair.rotation.y = Math.PI + 0.35; // back towards the desk, spun round
+    chair.position.set(4.15, 0, dz - 0.95);
+    chair.rotation.y = Math.PI; // squared up to the desk — she is sitting in it
     this.group.add(chair);
 
     // EMPLOYEE OF THE MONTH — her portrait, on the wall right above her own

@@ -17,16 +17,17 @@ const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
 
 // ---- Cutscene beats, in seconds from the top of the level
-const T_SHOTS = 1.5; // gunfire somewhere out on the floor
-const T_TURN0 = 1.65; // Ravi starts to look up from his screen
-const T_TURN1 = 3.2; // ...and is facing the glass
-const T_BURST = 3.15; // the side door goes in
-const T_WALK0 = 3.2; // the agent comes through it, rifle already up
-const T_WALK1 = 4.9; // ...and stops, two metres off her
-const T_EXEC = 6.0; // he fires; she goes down
-const T_DRAW0 = 7.6; // Ravi looks down at the drawer
-const T_DRAW1 = 8.8; // the gun is in his hand
-const T_END = 9.5; // control passes to the player
+const T_KNOCK = 1.4; // three knocks on the side door
+const T_TURN0 = 1.75; // Ravi looks up from his screen
+const T_TURN1 = 3.4; // ...and is facing the glass
+const T_BURST = 3.55; // the door goes in
+const T_WALK0 = 3.6; // the agent comes through it, rifle already up
+const T_WALK1 = 5.3; // ...and stops, two metres off her
+const T_EXEC = 6.4; // he fires; she goes down
+const T_DRAW0 = 8.0; // Ravi looks down at the pistol on his desk
+const T_GRAB = 8.9; // his hand closes on it
+const T_DRAW1 = 9.5; // ...and brings it up
+const T_END = 10.1; // control passes to the player
 
 /** Smoothstepped keyframe track: [time, value] pairs. */
 function track(keys: readonly (readonly [number, number])[], t: number): number {
@@ -115,6 +116,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     // The coworker — a civilian, no AI; she is only here to die.
     const cw = this.level.coworkerSpawn;
     this.coworker = new Enemy(cw.pos, cw.yaw, 0, { name: 'PRIYA', civilian: true });
+    this.coworker.setSitting(true, true); // at the desk until the door goes in
     this.scene.add(this.coworker.root);
     for (const p of this.coworker.parts) this.level.shootables.push(p);
 
@@ -128,7 +130,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
 
     // Ravi ends up looking at the midpoint of the pair, so both of them are
     // in frame side-on rather than one hidden behind the other.
-    const mid = cw.pos.clone().add(this.level.agentFiringPos).multiplyScalar(0.5);
+    const mid = this.level.coworkerStandPos.clone().add(this.level.agentFiringPos).multiplyScalar(0.5);
     this.lookYaw = Math.atan2(
       -(mid.x - this.level.playerSpawn.x),
       -(mid.z - this.level.playerSpawn.z)
@@ -220,26 +222,31 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       ],
       this.t
     );
-    this.weapon.stow = track([[0, 1], [T_DRAW0, 1], [T_DRAW1, 0]], this.t);
+    // The pistol is a real object on the desk until T_GRAB; after that the
+    // viewmodel takes over, starting out at arm's length where it was lying.
+    this.weapon.stow = this.t < T_GRAB ? 1 : 0;
+    this.weapon.reach = track([[T_GRAB, 1], [T_DRAW1, 0]], this.t);
 
     // Beats
-    this.beat('shot1', T_SHOTS, () => audio.enemyGunshot(22));
-    this.beat('shout', T_SHOTS + 0.35, () => audio.enemyShout(16));
-    this.beat('shot2', T_SHOTS + 0.6, () => audio.enemyGunshot(20));
-    this.beat('shot3', T_SHOTS + 0.95, () => audio.enemyGunshot(24));
+    // Three knocks on the side door — the only warning anyone gets
+    this.beat('knock', T_KNOCK, () => audio.knockSet());
     // She is already on her feet with her hands up when he walks in
-    this.beat('handsup', T_TURN0, () => this.coworker.setHandsUp(true));
     // The door goes in. He's already got the rifle up as he comes through it.
     this.beat('burst', T_BURST, () => {
       this.doorSwing = 1;
-      audio.bodyThud(this.agent.position.distanceTo(this.player.position));
-      audio.enemyShout(this.agent.position.distanceTo(this.player.position));
+      audio.doorBreach();
+      // She is out of the chair and her hands go up the moment it goes in
+      this.coworker.setSitting(false);
+      this.coworker.setHandsUp(true);
       this.ctx.bus.emit(Events.Sound, { position: this.agent.position.clone(), radius: 26, kind: 'impact' });
     });
     this.beat('halt', T_WALK1, () => this.agent.setWalk(0));
     this.beat('exec', T_EXEC, () => this.executeCoworker());
-    this.beat('drawer', T_DRAW0 + 0.15, () => audio.magOut());
-    this.beat('rack', T_DRAW1 - 0.15, () => audio.slideRack());
+    this.beat('grab', T_GRAB, () => {
+      this.level.deskGun.visible = false; // the viewmodel is holding it now
+      audio.magIn();
+    });
+    this.beat('rack', T_DRAW1 - 0.1, () => audio.slideRack());
 
     // The door slams open, then rebounds a little and stays wide
     if (this.doorSwing > 0) {
@@ -256,6 +263,13 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       this.agent.position.lerpVectors(this.level.agentSpawn.pos, this.level.agentFiringPos, s);
       this.agent.setWalk(1);
     }
+    // Up out of the chair, she backs off the desk to where the shot is staged
+    if (this.t > T_BURST && this.coworker.alive) {
+      const u = Math.min(1, (this.t - T_BURST) / 1.1);
+      const e = u * u * (3 - 2 * u);
+      this.coworker.position.lerpVectors(this.level.coworkerSpawn.pos, this.level.coworkerStandPos, e);
+    }
+
     // He tracks her the whole way in; she watches him
     this.agent.faceToward(this.coworker.position, dt, 4);
     if (this.coworker.alive) this.coworker.faceToward(this.agent.position, dt, 3);
@@ -327,6 +341,10 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.agent.setAiming(true);
     this.doorSwing = 1;
     this.level.doorPivot.rotation.y = -2.0;
+    this.coworker.setSitting(false, true);
+    this.coworker.setHandsUp(true);
+    this.coworker.position.copy(this.level.coworkerStandPos);
+    this.level.deskGun.visible = false;
     if (!this.beats.has('exec')) {
       this.beats.add('exec');
       this.executeCoworker();

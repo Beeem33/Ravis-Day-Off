@@ -34,6 +34,11 @@ export class WeaponViewmodel {
    * eases to 0 as Ravi lifts the gun out of his desk drawer.
    */
   stow = 0;
+  /**
+   * 1 = out where it was lying on the desk, 0 = normal hold. The intro
+   * blends this down as Ravi closes his shooting hand round it and lifts.
+   */
+  reach = 0;
   private sprintBlend = 0;
 
   // ---- Reload (John Wick style: flick the empty mag out left, slam a new one in)
@@ -430,6 +435,18 @@ export class WeaponViewmodel {
       this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
     );
     this.slide.position.z = -0.03 + this.slideKick * 0.045 + this.slidePull * 0.06;
+
+    // ---- Reaching for it on the desk: arm out, gun still lying flat, then
+    // it rolls upright into the grip as `reach` falls to zero.
+    if (this.reach > 0.0001) {
+      const r = this.reach;
+      this.root.position.x = THREE.MathUtils.lerp(this.root.position.x, 0.06, r);
+      this.root.position.y = THREE.MathUtils.lerp(this.root.position.y, -0.46, r);
+      this.root.position.z = THREE.MathUtils.lerp(this.root.position.z, -0.66, r);
+      this.root.rotation.x = THREE.MathUtils.lerp(this.root.rotation.x, -1.15, r); // muzzle down onto the desk
+      this.root.rotation.y = THREE.MathUtils.lerp(this.root.rotation.y, 0.32, r);
+      this.root.rotation.z = THREE.MathUtils.lerp(this.root.rotation.z, 0.28, r); // laid over on its side
+    }
 
     // ---- Draw / stow: swing the whole gun down out of frame
     if (this.stow > 0.0001) {

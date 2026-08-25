@@ -61,6 +61,9 @@ export class Enemy {
   /** 0..1 — hands raised. Only the civilian uses it. */
   private handsUp = 0;
   private handsUpTarget = 0;
+  /** 0..1 — seated at a desk. */
+  private sitBlend = 0;
+  private sitTarget = 0;
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
@@ -434,6 +437,20 @@ export class Enemy {
   /** Civilian only: put your hands up. */
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
+  }
+
+  /**
+   * Sit down / stand up. Hips drop to seat height, thighs come forward to
+   * horizontal and the shins fold back down so the feet stay on the floor.
+   */
+  setSitting(on: boolean, instant = false): void {
+    this.sitTarget = on ? 1 : 0;
+    if (instant) this.sitBlend = this.sitTarget;
+  }
+
+  /** True once they're properly on their feet again. */
+  get standing(): boolean {
+    return this.sitBlend < 0.05;
   }
 
   // Scratch vectors — gripRifle runs every frame for every live enemy.
@@ -825,15 +842,28 @@ export class Enemy {
     const bob = -Math.abs(Math.sin(this.walkPhase)) * 0.042 * stride;
     const sway = Math.sin(this.walkPhase) * 0.018 * stride; // weight shifting side to side
     const lean = 0.13 * stride; // leaning into the walk
+
+    // ---- Sitting: hips drop to seat height, thighs forward, shins back down
+    this.sitBlend += (this.sitTarget - this.sitBlend) * Math.min(1, dt * 4.5);
+    const sit = this.sitBlend;
+    if (sit > 0.001) {
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 1.55, sit);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.55, sit);
+      // Shins rotate back by the same amount, so the lower leg stays vertical
+      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -1.5, sit);
+      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -1.5, sit);
+    }
+    const drop = bob - 0.355 * sit; // 0.82 hip height down to a 0.46 seat
+
     // Hips ride with the pelvis, or the legs detach from it as it sways
-    this.legL.position.set(-0.115 + sway, 0.82 + bob, 0);
-    this.legR.position.set(0.115 + sway, 0.82 + bob, 0);
-    this.pelvis.position.set(sway, 0.96 + bob, 0);
+    this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
+    this.legR.position.set(0.115 + sway, 0.82 + drop, 0);
+    this.pelvis.position.set(sway, 0.96 + drop, 0);
     this.pelvis.rotation.z = -sway * 1.6;
-    this.head.position.set(sway * 0.6, 1.585 + bob, 0);
+    this.head.position.set(sway * 0.6, 1.585 + drop, 0);
     this.head.rotation.x = -lean * 0.7; // head stays level as the chest tips
     for (const [g, side] of [[this.armL, -1], [this.armR, 1]] as const) {
-      g.position.set(side * 0.29 + sway * 0.7, 1.4 + bob, 0);
+      g.position.set(side * 0.29 + sway * 0.7, 1.4 + drop, 0);
     }
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
@@ -864,6 +894,14 @@ export class Enemy {
       this.gripRifle(this.aimBlend);
     }
 
+    // Seated: forearms come up onto the desk in front of them
+    if (sit > 0.001 && this.handsUp < 0.5) {
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.55, sit);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 0.55, sit);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, 0.5, sit);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.5, sit);
+    }
+
     // Hands up — overrides the arm swing entirely as it blends in
     this.handsUp += (this.handsUpTarget - this.handsUp) * Math.min(1, dt * 6);
     if (this.handsUp > 0.001) {
@@ -882,7 +920,7 @@ export class Enemy {
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still
-    this.torso.position.set(sway * 0.85, 1.27 + bob + Math.sin(this.animTime * 2.2) * 0.008 * (1 - stride), 0);
+    this.torso.position.set(sway * 0.85, 1.27 + drop + Math.sin(this.animTime * 2.2) * 0.008 * (1 - stride), 0);
     this.torso.rotation.x = lean;
     this.torso.rotation.z = -sway * 2.2;
   }

@@ -110,6 +110,122 @@ export class AudioManager {
     osc.stop(t + duration + 0.05);
   }
 
+  /**
+   * A knuckle on a hollow door, `at` seconds from now. Three layers, because
+   * a single filtered blip is what makes procedural audio sound like a toy:
+   * the knuckle click, the low boom of the panel flexing, and the short
+   * woody ring of the leaf in its frame.
+   */
+  knock(at = 0, strength = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + at;
+    const out = ctx.createGain();
+    out.gain.value = 0.9 * strength;
+    out.connect(this.sfxBus);
+
+    // Knuckle contact: a very short burst of high noise
+    const click = ctx.createBufferSource();
+    click.buffer = this.noiseBuffer;
+    click.playbackRate.value = 1.5 + Math.random() * 0.3;
+    const clickF = ctx.createBiquadFilter();
+    clickF.type = 'bandpass';
+    clickF.frequency.value = 2100 + Math.random() * 500;
+    clickF.Q.value = 0.8;
+    const clickG = ctx.createGain();
+    clickG.gain.setValueAtTime(0.22, t);
+    clickG.gain.exponentialRampToValueAtTime(0.0001, t + 0.035);
+    click.connect(clickF).connect(clickG).connect(out);
+    click.start(t, Math.random());
+    click.stop(t + 0.08);
+
+    // The panel itself: low thump with a fast pitch drop
+    const body = ctx.createOscillator();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(126 + Math.random() * 18, t);
+    body.frequency.exponentialRampToValueAtTime(58, t + 0.12);
+    const bodyG = ctx.createGain();
+    bodyG.gain.setValueAtTime(0.0001, t);
+    bodyG.gain.exponentialRampToValueAtTime(0.5, t + 0.006); // fast attack, not a click
+    bodyG.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);
+    body.connect(bodyG).connect(out);
+    body.start(t);
+    body.stop(t + 0.25);
+
+    // Woody ring: hollow-core doors have an audible mid resonance
+    const ring = ctx.createBufferSource();
+    ring.buffer = this.noiseBuffer;
+    ring.playbackRate.value = 0.5;
+    const ringF = ctx.createBiquadFilter();
+    ringF.type = 'bandpass';
+    ringF.frequency.value = 330 + Math.random() * 60;
+    ringF.Q.value = 7;
+    const ringG = ctx.createGain();
+    ringG.gain.setValueAtTime(0.18, t + 0.004);
+    ringG.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    ring.connect(ringF).connect(ringG).connect(out);
+    ring.start(t, Math.random());
+    ring.stop(t + 0.35);
+  }
+
+  /** Three knocks, unevenly spaced the way a person actually knocks. */
+  knockSet(): void {
+    this.knock(0, 1);
+    this.knock(0.26, 0.92);
+    this.knock(0.49, 1.05);
+  }
+
+  /**
+   * A door taking a boot: the frame splintering, the leaf slamming back on
+   * its hinges, and a low thud through the floor.
+   */
+  doorBreach(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+
+    // Splintering timber — bright noise, gone almost instantly
+    const crack = ctx.createBufferSource();
+    crack.buffer = this.noiseBuffer;
+    crack.playbackRate.value = 1.7;
+    const crackF = ctx.createBiquadFilter();
+    crackF.type = 'highpass';
+    crackF.frequency.value = 1200;
+    const crackG = ctx.createGain();
+    crackG.gain.setValueAtTime(0.55, t);
+    crackG.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    crack.connect(crackF).connect(crackG).connect(this.sfxBus);
+    crack.start(t, Math.random());
+    crack.stop(t + 0.2);
+
+    // The boot: a heavy low impact
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(92, t);
+    thud.frequency.exponentialRampToValueAtTime(34, t + 0.26);
+    const thudG = ctx.createGain();
+    thudG.gain.setValueAtTime(0.0001, t);
+    thudG.gain.exponentialRampToValueAtTime(0.85, t + 0.008);
+    thudG.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    thud.connect(thudG).connect(this.sfxBus);
+    thud.start(t);
+    thud.stop(t + 0.45);
+
+    // Mid body of the slam, and the leaf banging the wall a beat later
+    this.noise(0.3, 'bandpass', 420, 0.4, true, 1.2);
+    const bang = ctx.createOscillator();
+    bang.type = 'sine';
+    bang.frequency.setValueAtTime(150, t + 0.16);
+    bang.frequency.exponentialRampToValueAtTime(62, t + 0.34);
+    const bangG = ctx.createGain();
+    bangG.gain.setValueAtTime(0.0001, t + 0.16);
+    bangG.gain.exponentialRampToValueAtTime(0.4, t + 0.17);
+    bangG.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+    bang.connect(bangG).connect(this.sfxBus);
+    bang.start(t + 0.16);
+    bang.stop(t + 0.5);
+  }
+
   /** Rough distance attenuation for world-positioned sounds. */
   private atten(distance: number, maxDist: number): number {
     return Math.max(0, 1 - distance / maxDist);

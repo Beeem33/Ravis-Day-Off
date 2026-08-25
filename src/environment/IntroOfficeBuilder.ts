@@ -24,6 +24,8 @@ export interface IntroLevelData {
   agentFiringPos: THREE.Vector3;
   /** Where the coworker ends up after standing from the desk. */
   coworkerStandPos: THREE.Vector3;
+  /** Her swivel chair — turns with her while she is still sitting in it. */
+  coworkerChair: THREE.Object3D;
   /** The pistol on Ravi's desk; hidden once he picks it up. */
   deskGun: THREE.Object3D;
   /** The side-entrance door, hinged: the scene kicks this open. */
@@ -83,6 +85,7 @@ export class IntroOfficeBuilder {
   private newsMat!: THREE.MeshBasicMaterial;
   private doorPivot!: THREE.Group;
   private deskGun!: THREE.Group;
+  private coworkerChair!: THREE.Group;
 
   /**
    * What is on Ravi's monitor when the level opens: a news story about the
@@ -176,6 +179,7 @@ export class IntroOfficeBuilder {
       agentFiringPos: new THREE.Vector3(3.2, 0, -0.7),
       doorPivot: this.doorPivot,
       deskGun: this.deskGun,
+      coworkerChair: this.coworkerChair,
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(12.2, 0, -0.9),
         new THREE.Vector3(13.9, 2.2, 0.9)
@@ -413,14 +417,11 @@ export class IntroOfficeBuilder {
     this.prop(desk, 0.44, 0.022, 0.15, -5, 0.72, front - 0.16, this.plasticMat, 0.05);
     this.prop(desk, 0.062, 0.028, 0.095, -4.6, 0.72, front - 0.14, this.plasticMat);
     this.prop(desk, 0.2, 0.44, 0.46, -6.2, 0, deskZ, this.darkMetalMat); // tower under the desk
-    // The drawer it came out of, hanging open on the side facing him
-    this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, front + 0.14, this.darkMetalMat);
-    this.prop(desk, 0.5, 0.02, 0.3, -4.1, 0.42, front + 0.0, this.darkMetalMat);
 
     // The pistol itself, lying on the desk. Ravi reaches out and takes this
     // one — the viewmodel picks up from exactly where it sits.
     this.deskGun = this.pistolProp();
-    this.deskGun.position.set(-4.06, 0.72, deskZ + 0.06);
+    this.deskGun.position.set(-4.38, 0.72, deskZ + 0.1);
     this.deskGun.rotation.y = -0.5;
     this.group.add(this.deskGun);
 
@@ -466,7 +467,7 @@ export class IntroOfficeBuilder {
     c1.rotation.y = 2.2;
     this.group.add(c1);
     const chips = chipsBox();
-    chips.position.set(-4.05, 0.72, deskZ + 0.16);
+    chips.position.set(-3.92, 0.72, deskZ - 0.2);
     chips.rotation.y = 0.4;
     this.group.add(chips);
   }
@@ -579,6 +580,7 @@ export class IntroOfficeBuilder {
     }
     // Her chair, rolled back — she stood up when they came through the door
     const chair = officeChair(0.46, new THREE.MeshLambertMaterial({ color: 0x3a3340 }));
+    this.coworkerChair = chair;
     chair.position.set(4.15, 0, dz - 0.95);
     chair.rotation.y = Math.PI; // squared up to the desk — she is sitting in it
     this.group.add(chair);

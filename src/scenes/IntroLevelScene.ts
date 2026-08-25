@@ -17,17 +17,18 @@ const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
 
 // ---- Cutscene beats, in seconds from the top of the level
-const T_KNOCK = 1.4; // three knocks on the side door
-const T_TURN0 = 1.75; // Ravi looks up from his screen
-const T_TURN1 = 3.4; // ...and is facing the glass
-const T_BURST = 3.55; // the door goes in
-const T_WALK0 = 3.6; // the agent comes through it, rifle already up
-const T_WALK1 = 5.3; // ...and stops, two metres off her
-const T_EXEC = 6.4; // he fires; she goes down
-const T_DRAW0 = 8.0; // Ravi looks down at the pistol on his desk
-const T_GRAB = 8.9; // his hand closes on it
-const T_DRAW1 = 9.5; // ...and brings it up
-const T_END = 10.1; // control passes to the player
+const T_KNOCK = 4.4; // three knocks on the side door
+const T_SWIVEL = 5.0; // she turns her chair towards the noise
+const T_TURN0 = 4.75; // Ravi looks up from his screen
+const T_TURN1 = 6.4; // ...and is facing the glass
+const T_BURST = 6.55; // the door goes in
+const T_WALK0 = 6.6; // the agent comes through it, rifle already up
+const T_WALK1 = 8.3; // ...and stops, two metres off her
+const T_EXEC = 9.4; // he fires; she goes down
+const T_DRAW0 = 11.0; // Ravi looks down at the pistol on his desk
+const T_GRAB = 11.9; // his hand sweeps across and takes it
+const T_DRAW1 = 12.4; // ...and it is up in the normal hold
+const T_END = 13.0; // control passes to the player
 
 /** Smoothstepped keyframe track: [time, value] pairs. */
 function track(keys: readonly (readonly [number, number])[], t: number): number {
@@ -69,6 +70,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private lookYaw = 0;
   /** 0 until the door is kicked, then eases to 1 as it swings wide. */
   private doorSwing = 0;
+  /** The chair's built-in yaw, so the swivel is relative to it. */
+  private chairYaw = 0;
 
   private ui!: HTMLElement;
   private objective!: HTMLElement;
@@ -117,6 +120,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     const cw = this.level.coworkerSpawn;
     this.coworker = new Enemy(cw.pos, cw.yaw, 0, { name: 'PRIYA', civilian: true });
     this.coworker.setSitting(true, true); // at the desk until the door goes in
+    this.chairYaw = this.level.coworkerChair.rotation.y;
     this.scene.add(this.coworker.root);
     for (const p of this.coworker.parts) this.level.shootables.push(p);
 
@@ -270,9 +274,17 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       this.coworker.position.lerpVectors(this.level.coworkerSpawn.pos, this.level.coworkerStandPos, e);
     }
 
-    // He tracks her the whole way in; she watches him
+    // He tracks her the whole way in. She is working with her back to the
+    // door until the knock — turning her before that spun her round inside
+    // a chair that stayed put.
     this.agent.faceToward(this.coworker.position, dt, 4);
-    if (this.coworker.alive) this.coworker.faceToward(this.agent.position, dt, 3);
+    if (this.coworker.alive && this.t >= T_SWIVEL) {
+      this.coworker.faceToward(this.agent.position, dt, 2.6);
+      // Still seated? The chair swivels with her.
+      if (!this.coworker.standing) {
+        this.level.coworkerChair.rotation.y = this.chairYaw + (this.coworker.yaw - this.level.coworkerSpawn.yaw);
+      }
+    }
 
     if (this.t >= T_END) this.beginPlay();
   }

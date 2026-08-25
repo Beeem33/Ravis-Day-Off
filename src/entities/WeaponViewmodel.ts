@@ -436,16 +436,18 @@ export class WeaponViewmodel {
     );
     this.slide.position.z = -0.03 + this.slideKick * 0.045 + this.slidePull * 0.06;
 
-    // ---- Reaching for it on the desk: arm out, gun still lying flat, then
-    // it rolls upright into the grip as `reach` falls to zero.
+    // ---- Taking it off the desk. The hand sweeps in from the right edge of
+    // frame, low and across the desktop, and the gun comes up out of the
+    // sweep. Holding it out at arm's length instead just looked like the
+    // pistol drifting in on its own.
     if (this.reach > 0.0001) {
       const r = this.reach;
-      this.root.position.x = THREE.MathUtils.lerp(this.root.position.x, 0.06, r);
-      this.root.position.y = THREE.MathUtils.lerp(this.root.position.y, -0.46, r);
-      this.root.position.z = THREE.MathUtils.lerp(this.root.position.z, -0.66, r);
-      this.root.rotation.x = THREE.MathUtils.lerp(this.root.rotation.x, -1.15, r); // muzzle down onto the desk
-      this.root.rotation.y = THREE.MathUtils.lerp(this.root.rotation.y, 0.32, r);
-      this.root.rotation.z = THREE.MathUtils.lerp(this.root.rotation.z, 0.28, r); // laid over on its side
+      this.root.position.x = THREE.MathUtils.lerp(this.root.position.x, 0.62, r); // off to the right
+      this.root.position.y = THREE.MathUtils.lerp(this.root.position.y, -0.52, r); // down at desk height
+      this.root.position.z = THREE.MathUtils.lerp(this.root.position.z, -0.52, r);
+      this.root.rotation.x = THREE.MathUtils.lerp(this.root.rotation.x, -0.95, r); // muzzle towards the desk
+      this.root.rotation.y = THREE.MathUtils.lerp(this.root.rotation.y, 0.95, r); // swung across
+      this.root.rotation.z = THREE.MathUtils.lerp(this.root.rotation.z, 0.55, r); // still on its side
     }
 
     // ---- Draw / stow: swing the whole gun down out of frame

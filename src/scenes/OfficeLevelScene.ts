@@ -222,7 +222,7 @@ export class OfficeLevelScene implements GameScene {
       const enemy = this.enemies[i];
       if (!enemy.alive) continue;
       const busyWithPlayer = this.ais[i].state === 'attack';
-      let timer = this.civShotTimers.get(enemy) ?? 6 + Math.random() * 8;
+      let timer = this.civShotTimers.get(enemy) ?? 3 + Math.random() * 5;
       timer -= dt;
       if (busyWithPlayer || timer > 0) {
         this.civShotTimers.set(enemy, busyWithPlayer ? Math.max(timer, 3) : timer);
@@ -236,9 +236,9 @@ export class OfficeLevelScene implements GameScene {
       enemy.faceToward(victim.position, dt, 12);
       enemy.setAiming(true);
       this.executeCivilian(enemy, victim);
-      // Long cooldown: the floor should empty over the course of the level,
-      // not in the first few seconds.
-      this.civShotTimers.set(enemy, 14 + Math.random() * 14);
+      // The floor should empty over the course of the level rather than in
+      // the first few seconds — but not so slowly that nothing happens.
+      this.civShotTimers.set(enemy, 7 + Math.random() * 9);
     }
   }
 
@@ -247,7 +247,7 @@ export class OfficeLevelScene implements GameScene {
     const eye = enemy.eyePosition();
     const facing = enemy.forwardDir();
     let best: Enemy | null = null;
-    let bestD = 10;
+    let bestD = 12.5;
     for (const c of this.civilians) {
       if (!c.alive) continue;
       const d = eye.distanceTo(c.position);
@@ -669,6 +669,9 @@ export class OfficeLevelScene implements GameScene {
 
   /** Blood for a hit at point along dir: exit jet particles, stretched splatter fan on what's behind, drip below. */
   private spatter(point: THREE.Vector3, dir: THREE.Vector3, big: boolean): void {
+    // Cast against current matrices: update() runs before render(), so world
+    // transforms are otherwise a frame stale and splatter can miss.
+    this.level.group.updateMatrixWorld(true);
     // Gore. Every splatter is projected onto a real surface found by raycast;
     // if there's nothing there (over the mezzanine void, etc.) nothing is drawn.
     const ground = this.surfaceBelow(point, 6);

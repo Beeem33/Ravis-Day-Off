@@ -275,12 +275,22 @@ export class IntroLevelScene implements GameScene {
     const { audio } = this.ctx;
     this.agent.flashMuzzle();
     audio.enemyGunshot(this.agent.position.distanceTo(this.player.position));
-    const chest = this.coworker.position.clone().add(new THREE.Vector3(0, 1.15, 0));
-    const dir = chest.clone().sub(this.agent.muzzleWorld()).normalize();
-    this.particles.tracer(this.agent.muzzleWorld(), chest, 0xffe0b0);
-    this.coworker.die(chest, dir, this.world, 'torso');
+
+    // The round has to land where the barrel is actually pointing. The
+    // shoulder-height rifle is level, so it strikes at muzzle height — a
+    // fixed chest offset put the wound near her hip while he was plainly
+    // aiming at her head.
+    this.agent.root.updateMatrixWorld(true);
+    const muzzle = this.agent.muzzleWorld();
+    const target = this.coworker.position.clone();
+    target.y = muzzle.y;
+    const dir = target.clone().sub(muzzle).normalize();
+    const rel = target.y - this.coworker.position.y;
+
+    this.particles.tracer(muzzle, target, 0xffe0b0);
+    this.coworker.die(target, dir, this.world, rel > 1.44 ? 'head' : 'torso');
     audio.fleshHit();
-    this.spatter(chest, dir, true);
+    this.spatter(target, dir, true);
   }
 
   /** Cutscene over: hand the same camera straight to the player. */
@@ -655,6 +665,10 @@ export class IntroLevelScene implements GameScene {
 
   /** Exit jet, splatter on whatever is behind, and a drip below. */
   private spatter(point: THREE.Vector3, dir: THREE.Vector3, big: boolean): void {
+    // These casts run during update(), when world matrices still hold last
+    // frame's values — and during the cutscene that was enough to make most
+    // of the splatter miss the wall entirely. Refresh before casting.
+    this.level.group.updateMatrixWorld(true);
     const ground = this.surfaceBelow(point, 6);
     this.particles.bloodSpray(point, dir, big, ground ? ground.point.y + 0.02 : -1);
     const exitFrom = point.clone().addScaledVector(dir, 0.3);

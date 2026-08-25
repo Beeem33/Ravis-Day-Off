@@ -221,19 +221,16 @@ export class OfficeLevelBuilder {
       // Staff still on their feet somewhere out on the floor
       civilianSpawns: [
         { pos: new THREE.Vector3(-7.5, 0, 5.5), yaw: 0.3 },
-        { pos: new THREE.Vector3(4.5, 0, 4.2), yaw: 2.1 },
-        { pos: new THREE.Vector3(-15, 0, -3.5), yaw: 1.4 },
         { pos: new THREE.Vector3(6.5, 0, -6.5), yaw: -1.2 },
-        { pos: new THREE.Vector3(-3, FLOOR_H, 6.5), yaw: 2.8 },
-        { pos: new THREE.Vector3(7.5, FLOOR_H, 3.5), yaw: -0.6 }
+        { pos: new THREE.Vector3(-15, 0, -3.5), yaw: 1.4 },
+        { pos: new THREE.Vector3(-3, FLOOR_H, 6.5), yaw: 2.8 }
       ],
       // And the ones who were already caught
       corpseSpawns: [
         { pos: new THREE.Vector3(-2.5, 0, 4.6), yaw: 1.1 },
         { pos: new THREE.Vector3(-11.8, 0, -6.2), yaw: -2.2 },
         { pos: new THREE.Vector3(8.6, 0, 2.4), yaw: 0.4 },
-        { pos: new THREE.Vector3(1.5, FLOOR_H, 5.2), yaw: 2.6 },
-        { pos: new THREE.Vector3(-13.5, FLOOR_H, -6.5), yaw: -0.8 }
+        { pos: new THREE.Vector3(1.5, FLOOR_H, 5.2), yaw: 2.6 }
       ]
     };
   }

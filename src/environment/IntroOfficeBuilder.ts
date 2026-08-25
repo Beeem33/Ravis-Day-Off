@@ -405,7 +405,7 @@ export class IntroOfficeBuilder {
     g.ellipse(64, 152, 42, 34, 0, 0, Math.PI * 2);
     g.fill();
     // Head
-    g.fillStyle = '#c99d78';
+    g.fillStyle = '#8a5c3b';
     g.beginPath();
     g.ellipse(64, 96, 26, 30, 0, 0, Math.PI * 2);
     g.fill();
@@ -427,7 +427,7 @@ export class IntroOfficeBuilder {
     g.ellipse(54, 96, 2.6, 2.6, 0, 0, Math.PI * 2);
     g.ellipse(74, 96, 2.6, 2.6, 0, 0, Math.PI * 2);
     g.fill();
-    g.strokeStyle = '#7a4b3a';
+    g.strokeStyle = '#3a2416';
     g.lineWidth = 2.5;
     g.beginPath();
     g.arc(64, 108, 11, 0.25 * Math.PI, 0.75 * Math.PI);

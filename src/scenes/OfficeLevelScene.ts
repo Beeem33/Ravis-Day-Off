@@ -6,6 +6,7 @@ import { Events } from '../core/EventBus';
 import { OfficeLevelBuilder, LevelData } from '../environment/OfficeLevelBuilder';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
+import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
@@ -15,6 +16,10 @@ import { FPSHUD } from '../ui/FPSHUD';
 
 const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
+// Shotgun: pump pacing sets the fire rate; the tube holds six
+const SHOTGUN_COOLDOWN = 0.85;
+const TUBE_SIZE = 6;
+const PELLETS = 8;
 
 /**
  * OfficeLevelScene — the playable shift. Owns the level, the player, all
@@ -26,6 +31,11 @@ export class OfficeLevelScene implements GameScene {
   private level!: LevelData;
   private player!: FPSPlayer;
   private weapon!: WeaponViewmodel;
+  private shotgun!: ShotgunViewmodel;
+  /** Which weapon is in hand, and which slot 1/2 asked for. */
+  private active: 'pistol' | 'shotgun' = 'pistol';
+  private wanted: 'pistol' | 'shotgun' = 'pistol';
+  private shells = TUBE_SIZE;
   private enemies: Enemy[] = [];
   private ais: EnemyAI[] = [];
   private civilians: Enemy[] = [];
@@ -108,6 +118,19 @@ export class OfficeLevelScene implements GameScene {
       else if (e === 'magIn') audio.magIn();
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
+    };
+    // The shotgun rides along stowed until 2 brings it up
+    this.shotgun = new ShotgunViewmodel(this.player.camera);
+    this.shotgun.onPumpEvent = (e) => {
+      if (e === 'back') audio.pumpBack();
+      else if (e === 'eject') this.dropShell();
+      else if (e === 'forward') audio.pumpForward();
+    };
+    this.shotgun.onReloadEvent = (e) => {
+      if (e === 'shellIn') {
+        audio.shellIn();
+        this.shells = Math.min(TUBE_SIZE, this.shells + 1);
+      }
     };
 
     this.particles = new ParticleManager(this.scene);
@@ -309,38 +332,82 @@ export class OfficeLevelScene implements GameScene {
       input.requestPointerLock();
     }
 
+    // Weapon slots: 1 = pistol, 2 = shotgun. The current gun swings down out
+    // of frame, then the other comes up — no switching mid-reload.
+    const heldVm = this.active === 'pistol' ? this.weapon : this.shotgun;
+    if (this.player.alive && !this.over && !heldVm.reloading) {
+      if (input.wasPressed('Digit1')) this.wanted = 'pistol';
+      if (input.wasPressed('Digit2')) this.wanted = 'shotgun';
+    }
+    if (this.wanted !== this.active) {
+      heldVm.stow = Math.min(1, heldVm.stow + dt * 5);
+      if (heldVm.stow >= 1) this.active = this.wanted;
+    } else {
+      heldVm.stow = Math.max(0, heldVm.stow - dt * 5);
+    }
+    const vm = this.active === 'pistol' ? this.weapon : this.shotgun;
+    const stowedVm = this.active === 'pistol' ? this.shotgun : this.weapon;
+    if (this.wanted === this.active) stowedVm.stow = 1;
+    const switching = this.wanted !== this.active || vm.stow > 0.1;
+
     // Aim down sights on right mouse (sprinting drops the aim)
-    const aiming = input.rightHeld && input.pointerLocked && this.player.alive && !this.over && !this.weapon.reloading;
+    const aiming =
+      input.rightHeld && input.pointerLocked && this.player.alive && !this.over && !vm.reloading && !switching;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
-    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
-    // FOV zoom while aiming
-    const targetFov = 74 - 22 * this.weapon.aimBlend;
+    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
+    this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
+    // FOV zoom while aiming (the shotgun's bead zooms less than the irons)
+    const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
     }
-    this.hud.setAiming(this.weapon.aimBlend > 0.5);
+    this.hud.setAiming(Math.max(this.weapon.aimBlend, this.shotgun.aimBlend) > 0.5);
 
-    // Player shooting (semi-auto)
+    // Player shooting (semi-auto pistol; pump-paced shotgun)
     this.fireCooldown -= dt;
     // (no firing at a sprint — the gun is down by your hip; let go of Shift first)
     const canFire =
-      this.player.alive && this.fireCooldown <= 0 && input.pointerLocked && !this.player.sprinting && !this.weapon.reloading;
+      this.player.alive &&
+      this.fireCooldown <= 0 &&
+      input.pointerLocked &&
+      !this.player.sprinting &&
+      !vm.reloading &&
+      !switching &&
+      (this.active === 'pistol' || !this.shotgun.pumping);
     const clicked = input.consumeClick();
-    if (clicked && canFire) {
-      if (this.ammo > 0) {
-        this.fireCooldown = FIRE_COOLDOWN;
-        this.ammo--;
-        this.playerShoot();
+    if (clicked && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {
+      // Interrupt the shell loop to get back in the fight
+      this.shotgun.cancelReload();
+    } else if (clicked && canFire) {
+      if (this.active === 'pistol') {
+        if (this.ammo > 0) {
+          this.fireCooldown = FIRE_COOLDOWN;
+          this.ammo--;
+          this.playerShoot();
+        } else {
+          this.ctx.audio.dryFire();
+          if (!this.player.sprinting) this.startReload();
+        }
       } else {
-        this.ctx.audio.dryFire();
-        if (!this.player.sprinting) this.startReload();
+        if (this.shells > 0) {
+          this.fireCooldown = SHOTGUN_COOLDOWN;
+          this.shells--;
+          this.playerShootShotgun();
+        } else {
+          this.ctx.audio.dryFire();
+          this.startShotgunReload();
+        }
       }
     }
-    // Manual reload on R (only if the mag isn't already full)
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting) this.startReload();
-    this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
+    // Manual reload on R (only if there's room)
+    if (input.wasPressed('KeyR') && this.player.alive && !this.player.sprinting && !switching) {
+      if (this.active === 'pistol' && this.ammo < MAG_SIZE) this.startReload();
+      else if (this.active === 'shotgun' && this.shells < TUBE_SIZE && !this.shotgun.pumping) this.startShotgunReload();
+    }
+    if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
+    else this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
 
     // Enemies + AI
     let anyAttacking = false;
@@ -465,6 +532,70 @@ export class OfficeLevelScene implements GameScene {
   private startReload(): void {
     if (this.weapon.startReload()) {
       this.player.aiming = false;
+    }
+  }
+
+  private startShotgunReload(): void {
+    if (this.shotgun.startReload(TUBE_SIZE - this.shells)) {
+      this.player.aiming = false;
+    }
+  }
+
+  /** The pump flicks the spent hull out the port; it becomes a real object. */
+  private dropShell(): void {
+    const { position, direction } = this.shotgun.ejectedShellPose();
+    const hull = new THREE.Group();
+    const bodyMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0105, 0.0105, 0.05, 8),
+      new THREE.MeshStandardMaterial({ color: 0xb32222, roughness: 0.6 })
+    );
+    hull.add(bodyMesh);
+    const brass = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0115, 0.0115, 0.013, 8),
+      new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.8, roughness: 0.35 })
+    );
+    brass.position.y = -0.028;
+    hull.add(brass);
+    hull.position.copy(position);
+    this.scene.add(hull);
+
+    const body = new CANNON.Body({
+      mass: 0.04,
+      shape: new CANNON.Box(new CANNON.Vec3(0.011, 0.032, 0.011)),
+      position: new CANNON.Vec3(position.x, position.y, position.z),
+      linearDamping: 0.05,
+      angularDamping: 0.25
+    });
+    const v = direction.clone().multiplyScalar(1.8 + Math.random() * 0.8).add(this.player.velocity);
+    body.velocity.set(v.x, v.y, v.z);
+    body.angularVelocity.set((Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18);
+    this.world.addBody(body);
+    this.droppedMags.push({ mesh: hull, body, life: OfficeLevelScene.MAG_LIFETIME });
+  }
+
+  private playerShootShotgun(): void {
+    const { audio, bus } = this.ctx;
+    audio.shotgunBlast();
+    this.shotgun.fire();
+    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 34, kind: 'gunshot' });
+
+    // A cone of pellets: wide from the hip, meaningfully tighter on the bead
+    const speedFactor = this.player.currentSpeed / 6.6;
+    let spread = 0.035 + speedFactor * 0.012;
+    spread *= 1 - 0.4 * this.shotgun.aimBlend;
+
+    const eye = this.player.eyePosition();
+    const baseDir = new THREE.Vector3();
+    this.player.camera.getWorldDirection(baseDir);
+    const muzzle = this.shotgun.muzzleWorld();
+    for (let i = 0; i < PELLETS; i++) {
+      const dir = baseDir.clone();
+      dir.x += (Math.random() - 0.5) * spread * 2;
+      dir.y += (Math.random() - 0.5) * spread * 2;
+      dir.z += (Math.random() - 0.5) * spread * 2;
+      dir.normalize();
+      const end = this.castBullet(eye, dir, null);
+      this.particles.tracer(muzzle, end);
     }
   }
 

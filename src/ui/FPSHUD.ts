@@ -196,14 +196,20 @@ export class FPSHUD {
 
   private ammoEl: HTMLElement | null = null;
   private shownAmmo = '';
+  private shownMagSize = -1;
 
   /** Rounds left in the magazine; blinks while reloading. */
   setAmmo(rounds: number, magSize: number, reloading: boolean): void {
     if (!this.ammoEl) {
       this.ammoEl = document.createElement('div');
       this.ammoEl.className = 'hud-ammo';
-      this.ammoEl.innerHTML = `<div class="rounds"></div><div>/ ${magSize} &nbsp;·&nbsp; R RELOAD</div>`;
       this.hud.appendChild(this.ammoEl);
+    }
+    if (magSize !== this.shownMagSize) {
+      // Weapon switch changed the magazine size — rebuild the readout
+      this.shownMagSize = magSize;
+      this.ammoEl.innerHTML = `<div class="rounds"></div><div>/ ${magSize} &nbsp;·&nbsp; R RELOAD</div>`;
+      this.shownAmmo = '';
     }
     const key = `${rounds}|${reloading}`;
     if (key === this.shownAmmo) return;

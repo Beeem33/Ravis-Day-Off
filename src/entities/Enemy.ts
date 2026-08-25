@@ -98,6 +98,7 @@ export class Enemy {
   /** Shared face textures: one mean, one very dead, one frightened. */
   private static faceAngry: THREE.MeshStandardMaterial | null = null;
   private static faceDead: THREE.MeshStandardMaterial | null = null;
+  private static faceDeadCivilian: THREE.MeshStandardMaterial | null = null;
   private static faceWorried: THREE.MeshStandardMaterial | null = null;
 
   /** The civilian's face: brows up, wide eyes, open mouth. */
@@ -105,9 +106,9 @@ export class Enemy {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d')!;
-    g.fillStyle = '#c99d78';
+    g.fillStyle = '#8a5c3b';
     g.fillRect(0, 0, 64, 64);
-    g.strokeStyle = '#2a1d15';
+    g.strokeStyle = '#1c120b';
     g.lineCap = 'round';
     // Brows raised and tilted OUT — the opposite slant to the angry face
     g.lineWidth = 4;
@@ -139,11 +140,11 @@ export class Enemy {
     return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
   }
 
-  private static drawFace(dead: boolean): THREE.MeshStandardMaterial {
+  private static drawFace(dead: boolean, skinHex?: string): THREE.MeshStandardMaterial {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d')!;
-    g.fillStyle = dead ? '#b9957a' : '#c59a76';
+    g.fillStyle = skinHex ?? (dead ? '#b9957a' : '#c59a76');
     g.fillRect(0, 0, 64, 64);
     // Stubble
     g.fillStyle = 'rgba(60,40,30,0.25)';
@@ -207,14 +208,15 @@ export class Enemy {
     const torsoMat = this.civilian ? this.mat(0xf4f2ec, 0.92) : suit;
     const sleeveMat = torsoMat;
     const shirt = this.mat(0xe9e6df, 0.9);
-    const skin = this.mat(0xc59a76);
+    // Floor staff share Ravi's complexion (same tone as the viewmodel hands)
+    const skin = this.mat(this.civilian ? 0x8a5c3b : 0xc59a76);
     const shoe = this.mat(0x0d0d10, 0.45);
     const glove = this.mat(0x0f0f12, 0.9);
     const gunmetal = this.mat(0x1a1c20, 0.5);
     const tieColors = [0x8c1515, 0x111111, 0x1f2a6b, 0x5a1a6b, 0x8c1515, 0x2a2a2a];
     const tie = this.mat(tieColors[this.variant % tieColors.length], 0.7);
     const hairColors = [0x1b1410, 0x3a2a1c, 0x0d0d0d, 0x6b4a2b, 0x2b2b2b, 0x8a7a66];
-    const hair = this.mat(hairColors[this.variant % hairColors.length], 0.95);
+    const hair = this.mat(this.civilian ? 0x120d0a : hairColors[this.variant % hairColors.length], 0.95);
 
     // Legs: suit trousers + polished shoes
     // (No clone(): Object3D.copy JSON-serializes userData, which holds a back-ref to this enemy.)
@@ -303,6 +305,7 @@ export class Enemy {
     // Head: face texture on the front (-Z), hair by variant
     if (!Enemy.faceAngry) Enemy.faceAngry = Enemy.drawFace(false);
     if (!Enemy.faceDead) Enemy.faceDead = Enemy.drawFace(true);
+    if (!Enemy.faceDeadCivilian) Enemy.faceDeadCivilian = Enemy.drawFace(true, '#7d5233');
     if (!Enemy.faceWorried) Enemy.faceWorried = Enemy.drawWorriedFace();
     const faceMat = this.civilian ? Enemy.faceWorried : Enemy.faceAngry;
     this.head = this.addPart(
@@ -536,7 +539,8 @@ export class Enemy {
     this.alive = false;
     // The lights go out behind the eyes
     const mats = this.head.material as THREE.Material[];
-    if (Array.isArray(mats) && Enemy.faceDead) mats[5] = Enemy.faceDead;
+    const deadFace = this.civilian ? Enemy.faceDeadCivilian : Enemy.faceDead;
+    if (Array.isArray(mats) && deadFace) mats[5] = deadFace;
     this.world = world;
     this.deadTimer = 0;
     this.root.updateMatrixWorld(true);

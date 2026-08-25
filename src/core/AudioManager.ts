@@ -126,6 +126,37 @@ export class AudioManager {
     this.noise(0.5, 'bandpass', 500, 0.14, true, 0.7);
   }
 
+  shotgunBlast(): void {
+    if (!this.ctx) return;
+    // Wider, deeper than the pistol: big low-end body, broadband crack,
+    // and a longer room tail
+    this.noise(0.08, 'highpass', 1600, 0.6);
+    this.noise(0.3, 'lowpass', 500, 1.0);
+    this.tone('square', 110, 28, 0.22, 0.55);
+    this.tone('sine', 70, 30, 0.28, 0.5);
+    this.noise(0.8, 'bandpass', 350, 0.18, true, 0.6);
+  }
+
+  /** Pump hauled back: metal-on-metal clack plus the hull flicked clear. */
+  pumpBack(): void {
+    this.noise(0.04, 'highpass', 2200, 0.22);
+    this.tone('square', 900, 350, 0.05, 0.16);
+    this.noise(0.07, 'lowpass', 800, 0.28);
+  }
+
+  /** Pump slammed forward: the heavier of the two clacks. */
+  pumpForward(): void {
+    this.noise(0.05, 'lowpass', 1000, 0.4);
+    this.tone('square', 600, 200, 0.06, 0.2);
+    this.noise(0.04, 'highpass', 2600, 0.16);
+  }
+
+  /** A shell thumbed into the loading port. */
+  shellIn(): void {
+    this.tone('square', 750, 320, 0.04, 0.12);
+    this.noise(0.05, 'lowpass', 1100, 0.22);
+  }
+
   enemyGunshot(distance: number): void {
     const a = this.atten(distance, 45) * 0.9 + 0.08;
     this.noise(0.09, 'highpass', 1500, 0.35 * a);

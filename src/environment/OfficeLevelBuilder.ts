@@ -941,10 +941,27 @@ export class OfficeLevelBuilder {
       b.rotation.y = Math.random() * Math.PI;
       this.group.add(b);
     }
-    for (const [x, y, z] of [[-10.4, 0, 0.6], [1.2, 0, -8.4], [-15.6, FLOOR_H, 5.0]] as const) {
+    // DEADBULL everywhere — this is a room full of people on a night shift.
+    // Tipped over on the floor...
+    for (const [x, y, z] of [
+      [-10.4, 0, 0.6], [1.2, 0, -8.4], [-6.6, 0, 1.2], [-14.6, 0, 0.4],
+      [3.4, 0, 6.8], [-2.2, 0, -6.4], [10.2, 0, -1.6], [-16.2, 0, -9.4],
+      [-15.6, FLOOR_H, 5.0], [2.6, FLOOR_H, -3.2], [8.8, FLOOR_H, 8.4], [-11.2, FLOOR_H, -3.4]
+    ] as const) {
       const can = sodaCan();
       can.position.set(x, y + 0.05, z);
-      can.rotation.z = Math.PI / 2; // on its side
+      can.rotation.z = Math.PI / 2;
+      can.rotation.y = Math.random() * Math.PI * 2;
+      this.group.add(can);
+    }
+    // ...and standing on desks and counters
+    for (const [x, y, z] of [
+      [-13.1, 0.72, -1.35], [-9.1, 0.72, -1.35], [-5.1, 0.72, 2.55], [-1.1, 0.72, -1.35],
+      [0.9, 0.72, 7.05], [-2.1, 0.72, -10.3], [2.9, 0.72, -6.5], [-9.9, 0.9, -11.5],
+      [4.9, FLOOR_H + 0.72, -9.2], [9.9, FLOOR_H + 0.72, -8.8], [-13.6, FLOOR_H + 0.72, 4.05]
+    ] as const) {
+      const can = sodaCan();
+      can.position.set(x, y, z);
       this.group.add(can);
     }
 

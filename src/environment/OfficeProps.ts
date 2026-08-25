@@ -314,55 +314,115 @@ export function spilledCoffee(): THREE.Group {
   return g;
 }
 
-let chipsMat: THREE.MeshLambertMaterial | null = null;
+const CHIP_W = 0.17;
+const CHIP_H = 0.24;
+const CHIP_D = 0.07;
+let chipsMats: THREE.Material[] | null = null;
 
-/** PRINTED CHIPS — the vending-machine snack. A boxed, extruded crisp. */
+function chipsCanvas(px: number, py: number, draw: (g: CanvasRenderingContext2D) => void): THREE.MeshLambertMaterial {
+  const c = document.createElement('canvas');
+  c.width = px;
+  c.height = py;
+  const g = c.getContext('2d')!;
+  const grad = g.createLinearGradient(0, 0, 0, py);
+  grad.addColorStop(0, '#f2a13a');
+  grad.addColorStop(1, '#c85f1a');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, px, py);
+  draw(g);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshLambertMaterial({ map: tex });
+}
+
+/**
+ * PRINTED CHIPS — the vending-machine snack.
+ *
+ * Each face gets its own material at its own aspect ratio. A single texture
+ * across a BoxGeometry stretches badly, because every face takes the same
+ * 0..1 UVs regardless of how differently shaped it is: the 0.07-deep sides
+ * were squeezing the whole label into a strip.
+ */
 export function chipsBox(): THREE.Group {
-  if (!chipsMat) {
-    const c = document.createElement('canvas');
-    c.width = 200;
-    c.height = 128;
-    const g = c.getContext('2d')!;
-    const grad = g.createLinearGradient(0, 0, 0, 128);
-    grad.addColorStop(0, '#f2a13a');
-    grad.addColorStop(1, '#d2691e');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 200, 128);
-    // A crisp being extruded off a little printer nozzle
-    g.fillStyle = '#4a4a52';
-    g.fillRect(84, 14, 32, 16);
-    g.beginPath();
-    g.moveTo(92, 30);
-    g.lineTo(108, 30);
-    g.lineTo(102, 44);
-    g.lineTo(98, 44);
-    g.closePath();
-    g.fill();
-    g.fillStyle = '#f7dd8a';
-    g.beginPath();
-    g.ellipse(100, 62, 26, 15, 0, 0, Math.PI * 2);
-    g.fill();
-    g.strokeStyle = '#c98a2a';
-    g.lineWidth = 2;
-    for (let i = -2; i <= 2; i++) {
+  if (!chipsMats) {
+    // Front: the printer, the crisp, the wordmark. Canvas matches the face.
+    const front = chipsCanvas(170, 240, (g) => {
+      g.fillStyle = '#4a4a52'; // extruder head
+      g.fillRect(60, 26, 50, 26);
       g.beginPath();
-      g.moveTo(100 + i * 9, 50);
-      g.lineTo(100 + i * 9, 74);
-      g.stroke();
-    }
-    g.fillStyle = '#2a1a10';
-    g.font = 'bold 22px Impact, sans-serif';
-    g.textAlign = 'center';
-    g.fillText('PRINTED CHIPS', 100, 100);
-    g.font = 'bold 9px monospace';
-    g.fillText('100% EXTRUDED · 0% POTATO', 100, 115);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    chipsMat = new THREE.MeshLambertMaterial({ map: tex });
+      g.moveTo(72, 52);
+      g.lineTo(98, 52);
+      g.lineTo(90, 74);
+      g.lineTo(80, 74);
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#f7dd8a'; // the crisp coming off it
+      g.beginPath();
+      g.ellipse(85, 108, 46, 28, 0, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#c98a2a';
+      g.lineWidth = 3;
+      for (let i = -2; i <= 2; i++) {
+        g.beginPath();
+        g.moveTo(85 + i * 16, 86);
+        g.lineTo(85 + i * 16, 130);
+        g.stroke();
+      }
+      g.fillStyle = '#2a1a10';
+      g.textAlign = 'center';
+      g.font = 'bold 27px Impact, sans-serif';
+      g.fillText('PRINTED', 85, 174);
+      g.fillText('CHIPS', 85, 200);
+      g.font = 'bold 10px monospace';
+      g.fillText('100% EXTRUDED', 85, 219);
+      g.fillText('0% POTATO', 85, 232);
+    });
+    // Back: a nutrition-panel look rather than a mirrored wordmark
+    const back = chipsCanvas(170, 240, (g) => {
+      g.fillStyle = 'rgba(255,248,235,0.9)';
+      g.fillRect(18, 30, 134, 180);
+      g.fillStyle = '#2a1a10';
+      g.textAlign = 'left';
+      g.font = 'bold 13px monospace';
+      g.fillText('NUTRITION', 26, 48);
+      g.font = '10px monospace';
+      const rows = ['Filament .... 41g', 'Salt ........ 2.1g', 'Resin ....... 0.4g', 'Potato ...... 0g', 'Regret ...... 88%'];
+      rows.forEach((r, i) => g.fillText(r, 26, 70 + i * 18));
+      g.strokeStyle = '#2a1a10';
+      g.lineWidth = 1;
+      for (let i = 0; i < rows.length; i++) {
+        g.beginPath();
+        g.moveTo(26, 75 + i * 18);
+        g.lineTo(144, 75 + i * 18);
+        g.stroke();
+      }
+      // Barcode
+      g.fillStyle = '#111';
+      for (let i = 0; i < 22; i++) g.fillRect(30 + i * 5, 168, 1 + (i % 3), 30);
+    });
+    // Narrow sides and the ends: a plain wrapper with a stripe, no text to squash
+    const side = chipsCanvas(70, 240, (g) => {
+      g.fillStyle = 'rgba(255,255,255,0.18)';
+      g.fillRect(0, 96, 70, 48);
+      g.fillStyle = '#2a1a10';
+      g.textAlign = 'center';
+      g.font = 'bold 10px monospace';
+      g.save();
+      g.translate(35, 120);
+      g.rotate(-Math.PI / 2);
+      g.fillText('PRINTED CHIPS', 0, 4);
+      g.restore();
+    });
+    const end = chipsCanvas(170, 70, (g) => {
+      g.fillStyle = 'rgba(255,255,255,0.16)';
+      g.fillRect(0, 24, 170, 22);
+    });
+    // BoxGeometry face order: px nx py ny pz nz
+    chipsMats = [side, side, end, end, front, back];
   }
   const g = new THREE.Group();
-  const box = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.24, 0.07), chipsMat);
-  box.position.y = 0.12;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(CHIP_W, CHIP_H, CHIP_D), chipsMats);
+  box.position.y = CHIP_H / 2;
   g.add(box);
   return g;
 }

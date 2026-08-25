@@ -148,7 +148,11 @@ export class IntroOfficeBuilder {
       // — the news story is what he's reading when the shooting starts.
       playerSpawn: new THREE.Vector3(-5, 0, -1.3),
       playerSpawnYaw: 0,
-      introPitch: IntroOfficeBuilder.pitchTo(new THREE.Vector3(-5, 0, -1.3), new THREE.Vector3(-5, 1.14, Z0 + 0.88)),
+      // Aimed at the centre of the news on his monitor (see buildRavisOffice)
+      introPitch: IntroOfficeBuilder.pitchTo(
+        new THREE.Vector3(-5, 0, -1.3),
+        new THREE.Vector3(-5, 0.995, Z0 + 0.72 - 0.4 + 0.16)
+      ),
       // Staged side-on to Ravi: she is south, the agent walks in from the
       // north, so the player sees both of them in profile with the rifle
       // clearly pointed across the view rather than at the camera.
@@ -310,26 +314,32 @@ export class IntroOfficeBuilder {
 
     // Ravi's desk against the north wall — he's reading the news on it when
     // it kicks off. The monitor is raised and tilted up so it fills his view.
+    // Desk runs x[-6.3,-3.7], z[deskZ-0.4, deskZ+0.4]. Ravi stands to the
+    // SOUTH of it (higher z), so everything he uses goes at the higher-z
+    // side and the monitor sits at the back.
     const deskZ = Z0 + 0.72;
+    const front = deskZ + 0.4; // edge nearest Ravi
+    const back = deskZ - 0.4; // edge against the wall
     this.solid(2.6, 0.72, 0.8, -5, 0, deskZ, this.deskMat, { surface: 'wood', occlude: false });
-    // yaw 0 = the glowing face points +Z, back down the room at Ravi. The
-    // plane is single-sided: turned the other way he'd see the plastic shell.
-    this.screen(0.66, 0.44, -5, 1.14, deskZ + 0.16, 0, this.newsMat);
+    // Monitor stands ON the desk: screen() drops its base 0.055 below the
+    // panel, so the panel centre has to sit that far above the desktop.
+    this.screen(0.66, 0.44, -5, 0.72 + 0.055 + 0.22, back + 0.16, 0, this.newsMat);
     const desk = new THREE.Group();
     this.group.add(desk);
-    this.prop(desk, 0.44, 0.022, 0.15, -5, 0.72, deskZ - 0.24, this.plasticMat, 0.05); // keyboard
-    this.prop(desk, 0.062, 0.028, 0.095, -4.62, 0.72, deskZ - 0.22, this.plasticMat); // mouse
+    // Keyboard and mouse in front of the screen, between it and Ravi
+    this.prop(desk, 0.44, 0.022, 0.15, -5, 0.72, front - 0.16, this.plasticMat, 0.05);
+    this.prop(desk, 0.062, 0.028, 0.095, -4.6, 0.72, front - 0.14, this.plasticMat);
     this.prop(desk, 0.2, 0.44, 0.46, -6.2, 0, deskZ, this.darkMetalMat); // tower under the desk
-    // The drawer the gun comes out of
-    this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, deskZ - 0.38, this.darkMetalMat);
+    // The drawer the gun comes out of — on the side facing him
+    this.prop(desk, 0.5, 0.16, 0.02, -4.1, 0.42, front - 0.02, this.darkMetalMat);
 
     // Paperwork, a can of DEADBULL, and a bin under the desk
     const pap = paperStack(8);
-    pap.position.set(-5.9, 0.72, deskZ - 0.02);
+    pap.position.set(-5.85, 0.72, deskZ - 0.05);
     pap.rotation.y = 0.35;
     this.group.add(pap);
     const can = sodaCan();
-    can.position.set(-4.32, 0.72, deskZ - 0.1);
+    can.position.set(-4.35, 0.72, deskZ - 0.06);
     this.group.add(can);
     const bin = trashCan();
     bin.position.set(-3.95, 0, deskZ + 0.15);
@@ -349,9 +359,11 @@ export class IntroOfficeBuilder {
     // Invisible shell carries the collider and the bullet hits
     this.solid(0.6, 1.4, 1.1, -8.3, 0, 1.6, this.darkMetalMat, { surface: 'metal' }).visible = false;
 
-    // The reading material of a man who ran a scam call centre
+    // The reading material of a man who ran a scam call centre. This one
+    // sits ON the desk — the desk only reaches x = -6.3, so anything further
+    // out at desktop height is hanging in mid air.
     const b1 = book('persuade');
-    b1.position.set(-6.55, 0.72, deskZ + 0.06);
+    b1.position.set(-6.0, 0.72, deskZ + 0.12);
     b1.rotation.y = 0.6;
     this.group.add(b1);
     const b2 = book('scamming');
@@ -450,7 +462,7 @@ export class IntroOfficeBuilder {
     // Her desk, against the south wall and clear of the sightline
     const dz = Z1 - 0.7;
     this.solid(2.2, 0.72, 0.8, 4.0, 0, dz, this.deskMat, { surface: 'wood', occlude: false });
-    this.screen(0.55, 0.35, 4.0, 0.98, dz - 0.16, Math.PI); // faces north, into the room
+    this.screen(0.55, 0.35, 4.0, 0.72 + 0.055 + 0.175, dz + 0.16, Math.PI); // back of her desk, facing north
     const d = new THREE.Group();
     this.group.add(d);
     this.prop(d, 0.44, 0.022, 0.15, 4.0, 0.72, dz - 0.28, this.plasticMat, -0.06);
@@ -463,6 +475,17 @@ export class IntroOfficeBuilder {
     const bin = trashCan();
     bin.position.set(5.35, 0, dz - 0.2);
     this.group.add(bin);
+    // Her own DEADBULL, and a couple more knocked over on the floor
+    const herCan = sodaCan();
+    herCan.position.set(3.15, 0.72, dz - 0.1);
+    this.group.add(herCan);
+    for (const [x, z] of [[1.4, -2.2], [6.0, 1.6], [-2.4, 1.9]] as const) {
+      const c = sodaCan();
+      c.position.set(x, 0.05, z);
+      c.rotation.z = Math.PI / 2;
+      c.rotation.y = Math.random() * Math.PI * 2;
+      this.group.add(c);
+    }
     // Her chair, rolled back — she stood up when they came through the door
     const chair = officeChair(0.46, new THREE.MeshLambertMaterial({ color: 0x3a3340 }));
     chair.position.set(4.25, 0, dz - 1.05);

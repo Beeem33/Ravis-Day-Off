@@ -61,19 +61,49 @@ export class InputManager {
       const locked = document.pointerLockElement === this.element;
       const lost = this.pointerLocked && !locked;
       this.pointerLocked = locked;
+      if (locked) this.hideLockHint();
       if (lost) this.onPointerLockLost?.();
     });
   }
 
+  /** Banner shown when the browser refuses to capture the mouse. */
+  private lockHint: HTMLElement | null = null;
+
+  private showLockHint(): void {
+    if (this.lockHint) return;
+    const el = document.createElement('div');
+    el.textContent =
+      'MOUSE CAPTURE BLOCKED BY YOUR BROWSER — click the icon left of the address bar, allow "Mouse cursor", then reload';
+    el.style.cssText =
+      'position:fixed;top:14px;left:50%;transform:translateX(-50%);background:#7a1010;color:#fff;' +
+      'font:bold 13px monospace;padding:9px 16px;border-radius:4px;z-index:9999;pointer-events:none;' +
+      'box-shadow:0 2px 12px rgba(0,0,0,0.6);max-width:90vw;text-align:center;';
+    document.body.appendChild(el);
+    this.lockHint = el;
+  }
+
+  private hideLockHint(): void {
+    this.lockHint?.remove();
+    this.lockHint = null;
+  }
+
   requestPointerLock(): void {
     if (this.pointerLocked) return;
+    // If the click was real and the browser still refuses, the site's
+    // pointer-lock permission is blocked — worth telling the player.
+    const hadGesture =
+      (navigator as { userActivation?: { isActive: boolean } }).userActivation?.isActive === true;
     try {
       // Returns a promise in modern browsers; rejection (e.g. user hit Esc
       // too recently, or the document isn't focused) is non-fatal.
       const p = this.element.requestPointerLock() as unknown as Promise<void> | undefined;
-      p?.catch?.(() => {});
-    } catch {
-      /* ignore */
+      p?.catch?.((err: unknown) => {
+        const e = err as { name?: string; message?: string } | undefined;
+        console.warn('[pointerlock] rejected:', e?.name ?? '', e?.message ?? err);
+        if (hadGesture && e?.name === 'NotAllowedError') this.showLockHint();
+      });
+    } catch (err) {
+      console.warn('[pointerlock] threw:', err);
     }
   }
 

@@ -860,12 +860,16 @@ export class Enemy {
     if (this.handsUp > 0.001) {
       const h = this.handsUp;
       const tremble = Math.sin(this.animTime * 11) * 0.035 * h;
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.5 + tremble, h);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.5 - tremble, h);
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.5, h);
-      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, 0.5, h);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, 0.5, h);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.5, h);
+      // Z has to splay the arms OUTWARD from the shoulders. Rotating them
+      // inward brought both hands together over the head, which read as a
+      // dive rather than surrender.
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.85 + tremble, h);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.85 - tremble, h);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.42, h);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.42, h);
+      // Elbows almost straight, so the hands clear the top of the head
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.25, h);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.25, h);
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still

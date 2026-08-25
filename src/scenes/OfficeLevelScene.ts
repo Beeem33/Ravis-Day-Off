@@ -222,34 +222,40 @@ export class OfficeLevelScene implements GameScene {
       const enemy = this.enemies[i];
       if (!enemy.alive) continue;
       const busyWithPlayer = this.ais[i].state === 'attack';
-      let timer = this.civShotTimers.get(enemy) ?? 1 + Math.random() * 2;
+      let timer = this.civShotTimers.get(enemy) ?? 6 + Math.random() * 8;
       timer -= dt;
       if (busyWithPlayer || timer > 0) {
-        this.civShotTimers.set(enemy, busyWithPlayer ? Math.max(timer, 0.8) : timer);
+        this.civShotTimers.set(enemy, busyWithPlayer ? Math.max(timer, 3) : timer);
         continue;
       }
       const victim = this.visibleCivilian(enemy);
       if (!victim) {
-        this.civShotTimers.set(enemy, 0.5);
+        this.civShotTimers.set(enemy, 1.5);
         continue;
       }
       enemy.faceToward(victim.position, dt, 12);
       enemy.setAiming(true);
       this.executeCivilian(enemy, victim);
-      this.civShotTimers.set(enemy, 1.4 + Math.random() * 2.2);
+      // Long cooldown: the floor should empty over the course of the level,
+      // not in the first few seconds.
+      this.civShotTimers.set(enemy, 14 + Math.random() * 14);
     }
   }
 
   /** Nearest living civilian this agent can actually see. */
   private visibleCivilian(enemy: Enemy): Enemy | null {
     const eye = enemy.eyePosition();
+    const facing = enemy.forwardDir();
     let best: Enemy | null = null;
-    let bestD = 16;
+    let bestD = 10;
     for (const c of this.civilians) {
       if (!c.alive) continue;
       const d = eye.distanceTo(c.position);
       if (d > bestD) continue;
       if (Math.abs(c.position.y - enemy.position.y) > 1.5) continue; // different floor
+      // Only someone they're actually looking at — no shooting over a shoulder
+      const toward = c.position.clone().sub(enemy.position).setY(0).normalize();
+      if (toward.dot(facing) < 0.35) continue;
       const to = c.position.clone().add(new THREE.Vector3(0, 1.2, 0)).sub(eye);
       const dist = to.length();
       this.raycaster.set(eye, to.normalize());

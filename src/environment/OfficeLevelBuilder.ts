@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { BreakableGlass } from './BreakableGlass';
 import { FlickeringLight } from './FlickeringLight';
-import { officeChair, trashCan, scatteredPaper, vendingMachine, sodaCan } from './OfficeProps';
+import {
+  officeChair, trashCan, scatteredPaper, vendingMachine, sodaCan,
+  fileCabinet, book, spilledCoffee, chipsBox
+} from './OfficeProps';
 
 /**
  * Axis-aligned movement collider. `glass` links a pane so shattering it
@@ -291,6 +294,31 @@ export class OfficeLevelBuilder {
 
   // --------------------------------------------------------------- helpers
 
+  /**
+   * File cabinet: detailed drawer geometry for looks, plus a plain box
+   * collider and a shootable shell so ballistics stay simple.
+   */
+  private cabinet(w: number, h: number, d: number, x: number, y: number, z: number, yaw = 0, drawers = 4): void {
+    const g = fileCabinet(w, h, d, drawers);
+    g.position.set(x, y, z);
+    g.rotation.y = yaw;
+    this.group.add(g);
+    const swap = Math.abs(Math.sin(yaw)) > 0.5;
+    const hw = (swap ? d : w) / 2;
+    const hd = (swap ? w : d) / 2;
+    // Invisible shell carries the raycast hits so bullets read 'metal'
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, h, hd * 2), this.darkMetalMat);
+    shell.position.set(x, y + h / 2, z);
+    shell.visible = false;
+    shell.userData.surface = 'metal';
+    this.group.add(shell);
+    this.shootables.push(shell);
+    this.occluders.push(shell);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(x - hw, y, z - hd), new THREE.Vector3(x + hw, y + h, z + hd))
+    });
+  }
+
   /** Add a solid box: mesh + collider + shootable (+ optional vision occluder). */
   private solid(
     w: number,
@@ -507,7 +535,7 @@ export class OfficeLevelBuilder {
 
     // Back office (z -12..-3, x -9..12): copier, file cabinets, desks
     this.solid(1.5, 1.15, 0.8, 6.5, 0, -11.4, this.darkMetalMat, { surface: 'metal' }); // copier
-    this.solid(0.6, 1.5, 2.4, -8.6, 0, -10.8, this.darkMetalMat, { surface: 'metal' }); // cabinets
+    this.cabinet(0.6, 1.5, 2.4, -8.6, 0, -10.8); // cabinets
     this.deskCluster(-1.5, -10.5, 0);
     this.deskCluster(2.5, -6.2, Math.PI / 2);
     this.solid(0.5, 1.1, 0.5, 11.2, 0, -10.5, this.darkMetalMat, { surface: 'metal', occlude: false }); // water cooler
@@ -533,13 +561,12 @@ export class OfficeLevelBuilder {
     // Monitor, offset along the desk — the workstation is built around it
     const seatX = cx + (Math.random() - 0.5) * 1.4;
     this.screen(0.55, 0.35, seatX, 0.95, cz + 0.6 * s, facing);
-    // Office chair
-    const chair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.5), this.darkMetalMat);
-    chair.position.set(cx + (Math.random() - 0.5) * 0.8, 0.45, cz - 0.2 * s);
+    // Office chair — the same task chair the intro uses
+    const chair = officeChair();
+    chair.position.set(cx + (Math.random() - 0.5) * 0.8, 0, cz - 0.25 * s);
+    // Back towards the desk, turned a little as if pushed away in a hurry
+    chair.rotation.y = (s > 0 ? Math.PI : 0) + (Math.random() - 0.5) * 0.9;
     this.group.add(chair);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.1), this.darkMetalMat);
-    back.position.set(chair.position.x, 0.85, chair.position.z - 0.22 * s);
-    this.group.add(back);
 
     // Clutter, built in desk-local space then turned to face the same way
     const clutter = this.deskClutter(1.35, seatX - cx);
@@ -764,14 +791,14 @@ export class OfficeLevelBuilder {
     // Exec furniture
     this.deskClusterAt(4.5, y, -9, 0);
     this.deskClusterAt(9.5, y, -9, 0);
-    this.solid(0.6, 1.5, 2.0, 2.4, y, -6, this.darkMetalMat, { surface: 'metal' }); // cabinets A
-    this.solid(0.6, 1.5, 2.0, 11.6, y, -6, this.darkMetalMat, { surface: 'metal' }); // cabinets B
+    this.cabinet(0.6, 1.5, 2.0, 2.4, y, -6, 0, 3); // cabinets A
+    this.cabinet(0.6, 1.5, 2.0, 11.6, y, -6, Math.PI, 3); // cabinets B
 
     // North open lounge: couch, planters, copier — cover around the mezzanine
     this.solid(2.6, 0.75, 1.0, -4, y, 6.5, new THREE.MeshLambertMaterial({ color: 0x5a2f2f }), { surface: 'wood' }); // couch
     this.solid(1.0, 0.75, 2.6, 3.2, y, 7.5, new THREE.MeshLambertMaterial({ color: 0x5a2f2f }), { surface: 'wood' });
     this.solid(1.5, 1.15, 0.8, 12, y, 10.8, this.darkMetalMat, { surface: 'metal' }); // copier
-    this.solid(0.6, 1.5, 2.4, -14, y, 8, this.darkMetalMat, { surface: 'metal' }); // cabinets
+    this.cabinet(0.6, 1.5, 2.4, -14, y, 8); // cabinets
     this.solid(1.2, 0.72, 1.2, -14, y, 4, this.deskMat, { surface: 'wood', occlude: false }); // side table
   }
 
@@ -916,16 +943,68 @@ export class OfficeLevelBuilder {
     }
     for (const [x, y, z] of [[-10.4, 0, 0.6], [1.2, 0, -8.4], [-15.6, FLOOR_H, 5.0]] as const) {
       const can = sodaCan();
-      can.position.set(x, y + 0.033, z);
+      can.position.set(x, y + 0.05, z);
       can.rotation.z = Math.PI / 2; // on its side
       this.group.add(can);
     }
+
+    // Reading matter, dropped where people left it
+    const bookAt = (kind: 'persuade' | 'scamming' | 'comic', x: number, y: number, z: number): void => {
+      const b = book(kind);
+      b.position.set(x, y, z);
+      b.rotation.y = Math.random() * Math.PI * 2;
+      this.group.add(b);
+    };
+    bookAt('persuade', -12.2, 0, 0.9); // the training manuals, on the aisle floor
+    bookAt('scamming', -4.8, 0, -0.7);
+    bookAt('persuade', 2.6, 0, -9.2);
+    bookAt('scamming', -13.4, 0, -7.2); // breakroom
+    bookAt('persuade', 3.8, FLOOR_H, -8.2); // exec office A
+    bookAt('scamming', 10.2, FLOOR_H, -7.6); // exec office B
+    bookAt('comic', -8.2, 0, 1.1);
+    bookAt('comic', -15.4, 0, 4.6);
+    bookAt('comic', 0.8, FLOOR_H, 7.2);
+    bookAt('comic', -12.8, FLOOR_H, 5.4);
+
+    // Coffee gone over as people ran
+    for (const [x, y, z] of [
+      [-9.2, 0, -0.4], [1.8, 0, 6.2], [-14.2, 0, -9.4],
+      [5.2, FLOOR_H, 4.6], [-6.4, FLOOR_H, -2.4]
+    ] as const) {
+      const c = spilledCoffee();
+      c.position.set(x, y, z);
+      c.rotation.y = Math.random() * Math.PI * 2;
+      this.group.add(c);
+    }
+
+    // PRINTED CHIPS, on desks and spilled out of the machines
+    const chipsAt = (x: number, y: number, z: number, tipped = false): void => {
+      const b = chipsBox();
+      b.position.set(x, y, z);
+      b.rotation.y = Math.random() * Math.PI * 2;
+      if (tipped) {
+        b.rotation.z = Math.PI / 2;
+        b.position.y = y + 0.085;
+      }
+      this.group.add(b);
+    };
+    chipsAt(-16.9, 0, -4.6, true); // dropped by the breakroom machines
+    chipsAt(-16.6, 0, -7.5, true);
+    chipsAt(-12.6, 0, -9.3); // breakroom table
+    chipsAt(8.1, 0, -11.2, true); // by the back-office machine
+    chipsAt(-0.3, 0, 7.05); // reception desk
+    chipsAt(-3.6, 0, 0.9, true); // cubicle aisle
+    chipsAt(-14.4, FLOOR_H, 9.4, true); // upper lounge machine
+    chipsAt(5.9, FLOOR_H, 10.9, true);
+    chipsAt(-13.9, FLOOR_H, 4.05); // side table
   }
 
   private buildLighting(): void {
     const g = this.group;
-    g.add(new THREE.AmbientLight(0x35404e, 0.85));
-    g.add(new THREE.HemisphereLight(0x8794a3, 0x1c1a17, 0.5));
+    // Warmer and a touch lifted, to match the intro. The old mix left the
+    // floor between fixtures reading as flat cold grey.
+    g.add(new THREE.AmbientLight(0x4a4436, 0.95));
+    g.add(new THREE.HemisphereLight(0xa39a86, 0x2a2620, 0.6));
 
     const addLight = (x: number, y: number, z: number, intensity = 9, dist = 11, color = 0xfff2dc) => {
       const l = new THREE.PointLight(color, intensity, dist, 1.6);
@@ -964,6 +1043,17 @@ export class OfficeLevelBuilder {
     addLight(0, 2.8, -8, 8); // back office
     addLight(-13, 2.8, -8.5, 7); // breakroom
     addLight(-16.5, 2.8, 3, 6); // west strip
+    // Fill for the stretches that had nothing overhead: the east half of the
+    // lobby, the run down to the stairwell door, the south-west corner of the
+    // cubicle farm and the east end of the back office.
+    addLight(8.5, 2.8, 8.0, 7); // lobby east
+    addLight(14.5, 2.8, 6.5, 6, 10); // south-east corner
+    addLight(9.5, 2.8, 2.0, 6, 10); // east corridor north
+    addLight(-11.5, 2.8, 6.5, 7); // lobby south-west
+    addLight(-17.0, 2.8, 8.5, 5, 9); // west corner
+    addLight(7.0, 2.8, -9.5, 7); // back office east
+    addLight(-6.0, 2.8, -4.5, 6, 10); // between the farm and the back office
+    addLight(-17.5, 2.8, -1.5, 5, 9); // west strip south
     // Stairwell: the void runs up to the roof and the middle is filled by the
     // divider wall, so light it from sconces on both faces of that wall. Each
     // sits head-height above the flight it lights, and the flights are at
@@ -981,6 +1071,14 @@ export class OfficeLevelBuilder {
     addLight(-13, 6.15, -7.5, 7, 10, 0xbfd9ff); // server room, cold blue
     addLight(4.5, 6.15, -8, 7); // office A
     addLight(9.5, 6.15, -8, 7); // office B
+    // Upper fill: the east end of the lounge, the corners, and the stretch of
+    // hallway past the flickering tubes that had nothing of its own.
+    addLight(15.5, 6.15, 6.5, 6, 10); // lounge far east
+    addLight(15.0, 6.15, -2.8, 6, 10); // hallway east / stair arrival
+    addLight(-16.5, 6.15, 8.5, 5, 9); // lounge north-west corner
+    addLight(6.5, 6.15, 10.0, 6, 10); // lounge north-east
+    addLight(-10.5, 6.15, 0.5, 6, 10); // west of the mezzanine
+    addLight(-17.0, 6.15, -10.5, 5, 9, 0xbfd9ff); // server room far corner
 
     // Upper hallway — the two flickering tubes
     this.addFlickering(1, 6.15, -2.9, 9, 9);

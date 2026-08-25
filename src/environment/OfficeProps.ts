@@ -195,20 +195,213 @@ function deadbullTexture(): THREE.MeshLambertMaterial {
   return deadbullMat;
 }
 
-/** A can of DEADBULL. Origin at the base. */
+/** A tall can of DEADBULL. Origin at the base. */
 export function sodaCan(): THREE.Group {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.033, 0.033, 0.115, 16), deadbullTexture());
-  body.position.y = 0.0605;
+  const R = 0.05;
+  const H = 0.19;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 18), deadbullTexture());
+  body.position.y = H / 2 + 0.008;
   g.add(body);
-  for (const [y, r] of [[0.006, 0.029], [0.118, 0.028]] as const) {
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.012, 16), MAT.chrome);
+  for (const [y, r] of [[0.004, R * 0.88], [H + 0.01, R * 0.86]] as const) {
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.016, 18), MAT.chrome);
     cap.position.y = y;
     g.add(cap);
   }
-  const tab = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.004, 0.012), MAT.chrome);
-  tab.position.set(0.008, 0.126, 0);
+  const tab = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.005, 0.018), MAT.chrome);
+  tab.position.set(0.012, H + 0.021, 0);
   g.add(tab);
+  return g;
+}
+
+// ------------------------------------------------------------------ reading
+
+const bookMats = new Map<string, THREE.MeshLambertMaterial>();
+
+/**
+ * Cover texture for a paperback: a solid spine colour with the title set
+ * across it. Cached per title, since the same books repeat around the floor.
+ */
+function bookCover(title: string, bg: string, ink: string, kicker: string): THREE.MeshLambertMaterial {
+  const key = `${title}|${bg}`;
+  const hit = bookMats.get(key);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 176;
+  const g = c.getContext('2d')!;
+  g.fillStyle = bg;
+  g.fillRect(0, 0, 128, 176);
+  // A band and a rule, so it reads as a cover and not a coloured slab
+  g.fillStyle = 'rgba(255,255,255,0.12)';
+  g.fillRect(0, 116, 128, 60);
+  g.strokeStyle = ink;
+  g.lineWidth = 2;
+  g.strokeRect(7, 7, 114, 162);
+  g.fillStyle = ink;
+  g.font = 'bold 15px Georgia, serif';
+  g.textAlign = 'center';
+  const words = title.split(' ');
+  const lines: string[] = [];
+  let line = '';
+  for (const w of words) {
+    if ((line + ' ' + w).trim().length > 11) {
+      lines.push(line.trim());
+      line = w;
+    } else line += ' ' + w;
+  }
+  lines.push(line.trim());
+  lines.forEach((l, i) => g.fillText(l, 64, 46 + i * 19));
+  g.font = 'italic 9px Georgia, serif';
+  g.fillText(kicker, 64, 150);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.MeshLambertMaterial({ map: tex });
+  bookMats.set(key, m);
+  return m;
+}
+
+/**
+ * A paperback lying face-up. The cover is on the top face, the rest is
+ * page-edge white, so it reads as a book from any angle.
+ */
+export function book(kind: 'persuade' | 'scamming' | 'comic'): THREE.Group {
+  const g = new THREE.Group();
+  const spec = {
+    persuade: { t: 'HOW TO PERSUADE ANYONE', bg: '#1d3f6e', ink: '#f4e9c8', k: 'closing, every time' },
+    scamming: { t: 'THE ART OF SCAMMING', bg: '#6e1d1d', ink: '#f0dfc0', k: 'a practical guide' },
+    comic: { t: 'CAPTAIN VOIP', bg: '#d8a13a', ink: '#2a1a52', k: 'issue #12 · hold music!' }
+  }[kind];
+  const cover = bookCover(spec.t, spec.bg, spec.ink, spec.k);
+  const pages = MAT.paper;
+  const W = kind === 'comic' ? 0.17 : 0.14;
+  const D = kind === 'comic' ? 0.26 : 0.21;
+  const H = kind === 'comic' ? 0.012 : 0.035;
+  // Cover on top (+Y), pages everywhere else
+  const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), [
+    pages, pages, cover, pages, pages, pages
+  ]);
+  body.position.y = H / 2;
+  g.add(body);
+  return g;
+}
+
+/** A spill of coffee with the cup that made it lying alongside. */
+export function spilledCoffee(): THREE.Group {
+  const g = new THREE.Group();
+  const stainMat = new THREE.MeshLambertMaterial({ color: 0x3b2317, transparent: true, opacity: 0.88 });
+  // An irregular puddle: a few overlapping flattened discs
+  for (let i = 0; i < 5; i++) {
+    const r = 0.09 + Math.random() * 0.13;
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 14), stainMat);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set((Math.random() - 0.5) * 0.22, 0.003 + i * 0.0008, (Math.random() - 0.5) * 0.22);
+    disc.scale.set(1, 1 + Math.random() * 0.5, 1);
+    g.add(disc);
+  }
+  // The cup, on its side
+  const cupMat = new THREE.MeshLambertMaterial({ color: 0xe4e0d6 });
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.034, 0.1, 12, 1, true), cupMat);
+  cup.material.side = THREE.DoubleSide;
+  cup.rotation.z = Math.PI / 2;
+  cup.rotation.y = Math.random() * Math.PI;
+  cup.position.set(0.17, 0.042, -0.04);
+  g.add(cup);
+  const cupBase = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.008, 12), cupMat);
+  cupBase.rotation.z = Math.PI / 2;
+  cupBase.position.set(0.216, 0.042, -0.04);
+  g.add(cupBase);
+  return g;
+}
+
+let chipsMat: THREE.MeshLambertMaterial | null = null;
+
+/** PRINTED CHIPS — the vending-machine snack. A boxed, extruded crisp. */
+export function chipsBox(): THREE.Group {
+  if (!chipsMat) {
+    const c = document.createElement('canvas');
+    c.width = 200;
+    c.height = 128;
+    const g = c.getContext('2d')!;
+    const grad = g.createLinearGradient(0, 0, 0, 128);
+    grad.addColorStop(0, '#f2a13a');
+    grad.addColorStop(1, '#d2691e');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 200, 128);
+    // A crisp being extruded off a little printer nozzle
+    g.fillStyle = '#4a4a52';
+    g.fillRect(84, 14, 32, 16);
+    g.beginPath();
+    g.moveTo(92, 30);
+    g.lineTo(108, 30);
+    g.lineTo(102, 44);
+    g.lineTo(98, 44);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#f7dd8a';
+    g.beginPath();
+    g.ellipse(100, 62, 26, 15, 0, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#c98a2a';
+    g.lineWidth = 2;
+    for (let i = -2; i <= 2; i++) {
+      g.beginPath();
+      g.moveTo(100 + i * 9, 50);
+      g.lineTo(100 + i * 9, 74);
+      g.stroke();
+    }
+    g.fillStyle = '#2a1a10';
+    g.font = 'bold 22px Impact, sans-serif';
+    g.textAlign = 'center';
+    g.fillText('PRINTED CHIPS', 100, 100);
+    g.font = 'bold 9px monospace';
+    g.fillText('100% EXTRUDED · 0% POTATO', 100, 115);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    chipsMat = new THREE.MeshLambertMaterial({ map: tex });
+  }
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.24, 0.07), chipsMat);
+  box.position.y = 0.12;
+  g.add(box);
+  return g;
+}
+
+/**
+ * Lateral file cabinet with real drawer fronts, recessed handles and a top
+ * lip — the levels were drawing these as a single blank slab.
+ * `w` x `d` footprint, `h` tall, split into `drawers` fronts facing -Z.
+ */
+export function fileCabinet(w = 0.6, h = 1.5, d = 2.4, drawers = 4): THREE.Group {
+  const g = new THREE.Group();
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), lam(0x3c4148));
+  shell.position.y = h / 2;
+  g.add(shell);
+  // Top lip
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w + 0.03, 0.025, d + 0.03), lam(0x2c3138));
+  top.position.y = h + 0.008;
+  g.add(top);
+  // Kick plate
+  const kick = new THREE.Mesh(new THREE.BoxGeometry(w - 0.06, 0.07, d - 0.06), lam(0x22262b));
+  kick.position.y = 0.035;
+  g.add(kick);
+  // Drawer fronts down the long face (-X side), each with a handle
+  const gap = 0.012;
+  const usable = h - 0.11;
+  const dh = usable / drawers - gap;
+  for (let i = 0; i < drawers; i++) {
+    const y = 0.08 + dh / 2 + i * (dh + gap);
+    const front = new THREE.Mesh(new THREE.BoxGeometry(0.02, dh, d - 0.07), lam(0x474d55));
+    front.position.set(-w / 2 - 0.008, y, 0);
+    g.add(front);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.022, d * 0.34), MAT.chrome);
+    handle.position.set(-w / 2 - 0.026, y + dh * 0.28, 0);
+    g.add(handle);
+    // Label holder
+    const label = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.035, 0.14), lam(0xd8d5c8));
+    label.position.set(-w / 2 - 0.022, y - dh * 0.22, -d * 0.3);
+    g.add(label);
+  }
   return g;
 }
 

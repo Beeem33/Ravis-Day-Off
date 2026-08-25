@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BreakableGlass } from './BreakableGlass';
 import { FlickeringLight } from './FlickeringLight';
 import { Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, spreadsheetCanvas, makeTex } from './OfficeLevelBuilder';
-import { officeChair, trashCan, sodaCan, paperStack } from './OfficeProps';
+import { officeChair, trashCan, sodaCan, paperStack, fileCabinet, book, spilledCoffee, chipsBox } from './OfficeProps';
 
 export interface IntroLevelData {
   group: THREE.Group;
@@ -341,7 +341,31 @@ export class IntroOfficeBuilder {
     chair.rotation.y = 0.5;
     this.group.add(chair);
 
-    this.solid(0.6, 1.4, 1.1, -8.3, 0, 1.6, this.darkMetalMat, { surface: 'metal' });
+    // Filing cabinet with real drawer fronts
+    const cab = fileCabinet(0.6, 1.4, 1.1, 3);
+    cab.position.set(-8.3, 0, 1.6);
+    cab.rotation.y = Math.PI; // drawers face into the room
+    this.group.add(cab);
+    // Invisible shell carries the collider and the bullet hits
+    this.solid(0.6, 1.4, 1.1, -8.3, 0, 1.6, this.darkMetalMat, { surface: 'metal' }).visible = false;
+
+    // The reading material of a man who ran a scam call centre
+    const b1 = book('persuade');
+    b1.position.set(-6.55, 0.72, deskZ + 0.06);
+    b1.rotation.y = 0.6;
+    this.group.add(b1);
+    const b2 = book('scamming');
+    b2.position.set(-7.4, 0, 0.4);
+    b2.rotation.y = -1.1;
+    this.group.add(b2);
+    const c1 = book('comic');
+    c1.position.set(-7.9, 0, -0.9);
+    c1.rotation.y = 2.2;
+    this.group.add(c1);
+    const chips = chipsBox();
+    chips.position.set(-4.05, 0.72, deskZ + 0.16);
+    chips.rotation.y = 0.4;
+    this.group.add(chips);
   }
 
   /**
@@ -450,7 +474,20 @@ export class IntroOfficeBuilder {
     this.employeePhoto(4.0, 1.95, Z1 - T / 2, -1); // south wall, facing into the room
 
     // A filing cabinet in the north-east corner, the only bit of cover
-    this.solid(0.6, 1.4, 1.0, 6.2, 0, Z0 + 0.7, this.darkMetalMat, { surface: 'metal' });
+    const cab = fileCabinet(0.6, 1.4, 1.0, 3);
+    cab.position.set(6.2, 0, Z0 + 0.7);
+    this.group.add(cab);
+    this.solid(0.6, 1.4, 1.0, 6.2, 0, Z0 + 0.7, this.darkMetalMat, { surface: 'metal' }).visible = false;
+
+    // Spilled coffee where she was standing when they came through
+    const spill = spilledCoffee();
+    spill.position.set(2.3, 0, 0.9);
+    this.group.add(spill);
+    const chips = chipsBox();
+    chips.position.set(5.7, 0, dz - 0.9);
+    chips.rotation.z = Math.PI / 2;
+    chips.position.y = 0.085;
+    this.group.add(chips);
   }
 
   // -------------------------------------------------------- exit corridor

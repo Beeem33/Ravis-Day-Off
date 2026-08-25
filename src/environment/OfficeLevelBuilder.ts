@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BreakableGlass } from './BreakableGlass';
 import { FlickeringLight } from './FlickeringLight';
+import { officeChair, trashCan, scatteredPaper, vendingMachine, sodaCan } from './OfficeProps';
 
 /**
  * Axis-aligned movement collider. `glass` links a pane so shattering it
@@ -36,6 +37,10 @@ export interface LevelData {
   playerSpawnYaw: number;
   flickering: FlickeringLight[];
   glassPanes: BreakableGlass[];
+  /** Staff still alive and running when the shift starts. */
+  civilianSpawns: EnemySpawn[];
+  /** Staff who didn't make it — bodies already on the floor. */
+  corpseSpawns: EnemySpawn[];
 }
 
 // ---------------------------------------------------------------- textures
@@ -186,6 +191,8 @@ export class OfficeLevelBuilder {
     this.buildGroundFloor();
     this.buildStairs();
     this.buildUpperFloor();
+    this.buildVendingMachines();
+    this.buildDebris();
     this.buildLighting();
 
     return {
@@ -207,7 +214,24 @@ export class OfficeLevelBuilder {
       playerSpawn: new THREE.Vector3(-16.5, 0, 0.1),
       playerSpawnYaw: -Math.PI / 2, // facing east down the cubicle aisle
       flickering: this.flickering,
-      glassPanes: this.glassPanes
+      glassPanes: this.glassPanes,
+      // Staff still on their feet somewhere out on the floor
+      civilianSpawns: [
+        { pos: new THREE.Vector3(-7.5, 0, 5.5), yaw: 0.3 },
+        { pos: new THREE.Vector3(4.5, 0, 4.2), yaw: 2.1 },
+        { pos: new THREE.Vector3(-15, 0, -3.5), yaw: 1.4 },
+        { pos: new THREE.Vector3(6.5, 0, -6.5), yaw: -1.2 },
+        { pos: new THREE.Vector3(-3, FLOOR_H, 6.5), yaw: 2.8 },
+        { pos: new THREE.Vector3(7.5, FLOOR_H, 3.5), yaw: -0.6 }
+      ],
+      // And the ones who were already caught
+      corpseSpawns: [
+        { pos: new THREE.Vector3(-2.5, 0, 4.6), yaw: 1.1 },
+        { pos: new THREE.Vector3(-11.8, 0, -6.2), yaw: -2.2 },
+        { pos: new THREE.Vector3(8.6, 0, 2.4), yaw: 0.4 },
+        { pos: new THREE.Vector3(1.5, FLOOR_H, 5.2), yaw: 2.6 },
+        { pos: new THREE.Vector3(-13.5, FLOOR_H, -6.5), yaw: -0.8 }
+      ]
     };
   }
 
@@ -804,6 +828,97 @@ export class OfficeLevelBuilder {
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 8), this.darkMetalMat);
       cap.position.set(x + off, ceilY - 0.025, z);
       this.group.add(cap);
+    }
+  }
+
+  /**
+   * Vending machines: the breakroom bank downstairs and one on the upper
+   * lounge. Each gets a box collider — they're solid cover.
+   */
+  private buildVendingMachines(): void {
+    const place = (x: number, y: number, z: number, yaw: number): void => {
+      const m = vendingMachine();
+      m.position.set(x, y, z);
+      m.rotation.y = yaw;
+      this.group.add(m);
+      // Footprint is 1.0 x 0.78 before rotation; swap for the quarter turns
+      const swap = Math.abs(Math.sin(yaw)) > 0.5;
+      const hw = (swap ? 0.78 : 1.0) / 2;
+      const hd = (swap ? 1.0 : 0.78) / 2;
+      this.colliders.push({
+        box: new THREE.Box3(
+          new THREE.Vector3(x - hw, y, z - hd),
+          new THREE.Vector3(x + hw, y + 1.95, z + hd)
+        )
+      });
+    };
+    // Breakroom, against the west wall next to the old drinks machine
+    place(-17.7, 0, -6.6, Math.PI / 2);
+    place(-17.7, 0, -5.5, Math.PI / 2);
+    // Back office, by the copier
+    place(9.0, 0, -11.7, 0);
+    // Upper lounge
+    place(-16.5, FLOOR_H, 9.6, Math.PI / 2);
+    place(5.5, FLOOR_H, 11.7, 0);
+  }
+
+  /**
+   * The raid has already been through here: paperwork off the desks, chairs
+   * knocked over, bins spilled. Purely visual — none of it collides, so it
+   * never snags the player mid-fight.
+   */
+  private buildDebris(): void {
+    const paperAt = (x: number, y: number, z: number, n: number, r: number): void => {
+      const p = scatteredPaper(n, r);
+      p.position.set(x, y, z);
+      this.group.add(p);
+    };
+    // Ground floor: cubicle aisle, back office, lobby, breakroom
+    paperAt(-11.5, 0, 0.1, 7, 1.2);
+    paperAt(-3.5, 0, 0.1, 5, 0.9);
+    paperAt(-1.5, 0, -9.5, 8, 1.4);
+    paperAt(4.5, 0, -7.0, 6, 1.1);
+    paperAt(-0.5, 0, 6.5, 5, 1.0);
+    paperAt(-13, 0, -8.0, 4, 0.8);
+    paperAt(9.5, 0, -2.0, 5, 1.0);
+    // Upper floor: hallway and the lounge
+    paperAt(-4, FLOOR_H, -2.7, 6, 1.2);
+    paperAt(4.5, FLOOR_H, -8.5, 5, 0.9);
+    paperAt(-12.5, FLOOR_H, 4.0, 6, 1.1);
+    paperAt(2.0, FLOOR_H, 7.5, 5, 1.0);
+
+    // Chairs shoved back or tipped over as people ran
+    const chairAt = (x: number, y: number, z: number, yaw: number, tipped: boolean): void => {
+      const c = officeChair();
+      c.position.set(x, y, z);
+      c.rotation.y = yaw;
+      if (tipped) {
+        c.rotation.z = Math.PI / 2 + (Math.random() - 0.5) * 0.3;
+        c.position.y = y + 0.28;
+      }
+      this.group.add(c);
+    };
+    chairAt(-9.5, 0, 0.4, 1.2, true);
+    chairAt(-5.5, 0, 0.6, 2.6, false);
+    chairAt(-13.5, 0, -0.4, 0.4, true);
+    chairAt(2.2, 0, -6.0, 1.9, false);
+    chairAt(-2.0, 0, -9.8, 0.8, true);
+    chairAt(4.6, FLOOR_H, -8.6, 2.2, true);
+    chairAt(9.4, FLOOR_H, -8.4, 0.6, false);
+
+    // Bins over on their sides, and a couple of dropped cans
+    for (const [x, y, z] of [[-7.8, 0, 1.0], [3.6, 0, -9.6], [-16.0, 0, 4.2], [-13.8, FLOOR_H, 3.0]] as const) {
+      const b = trashCan();
+      b.position.set(x, y + 0.16, z);
+      b.rotation.z = Math.PI / 2;
+      b.rotation.y = Math.random() * Math.PI;
+      this.group.add(b);
+    }
+    for (const [x, y, z] of [[-10.4, 0, 0.6], [1.2, 0, -8.4], [-15.6, FLOOR_H, 5.0]] as const) {
+      const can = sodaCan();
+      can.position.set(x, y + 0.033, z);
+      can.rotation.z = Math.PI / 2; // on its side
+      this.group.add(can);
     }
   }
 

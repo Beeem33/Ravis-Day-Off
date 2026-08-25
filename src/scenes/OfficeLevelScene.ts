@@ -8,6 +8,7 @@ import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
+import { CivilianAI } from '../entities/CivilianAI';
 import { ParticleManager } from '../fx/ParticleManager';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -27,6 +28,10 @@ export class OfficeLevelScene implements GameScene {
   private weapon!: WeaponViewmodel;
   private enemies: Enemy[] = [];
   private ais: EnemyAI[] = [];
+  private civilians: Enemy[] = [];
+  private civAIs: CivilianAI[] = [];
+  /** Per-enemy cooldown before they take a shot at a civilian. */
+  private civShotTimers = new Map<Enemy, number>();
   private particles!: ParticleManager;
   private decals!: BloodDecalSystem;
   private hud!: FPSHUD;
@@ -128,6 +133,16 @@ export class OfficeLevelScene implements GameScene {
     });
     this.remaining = this.enemies.length;
 
+    // Staff still on the floor — no weapons, they just run
+    this.level.civilianSpawns.forEach((s, i) => {
+      const civ = new Enemy(s.pos, s.yaw, i, { name: `STAFF ${i + 1}`, civilian: true });
+      this.scene.add(civ.root);
+      this.civilians.push(civ);
+      for (const part of civ.parts) this.level.shootables.push(part);
+      this.civAIs.push(new CivilianAI(civ, this.level.waypoints, this.level.colliders, bus));
+    });
+    this.spawnCorpses();
+
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
     this.hud.show();
 
@@ -152,6 +167,7 @@ export class OfficeLevelScene implements GameScene {
   exit(): void {
     for (const u of this.unsubs) u();
     for (const ai of this.ais) ai.dispose();
+    for (const ai of this.civAIs) ai.dispose();
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);
     window.removeEventListener('beforeunload', this.unloadGuard);
@@ -162,6 +178,103 @@ export class OfficeLevelScene implements GameScene {
       const mesh = o as THREE.Mesh;
       if (mesh.geometry) mesh.geometry.dispose();
     });
+  }
+
+  /**
+   * Staff who were already dead when Ravi got here. They're simulated
+   * forward at load so the bodies are lying still on the first frame
+   * instead of dropping in front of the player.
+   */
+  private spawnCorpses(): void {
+    const settleFrames = 110;
+    for (const [i, s] of this.level.corpseSpawns.entries()) {
+      const body = new Enemy(s.pos, s.yaw, i + 7, { name: 'STAFF', civilian: true });
+      this.scene.add(body.root);
+      this.civilians.push(body);
+      for (const part of body.parts) this.level.shootables.push(part);
+      const dir = new THREE.Vector3(Math.cos(s.yaw), -0.25, Math.sin(s.yaw)).normalize();
+      const hit = s.pos.clone().add(new THREE.Vector3(0, 1.1 + Math.random() * 0.3, 0));
+      body.die(hit, dir, this.world, Math.random() < 0.3 ? 'head' : 'torso');
+    }
+    // Run the ragdolls to rest before the level is ever drawn
+    for (let f = 0; f < settleFrames; f++) {
+      this.world.step(1 / 60);
+      for (const c of this.civilians) if (!c.alive) c.update(1 / 60);
+    }
+    // Blood underneath each of them
+    for (const c of this.civilians) {
+      if (c.alive) continue;
+      const base = c.corpseBase();
+      const under = this.surfaceBelow(base, 3);
+      if (under) this.decals.place('pool', under.point, under.normal, undefined, undefined, 1, under.object);
+      this.pooledCorpses.add(c);
+    }
+  }
+
+  /**
+   * Agents shooting the staff. An agent already fighting Ravi ignores them —
+   * he has a bigger problem — so they only get picked off by agents who
+   * haven't found him yet, which is what makes walking in on a fresh body
+   * feel like something that happened without you.
+   */
+  private updateCivilianHunt(dt: number): void {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (!enemy.alive) continue;
+      const busyWithPlayer = this.ais[i].state === 'attack';
+      let timer = this.civShotTimers.get(enemy) ?? 1 + Math.random() * 2;
+      timer -= dt;
+      if (busyWithPlayer || timer > 0) {
+        this.civShotTimers.set(enemy, busyWithPlayer ? Math.max(timer, 0.8) : timer);
+        continue;
+      }
+      const victim = this.visibleCivilian(enemy);
+      if (!victim) {
+        this.civShotTimers.set(enemy, 0.5);
+        continue;
+      }
+      enemy.faceToward(victim.position, dt, 12);
+      enemy.setAiming(true);
+      this.executeCivilian(enemy, victim);
+      this.civShotTimers.set(enemy, 1.4 + Math.random() * 2.2);
+    }
+  }
+
+  /** Nearest living civilian this agent can actually see. */
+  private visibleCivilian(enemy: Enemy): Enemy | null {
+    const eye = enemy.eyePosition();
+    let best: Enemy | null = null;
+    let bestD = 16;
+    for (const c of this.civilians) {
+      if (!c.alive) continue;
+      const d = eye.distanceTo(c.position);
+      if (d > bestD) continue;
+      if (Math.abs(c.position.y - enemy.position.y) > 1.5) continue; // different floor
+      const to = c.position.clone().add(new THREE.Vector3(0, 1.2, 0)).sub(eye);
+      const dist = to.length();
+      this.raycaster.set(eye, to.normalize());
+      this.raycaster.far = dist - 0.3;
+      if (this.raycaster.intersectObjects(this.level.occluders, false).length > 0) continue;
+      best = c;
+      bestD = d;
+    }
+    return best;
+  }
+
+  private executeCivilian(enemy: Enemy, victim: Enemy): void {
+    const { audio, bus } = this.ctx;
+    audio.enemyGunshot(enemy.position.distanceTo(this.player.position));
+    enemy.flashMuzzle();
+    bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 25, kind: 'gunshot' });
+    const muzzle = enemy.muzzleWorld();
+    const chest = victim.position.clone().add(new THREE.Vector3(0, 1.15, 0));
+    const dir = chest.clone().sub(muzzle).normalize();
+    this.particles.tracer(muzzle, chest, 0xffe0b0);
+    victim.die(chest, dir, this.world, 'torso');
+    audio.fleshHit();
+    this.spatter(chest, dir, true);
+    const ai = this.civAIs.find((a) => a['civ'] === victim);
+    ai?.dispose();
   }
 
   private onOverlayClick(): void {
@@ -243,6 +356,19 @@ export class OfficeLevelScene implements GameScene {
     }
     this.hud.setAlert(anyAttacking && this.player.alive);
     this.hud.setHealth(this.player.health, this.player.regenProgress);
+
+    // Staff: run them, let the agents pick them off, pool the ones that fall
+    for (let i = 0; i < this.civilians.length; i++) {
+      const c = this.civilians[i];
+      c.update(dt);
+      if (c.alive) this.civAIs[i]?.update(dt);
+      else if (c.settled && !this.pooledCorpses.has(c)) {
+        this.pooledCorpses.add(c);
+        const under = this.surfaceBelow(c.corpseBase(), 3);
+        if (under) this.decals.place('pool', under.point, under.normal, undefined, undefined, 1, under.object);
+      }
+    }
+    if (!this.over) this.updateCivilianHunt(dt);
 
     for (const f of this.level.flickering) f.update(dt);
     for (const g of this.level.glassPanes) g.update(dt);
@@ -495,15 +621,27 @@ export class OfficeLevelScene implements GameScene {
   ): void {
     const { audio, bus } = this.ctx;
     enemy.die(point, dir, this.world, hitPart);
-    this.remaining--;
-
     audio.fleshHit();
+    this.spatter(point, dir, true);
+
+    // Shooting one of your own staff is not progress: it doesn't count
+    // towards the intruders and there's no kill confirm for it.
+    if (enemy.civilian) {
+      this.civAIs.find((a) => a['civ'] === enemy)?.dispose();
+      bus.emit(Events.EnemyKilled, {
+        name: enemy.name,
+        remaining: this.remaining,
+        headshot,
+        by: byPlayer ? 'RAVI ✖' : 'FBI'
+      });
+      return;
+    }
+
+    this.remaining--;
     if (byPlayer) {
       audio.killConfirm();
       bus.emit(Events.HitMarker, { lethal: true });
     }
-
-    this.spatter(point, dir, true);
 
     bus.emit(Events.EnemyKilled, {
       name: enemy.name,
@@ -515,6 +653,8 @@ export class OfficeLevelScene implements GameScene {
     if (this.remaining <= 0) {
       this.over = true;
       this.won = true;
+      // Anyone still alive out there can stop running now
+      for (const ai of this.civAIs) ai.calmDown();
       bus.emit(Events.LevelComplete);
       // Let the last one hit the floor before the shift-complete card (3 s)
       window.setTimeout(() => this.ctx.input.exitPointerLock(), 3000);

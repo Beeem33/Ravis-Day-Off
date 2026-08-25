@@ -117,7 +117,7 @@ export class IntroLevelScene implements GameScene {
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
     this.player.cinematic = true;
-    this.player.pitch = -0.18; // looking down at his monitor
+    this.player.pitch = this.level.introPitch; // aimed at the news on his screen
     this.scene.add(this.player.camera);
     this.player.onVaultGlass = (c) => this.smashGlass(c.glass, c);
 
@@ -232,9 +232,10 @@ export class IntroLevelScene implements GameScene {
       ],
       this.t
     );
+    const p0 = this.level.introPitch; // head down over the monitor
     this.player.pitch = track(
       [
-        [0, -0.18], [T_TURN0, -0.18], [T_TURN1, -0.02],
+        [0, p0], [T_TURN0, p0], [T_TURN1, -0.02],
         [T_DRAW0, -0.02], [T_DRAW1, -0.62], [T_END, -0.04]
       ],
       this.t

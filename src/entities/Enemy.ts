@@ -44,6 +44,8 @@ export class Enemy {
 
   private walkPhase = 0;
   private animTime = 0;
+  /** Eased walkSpeed, so strides start and stop smoothly. */
+  private strideBlend = 0;
   private walkSpeed = 0; // 0 idle .. 1 full stride
   private aimBlend = 0; // 0 relaxed .. 1 weapon raised
   private world: CANNON.World | null = null;
@@ -431,6 +433,59 @@ export class Enemy {
     this.handsUpTarget = on ? 1 : 0;
   }
 
+  // Scratch vectors — gripRifle runs every frame for every live enemy.
+  private static _gripTarget = new THREE.Vector3();
+  private static _gripLocal = new THREE.Vector3();
+  private static _gripDir = new THREE.Vector3();
+  private static _gripQuat = new THREE.Quaternion();
+  private static _gripChain = new THREE.Vector3();
+  private static _rifleQuat = new THREE.Quaternion();
+  private static _rifleAim = new THREE.Quaternion();
+  private static _rifleEuler = new THREE.Euler();
+
+  /**
+   * Two-bone IK putting the left hand on the rifle's handguard.
+   *
+   * The rifle hangs off the right forearm, so where the support hand needs to
+   * be moves with the aim. Rather than guessing fixed rotations, solve the
+   * left arm each frame: point the upper arm at the grip, then bend the elbow
+   * by the angle the law of cosines gives for the remaining reach.
+   * `blend` fades it in with the aim so the arm doesn't snap across.
+   */
+  private gripRifle(blend: number): void {
+    const UPPER = 0.29; // shoulder to elbow
+    const FORE = 0.31; // elbow to hand
+
+    // Walk the handguard up the right arm's chain into root space by hand.
+    // Going through world space would depend on matrixWorld, which is only
+    // refreshed at render time and is a frame stale here.
+    const local = Enemy._gripLocal.set(0, 0.02, -0.19); // handguard, in rifle space
+    local.applyQuaternion(this.rifle.quaternion).add(this.rifle.position); // → forearm
+    local.applyQuaternion(this.foreR.quaternion).add(this.foreR.position); // → upper arm
+    local.applyQuaternion(this.armR.quaternion).add(this.armR.position); // → root
+    local.sub(this.armL.position); // → relative to the left shoulder
+
+    let d = local.length();
+    if (d < 1e-4) return;
+    const maxReach = (UPPER + FORE) * 0.995;
+    if (d > maxReach) d = maxReach;
+    const dir = Enemy._gripDir.copy(local).normalize();
+
+    // Elbow first: the interior angle that closes the triangle, applied as a
+    // forward fold about the elbow's X axis.
+    const cosB = (UPPER * UPPER + FORE * FORE - d * d) / (2 * UPPER * FORE);
+    const bend = Math.PI - Math.acos(THREE.MathUtils.clamp(cosB, -1, 1));
+
+    // With that fold, the shoulder-to-hand vector in the upper arm's own
+    // frame is fixed. Rotating that onto the line to the grip puts the hand
+    // exactly on target — no separate shoulder angle needed.
+    const chain = Enemy._gripChain.set(0, -(UPPER + FORE * Math.cos(bend)), -FORE * Math.sin(bend)).normalize();
+    const q = Enemy._gripQuat.setFromUnitVectors(chain, dir);
+
+    this.armL.quaternion.slerp(q, blend);
+    this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, bend, blend);
+  }
+
   muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
     return this.muzzle.getWorldPosition(out);
   }
@@ -742,17 +797,35 @@ export class Enemy {
       return;
     }
 
-    // Walk cycle
+    // ---- Walk cycle
     this.animTime += dt; // always runs, for idle motion while standing still
-    if (this.walkSpeed > 0.05) {
+    // Ease the stride in and out so starting and stopping isn't a snap
+    this.strideBlend += (this.walkSpeed - this.strideBlend) * Math.min(1, dt * 6);
+    const stride = this.strideBlend;
+    if (this.walkSpeed > 0.05 || stride > 0.02) {
       this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed);
     }
-    const swing = Math.sin(this.walkPhase) * 0.55 * this.walkSpeed;
+    const swing = Math.sin(this.walkPhase) * 0.55 * stride;
     this.legL.rotation.x = swing;
     this.legR.rotation.x = -swing;
     // Knees bend on the back-swing
     this.shinL.rotation.x = Math.max(0, swing) * 0.9;
     this.shinR.rotation.x = Math.max(0, -swing) * 0.9;
+
+    // Body rise and fall. Without this they slide along at a constant height
+    // and read as floating. The pelvis peaks at mid-stance (twice a cycle)
+    // and dips as the legs split, and the whole upper body rides with it.
+    const bob = -Math.abs(Math.cos(this.walkPhase)) * 0.045 * stride;
+    const sway = Math.sin(this.walkPhase) * 0.018 * stride; // weight shifting side to side
+    const lean = 0.13 * stride; // leaning into the walk
+    for (const g of [this.legL, this.legR]) g.position.y = 0.82 + bob;
+    this.pelvis.position.set(sway, 0.96 + bob, 0);
+    this.pelvis.rotation.z = -sway * 1.6;
+    this.head.position.set(sway * 0.6, 1.585 + bob, 0);
+    this.head.rotation.x = -lean * 0.7; // head stays level as the chest tips
+    for (const [g, side] of [[this.armL, -1], [this.armR, 1]] as const) {
+      g.position.set(side * 0.29 + sway * 0.7, 1.4 + bob, 0);
+    }
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
     this.aimBlend += (this.aimTarget - this.aimBlend) * Math.min(1, dt * 8);
@@ -765,8 +838,22 @@ export class Enemy {
     // Elbows: bent to hold the rifle when aiming, loose swing while walking
     this.foreR.rotation.x = 0.45 * this.aimBlend + Math.max(0, armSwing) * 0.6 * (1 - this.aimBlend);
     this.foreL.rotation.x = 0.8 * this.aimBlend + Math.max(0, -armSwing) * 0.6 * (1 - this.aimBlend);
-    // Rifle stays level and pointing forward whatever the arm does (slight dip when carried)
-    this.rifle.rotation.x = -(this.armR.rotation.x + this.foreR.rotation.x) - 0.15 * (1 - this.aimBlend);
+    // Bring the weapon in to the centreline as it comes up. Held out at the
+    // right shoulder the handguard is 0.8m from the left shoulder — further
+    // than the arm is long — so the support hand could never reach it.
+    this.armR.rotation.z = -0.5 * this.aimBlend;
+    // Rifle points forward whatever the arms are doing. Cancelling the arm
+    // rotations one Euler axis at a time leaves a yaw behind, so undo the
+    // whole parent rotation instead and set the pose we actually want.
+    Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend), 0, 0); // muzzle dips when carried
+    Enemy._rifleQuat.copy(this.armR.quaternion).multiply(this.foreR.quaternion).invert();
+    this.rifle.quaternion.copy(Enemy._rifleQuat).multiply(Enemy._rifleAim.setFromEuler(Enemy._rifleEuler));
+
+    // Support hand: reach the left arm out to the handguard so it is actually
+    // holding the weapon, instead of hanging in the air beside it.
+    if (!this.civilian && this.aimBlend > 0.01) {
+      this.gripRifle(this.aimBlend);
+    }
 
     // Hands up — overrides the arm swing entirely as it blends in
     this.handsUp += (this.handsUpTarget - this.handsUp) * Math.min(1, dt * 6);
@@ -781,8 +868,10 @@ export class Enemy {
       this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.5, h);
     }
 
-    // Subtle idle breathing
-    this.torso.position.y = 1.27 + Math.sin(this.animTime * 2.2) * 0.008;
+    // Chest: rides the bob, leans into the walk, breathes when still
+    this.torso.position.set(sway * 0.85, 1.27 + bob + Math.sin(this.animTime * 2.2) * 0.008 * (1 - stride), 0);
+    this.torso.rotation.x = lean;
+    this.torso.rotation.z = -sway * 2.2;
   }
 
   private updateDead(dt: number): void {

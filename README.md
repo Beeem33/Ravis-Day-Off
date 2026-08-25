@@ -1,10 +1,10 @@
 # Ravi's Day Off
 
 <p align="center">
-  <a href="https://beeem33.github.io/Ravis-Day-Off/?v=ce92623"><img src="https://img.shields.io/badge/%E2%96%B6%20PLAY%20GAME-in%20your%20browser-ff3b3b?style=for-the-badge" alt="Play Game" height="48"></a>
+  <a href="https://beeem33.github.io/Ravis-Day-Off/?v=06198ff"><img src="https://img.shields.io/badge/%E2%96%B6%20PLAY%20GAME-in%20your%20browser-ff3b3b?style=for-the-badge" alt="Play Game" height="48"></a>
 </p>
 
-**[▶ Play Game](https://beeem33.github.io/Ravis-Day-Off/?v=ce92623)** — runs in any desktop browser, no install. (Click the game to lock your mouse; Esc releases it.)
+**[▶ Play Game](https://beeem33.github.io/Ravis-Day-Off/?v=06198ff)** — runs in any desktop browser, no install. (Click the game to lock your mouse; Esc releases it.)
 
 A fast-paced, lethal first-person shooter set in a two-storey call center. Built with **Three.js + cannon-es + Vite/TypeScript** — no game engine, no asset files (all geometry, textures and audio are procedural).
 

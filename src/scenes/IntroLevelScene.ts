@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { IntroOfficeBuilder, IntroLevelData } from '../environment/IntroOfficeBuilder';
+import { CombatScene } from './CombatScene';
+import { BloodDecalSystem } from '../fx/BloodDecalSystem';
+import { ParticleManager } from '../fx/ParticleManager';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
-import { ParticleManager } from '../fx/ParticleManager';
-import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { FPSHUD } from '../ui/FPSHUD';
 import type { BreakableGlass } from '../environment/BreakableGlass';
 
@@ -51,19 +51,12 @@ function track(keys: readonly (readonly [number, number])[], t: number): number 
  * The cutscene and the gameplay share one camera (the FPSPlayer's, in
  * `cinematic` mode) so the handover is a continuation rather than a cut.
  */
-export class IntroLevelScene implements GameScene {
-  private scene = new THREE.Scene();
-  private level!: IntroLevelData;
-  private player!: FPSPlayer;
+export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private weapon!: WeaponViewmodel;
   private agent!: Enemy;
   private agentAI: EnemyAI | null = null;
   private coworker!: Enemy;
-  private particles!: ParticleManager;
-  private decals!: BloodDecalSystem;
   private hud!: FPSHUD;
-  private world!: CANNON.World;
-  private raycaster = new THREE.Raycaster();
 
   private phase: 'cutscene' | 'play' | 'leaving' | 'dead' = 'cutscene';
   private t = 0;
@@ -83,7 +76,9 @@ export class IntroLevelScene implements GameScene {
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private corpsePooled = new Set<Enemy>();
 
-  constructor(private ctx: GameContext) {}
+  constructor(ctx: GameContext) {
+    super(ctx);
+  }
 
   // -------------------------------------------------------------- lifecycle
 
@@ -95,31 +90,13 @@ export class IntroLevelScene implements GameScene {
     this.level = new IntroOfficeBuilder().build();
     this.scene.add(this.level.group);
 
-    this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -19, 0) });
-    this.world.broadphase = new CANNON.SAPBroadphase(this.world);
-    this.world.allowSleep = true;
-    this.world.defaultContactMaterial.friction = 0.45;
-    this.world.defaultContactMaterial.restitution = 0.12;
-    for (const c of this.level.colliders) {
-      if (c.glass) continue;
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      c.box.getSize(size);
-      c.box.getCenter(center);
-      this.world.addBody(
-        new CANNON.Body({
-          type: CANNON.Body.STATIC,
-          shape: new CANNON.Box(new CANNON.Vec3(size.x / 2, size.y / 2, size.z / 2)),
-          position: new CANNON.Vec3(center.x, center.y, center.z)
-        })
-      );
-    }
+    this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
     this.player.cinematic = true;
     this.player.pitch = this.level.introPitch; // aimed at the news on his screen
     this.scene.add(this.player.camera);
-    this.player.onVaultGlass = (c) => this.smashGlass(c.glass, c);
+    this.player.onVaultGlass = (c) => this.vaultGlass(c);
 
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.weapon.stow = 1; // still in the drawer
@@ -510,121 +487,14 @@ export class IntroLevelScene implements GameScene {
     this.particles.tracer(this.weapon.muzzleWorld(), end);
   }
 
-  private enemyFire(enemy: Enemy): void {
-    const { audio, bus } = this.ctx;
-    const player = this.player;
-    const dist = player.position.distanceTo(enemy.position);
-    audio.enemyGunshot(dist);
-    enemy.flashMuzzle();
-    bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 25, kind: 'gunshot' });
-
-    const muzzle = enemy.muzzleWorld();
-    const speedFactor = Math.min(1, player.currentSpeed / 6.6);
-    let hitChance = 0.65 - dist * 0.03 - speedFactor * 0.3 - (player.crouching ? 0.12 : 0);
-    hitChance = THREE.MathUtils.clamp(hitChance, 0.1, 0.9);
-
-    if (Math.random() < hitChance && player.alive) {
-      const target = player.eyePosition().add(
-        new THREE.Vector3((Math.random() - 0.5) * 0.2, -0.2 - Math.random() * 0.4, (Math.random() - 0.5) * 0.2)
-      );
-      this.particles.tracer(muzzle, target, 0xffe0b0);
-      player.hit(enemy.name);
-    } else {
-      const target = player.eyePosition();
-      const off = 0.35 + Math.random() * 0.7;
-      target.add(
-        new THREE.Vector3((Math.random() - 0.5) * off * 2, (Math.random() - 0.5) * off, (Math.random() - 0.5) * off * 2)
-      );
-      const d = target.sub(muzzle).normalize();
-      const end = this.castBullet(muzzle, d, enemy);
-      this.particles.tracer(muzzle, end, 0xffe0b0);
-      if (player.alive) audio.bulletWhiz();
-    }
-  }
-
-  private smashGlass(pane: BreakableGlass | undefined, c: { disabled?: boolean }): void {
-    if (!pane || pane.broken) {
-      c.disabled = true;
-      return;
-    }
-    pane.shatter(pane.center(), this.player.forwardDir(), this.particles, this.ctx.audio, this.player.position);
-    c.disabled = true;
-    const idx = this.level.shootables.indexOf(pane.mesh);
-    if (idx >= 0) this.level.shootables.splice(idx, 1);
-    this.ctx.bus.emit(Events.Sound, { position: pane.center(), radius: 18, kind: 'glass' });
-  }
-
-  /** Bullet raycast: glass shatters and the round keeps going, panels take one pierce. */
-  private castBullet(origin: THREE.Vector3, dir: THREE.Vector3, shooter: Enemy | null): THREE.Vector3 {
-    const { audio } = this.ctx;
-    let from = origin.clone();
-    let remaining = 60;
-    let pierces = 0;
-
-    for (let guard = 0; guard < 6; guard++) {
-      this.raycaster.set(from, dir);
-      this.raycaster.far = remaining;
-      const hit = this.raycaster
-        .intersectObjects(this.level.shootables, false)
-        .filter((h) => h.distance > 0.02)
-        .find((h) => {
-          const e = h.object.userData.enemy as Enemy | undefined;
-          return !(e && e === shooter); // never hit yourself
-        });
-      if (!hit) return from.clone().addScaledVector(dir, remaining);
-
-      const obj = hit.object;
-      const point = hit.point.clone();
-      const normal = (hit.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(obj.matrixWorld);
-      const enemyRef = obj.userData.enemy as Enemy | undefined;
-
-      if (enemyRef && !enemyRef.alive) {
-        enemyRef.hitCorpse(point, dir);
-        this.spatter(point, dir, false);
-        audio.fleshHit();
-        if (shooter === null) this.ctx.bus.emit(Events.HitMarker, { lethal: false });
-        return point;
-      }
-
-      if (enemyRef) {
-        this.killEnemy(enemyRef, point, dir, shooter === null, (obj.userData.part as string) ?? 'torso');
-        return point;
-      }
-
-      if (obj.userData.glass) {
-        const pane = obj.userData.glass as BreakableGlass;
-        if (!pane.broken) {
-          pane.shatter(point, dir, this.particles, audio, this.player.position);
-          if (pane.colliderIndex >= 0) this.level.colliders[pane.colliderIndex].disabled = true;
-          const idx = this.level.shootables.indexOf(obj);
-          if (idx >= 0) this.level.shootables.splice(idx, 1);
-          this.ctx.bus.emit(Events.Sound, { position: point.clone(), radius: 18, kind: 'glass' });
-        }
-        remaining -= hit.distance + 0.05;
-        from = point.addScaledVector(dir, 0.05);
-        continue;
-      }
-
-      if (obj.userData.pierce && pierces < 1) {
-        pierces++;
-        this.particles.concreteChips(point, normal, 0x9aa2b0);
-        this.decals.place('bullethole', point, normal);
-        remaining -= hit.distance + 0.12;
-        from = point.clone().addScaledVector(dir, 0.12);
-        continue;
-      }
-
-      const surface = (obj.userData.surface as string) ?? 'concrete';
-      const tint = surface === 'metal' ? 0x8f979e : surface === 'wood' ? 0x9a7d55 : 0xb9b3a8;
-      this.particles.concreteChips(point, normal, tint);
-      this.decals.place('bullethole', point, normal);
-      audio.ricochet(point.distanceTo(this.player.position));
-      return point;
-    }
-    return from;
-  }
-
-  private killEnemy(enemy: Enemy, point: THREE.Vector3, dir: THREE.Vector3, byPlayer: boolean, hitPart: string): void {
+  protected killEnemy(
+    enemy: Enemy,
+    point: THREE.Vector3,
+    dir: THREE.Vector3,
+    byPlayer: boolean,
+    headshot: boolean,
+    hitPart = 'torso'
+  ): void {
     const { audio, bus } = this.ctx;
     enemy.die(point, dir, this.world, hitPart);
     audio.fleshHit();
@@ -641,57 +511,11 @@ export class IntroLevelScene implements GameScene {
       bus.emit(Events.EnemyKilled, {
         name: enemy.name,
         remaining: 0,
-        headshot: hitPart === 'head',
+        headshot,
         by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
       });
       this.setObjective('NOW GET OUT — THE DOOR AT THE END OF THE HALL');
     }
   }
 
-  private surfaceBelow(
-    from: THREE.Vector3,
-    maxDist: number
-  ): { point: THREE.Vector3; normal: THREE.Vector3; object: THREE.Object3D } | null {
-    this.raycaster.set(from.clone().add(new THREE.Vector3(0, 0.05, 0)), new THREE.Vector3(0, -1, 0));
-    this.raycaster.far = maxDist + 0.05;
-    const hit = this.raycaster
-      .intersectObjects(this.level.shootables, false)
-      .find((h) => !h.object.userData.enemy && !h.object.userData.glass);
-    if (!hit) return null;
-    const normal = (hit.face?.normal ?? new THREE.Vector3(0, 1, 0)).clone().transformDirection(hit.object.matrixWorld);
-    if (normal.y < 0.5) return null;
-    return { point: hit.point, normal, object: hit.object };
-  }
-
-  /** Exit jet, splatter on whatever is behind, and a drip below. */
-  private spatter(point: THREE.Vector3, dir: THREE.Vector3, big: boolean): void {
-    // These casts run during update(), when world matrices still hold last
-    // frame's values — and during the cutscene that was enough to make most
-    // of the splatter miss the wall entirely. Refresh before casting.
-    this.level.group.updateMatrixWorld(true);
-    const ground = this.surfaceBelow(point, 6);
-    this.particles.bloodSpray(point, dir, big, ground ? ground.point.y + 0.02 : -1);
-    const exitFrom = point.clone().addScaledVector(dir, 0.3);
-    const castSplat = (d: THREE.Vector3, size: number, stretch: number, maxDist: number): void => {
-      this.raycaster.set(exitFrom, d);
-      this.raycaster.far = maxDist;
-      const hit = this.raycaster
-        .intersectObjects(this.level.shootables, false)
-        .find((h) => !h.object.userData.enemy && !h.object.userData.glass);
-      if (!hit) return;
-      const n = (hit.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(hit.object.matrixWorld);
-      const falloff = Math.max(0.35, 1 - hit.distance / maxDist);
-      this.decals.place('blood', hit.point, n, size * falloff, d, stretch, hit.object);
-    };
-    castSplat(dir, (big ? 0.9 : 0.5) + Math.random() * 0.8, 2.2 + Math.random() * 1.2, 7);
-    const fan = (big ? 4 : 2) + Math.floor(Math.random() * 4);
-    for (let i = 0; i < fan; i++) {
-      const d = dir
-        .clone()
-        .add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.45, (Math.random() - 0.5) * 0.5))
-        .normalize();
-      castSplat(d, 0.25 + Math.random() * 0.5, 1.3 + Math.random() * 1.2, 6);
-    }
-    if (ground) this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
-  }
 }

@@ -20,9 +20,9 @@ const MAG_SIZE = 10;
 const T_SHOTS = 1.5; // gunfire somewhere out on the floor
 const T_TURN0 = 1.65; // Ravi starts to look up from his screen
 const T_TURN1 = 3.2; // ...and is facing the glass
-const T_WALK0 = 3.2; // the agent walks into view
+const T_BURST = 3.15; // the side door goes in
+const T_WALK0 = 3.2; // the agent comes through it, rifle already up
 const T_WALK1 = 4.9; // ...and stops, two metres off her
-const T_RAISE = 5.0; // rifle comes up to the shoulder
 const T_EXEC = 6.0; // he fires; she goes down
 const T_DRAW0 = 7.6; // Ravi looks down at the drawer
 const T_DRAW1 = 8.8; // the gun is in his hand
@@ -66,6 +66,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private agentDown = false;
   private fade = 0; // 0..1 black wipe on the way out
   private lookYaw = 0;
+  /** 0 until the door is kicked, then eases to 1 as it swings wide. */
+  private doorSwing = 0;
 
   private ui!: HTMLElement;
   private objective!: HTMLElement;
@@ -116,10 +118,11 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.scene.add(this.coworker.root);
     for (const p of this.coworker.parts) this.level.shootables.push(p);
 
-    // The agent — rifle stays down until he's in position, and AI is
+    // The agent — rifle already up as he comes through the door; his AI is
     // withheld until the cutscene is done.
     const ag = this.level.agentSpawn;
     this.agent = new Enemy(ag.pos, ag.yaw, 1, { name: 'FBI AGENT' });
+    this.agent.setAiming(true); // comes through the door with it already shouldered
     this.scene.add(this.agent.root);
     for (const p of this.agent.parts) this.level.shootables.push(p);
 
@@ -226,15 +229,27 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.beat('shot3', T_SHOTS + 0.95, () => audio.enemyGunshot(24));
     // She is already on her feet with her hands up when he walks in
     this.beat('handsup', T_TURN0, () => this.coworker.setHandsUp(true));
-    this.beat('raise', T_RAISE, () => {
-      this.agent.setWalk(0);
-      this.agent.setAiming(true); // the rifle visibly comes up to the shoulder
+    // The door goes in. He's already got the rifle up as he comes through it.
+    this.beat('burst', T_BURST, () => {
+      this.doorSwing = 1;
+      audio.bodyThud(this.agent.position.distanceTo(this.player.position));
+      audio.enemyShout(this.agent.position.distanceTo(this.player.position));
+      this.ctx.bus.emit(Events.Sound, { position: this.agent.position.clone(), radius: 26, kind: 'impact' });
     });
+    this.beat('halt', T_WALK1, () => this.agent.setWalk(0));
     this.beat('exec', T_EXEC, () => this.executeCoworker());
     this.beat('drawer', T_DRAW0 + 0.15, () => audio.magOut());
     this.beat('rack', T_DRAW1 - 0.15, () => audio.slideRack());
 
-    // The agent walks in from the north and stops short of her
+    // The door slams open, then rebounds a little and stays wide
+    if (this.doorSwing > 0) {
+      this.doorSwing = Math.min(1, this.doorSwing + dt * 4.5);
+      const k = 1 - Math.pow(1 - this.doorSwing, 3);
+      const rebound = Math.sin(this.doorSwing * Math.PI) * 0.16; // kicks past, settles back
+      this.level.doorPivot.rotation.y = -(2.0 * k - rebound);
+    }
+
+    // The agent comes through it and stops short of her
     if (this.t >= T_WALK0 && this.t <= T_WALK1) {
       const u = (this.t - T_WALK0) / (T_WALK1 - T_WALK0);
       const s = u * u * (3 - 2 * u);
@@ -310,6 +325,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.agent.position.copy(this.level.agentFiringPos);
     this.agent.setWalk(0);
     this.agent.setAiming(true);
+    this.doorSwing = 1;
+    this.level.doorPivot.rotation.y = -2.0;
     if (!this.beats.has('exec')) {
       this.beats.add('exec');
       this.executeCoworker();

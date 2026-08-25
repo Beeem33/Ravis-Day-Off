@@ -812,17 +812,22 @@ export class Enemy {
     const swing = Math.sin(this.walkPhase) * 0.55 * stride;
     this.legL.rotation.x = swing;
     this.legR.rotation.x = -swing;
-    // Knees bend on the back-swing
-    this.shinL.rotation.x = Math.max(0, swing) * 0.9;
-    this.shinR.rotation.x = Math.max(0, -swing) * 0.9;
+    // Knees bend BACKWARD (negative x — +x swings a limb forward) and only
+    // while that leg is behind the body, heel coming up towards the seat.
+    // Bending them forward on the front swing broke the leg the wrong way.
+    this.shinL.rotation.x = -Math.max(0, -swing) * 1.05;
+    this.shinR.rotation.x = -Math.max(0, swing) * 1.05;
 
-    // Body rise and fall. Without this they slide along at a constant height
-    // and read as floating. The pelvis peaks at mid-stance (twice a cycle)
-    // and dips as the legs split, and the whole upper body rides with it.
-    const bob = -Math.abs(Math.cos(this.walkPhase)) * 0.045 * stride;
+    // Body rise and fall, twice per cycle. Highest when a leg is directly
+    // underneath (legs passing, swing ≈ 0) and lowest when they are split
+    // widest. Keying this to cos put it exactly out of phase — the body sank
+    // at the top of each step, which is what made the walk bounce wrongly.
+    const bob = -Math.abs(Math.sin(this.walkPhase)) * 0.042 * stride;
     const sway = Math.sin(this.walkPhase) * 0.018 * stride; // weight shifting side to side
     const lean = 0.13 * stride; // leaning into the walk
-    for (const g of [this.legL, this.legR]) g.position.y = 0.82 + bob;
+    // Hips ride with the pelvis, or the legs detach from it as it sways
+    this.legL.position.set(-0.115 + sway, 0.82 + bob, 0);
+    this.legR.position.set(0.115 + sway, 0.82 + bob, 0);
     this.pelvis.position.set(sway, 0.96 + bob, 0);
     this.pelvis.rotation.z = -sway * 1.6;
     this.head.position.set(sway * 0.6, 1.585 + bob, 0);

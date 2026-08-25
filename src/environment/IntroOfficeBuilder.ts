@@ -22,6 +22,8 @@ export interface IntroLevelData {
   agentSpawn: EnemySpawn;
   /** Where he stops, two metres off her, before raising the rifle. */
   agentFiringPos: THREE.Vector3;
+  /** The side-entrance door, hinged: the scene kicks this open. */
+  doorPivot: THREE.Group;
   /** Walk in here (once the agent is down) to finish the level. */
   exitTrigger: THREE.Box3;
 }
@@ -43,6 +45,10 @@ const DOOR_Z1 = 0.7;
 const HALL_Z0 = -1.5; // corridor east to the exit
 const HALL_Z1 = 1.5;
 const HALL_X = 7;
+// Side entrance in the north wall — the door the agent comes through
+const BURST_X0 = 2.45;
+const BURST_X1 = 3.95;
+const VEST_Z = -5.0; // back of the little lobby behind it
 
 /**
  * IntroOfficeBuilder — the opening level: Ravi's private office behind a
@@ -71,6 +77,7 @@ export class IntroOfficeBuilder {
   private plasticMat!: THREE.MeshLambertMaterial;
   private coolerMat!: THREE.MeshLambertMaterial;
   private newsMat!: THREE.MeshBasicMaterial;
+  private doorPivot!: THREE.Group;
 
   /**
    * What is on Ravi's monitor when the level opens: a news story about the
@@ -157,9 +164,10 @@ export class IntroOfficeBuilder {
       // north, so the player sees both of them in profile with the rifle
       // clearly pointed across the view rather than at the camera.
       coworkerSpawn: { pos: new THREE.Vector3(3.2, 0, 1.4), yaw: 0 },
-      agentSpawn: { pos: new THREE.Vector3(3.2, 0, -2.3), yaw: Math.PI },
+      agentSpawn: { pos: new THREE.Vector3(3.2, 0, -4.0), yaw: Math.PI },
       /** Where the agent stops before raising the rifle. */
       agentFiringPos: new THREE.Vector3(3.2, 0, -0.7),
+      doorPivot: this.doorPivot,
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(12.2, 0, -0.9),
         new THREE.Vector3(13.9, 2.2, 0.9)
@@ -291,13 +299,55 @@ export class IntroOfficeBuilder {
     this.solid(hw, 0.3, HALL_Z1 - HALL_Z0, (HALL_X + X1) / 2, -0.3, 0, this.carpetMat, { surface: 'concrete' });
     this.solid(hw, 0.3, HALL_Z1 - HALL_Z0, (HALL_X + X1) / 2, WALL_H, 0, this.ceilMat, { surface: 'concrete' });
 
-    // Outer walls of the office + front floor
-    this.wallX(X0, HALL_X, Z0);
+    // Outer walls of the office + front floor. The north wall carries the
+    // side entrance the FBI come through.
+    this.wallX(X0, BURST_X0, Z0);
+    this.wallX(BURST_X1, HALL_X, Z0);
+    this.solid(BURST_X1 - BURST_X0, WALL_H - 2.25, T, (BURST_X0 + BURST_X1) / 2, 2.25, Z0, this.wallMat); // header
     this.wallX(X0, HALL_X, Z1);
+    this.buildEntry();
     this.wallZ(Z0, Z1, X0);
     // East end of the front floor, either side of the corridor mouth
     this.wallZ(Z0, HALL_Z0, HALL_X);
     this.wallZ(HALL_Z1, Z1, HALL_X);
+  }
+
+  /**
+   * The side entrance: a small lobby beyond the north wall and the door
+   * itself, hinged so the scene can kick it open. Something has to be back
+   * there or the doorway opens onto nothing once it swings.
+   */
+  private buildEntry(): void {
+    const cx = (BURST_X0 + BURST_X1) / 2;
+    const w = BURST_X1 - BURST_X0 + 1.2;
+    const d = Z0 - VEST_Z;
+    this.solid(w, 0.3, d, cx, -0.3, (Z0 + VEST_Z) / 2, this.carpetMat, { surface: 'concrete' });
+    this.solid(w, 0.3, d, cx, WALL_H, (Z0 + VEST_Z) / 2, this.ceilMat, { surface: 'concrete' });
+    this.wallZ(VEST_Z, Z0, cx - w / 2);
+    this.wallZ(VEST_Z, Z0, cx + w / 2);
+    this.wallX(cx - w / 2, cx + w / 2, VEST_Z);
+
+    // The door: pivot at the left jamb so it swings into the room
+    this.doorPivot = new THREE.Group();
+    this.doorPivot.position.set(BURST_X0, 0, Z0);
+    this.group.add(this.doorPivot);
+    const leafW = BURST_X1 - BURST_X0 - 0.04;
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, 2.2, 0.06), this.deskMat);
+    leaf.position.set(leafW / 2 + 0.02, 1.1, 0);
+    leaf.userData.surface = 'wood';
+    this.doorPivot.add(leaf);
+    this.shootables.push(leaf);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.8, 0.07, 0.07), this.darkMetalMat);
+    bar.position.set(leafW / 2 + 0.02, 1.02, -0.07); // push bar, on the outside face
+    this.doorPivot.add(bar);
+    const kick = new THREE.Mesh(new THREE.BoxGeometry(leafW, 0.3, 0.02), this.darkMetalMat);
+    kick.position.set(leafW / 2 + 0.02, 0.2, 0.04);
+    this.doorPivot.add(kick);
+
+    // Dim light in the lobby so the doorway isn't a black rectangle
+    const l = new THREE.PointLight(0xdfe6f0, 3.5, 6, 1.7);
+    l.position.set(cx, 2.5, Z0 - 1.6);
+    this.group.add(l);
   }
 
   // ------------------------------------------------------- Ravi's office

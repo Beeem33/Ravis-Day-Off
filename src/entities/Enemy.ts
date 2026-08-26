@@ -71,8 +71,8 @@ export class Enemy {
   /** 0..1 — down on both knees, pleading. */
   private kneelBlend = 0;
   private kneelTarget = 0;
-  private wardBlend = 0;
-  private wardTarget = 0;
+  private earsBlend = 0;
+  private earsTarget = 0;
   /** Manning a vehicle turret: no personal weapon, hands on the spades. */
   private turret = false;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
@@ -573,12 +573,12 @@ export class Enemy {
   }
 
   /**
-   * Warding the shooter off: both arms out in front, palms toward them,
-   * shoulders hunched away. Stood up rather than kneeling, so it reads as
-   * "don't" rather than "please".
+   * Hands clamped over the ears, head ducked. Unlike kneeling this is not a
+   * planted pose — it rides on top of whatever the legs are doing, so they
+   * keep running while they do it.
    */
-  setWarding(on: boolean): void {
-    this.wardTarget = on ? 1 : 0;
+  setCoveringEars(on: boolean): void {
+    this.earsTarget = on ? 1 : 0;
     if (on) this.setScared();
   }
 
@@ -591,21 +591,22 @@ export class Enemy {
 
   /**
    * Out of every panic pose and back upright. Used when the floor goes quiet:
-   * anyone still kneeling or warding stands up and can walk again.
+   * anyone still kneeling or covering their ears comes back to normal.
    */
   standDown(): void {
     this.kneelTarget = 0;
-    this.wardTarget = 0;
+    this.earsTarget = 0;
     this.handsUpTarget = 0;
     this.setShaken();
   }
 
   /**
-   * True while a pose pins them in place. Kneeling and warding are both
-   * planted stances — an AI that walks them anyway makes them glide.
+   * True while a pose pins them in place. Kneeling is a planted stance — an
+   * AI that walks them anyway just slides the whole pose over the carpet.
+   * Covering the ears is not: that one is meant to be run in.
    */
   get rooted(): boolean {
-    return this.kneelTarget > 0 || this.wardTarget > 0 || this.kneelBlend > 0.05 || this.wardBlend > 0.05;
+    return this.kneelTarget > 0 || this.kneelBlend > 0.05;
   }
 
   /**
@@ -1215,24 +1216,31 @@ export class Enemy {
       this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.18, h);
     }
 
-    // Warding off — arms straight out in front, palms up at the shooter,
-    // head turned away from what is about to happen.
-    this.wardBlend += (this.wardTarget - this.wardBlend) * Math.min(1, dt * 6);
-    if (this.wardBlend > 0.001) {
-      const w = this.wardBlend;
-      const shake = Math.sin(at * 12.5) * 0.045 * w;
-      // +x swings a hanging arm forward; ~1.6 puts it level with the shoulder
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 1.62 + shake, w);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 1.62 - shake, w);
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.2, w);
-      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.2, w);
-      // Elbows just short of locked, so the arms read as pushed out flat
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.3, w);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.3, w);
-      // Shrink away from it: shoulders up, chin tucked and turned aside
-      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, -0.16, w);
-      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.2, w);
-      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.32, w);
+    // Hands clamped over the ears, elbows flared up and forward. Only the
+    // arms and the chin are touched, so the run cycle carries on underneath.
+    //
+    // The angles are not eyeballed: getting a hand onto the ear needs all
+    // three shoulder axes, because the arm's own X/Z alone can only swing it
+    // in front of the face. These were solved against the actual rig so the
+    // palm lands 0.125m out from the head centre and 0.03m below it — where
+    // an ear is — with the elbow 0.1m out, 0.15m forward and 0.23m up. The
+    // left arm is the mirror: X the same, Y and Z negated.
+    this.earsBlend += (this.earsTarget - this.earsBlend) * Math.min(1, dt * 6);
+    if (this.earsBlend > 0.001) {
+      const c = this.earsBlend;
+      const flinch = Math.sin(at * 14) * 0.045 * c;
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, -1.24, c);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, -1.24, c);
+      // Nothing else writes the shoulder's Y, so these scale straight off the
+      // blend and unwind to zero on their own when the pose lets go.
+      this.armR.rotation.y = -1.05 * c;
+      this.armL.rotation.y = 1.05 * c;
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 2.42, c);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -2.42, c);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -2.37 + flinch, c);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -2.37 - flinch, c);
+      // Chin down into the shoulders, the way people do it
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.26, c);
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still

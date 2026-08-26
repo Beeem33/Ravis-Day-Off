@@ -76,8 +76,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private pooled = new Set<Enemy>();
   /** Staff on their knees pleading — kept turned towards the agents. */
   private begging = new Set<Enemy>();
-  /** Staff with their arms out, warding the shooters off. */
-  private warding = new Set<Enemy>();
+  /** Staff running with their hands clamped over their ears. */
+  private covering = new Set<Enemy>();
   /** Staff stood watching Ravi once the floor is quiet. */
   private staring = new Set<Enemy>();
   /** True once the bumper has gone through the wall. */
@@ -435,10 +435,14 @@ export class Level3Scene extends CombatScene<Level3Data> {
       e.setHandsUp(true);
       this.begging.add(e);
     } else {
-      // Stood their ground with both arms out — "don't"
-      this.plant(e);
-      e.setWarding(true);
-      this.warding.add(e);
+      // Running with their hands over their ears. Same flight as the first
+      // branch, but they are not surrendering — they are just trying not to
+      // hear it, so the hands go to the head instead of into the air.
+      const ai = new CivilianAI(e, this.level.waypoints, this.level.colliders, this.ctx.bus);
+      this.staffAI.set(e, ai);
+      e.setHandsUp(false); // the AI raises them on construction
+      e.setCoveringEars(true);
+      this.covering.add(e);
     }
   }
 
@@ -462,7 +466,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     for (const e of this.staff) {
       if (!e.alive) continue;
       this.begging.delete(e);
-      this.warding.delete(e);
+      this.covering.delete(e);
       const ai = this.staffAI.get(e);
       // Most of them just stand and stare at Ravi; a couple go back to
       // moving, so the floor is not a room of statues.
@@ -669,7 +673,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
   /** Take a member of staff out of every pose set and drop their AI. */
   private staffDown(victim: Enemy): void {
     this.begging.delete(victim);
-    this.warding.delete(victim);
+    this.covering.delete(victim);
     this.staring.delete(victim);
     this.staffAI.get(victim)?.dispose();
     this.staffAI.delete(victim);
@@ -814,16 +818,12 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
     // Anyone pleading keeps facing the raid — begging at a wall reads as a
     // bug rather than a person.
-    if (this.begging.size || this.warding.size) {
+    if (this.begging.size) {
       const threat = this.agents.find((a) => a.alive)?.position
         ?? (this.gunner?.alive ? this.gunner.position : this.level.truck.position);
       for (const e of this.begging) {
         if (e.alive) e.faceToward(threat, dt, 2.4);
         else this.begging.delete(e);
-      }
-      for (const e of this.warding) {
-        if (e.alive) e.faceToward(threat, dt, 3.2);
-        else this.warding.delete(e);
       }
     }
     // Afterwards they watch the one still holding a gun

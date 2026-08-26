@@ -545,7 +545,38 @@ export class AudioManager {
    * Muffled lo-fi beat "leaking from the guard's headphones": heavily
    * low-passed chords, dusty vinyl crackle, soft kick/snare at 72 BPM.
    */
+  /**
+   * Menu music: the mp3 in public/audio on loop, routed through the music
+   * bus so the volume sliders still apply. Falls back to the old procedural
+   * lo-fi mix if the file can't be played.
+   */
+  private menuTrack: HTMLAudioElement | null = null;
+  private menuTrackSource: MediaElementAudioSourceNode | null = null;
+
   startMenuMusic(): void {
+    if (!this.ctx) return;
+    if (this.menuTrack && !this.menuTrack.paused) return;
+    if (!this.menuTrack) {
+      const el = new Audio('audio/menu.mp3');
+      el.loop = true;
+      el.preload = 'auto';
+      el.onerror = () => {
+        // File missing or undecodable — fall back to the synth mix
+        this.menuTrack = null;
+        this.startSynthMenuMusic();
+      };
+      this.menuTrack = el;
+      // Route through the Web Audio graph (createMediaElementSource may only
+      // be called once per element, so both are cached together)
+      this.menuTrackSource = this.ctx.createMediaElementSource(el);
+      this.menuTrackSource.connect(this.musicBus);
+    }
+    void this.menuTrack.play().catch(() => {
+      // Autoplay refused (no gesture yet) — the next unlock call retries
+    });
+  }
+
+  private startSynthMenuMusic(): void {
     if (!this.ctx || this.musicTimer !== null) return;
     const ctx = this.ctx;
 
@@ -655,6 +686,10 @@ export class AudioManager {
   }
 
   stopMenuMusic(): void {
+    if (this.menuTrack) {
+      this.menuTrack.pause();
+      this.menuTrack.currentTime = 0;
+    }
     if (this.musicTimer !== null) {
       clearInterval(this.musicTimer);
       this.musicTimer = null;

@@ -425,13 +425,6 @@ export class Enemy {
         hairBox(0.26, 0.22, 0.03, 0, -0.01, 0.115);
         break;
     }
-    // Sunglasses on a couple of them
-    if (this.variant % 3 === 1) {
-      const shades = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.045, 0.02), this.mat(0x050505, 0.2));
-      shades.position.set(0, 0.03, -0.125);
-      this.head.add(shades);
-    }
-
     this.finishBody(suit, shirt, glove, gunmetal);
   }
 

@@ -700,9 +700,11 @@ const artMats = new Map<string, THREE.MeshLambertMaterial>();
  * Framed wall art. Motivational tat for the call floor, plus a few
  * landscapes — the sort of thing bought by the metre for an office.
  */
-export function wallArt(kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks'): THREE.Group {
-  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : 1.15;
-  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : 0.8;
+export function wallArt(
+  kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks' | 'house' | 'newcar'
+): THREE.Group {
+  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : kind === 'newcar' ? 1.3 : 1.15;
+  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : kind === 'newcar' ? 0.92 : 0.8;
 
   let mat = artMats.get(kind);
   if (!mat) {
@@ -791,6 +793,215 @@ export function wallArt(kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks')
         g.lineTo(cx + px * 0.05, by - py * 0.03 + i * py * 0.026);
       }
       g.stroke();
+    } else if (kind === 'house') {
+      // Somebody's place out in the suburbs — the kind of snapshot people pin
+      // up because it is what the money is supposed to be for.
+      const sky = g.createLinearGradient(0, 0, 0, py * 0.72);
+      sky.addColorStop(0, '#8fb9de');
+      sky.addColorStop(1, '#d9e7ef');
+      g.fillStyle = sky;
+      g.fillRect(0, 0, px, py * 0.72);
+      g.fillStyle = '#fdf6d8';
+      g.beginPath();
+      g.arc(px * 0.17, py * 0.16, py * 0.075, 0, Math.PI * 2);
+      g.fill();
+      // Lawn
+      g.fillStyle = '#6f9c4c';
+      g.fillRect(0, py * 0.7, px, py * 0.3);
+      g.fillStyle = '#628c43';
+      g.fillRect(0, py * 0.7, px, py * 0.035);
+      // Path up to the door
+      g.fillStyle = '#c9c3b2';
+      g.beginPath();
+      g.moveTo(px * 0.46, py * 0.78);
+      g.lineTo(px * 0.54, py * 0.78);
+      g.lineTo(px * 0.6, py);
+      g.lineTo(px * 0.4, py);
+      g.closePath();
+      g.fill();
+      // Walls
+      const hx = px * 0.26;
+      const hw = px * 0.48;
+      const hy = py * 0.4;
+      const hh = py * 0.38;
+      g.fillStyle = '#e6ded0';
+      g.fillRect(hx, hy, hw, hh);
+      g.fillStyle = '#d3c9b8';
+      g.fillRect(hx, hy, hw, py * 0.02);
+      // Roof
+      g.fillStyle = '#8e5a44';
+      g.beginPath();
+      g.moveTo(hx - px * 0.05, hy);
+      g.lineTo(hx + hw / 2, hy - py * 0.2);
+      g.lineTo(hx + hw + px * 0.05, hy);
+      g.closePath();
+      g.fill();
+      // Chimney with a curl of smoke
+      g.fillStyle = '#7d4f3c';
+      g.fillRect(hx + hw * 0.72, hy - py * 0.19, px * 0.045, py * 0.15);
+      g.strokeStyle = 'rgba(255,255,255,0.62)';
+      g.lineWidth = Math.max(2, px * 0.007);
+      for (let i = 0; i < 5; i++) {
+        const smokeX = hx + hw * 0.74 + Math.sin(i * 1.3) * px * 0.02;
+        g.beginPath();
+        g.moveTo(smokeX, hy - py * (0.2 + i * 0.03));
+        g.lineTo(smokeX + px * 0.02, hy - py * (0.215 + i * 0.03));
+        g.stroke();
+      }
+      // Door and windows, lit from inside
+      g.fillStyle = '#5e4632';
+      g.fillRect(px * 0.455, hy + hh * 0.42, px * 0.09, hh * 0.58);
+      g.fillStyle = '#d8b24a';
+      g.beginPath();
+      g.arc(px * 0.532, hy + hh * 0.72, px * 0.008, 0, Math.PI * 2);
+      g.fill();
+      for (const wx of [0.33, 0.62]) {
+        g.fillStyle = '#f6df9a';
+        g.fillRect(px * wx, hy + hh * 0.2, px * 0.1, hh * 0.28);
+        g.strokeStyle = '#e6ded0';
+        g.lineWidth = Math.max(2, px * 0.008);
+        g.beginPath();
+        g.moveTo(px * (wx + 0.05), hy + hh * 0.2);
+        g.lineTo(px * (wx + 0.05), hy + hh * 0.48);
+        g.moveTo(px * wx, hy + hh * 0.34);
+        g.lineTo(px * (wx + 0.1), hy + hh * 0.34);
+        g.stroke();
+      }
+      // A tree either side
+      for (const tx of [0.1, 0.9]) {
+        g.fillStyle = '#5c4327';
+        g.fillRect(px * tx - px * 0.012, py * 0.56, px * 0.024, py * 0.18);
+        g.fillStyle = '#4f7d3a';
+        g.beginPath();
+        g.arc(px * tx, py * 0.52, py * 0.1, 0, Math.PI * 2);
+        g.fill();
+      }
+    } else if (kind === 'newcar') {
+      // The staff snapshot: somebody grinning beside the car the bonus bought.
+      g.fillStyle = '#e9e4d8';
+      g.fillRect(0, 0, px, py);
+      const iw = px * 0.9;
+      const ih = py * 0.74;
+      const ix = (px - iw) / 2;
+      const iy = py * 0.05;
+      const forecourt = g.createLinearGradient(0, iy, 0, iy + ih * 0.6);
+      forecourt.addColorStop(0, '#6ea3d4');
+      forecourt.addColorStop(1, '#c5dcea');
+      g.fillStyle = forecourt;
+      g.fillRect(ix, iy, iw, ih * 0.6);
+      g.fillStyle = '#6b6f74';
+      g.fillRect(ix, iy + ih * 0.6, iw, ih * 0.4);
+      g.fillStyle = '#7a7f85';
+      g.fillRect(ix, iy + ih * 0.6, iw, ih * 0.02);
+      // Dealership bunting across the sky
+      g.strokeStyle = '#f2f2f2';
+      g.lineWidth = Math.max(1, px * 0.004);
+      g.beginPath();
+      g.moveTo(ix, iy + ih * 0.1);
+      g.lineTo(ix + iw, iy + ih * 0.06);
+      g.stroke();
+      for (let i = 0; i < 11; i++) {
+        const fx = ix + (iw * i) / 10;
+        const fy = iy + ih * (0.1 - (i / 10) * 0.04);
+        g.fillStyle = ['#d94b3f', '#e8c34a', '#3f7fd9'][i % 3];
+        g.beginPath();
+        g.moveTo(fx, fy);
+        g.lineTo(fx + px * 0.016, fy);
+        g.lineTo(fx + px * 0.008, fy + ih * 0.06);
+        g.closePath();
+        g.fill();
+      }
+      // The car: a low red saloon, three-quarter on
+      const carX = ix + iw * 0.62;
+      const carY = iy + ih * 0.78;
+      const carW = iw * 0.52;
+      g.fillStyle = 'rgba(0,0,0,0.22)';
+      g.beginPath();
+      g.ellipse(carX, carY + ih * 0.1, carW * 0.55, ih * 0.035, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#c0271e';
+      g.beginPath();
+      g.roundRect(carX - carW / 2, carY - ih * 0.12, carW, ih * 0.17, ih * 0.03);
+      g.fill();
+      g.beginPath();
+      g.moveTo(carX - carW * 0.3, carY - ih * 0.11);
+      g.lineTo(carX - carW * 0.16, carY - ih * 0.26);
+      g.lineTo(carX + carW * 0.2, carY - ih * 0.26);
+      g.lineTo(carX + carW * 0.32, carY - ih * 0.11);
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#9fc4dd';
+      g.beginPath();
+      g.moveTo(carX - carW * 0.25, carY - ih * 0.13);
+      g.lineTo(carX - carW * 0.14, carY - ih * 0.235);
+      g.lineTo(carX + carW * 0.17, carY - ih * 0.235);
+      g.lineTo(carX + carW * 0.26, carY - ih * 0.13);
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#1a1a1c';
+      for (const wx of [-0.3, 0.3]) {
+        g.beginPath();
+        g.arc(carX + carW * wx, carY + ih * 0.055, ih * 0.055, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.fillStyle = '#8d939b';
+      for (const wx of [-0.3, 0.3]) {
+        g.beginPath();
+        g.arc(carX + carW * wx, carY + ih * 0.055, ih * 0.022, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.fillStyle = '#f4e7b0';
+      g.fillRect(carX - carW / 2 - px * 0.004, carY - ih * 0.07, px * 0.022, ih * 0.035);
+      // The employee, arm up, keys in hand
+      const mx = ix + iw * 0.2;
+      const groundY = carY + ih * 0.12;
+      g.fillStyle = '#c98d63';
+      g.beginPath();
+      g.arc(mx, groundY - ih * 0.5, ih * 0.062, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#221a14';
+      g.beginPath();
+      g.arc(mx, groundY - ih * 0.53, ih * 0.064, Math.PI, 0);
+      g.fill();
+      g.strokeStyle = '#4a2e22';
+      g.lineWidth = Math.max(2, px * 0.005);
+      g.beginPath();
+      g.arc(mx, groundY - ih * 0.495, ih * 0.03, 0.25, Math.PI - 0.25);
+      g.stroke();
+      g.fillStyle = '#2b2b2b';
+      for (const ex of [-0.022, 0.022]) {
+        g.beginPath();
+        g.arc(mx + ih * ex, groundY - ih * 0.515, ih * 0.008, 0, Math.PI * 2);
+        g.fill();
+      }
+      // Shirt and chinos — the floor uniform
+      g.fillStyle = '#f2f2ee';
+      g.fillRect(mx - ih * 0.062, groundY - ih * 0.44, ih * 0.124, ih * 0.19);
+      g.fillStyle = '#33507d';
+      g.fillRect(mx - ih * 0.062, groundY - ih * 0.25, ih * 0.055, ih * 0.25);
+      g.fillRect(mx + ih * 0.007, groundY - ih * 0.25, ih * 0.055, ih * 0.25);
+      g.fillStyle = '#1e1e20';
+      g.fillRect(mx - ih * 0.068, groundY - ih * 0.02, ih * 0.062, ih * 0.02);
+      g.fillRect(mx + ih * 0.006, groundY - ih * 0.02, ih * 0.062, ih * 0.02);
+      // Near arm down, far arm thrown up with the keys
+      g.strokeStyle = '#c98d63';
+      g.lineWidth = ih * 0.028;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(mx - ih * 0.055, groundY - ih * 0.42);
+      g.lineTo(mx - ih * 0.085, groundY - ih * 0.27);
+      g.moveTo(mx + ih * 0.055, groundY - ih * 0.42);
+      g.lineTo(mx + ih * 0.12, groundY - ih * 0.55);
+      g.stroke();
+      g.fillStyle = '#d8d8d8';
+      g.beginPath();
+      g.arc(mx + ih * 0.128, groundY - ih * 0.575, ih * 0.012, 0, Math.PI * 2);
+      g.fill();
+      // Caption on the mount below the photo
+      g.fillStyle = '#2b2b2b';
+      g.textAlign = 'center';
+      g.font = 'bold ' + Math.round(py * 0.075) + 'px Georgia, serif';
+      g.fillText('TOP CLOSER — Q3', px / 2, py * 0.92);
     } else {
       // Landscapes: banded sky, a sun, a horizon silhouette
       const palettes = {
@@ -831,6 +1042,89 @@ export function wallArt(kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks')
   pic.position.z = 0.028;
   g2.add(pic);
   return g2;
+}
+
+/**
+ * Potted plant. `kind` picks the silhouette: a tall rubber-plant on a
+ * stem for corners, a low bushy fern for desks and counters, and a
+ * half-dead one for the corners nobody waters. Radius is roughly
+ * 0.24m for 'tall' and 0.2m otherwise, so callers can size colliders.
+ */
+export function flowerPot(kind: 'tall' | 'bushy' | 'dying' = 'bushy'): THREE.Group {
+  const g = new THREE.Group();
+  const dying = kind === 'dying';
+  const potR = kind === 'tall' ? 0.17 : 0.145;
+  const potH = kind === 'tall' ? 0.3 : 0.24;
+  const clay = lam(dying ? 0x8a5a44 : 0xa8624a);
+
+  // Tapered pot with a rim lip, and soil sunk just below it
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(potR, potR * 0.72, potH, 14), clay);
+  pot.position.y = potH / 2;
+  g.add(pot);
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(potR * 1.07, potR * 1.07, 0.03, 14), clay);
+  rim.position.y = potH - 0.012;
+  g.add(rim);
+  const soil = new THREE.Mesh(new THREE.CylinderGeometry(potR * 0.95, potR * 0.95, 0.02, 12), lam(0x2e241b));
+  soil.position.y = potH - 0.022;
+  g.add(soil);
+
+  const leafMat = lam(dying ? 0x6d6a33 : kind === 'tall' ? 0x2f6b34 : 0x3d7f3a);
+  const base = potH - 0.02;
+
+  if (kind === 'tall') {
+    // Woody stem with leaves paired off it, drooping a little further out
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.026, 0.72, 8), lam(0x4a3a26));
+    stem.position.y = base + 0.36;
+    g.add(stem);
+    for (let i = 0; i < 7; i++) {
+      const t = i / 6;
+      const yaw = i * 2.4;
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.015, 0.12), leafMat);
+      leaf.position.set(Math.sin(yaw) * 0.12, base + 0.22 + t * 0.52, Math.cos(yaw) * 0.12);
+      leaf.rotation.y = -yaw;
+      leaf.rotation.z = -0.42 + t * 0.16;
+      g.add(leaf);
+    }
+  } else {
+    // Fronds fanning out of the soil, each a flattened box tipped outward
+    const n = dying ? 6 : 9;
+    for (let i = 0; i < n; i++) {
+      const yaw = (i / n) * Math.PI * 2 + (i % 2) * 0.3;
+      const len = (dying ? 0.2 : 0.3) + (i % 3) * 0.035;
+      const tilt = dying ? 1.15 : 0.62;
+      const frond = new THREE.Mesh(new THREE.BoxGeometry(len, 0.012, 0.08), leafMat);
+      frond.position.set(
+        Math.sin(yaw) * len * 0.42,
+        base + Math.cos(tilt) * len * 0.42 + 0.03,
+        Math.cos(yaw) * len * 0.42
+      );
+      frond.rotation.y = -yaw + Math.PI / 2;
+      frond.rotation.x = dying ? tilt : -tilt;
+      g.add(frond);
+    }
+    if (!dying) {
+      // A few flower heads sitting up out of the foliage
+      for (let i = 0; i < 4; i++) {
+        const yaw = i * 1.7;
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.032, 7, 5),
+          lam([0xd9556b, 0xe0a03c, 0xd9556b, 0xc8659e][i])
+        );
+        head.position.set(Math.sin(yaw) * 0.075, base + 0.15 + (i % 2) * 0.045, Math.cos(yaw) * 0.075);
+        g.add(head);
+      }
+    } else {
+      // Shed leaves collecting on the soil
+      for (let i = 0; i < 4; i++) {
+        const yaw = i * 1.9;
+        const dead = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.008, 0.04), lam(0x6b5228));
+        dead.position.set(Math.sin(yaw) * 0.07, base + 0.005, Math.cos(yaw) * 0.07);
+        dead.rotation.y = yaw;
+        g.add(dead);
+      }
+    }
+  }
+  return g;
 }
 
 /** Office laser printer on a stand: paper tray, output shelf, control panel. */
@@ -1001,7 +1295,8 @@ export function snack(kind: 'nutbar' | 'gumdrops' | 'cakes' | 'jerky'): THREE.Gr
 /**
  * Lateral file cabinet with real drawer fronts, recessed handles and a top
  * lip — the levels were drawing these as a single blank slab.
- * `w` x `d` footprint, `h` tall, split into `drawers` fronts facing -Z.
+ * `w` x `d` footprint, `h` tall, split into `drawers` fronts facing -X — so
+ * the bank runs along Z and yaw pi turns the drawers to face +X.
  */
 export function fileCabinet(w = 0.6, h = 1.5, d = 2.4, drawers = 4): THREE.Group {
   const g = new THREE.Group();

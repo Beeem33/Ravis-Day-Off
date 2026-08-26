@@ -3,7 +3,7 @@ import { BreakableGlass } from './BreakableGlass';
 import { FlickeringLight } from './FlickeringLight';
 import {
   officeChair, trashCan, scatteredPaper, vendingMachine, sodaCan,
-  fileCabinet, book, spilledCoffee, chipsBox
+  fileCabinet, book, spilledCoffee, chipsBox, wallArt, flowerPot, paperStack
 } from './OfficeProps';
 
 /**
@@ -192,6 +192,7 @@ export class OfficeLevelBuilder {
     this.buildShell();
     this.buildGroundFloor();
     this.buildVendingMachines();
+    this.buildDecor();
     this.buildDebris();
     this.buildLighting();
 
@@ -525,7 +526,8 @@ export class OfficeLevelBuilder {
 
     // Back office (z -12..-3, x -9..12): copier, file cabinets, desks
     this.solid(1.5, 1.15, 0.8, 6.5, 0, -11.4, this.darkMetalMat, { surface: 'metal' }); // copier
-    this.cabinet(0.6, 1.5, 2.4, -8.6, 0, -10.8); // cabinets
+    this.cabinet(0.6, 1.5, 2.4, -5.0, 0, -11.85, Math.PI / 2); // bank on the north wall, drawers south
+    this.cabinet(0.6, 1.3, 1.6, -8.9, 0, -8.4, Math.PI, 3); // short bank, drawers east
     this.deskCluster(-1.5, -10.5, 0);
     this.deskCluster(2.5, -6.2, Math.PI / 2);
     this.solid(0.5, 1.1, 0.5, 11.2, 0, -10.5, this.darkMetalMat, { surface: 'metal', occlude: false }); // water cooler
@@ -544,9 +546,11 @@ export class OfficeLevelBuilder {
     // Desk slab along the back
     const deskZ = cz + 0.55 * s;
     this.solid(2.7, 0.72, 0.6, cx, 0, deskZ, this.deskMat, { surface: 'wood', occlude: false });
-    // Monitor, offset along the desk — the workstation is built around it
+    // Monitor, offset along the desk — the workstation is built around it.
+    // The occupant sits 0.85 back from it along -s, so the panel has to turn
+    // through 180 to look at them; at `facing` it showed them its back.
     const seatX = cx + (Math.random() - 0.5) * 1.4;
-    this.screen(0.55, 0.35, seatX, 0.95, cz + 0.6 * s, facing);
+    this.screen(0.55, 0.35, seatX, 0.95, cz + 0.6 * s, facing + Math.PI);
     // Office chair — the same task chair the intro uses
     const chair = officeChair();
     chair.position.set(cx + (Math.random() - 0.5) * 0.8, 0, cz - 0.25 * s);
@@ -639,29 +643,99 @@ export class OfficeLevelBuilder {
     }
   }
 
-  /** Freestanding pair of desks used in the back office / exec suites. */
+  /**
+   * Freestanding desk in the back office. These were a bare slab with a
+   * monitor stood on it; they now get a worktop with an edge band, a modesty
+   * panel, a drawer pedestal, legs, a chair, a bin and paperwork, so they
+   * read as somewhere somebody actually worked.
+   *
+   * The occupant sits on the desk's local +Z side, so `rot` points at
+   * whichever way the worker faces away from — 0 seats them to the south.
+   */
   private deskCluster(cx: number, cz: number, rot: number): void {
     const g = new THREE.Group();
     g.position.set(cx, 0, cz);
     g.rotation.y = rot;
     this.group.add(g);
-    const desk = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.72, 1.1), this.deskMat);
-    desk.position.y = 0.36;
+
+    const W = 2.4;
+    const D = 1.1;
+    const TOP = 0.72;
+    // Worktop with a slight overhang, on a darker edge band
+    const desk = new THREE.Mesh(new THREE.BoxGeometry(W, 0.05, D), this.deskMat);
+    desk.position.y = TOP - 0.025;
     desk.userData.surface = 'wood';
     g.add(desk);
     this.shootables.push(desk);
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(W + 0.03, 0.022, D + 0.03), this.darkMetalMat);
+    lip.position.y = TOP - 0.055;
+    g.add(lip);
+    // Modesty panel across the back, set in from the edge
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(W - 0.2, 0.42, 0.03), this.deskMat);
+    panel.position.set(0, 0.4, -D / 2 + 0.13);
+    panel.userData.surface = 'wood';
+    g.add(panel);
+    this.shootables.push(panel);
+    // Drawer pedestal under the far end: three fronts with chrome pulls
+    const pedX = W / 2 - 0.36;
+    const ped = new THREE.Mesh(new THREE.BoxGeometry(0.58, TOP - 0.09, D - 0.16), this.deskMat);
+    ped.position.set(pedX, (TOP - 0.09) / 2 + 0.04, 0);
+    ped.userData.surface = 'wood';
+    g.add(ped);
+    this.shootables.push(ped);
+    for (let i = 0; i < 3; i++) {
+      const dy = 0.13 + i * 0.185;
+      const front = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.16, 0.02), this.plasticMat);
+      front.position.set(pedX, dy, (D - 0.16) / 2 + 0.015);
+      g.add(front);
+      const pull = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.02, 0.022), this.darkMetalMat);
+      pull.position.set(pedX, dy + 0.048, (D - 0.16) / 2 + 0.032);
+      g.add(pull);
+    }
+    // Legs on the open end
+    for (const lz of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, TOP - 0.06, 0.06), this.darkMetalMat);
+      leg.position.set(-W / 2 + 0.1, (TOP - 0.06) / 2, lz * (D / 2 - 0.13));
+      g.add(leg);
+    }
+
     // World-space collider (rot is 0 or 90°, so swap extents)
     const swap = Math.abs(Math.sin(rot)) > 0.5;
-    const w = swap ? 1.1 : 2.4;
-    const d = swap ? 2.4 : 1.1;
+    const w = swap ? D : W;
+    const d = swap ? W : D;
     this.colliders.push({
       box: new THREE.Box3(new THREE.Vector3(cx - w / 2, 0, cz - d / 2), new THREE.Vector3(cx + w / 2, 0.72, cz + d / 2))
     });
-    this.screen(0.55, 0.35, cx, 0.95, cz, rot + Math.PI);
 
-    // `g` already carries the desk's position and rotation, so the clutter
-    // group goes in at its local origin.
-    g.add(this.deskClutter(1.2, (Math.random() - 0.5) * 1.0));
+    // Monitor off-centre, clear of the drawer pedestal. `screen` takes world
+    // coordinates, so the desk-local offset has to be rotated out by hand.
+    const seatX = -W / 2 + 0.78;
+    const monZ = -0.16;
+    const sr = Math.sin(rot);
+    const cr = Math.cos(rot);
+    this.screen(
+      0.55, 0.35,
+      cx + seatX * cr + monZ * sr, 0.95, cz - seatX * sr + monZ * cr,
+      rot
+    );
+    g.add(this.deskClutter(1.2, seatX));
+
+    // Task chair pulled out from the working side, and a bin beside it
+    const chair = officeChair();
+    chair.position.set(seatX + 0.08, 0, D / 2 + 0.4);
+    chair.rotation.y = Math.PI + (Math.random() - 0.5) * 0.7;
+    g.add(chair);
+    const bin = trashCan();
+    bin.position.set(-W / 2 + 0.2, 0, D / 2 + 0.28);
+    g.add(bin);
+    // Paperwork stacked on the far end, and a plant in the corner
+    const stack = paperStack(9, 0.05);
+    stack.position.set(W / 2 - 0.44, TOP, -0.14);
+    stack.rotation.y = (Math.random() - 0.5) * 0.5;
+    g.add(stack);
+    const pot = flowerPot('bushy');
+    pot.position.set(W / 2 - 0.3, TOP, 0.3);
+    g.add(pot);
   }
 
   /**
@@ -733,6 +807,79 @@ export class OfficeLevelBuilder {
    * Vending machines: the bank along the west strip plus one in the back
    * office. Each gets a box collider — they're solid cover.
    */
+  /**
+   * Framed art and potted plants. The walls were bare boxes and the floor
+   * had nothing living on it. Pictures sit just proud of the plaster (the
+   * frame is 0.05 deep, so 0.03 clear of the inner face is enough), and the
+   * plants get a collider only where one would actually be in the way.
+   *
+   * Wall art faces +Z at yaw 0, so: 0 on the north wall, PI on the south,
+   * PI/2 on the west and -PI/2 on the east all point into the room.
+   */
+  private buildDecor(): void {
+    const NORTH = -12.16;
+    const SOUTH = 12.16;
+    const WEST = -18.16;
+    const EAST = EAST_X - 0.16;
+
+    const hang = (k: Parameters<typeof wallArt>[0], x: number, y: number, z: number, yaw: number): void => {
+      const a = wallArt(k);
+      a.position.set(x, y, z);
+      a.rotation.y = yaw;
+      this.group.add(a);
+      this.shootables.push(a.children[0] as THREE.Mesh);
+    };
+
+    // Reception: the house and the car, the two things the floor is sold on
+    hang('house', -5.6, 1.95, SOUTH, Math.PI);
+    hang('newcar', 5.4, 2.0, SOUTH, Math.PI);
+    hang('together', 0, 1.95, 6.15, Math.PI); // over the reception sign
+    // Down the west strip
+    hang('house', WEST, 1.95, 3.4, Math.PI / 2);
+    hang('dial', WEST, 2.0, -3.2, Math.PI / 2);
+    hang('newcar', WEST, 2.0, -8.6, Math.PI / 2);
+    // Back office
+    hang('coast', -2.6, 1.95, NORTH, 0);
+    hang('newcar', 2.4, 2.0, NORTH, 0);
+    hang('dunes', -9.6, 1.95, NORTH, 0);
+    // East wall, either side of the service door
+    hang('peaks', EAST, 1.95, -4.2, -Math.PI / 2);
+    hang('house', EAST, 1.95, 6.4, -Math.PI / 2);
+
+    // Plants. Tall ones stand on the floor and are worth walking round;
+    // the small ones sit on counters and ledges.
+    const potAt = (kind: 'tall' | 'bushy' | 'dying', x: number, y: number, z: number, solid = false): void => {
+      const pot = flowerPot(kind);
+      pot.position.set(x, y, z);
+      pot.rotation.y = Math.random() * Math.PI * 2;
+      this.group.add(pot);
+      if (!solid) return;
+      const r = kind === 'tall' ? 0.22 : 0.18;
+      this.colliders.push({
+        box: new THREE.Box3(new THREE.Vector3(x - r, y, z - r), new THREE.Vector3(x + r, y + 1.1, z + r))
+      });
+    };
+    // Lobby — the bit visitors would have seen
+    potAt('tall', 3.2, 0, 6.2, true);
+    potAt('tall', -3.2, 0, 6.2, true);
+    potAt('tall', 10.6, 0, 10.6, true);
+    potAt('tall', -16.9, 0, 10.9, true);
+    potAt('bushy', 2.1, 1.1, 7.2); // on the reception counter
+    potAt('bushy', -2.1, 1.1, 7.2);
+    // West strip
+    potAt('tall', -17.4, 0, 1.2, true);
+    potAt('dying', -17.5, 0, -2.4, true);
+    // Cubicle farm — one at each end of the aisle
+    potAt('dying', -15.6, 0, 0.1, true);
+    potAt('bushy', 0.8, 0, 0.1, true);
+    // Back office and the north-west quarter that opened up
+    potAt('tall', -8.4, 0, -11.6, true);
+    potAt('dying', -13.6, 0, -11.5, true);
+    potAt('tall', 11.4, 0, -11.6, true);
+    potAt('bushy', -5.0, 1.5, -11.3); // on the cabinet bank
+    potAt('tall', -16.2, 0, -7.4, true);
+  }
+
   private buildVendingMachines(): void {
     const place = (x: number, y: number, z: number, yaw: number): void => {
       const m = vendingMachine();
@@ -750,11 +897,11 @@ export class OfficeLevelBuilder {
         )
       });
     };
-    // West strip, lined up against the outside wall
-    place(-17.7, 0, -6.6, Math.PI / 2);
-    place(-17.7, 0, -5.5, Math.PI / 2);
-    // Back office, by the copier
-    place(8.0, 0, -11.7, 0);
+    // West strip, backs to the outside wall, serving east into the room
+    place(-17.7, 0, -6.6, -Math.PI / 2);
+    place(-17.7, 0, -5.5, -Math.PI / 2);
+    // Back office, by the copier, serving south
+    place(8.0, 0, -11.7, Math.PI);
   }
 
   /**
@@ -817,8 +964,8 @@ export class OfficeLevelBuilder {
     }
     // ...and standing on desks and counters
     for (const [x, y, z] of [
-      [-13.1, 0.72, -1.35], [-9.1, 0.72, -1.35], [-5.1, 0.72, 2.55], [-1.1, 0.72, -1.35],
-      [0.9, 0.72, 7.05], [-2.1, 0.72, -10.3], [2.9, 0.72, -6.5], [-9.9, 0.9, -11.5],
+      [-13.1, 0.72, -1.35], [-9.1, 0.72, -1.35], [-5.1, 0.72, 1.55], [-1.1, 0.72, -1.35],
+      [0.9, 1.1, 7.05], [-2.1, 0.72, -10.3], [2.9, 0.72, -6.5], [-5.0, 1.5, -11.85],
     ] as const) {
       const can = sodaCan();
       can.position.set(x, y, z);
@@ -900,6 +1047,13 @@ export class OfficeLevelBuilder {
     addLight(7.0, 2.8, -9.5, 7); // back office east
     addLight(-6.0, 2.8, -4.5, 6, 10); // between the farm and the back office
     addLight(-17.5, 2.8, -1.5, 5, 9); // west strip south
+    // North-west quarter — the old breakroom took its only fixture with it
+    addLight(-15.5, 2.8, -9.0, 8, 13);
+    addLight(-11.0, 2.8, -10.6, 7, 12);
+    addLight(-15.8, 2.8, -5.0, 6, 10); // west strip, mid
+    addLight(-13.5, 2.8, 10.8, 6, 11); // lobby, south-west corner
+    addLight(5.0, 2.8, 1.5, 6, 10); // between the farm and the east corridor
+    addLight(6.5, 2.8, 10.8, 6, 11); // lobby, south-east corner
 
     // Ground east corridor — flickering (dark hallway)
     this.addFlickering(9.5, 2.8, -3, 8, 10);

@@ -18,14 +18,15 @@ export class TakedownViewmodel {
   active = false;
   private t = 0;
   private fired = new Set<string>();
-  /** 'grab' | 'draw' | 'stab' | 'done' */
-  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'done') => void) | null = null;
+  /** 'grab' | 'draw' | 'stab' (first, the kill) | 'stab2' | 'stab3' | 'done' */
+  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'stab2' | 'stab3' | 'done') => void) | null = null;
 
   static readonly GRAB_T = 0.35;
   static readonly DRAW_T = 0.5;
   static readonly STAB_T = 2.0;
+  static readonly STAB_CYCLE = 0.34; // per-stab rhythm of the triple
   static readonly DIE_T = 2.25;
-  static readonly TOTAL_T = 3.0;
+  static readonly TOTAL_T = 3.75;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -102,7 +103,7 @@ export class TakedownViewmodel {
     this.root.visible = false;
   }
 
-  private event(name: 'grab' | 'draw' | 'stab' | 'done'): void {
+  private event(name: 'grab' | 'draw' | 'stab' | 'stab2' | 'stab3' | 'done'): void {
     if (this.fired.has(name)) return;
     this.fired.add(name);
     this.onEvent?.(name);
@@ -112,8 +113,8 @@ export class TakedownViewmodel {
   get struggle(): number {
     if (!this.active) return 0;
     const T = TakedownViewmodel;
-    if (this.t < T.GRAB_T || this.t > T.DIE_T) return 0;
-    if (this.t > T.STAB_T) return 1.4; // the stab itself kicks hardest
+    if (this.t < T.GRAB_T || this.t > T.STAB_T + T.STAB_CYCLE * 3) return 0;
+    if (this.t > T.STAB_T) return 1.4; // the stabs kick hardest
     return Math.min(1, (this.t - T.GRAB_T) / 0.4);
   }
 
@@ -137,8 +138,8 @@ export class TakedownViewmodel {
     const lFrom = new THREE.Vector3(-0.42, -0.5, -0.25);
     const lGrab = new THREE.Vector3(0.13, -0.01, -0.62);
     const reach = ease(c01(t / T.GRAB_T));
-    // After the kill: drop back out of frame
-    const out = ease(c01((t - T.DIE_T - 0.25) / 0.5));
+    // After the LAST stab: drop back out of frame
+    const out = ease(c01((t - (T.TOTAL_T - 0.55)) / 0.5));
     this.armL.position.lerpVectors(lFrom, lGrab, reach);
     this.armL.position.x += jx;
     this.armL.position.y += jy;
@@ -150,7 +151,7 @@ export class TakedownViewmodel {
     // the struggle, then drives up under the jaw
     const rPocket = new THREE.Vector3(0.3, -0.55, -0.2);
     const rReady = new THREE.Vector3(0.26, -0.3, -0.38);
-    const rStab = new THREE.Vector3(0.04, -0.09, -0.66); // a real lunge — full extension into the throat
+    const rStab = new THREE.Vector3(0.03, -0.08, -0.72); // full extension — the blade buries in the held throat
     // The forearm stays low so the cuff never swallows the frame — it's the
     // KNIFE that pitches up for the thrust, in the hand.
     if (t < T.DRAW_T) {
@@ -167,15 +168,27 @@ export class TakedownViewmodel {
       this.armR.rotation.set(-0.35 * k - 0.25 * (1 - k) + jy * 2, -0.55 * k - 0.2 * (1 - k), 0.1 * k);
       this.knife.rotation.set(-0.15 - 0.3 * k, 0, 0.35 * k); // blade cocked upward, ready
     } else {
-      // The thrust: fast in, then held with a grinding twist
-      const k = ease(c01((t - T.STAB_T) / 0.14));
-      this.armR.position.lerpVectors(rReady, rStab, k);
+      // THREE fast stabs. The arm drives past the grab hand so the blade
+      // visibly buries in the throat (the enemy is held ~0.95m out; the tip
+      // reaches ~1.15m at full extension), rips back to mid, drives in again.
+      const rPull = new THREE.Vector3(0.17, -0.17, -0.42); // between stabs: blade back out, still up
+      const tt = t - T.STAB_T;
+      const idx = Math.min(2, Math.floor(tt / T.STAB_CYCLE));
+      const ph = tt - idx * T.STAB_CYCLE;
+      let k: number;
+      if (ph < 0.11) k = ease(c01(ph / 0.11)); // drive in hard
+      else if (ph < 0.19) k = 1; // buried to the guard
+      else if (idx < 2) k = 1 - ease(c01((ph - 0.19) / 0.12)); // rip it back out
+      else k = 1 - 0.3 * ease(c01((ph - 0.19) / 0.5)); // the last one stays in and sags
+      const from = idx === 0 ? rReady : rPull;
+      this.armR.position.lerpVectors(from, rStab, k);
       this.armR.position.x += jx;
       this.armR.position.y += jy;
-      const grind = t > T.STAB_T + 0.14 ? Math.sin(t * 10) * 0.05 : 0;
-      this.armR.rotation.set(-0.55 * k - 0.35 * (1 - k) + grind, -0.55 + 0.25 * k, 0.12 + grind * 0.6);
-      this.knife.rotation.set(-0.45 - 0.5 * k + grind, 0, 0.35 - 0.2 * k + grind * 0.4); // driven up under the jaw
-      if (k >= 1) this.event('stab');
+      const grind = k >= 1 ? Math.sin(t * 22) * 0.04 : 0;
+      this.armR.rotation.set(-0.5 * k - 0.3 * (1 - k) + grind, -0.45 + 0.2 * k, 0.1 + grind * 0.6);
+      // Blade stays near-level so the thrust reads as INTO the throat, not up past it
+      this.knife.rotation.set(-0.28 - 0.17 * k + grind, 0, 0.3 - 0.2 * k + grind * 0.4);
+      if (k >= 1) this.event(idx === 0 ? 'stab' : idx === 1 ? 'stab2' : 'stab3');
     }
 
     // Recover: everything sinks out of the frame together

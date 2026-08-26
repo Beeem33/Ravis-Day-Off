@@ -156,6 +156,15 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
           this.killEnemy(victim, neck, slump.normalize(), true, false, 'head', 0.2);
           this.spatter(neck, spray, true);
         }
+      } else if (e === 'stab2' || e === 'stab3') {
+        // Second and third thrusts land in the held body
+        audio.knifeStab();
+        if (victim) {
+          const neck = victim.position.clone().add(new THREE.Vector3(0, 1.42, 0));
+          const jab = this.player.forwardDir().clone();
+          victim.hitCorpse(neck, jab);
+          this.spatter(neck, jab.clone().negate().setY(0.5).normalize(), false);
+        }
       } else if (e === 'done') {
         this.takedown = null;
         this.player.cinematic = false;

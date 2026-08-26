@@ -14,10 +14,11 @@ interface SmokePuff {
 }
 
 /**
- * MainMenuScene — after the shift. Ravi sits in a chair in a dark room,
- * facing the camera, shotgun resting across his lap, cigar going, a single
- * candle burning on the table beside him. The whole frame goes through the
- * CRT post shader.
+ * MainMenuScene — after the shift. Ravi sits facing the camera in a dark
+ * room, one leg crossed over the other, cigar in hand — four seconds at his
+ * lips, then slowly down to rest, then back up. On the table beside him: a
+ * single candle dead centre, his pistol, and a small pile of loose rounds.
+ * The whole frame goes through the CRT post shader.
  */
 export class MainMenuScene implements GameScene {
   private scene = new THREE.Scene();
@@ -25,12 +26,14 @@ export class MainMenuScene implements GameScene {
   private crt: CRTPass;
   private ui: MenuUI | null = null;
   private unsubs: (() => void)[] = [];
-  private musicStarted = false;
+  private musicRetry = 0;
 
   // Animated bits
   private ravi!: THREE.Group;
   private head!: THREE.Group;
-  private gun!: THREE.Group;
+  private shoulderR!: THREE.Group;
+  private elbowR!: THREE.Group;
+  private cigar!: THREE.Group;
   private candleLight!: THREE.PointLight;
   private flame!: THREE.Mesh;
   private ember!: THREE.Mesh;
@@ -77,7 +80,7 @@ export class MainMenuScene implements GameScene {
     return tex;
   }
 
-  /** Ravi's face for the close-up: tired eyes, set jaw. Not angry. Done. */
+  /** Dead serious. Hard eyes straight at the camera, brows down, jaw set. */
   private static faceTexture(): THREE.MeshStandardMaterial {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
@@ -88,29 +91,33 @@ export class MainMenuScene implements GameScene {
     for (let i = 0; i < 70; i++) g.fillRect(10 + Math.random() * 44, 38 + Math.random() * 20, 1, 1);
     g.strokeStyle = '#2a1d15';
     g.lineCap = 'round';
-    // Heavy lids — half-closed eyes
-    g.lineWidth = 3;
+    // Brows driven down toward the bridge
+    g.lineWidth = 4;
     g.beginPath();
-    g.moveTo(14, 24);
+    g.moveTo(13, 21);
     g.lineTo(27, 25);
-    g.moveTo(37, 25);
-    g.lineTo(50, 24);
+    g.moveTo(51, 21);
+    g.lineTo(37, 25);
     g.stroke();
+    // Narrowed eyes, fixed on the lens
     g.fillStyle = '#f0ece4';
-    g.fillRect(16, 27, 10, 4);
-    g.fillRect(38, 27, 10, 4);
+    g.fillRect(15, 27, 11, 5);
+    g.fillRect(38, 27, 11, 5);
     g.fillStyle = '#1a1a1a';
-    g.fillRect(20, 27, 4, 4);
-    g.fillRect(41, 27, 4, 4);
-    // Shadows under the eyes
-    g.fillStyle = 'rgba(70,45,35,0.35)';
-    g.fillRect(16, 32, 10, 3);
-    g.fillRect(38, 32, 10, 3);
-    // Flat mouth, cigar corner
+    g.fillRect(19, 28, 4, 4);
+    g.fillRect(42, 28, 4, 4);
+    // Hard flat mouth
     g.lineWidth = 3;
     g.beginPath();
-    g.moveTo(24, 49);
-    g.lineTo(41, 48);
+    g.moveTo(23, 49);
+    g.lineTo(41, 49);
+    g.stroke();
+    // Set jaw shadow
+    g.strokeStyle = 'rgba(70,45,35,0.5)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(20, 55);
+    g.lineTo(44, 55);
     g.stroke();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -128,54 +135,72 @@ export class MainMenuScene implements GameScene {
     const floor = new THREE.Mesh(new THREE.BoxGeometry(12, 0.2, 12), this.lam(0x1a1c20));
     floor.position.set(0, -0.1, 0);
     s.add(floor);
-    // Walls barely there — swallowed by the dark
     const backWall = new THREE.Mesh(new THREE.BoxGeometry(12, 3.2, 0.2), this.lam(0x15171b));
     backWall.position.set(0, 1.6, -2.4);
     s.add(backWall);
 
-    // The side table, and the candle on it
-    const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.04, 16), this.lam(0x3e3226));
-    tableTop.position.set(-0.95, 0.62, -0.35);
+    // The side table
+    const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.04, 18), this.lam(0x3e3226));
+    tableTop.position.set(-0.95, 0.62, -0.2);
     s.add(tableTop);
     const tableLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.6, 10), this.lam(0x2b2219));
-    tableLeg.position.set(-0.95, 0.31, -0.35);
+    tableLeg.position.set(-0.95, 0.31, -0.2);
     s.add(tableLeg);
 
+    // Candle dead centre of the table
     const candle = new THREE.Mesh(
       new THREE.CylinderGeometry(0.028, 0.032, 0.16, 12),
       new THREE.MeshStandardMaterial({ color: 0xe8dfc8, roughness: 0.6 })
     );
-    candle.position.set(-0.95, 0.72, -0.35);
+    candle.position.set(-0.95, 0.72, -0.2);
     s.add(candle);
-    // Melted wax pooling at the base
     const wax = new THREE.Mesh(
       new THREE.CylinderGeometry(0.05, 0.055, 0.015, 12),
       new THREE.MeshStandardMaterial({ color: 0xded4ba, roughness: 0.5 })
     );
-    wax.position.set(-0.95, 0.648, -0.35);
+    wax.position.set(-0.95, 0.648, -0.2);
     s.add(wax);
     const wick = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.02, 6), this.lam(0x111));
-    wick.position.set(-0.95, 0.81, -0.35);
+    wick.position.set(-0.95, 0.81, -0.2);
     s.add(wick);
-    // Flame: a soft additive teardrop
     this.flame = new THREE.Mesh(
       new THREE.ConeGeometry(0.02, 0.07, 10),
       new THREE.MeshBasicMaterial({ color: 0xffca6a, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending })
     );
-    this.flame.position.set(-0.95, 0.85, -0.35);
+    this.flame.position.set(-0.95, 0.85, -0.2);
     s.add(this.flame);
-    // The candle is the key light for the whole shot
     this.candleLight = new THREE.PointLight(0xffb45e, 9, 6, 1.6);
-    this.candleLight.position.set(-0.95, 0.9, -0.35);
+    this.candleLight.position.set(-0.95, 0.9, -0.2);
     s.add(this.candleLight);
 
-    // A whisper of cold fill so his dark side isn't a void
+    // His pistol on the table, and a small pile of loose rounds
+    const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
+    const pistol = new THREE.Group();
+    const slide = new THREE.Mesh(new RoundedBoxGeometry(0.035, 0.045, 0.2, 2, 0.01), steel);
+    pistol.add(slide);
+    const grip = new THREE.Mesh(new RoundedBoxGeometry(0.03, 0.1, 0.045, 2, 0.01), this.lam(0x3a3228));
+    grip.position.set(0, -0.045, 0.075);
+    grip.rotation.x = 0.25;
+    pistol.add(grip);
+    pistol.position.set(-1.07, 0.665, -0.06);
+    pistol.rotation.set(Math.PI / 2 - 0.02, 0, 1.9); // lying flat on its side
+    s.add(pistol);
+    const brass = new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.8, roughness: 0.35 });
+    for (let i = 0; i < 6; i++) {
+      const round = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.024, 8), brass);
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * 0.045;
+      round.position.set(-0.8 + Math.cos(a) * d, 0.647 + (i < 2 ? 0.011 : 0), -0.08 + Math.sin(a) * d);
+      round.rotation.set(Math.PI / 2, 0, Math.random() * Math.PI * 2);
+      s.add(round);
+    }
+
+    // Lighting: candle is the key; a whisper of cold fill from the other side
     s.add(new THREE.AmbientLight(0x11151d, 1.0));
     const fill = new THREE.PointLight(0x3a4a66, 1.6, 6, 1.8);
     fill.position.set(1.6, 1.8, 1.4);
     s.add(fill);
 
-    // Framing: dead-on, seated height
     this.camera.position.set(0, 1.05, 2.2);
     this.camera.lookAt(0, 0.95, 0);
   }
@@ -193,7 +218,7 @@ export class MainMenuScene implements GameScene {
     const shoe = this.lam(0x14161a);
     const hair = this.lam(0x14100c);
 
-    // The chair — a plain office job, facing the camera
+    // The chair, facing the camera
     const chair = this.lam(0x1e2126);
     const seat = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.08, 0.6, 3, 0.03), chair);
     seat.position.set(0, 0.52, -0.12);
@@ -213,22 +238,40 @@ export class MainMenuScene implements GameScene {
       this.ravi.add(leg);
     }
 
-    // Seated body: thighs forward to the knees, shins down, feet planted
-    for (const sx of [-0.13, 0.14]) {
+    // LEFT leg planted; RIGHT leg crossed over it, ankle riding the knee —
+    // the boss-of-the-room sit.
+    {
       const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.3, 4, 10), trouser);
       thigh.rotation.x = Math.PI / 2 - 0.08;
-      thigh.position.set(sx, 0.6, 0.12);
+      thigh.position.set(-0.13, 0.6, 0.12);
       this.ravi.add(thigh);
       const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.3, 4, 10), trouser);
-      shin.position.set(sx, 0.28, 0.32);
+      shin.position.set(-0.13, 0.28, 0.32);
       shin.rotation.x = 0.15;
       this.ravi.add(shin);
       const foot = new THREE.Mesh(new RoundedBoxGeometry(0.15, 0.08, 0.27, 3, 0.03), shoe);
-      foot.position.set(sx, 0.04, 0.42);
+      foot.position.set(-0.13, 0.04, 0.42);
+      this.ravi.add(foot);
+    }
+    {
+      // Right thigh angles out and forward, knee high
+      const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.3, 4, 10), trouser);
+      thigh.position.set(0.18, 0.66, 0.1);
+      thigh.rotation.set(Math.PI / 2 - 0.18, 0, -0.35);
+      this.ravi.add(thigh);
+      // Shin lies across, ankle landing on the left knee
+      const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.3, 4, 10), trouser);
+      shin.position.set(0.03, 0.68, 0.32);
+      shin.rotation.set(0.25, 0, Math.PI / 2 - 0.12);
+      this.ravi.add(shin);
+      // Foot hanging off past the left knee, toes dropped
+      const foot = new THREE.Mesh(new RoundedBoxGeometry(0.13, 0.08, 0.25, 3, 0.03), shoe);
+      foot.position.set(-0.24, 0.62, 0.37);
+      foot.rotation.set(0.5, 0.3, 0.15);
       this.ravi.add(foot);
     }
 
-    // Torso leaned back into the chair, shirt with loose tie, blood still on it
+    // Torso against the chair back, shirt, loose tie, someone else's blood
     const torso = new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.54, 0.24, 4, 0.08), shirtMat);
     torso.position.set(0, 0.98, -0.14);
     torso.rotation.x = 0.12;
@@ -246,7 +289,7 @@ export class MainMenuScene implements GameScene {
       torso.add(b);
     }
 
-    // Head, facing the camera, cigar in the corner of his mouth
+    // Head: dead serious, eyes on the camera
     this.head = new THREE.Group();
     this.head.position.set(0, 1.44, -0.1);
     const skull = new THREE.Mesh(
@@ -260,35 +303,10 @@ export class MainMenuScene implements GameScene {
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.09, 10), skin);
     neck.position.y = -0.16;
     this.head.add(neck);
-    // The cigar: dark wrap, ash-grey tip, ember
-    const cigar = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.11, 8), this.lam(0x3d2a1a));
-    body.rotation.x = Math.PI / 2;
-    cigar.add(body);
-    const ash = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.015, 8), this.lam(0x8f8f8a));
-    ash.rotation.x = Math.PI / 2;
-    ash.position.z = 0.06;
-    cigar.add(ash);
-    this.ember = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0105, 0.0105, 0.006, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff5a1e })
-    );
-    this.ember.rotation.x = Math.PI / 2;
-    this.ember.position.z = 0.07;
-    cigar.add(this.ember);
-    this.emberLight = new THREE.PointLight(0xff6a22, 0.5, 0.6, 2);
-    this.emberLight.position.z = 0.07;
-    cigar.add(this.emberLight);
-    cigar.position.set(0.055, -0.065, 0.12);
-    cigar.rotation.set(0.25, -0.18, 0);
-    this.head.add(cigar);
     this.ravi.add(this.head);
 
-    // Arms down to the lap, hands resting on the shotgun
-    const mkArm = (shoulder: THREE.Vector3, hand: THREE.Vector3, out: number) => {
-      const elbow = shoulder.clone().lerp(hand, 0.5);
-      elbow.x += out;
-      elbow.z += 0.04;
+    // LEFT arm: resting along the chair, hand on his crossed shin
+    {
       const seg = (a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
         const len = a.distanceTo(b);
         const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.05, len - r), 3, 8), mat);
@@ -297,45 +315,55 @@ export class MainMenuScene implements GameScene {
         m.rotateX(Math.PI / 2);
         this.ravi.add(m);
       };
-      seg(shoulder, elbow, 0.058, shirtMat); // rolled sleeve
-      seg(elbow, hand, 0.048, skin); // bare forearm
-    };
-    mkArm(new THREE.Vector3(0.24, 1.24, -0.12), new THREE.Vector3(0.2, 0.72, 0.14), 0.07);
-    mkArm(new THREE.Vector3(-0.24, 1.24, -0.12), new THREE.Vector3(-0.22, 0.72, 0.14), -0.07);
+      const shoulder = new THREE.Vector3(-0.24, 1.24, -0.12);
+      const elbow = new THREE.Vector3(-0.31, 0.95, 0.0);
+      const hand = new THREE.Vector3(-0.16, 0.72, 0.3);
+      seg(shoulder, elbow, 0.058, shirtMat);
+      seg(elbow, hand, 0.048, skin);
+      const handL = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.07, 0.1, 3, 0.025), skin);
+      handL.position.copy(hand);
+      this.ravi.add(handL);
+    }
 
-    // The shotgun, resting across his lap
-    this.gun = new THREE.Group();
-    this.gun.position.set(0, 0.71, 0.16);
-    this.gun.rotation.set(0.04, 0.16, 0.05);
-    const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.4, metalness: 0.7 });
-    const walnut = new THREE.MeshStandardMaterial({ color: 0x4d3a26, roughness: 0.8 });
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.62, 12), steel);
-    barrel.rotation.z = Math.PI / 2;
-    barrel.position.set(-0.28, 0.03, 0);
-    this.gun.add(barrel);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.5, 10), steel);
-    tube.rotation.z = Math.PI / 2;
-    tube.position.set(-0.25, -0.01, 0);
-    this.gun.add(tube);
-    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.09, 0.055, 3, 0.015), steel);
-    receiver.position.set(0.03, 0.005, 0);
-    this.gun.add(receiver);
-    const forend = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.16, 10), walnut);
-    forend.rotation.z = Math.PI / 2;
-    forend.position.set(-0.22, -0.01, 0);
-    this.gun.add(forend);
-    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.11, 0.05, 3, 0.02), walnut);
-    stock.position.set(0.28, -0.015, 0);
-    stock.rotation.z = -0.1;
-    this.gun.add(stock);
-    // Hands resting on it
-    const handR = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.07, 0.09, 3, 0.025), skin);
-    handR.position.set(0.2, 0.045, 0);
-    this.gun.add(handR);
-    const handL = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.07, 0.1, 3, 0.025), skin);
-    handL.position.set(-0.22, 0.045, 0);
-    this.gun.add(handL);
-    this.ravi.add(this.gun);
+    // RIGHT arm: articulated — shoulder and elbow joints — so it can carry
+    // the cigar between his mouth and the armrest.
+    this.shoulderR = new THREE.Group();
+    this.shoulderR.position.set(0.24, 1.26, -0.1);
+    const upperR = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.24, 4, 10), shirtMat);
+    upperR.position.set(0, -0.16, 0);
+    this.shoulderR.add(upperR);
+    this.elbowR = new THREE.Group();
+    this.elbowR.position.set(0, -0.32, 0);
+    const foreR = new THREE.Mesh(new THREE.CapsuleGeometry(0.048, 0.2, 4, 10), skin);
+    foreR.position.set(0, -0.14, 0);
+    this.elbowR.add(foreR);
+    const handR = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.075, 0.085, 3, 0.025), skin);
+    handR.position.set(0, -0.28, 0);
+    this.elbowR.add(handR);
+    // The cigar, pinched in the fingers
+    this.cigar = new THREE.Group();
+    const cbody = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.11, 8), this.lam(0x3d2a1a));
+    cbody.rotation.x = Math.PI / 2;
+    this.cigar.add(cbody);
+    const ash = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.015, 8), this.lam(0x8f8f8a));
+    ash.rotation.x = Math.PI / 2;
+    ash.position.z = -0.055;
+    this.cigar.add(ash);
+    this.ember = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0105, 0.0105, 0.006, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff5a1e })
+    );
+    this.ember.rotation.x = Math.PI / 2;
+    this.ember.position.z = -0.065;
+    this.cigar.add(this.ember);
+    this.emberLight = new THREE.PointLight(0xff6a22, 0.5, 0.6, 2);
+    this.emberLight.position.z = -0.065;
+    this.cigar.add(this.emberLight);
+    this.cigar.position.set(0, -0.3, -0.06);
+    this.cigar.rotation.x = -0.5;
+    this.elbowR.add(this.cigar);
+    this.shoulderR.add(this.elbowR);
+    this.ravi.add(this.shoulderR);
   }
 
   // -------------------------------------------------------------- lifecycle
@@ -350,10 +378,10 @@ export class MainMenuScene implements GameScene {
         this.crt.setSize(window.innerWidth, window.innerHeight);
       })
     );
-    if (this.ctx.audio.ready) {
-      this.ctx.audio.startMenuMusic();
-      this.musicStarted = true;
-    }
+    // Kick the music immediately if the browser lets us; otherwise the
+    // update loop keeps retrying and it starts on the first click.
+    this.ctx.audio.unlock();
+    this.ctx.audio.startMenuMusic();
   }
 
   exit(): void {
@@ -365,9 +393,11 @@ export class MainMenuScene implements GameScene {
   }
 
   update(dt: number, time: number): void {
-    if (!this.musicStarted && this.ctx.audio.ready) {
+    // Keep nudging until the track is actually going (autoplay policy)
+    this.musicRetry -= dt;
+    if (this.musicRetry <= 0 && !this.ctx.audio.menuMusicPlaying) {
+      this.musicRetry = 0.5;
       this.ctx.audio.startMenuMusic();
-      this.musicStarted = true;
     }
 
     // Candle: restless flame, restless light
@@ -376,43 +406,54 @@ export class MainMenuScene implements GameScene {
     this.flame.scale.set(flick, 0.85 + (flick - 0.85) * 2.2, flick);
     this.flame.rotation.z = Math.sin(time * 7.7) * 0.1;
 
-    // The cigar: a slow draw every eight seconds — ember flares, then smoke
-    const drag = time % 8;
-    const drawing = drag > 5.4 && drag < 6.6;
-    const glow = drawing ? 0.75 + Math.sin(((drag - 5.4) / 1.2) * Math.PI) : 0.45 + Math.sin(time * 2.2) * 0.1;
+    // The cigar arm: 4s at the mouth → 1.4s slow lower → 2.4s resting at
+    // armrest height → 1.4s back up. Ember flares while it's at his lips.
+    const CYCLE = 9.2;
+    const p = time % CYCLE;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    let lift: number; // 1 = at mouth, 0 = down at the rest
+    if (p < 4) lift = 1;
+    else if (p < 5.4) lift = 1 - ease((p - 4) / 1.4);
+    else if (p < 7.8) lift = 0;
+    else lift = ease((p - 7.8) / 1.4);
+    // Two-joint pose blend: down pose / mouth pose
+    this.shoulderR.rotation.x = -0.28 - 0.78 * lift;
+    this.shoulderR.rotation.z = -0.1 + 0.62 * lift;
+    this.shoulderR.rotation.y = 0.15 * lift;
+    this.elbowR.rotation.x = -0.5 - 1.35 * lift;
+    const atMouth = lift > 0.96;
+    const glow = atMouth ? 0.75 + Math.sin(time * 3.5) * 0.25 : 0.4 + Math.sin(time * 2.2) * 0.08;
     (this.ember.material as THREE.MeshBasicMaterial).color.setHSL(0.045, 1, 0.25 + glow * 0.3);
     this.emberLight.intensity = glow * 1.1;
 
-    // Breathing + the small motions of a man thinking
+    // Stillness otherwise: breathing, and the smallest turn of the head
     this.ravi.position.y = Math.sin(time * 0.7) * 0.006;
-    this.head.rotation.x = 0.06 + Math.sin(time * 0.32) * 0.03;
-    this.head.rotation.y = Math.sin(time * 0.21) * 0.06;
-    this.head.rotation.z = Math.sin(time * 0.17) * 0.02;
-    this.gun.rotation.z = 0.05 + Math.sin(time * 0.7) * 0.004; // rises with the chest
+    this.head.rotation.x = 0.02 + Math.sin(time * 0.32) * 0.02;
+    this.head.rotation.y = Math.sin(time * 0.21) * 0.04;
 
-    // Smoke curling off the cigar (and heavier right after a drag)
+    // Smoke curls off the cigar — thickest while it's at his mouth
     this.smokeTimer -= dt;
     if (this.smokeTimer <= 0) {
-      this.smokeTimer = drawing ? 0.18 : 0.5 + Math.random() * 0.3;
-      this.head.updateWorldMatrix(true, true);
-      this.cigarTip.set(0.055, -0.065, 0.19).applyMatrix4(this.head.matrixWorld);
+      this.smokeTimer = atMouth ? 0.25 : 0.6 + Math.random() * 0.3;
+      this.cigar.updateWorldMatrix(true, false);
+      this.cigarTip.set(0, 0, -0.07).applyMatrix4(this.cigar.matrixWorld);
       const puff = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.06), this.smokeMat);
       puff.position.copy(this.cigarTip);
       this.scene.add(puff);
       this.smoke.push({ mesh: puff, age: 0, life: 2.6 + Math.random(), drift: Math.random() * Math.PI * 2 });
     }
     for (let i = this.smoke.length - 1; i >= 0; i--) {
-      const p = this.smoke[i];
-      p.age += dt;
-      const k = p.age / p.life;
-      p.mesh.position.y += dt * (0.14 + k * 0.1);
-      p.mesh.position.x += Math.sin(p.age * 1.3 + p.drift) * dt * 0.03;
-      p.mesh.position.z += Math.cos(p.age * 1.1 + p.drift) * dt * 0.02;
-      p.mesh.scale.setScalar(1 + k * 3.2);
-      p.mesh.quaternion.copy(this.camera.quaternion);
-      (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.28 * (1 - k);
+      const sp = this.smoke[i];
+      sp.age += dt;
+      const k = sp.age / sp.life;
+      sp.mesh.position.y += dt * (0.14 + k * 0.1);
+      sp.mesh.position.x += Math.sin(sp.age * 1.3 + sp.drift) * dt * 0.03;
+      sp.mesh.position.z += Math.cos(sp.age * 1.1 + sp.drift) * dt * 0.02;
+      sp.mesh.scale.setScalar(1 + k * 3.2);
+      sp.mesh.quaternion.copy(this.camera.quaternion);
+      (sp.mesh.material as THREE.MeshBasicMaterial).opacity = 0.28 * (1 - k);
       if (k >= 1) {
-        this.scene.remove(p.mesh);
+        this.scene.remove(sp.mesh);
         this.smoke.splice(i, 1);
       }
     }

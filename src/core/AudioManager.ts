@@ -553,8 +553,14 @@ export class AudioManager {
   private menuTrack: HTMLAudioElement | null = null;
   private menuTrackSource: MediaElementAudioSourceNode | null = null;
 
+  /** True while either the mp3 or the fallback synth mix is actually going. */
+  get menuMusicPlaying(): boolean {
+    return (this.menuTrack !== null && !this.menuTrack.paused) || this.musicTimer !== null;
+  }
+
   startMenuMusic(): void {
     if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') void this.ctx.resume();
     if (this.menuTrack && !this.menuTrack.paused) return;
     if (!this.menuTrack) {
       const el = new Audio('audio/menu.mp3');

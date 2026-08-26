@@ -23,10 +23,10 @@ export class TakedownViewmodel {
 
   static readonly GRAB_T = 0.35;
   static readonly DRAW_T = 0.5;
-  static readonly STAB_T = 2.0;
-  static readonly STAB_CYCLE = 0.34; // per-stab rhythm of the triple
-  static readonly DIE_T = 2.25;
-  static readonly TOTAL_T = 3.75;
+  static readonly STAB_T = 1.1; // first thrust comes straight off the draw — no standing around
+  static readonly STAB_CYCLE = 0.62; // per-stab rhythm of the triple — deliberate, not frantic
+  static readonly DIE_T = 1.35;
+  static readonly TOTAL_T = 4.0;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -151,7 +151,7 @@ export class TakedownViewmodel {
     // the struggle, then drives up under the jaw
     const rPocket = new THREE.Vector3(0.3, -0.55, -0.2);
     const rReady = new THREE.Vector3(0.26, -0.3, -0.38);
-    const rStab = new THREE.Vector3(0.03, -0.08, -0.72); // full extension — the blade buries in the held throat
+    const rStab = new THREE.Vector3(0.03, -0.26, -0.7); // full extension, driven into the CHEST
     // The forearm stays low so the cuff never swallows the frame — it's the
     // KNIFE that pitches up for the thrust, in the hand.
     if (t < T.DRAW_T) {
@@ -169,17 +169,17 @@ export class TakedownViewmodel {
       this.knife.rotation.set(-0.15 - 0.3 * k, 0, 0.35 * k); // blade cocked upward, ready
     } else {
       // THREE fast stabs. The arm drives past the grab hand so the blade
-      // visibly buries in the throat (the enemy is held ~0.95m out; the tip
+      // visibly buries in the chest (the enemy is held ~0.95m out; the tip
       // reaches ~1.15m at full extension), rips back to mid, drives in again.
-      const rPull = new THREE.Vector3(0.17, -0.17, -0.42); // between stabs: blade back out, still up
+      const rPull = new THREE.Vector3(0.17, -0.24, -0.42); // between stabs: blade back out, chest height
       const tt = t - T.STAB_T;
       const idx = Math.min(2, Math.floor(tt / T.STAB_CYCLE));
       const ph = tt - idx * T.STAB_CYCLE;
       let k: number;
-      if (ph < 0.11) k = ease(c01(ph / 0.11)); // drive in hard
-      else if (ph < 0.19) k = 1; // buried to the guard
-      else if (idx < 2) k = 1 - ease(c01((ph - 0.19) / 0.12)); // rip it back out
-      else k = 1 - 0.3 * ease(c01((ph - 0.19) / 0.5)); // the last one stays in and sags
+      if (ph < 0.18) k = ease(c01(ph / 0.18)); // drive in
+      else if (ph < 0.34) k = 1; // buried to the guard
+      else if (idx < 2) k = 1 - ease(c01((ph - 0.34) / 0.22)); // draw it back out
+      else k = 1 - 0.3 * ease(c01((ph - 0.34) / 0.6)); // the last one stays in and sags
       const from = idx === 0 ? rReady : rPull;
       this.armR.position.lerpVectors(from, rStab, k);
       this.armR.position.x += jx;

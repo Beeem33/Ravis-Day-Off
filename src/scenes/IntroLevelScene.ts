@@ -126,7 +126,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
         audio.knifeDraw();
       } else if (e === 'stab') {
         if (victim && victim.alive) {
-          const neck = victim.position.clone().add(new THREE.Vector3(0, 1.42, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
           const spray = this.player
             .forwardDir()
             .clone()
@@ -136,17 +136,17 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
           audio.knifeStab();
           const slump = this.player.forwardDir().clone();
           slump.y = -0.3;
-          this.killEnemy(victim, neck, slump.normalize(), true, false, 'head', 0.2);
-          this.spatter(neck, spray, true);
+          this.killEnemy(victim, chest, slump.normalize(), true, false, 'torso', 0.2);
+          this.spatter(chest, spray, true);
         }
       } else if (e === 'stab2' || e === 'stab3') {
         // Second and third thrusts land in the held body
         audio.knifeStab();
         if (victim) {
-          const neck = victim.position.clone().add(new THREE.Vector3(0, 1.42, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
           const jab = this.player.forwardDir().clone();
-          victim.hitCorpse(neck, jab);
-          this.spatter(neck, jab.clone().negate().setY(0.5).normalize(), false);
+          victim.hitCorpse(chest, jab);
+          this.spatter(chest, jab.clone().negate().setY(0.5).normalize(), false);
         }
       } else if (e === 'done') {
         this.takedown = null;
@@ -553,7 +553,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     anchor.y = this.player.position.y;
     this.player.position.lerp(anchor, Math.min(1, dt * 6));
 
-    const head = enemy.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+    const head = enemy.position.clone().add(new THREE.Vector3(0, 1.32, 0)); // frame face AND chest — the stabs land low
     const dir = head.sub(this.player.eyePosition());
     const targetYaw = Math.atan2(-dir.x, -dir.z);
     const targetPitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));

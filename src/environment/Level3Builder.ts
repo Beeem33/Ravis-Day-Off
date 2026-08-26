@@ -1,0 +1,675 @@
+import * as THREE from 'three';
+import { FlickeringLight } from './FlickeringLight';
+import { BreakableGlass } from './BreakableGlass';
+import {
+  Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, spreadsheetCanvas, makeTex
+} from './OfficeLevelBuilder';
+import {
+  officeChair, trashCan, sodaCan, paperStack, scatteredPaper, fileCabinet, book, spilledCoffee,
+  chipsBox, snack, printer, vent, fireAlarm, breakTable, vendingMachine, swatTruck, rubblePile
+} from './OfficeProps';
+
+export interface Level3Data {
+  group: THREE.Group;
+  colliders: Collider[];
+  shootables: THREE.Object3D[];
+  occluders: THREE.Object3D[];
+  waypoints: Waypoint[];
+  glassPanes: BreakableGlass[];
+  flickering: FlickeringLight[];
+  playerSpawn: THREE.Vector3;
+  playerSpawnYaw: number;
+  /** Where the player stands, unable to move, for the opening. */
+  introStand: THREE.Vector3;
+  introYaw: number;
+  /** Staff at their desks, already seated and working. */
+  deskWorkers: EnemySpawn[];
+  /** The one filling a cup at the cooler. */
+  coolerWorker: EnemySpawn;
+  /** The one who walks over to talk to Ravi: where he starts, where he stops. */
+  greeterStart: THREE.Vector3;
+  greeterTalkPos: THREE.Vector3;
+  /** The truck, and the pieces of it the scene drives. */
+  truck: THREE.Group;
+  truckDoor: THREE.Group;
+  truckGunMount: THREE.Group;
+  truckGunYaw: THREE.Group;
+  /** Where the truck starts (outside) and where it ends up (inside). */
+  truckFrom: THREE.Vector3;
+  truckTo: THREE.Vector3;
+  /** Where the gunner sits once the truck is parked. */
+  gunnerSpawn: EnemySpawn;
+  /** Team members pour out of here. */
+  agentSpawns: EnemySpawn[];
+  /** Rubble + fire that seals the hole; enabled after the crash. */
+  breachBarrier: THREE.Group;
+  breachColliders: Collider[];
+  /** Fire licks, animated by the scene. */
+  fires: THREE.Mesh[];
+}
+
+const WALL_H = 3.2;
+const T = 0.24;
+
+// ---- Footprint: a long corridor in from the west, then the office floor.
+const HALL_X0 = -34;
+const HALL_X1 = -16;
+const HALL_Z0 = -2.2;
+const HALL_Z1 = 2.2;
+const OFF_X0 = -16;
+const OFF_X1 = 16;
+const OFF_Z0 = -13;
+const OFF_Z1 = 13;
+// Breakroom in the south-east corner
+const BR_X0 = 7.5;
+const BR_Z0 = 5.5;
+// The truck comes through the north wall here
+const BREACH_X = 1.0;
+const BREACH_W = 7.0;
+// The ceiling is torn open above the breach so the roof gunner is exposed
+const CEIL_HOLE_X0 = BREACH_X - 4.6;
+const CEIL_HOLE_X1 = BREACH_X + 4.6;
+const CEIL_HOLE_Z1 = OFF_Z0 + 10.0; // deep enough that the gunner is
+// shootable from most of the floor, not only from under his muzzle
+
+/**
+ * Level3Builder — the sister office. A long featureless corridor in, then a
+ * single-storey open-plan floor: rows of desks (no cubicles), a breakroom,
+ * and the north wall that a Bureau truck is about to come through.
+ *
+ * Same conventions as the other builders: `solid()` registers mesh +
+ * collider + raycast target, and `y` is always the BASE of a box.
+ */
+export class Level3Builder {
+  private group = new THREE.Group();
+  private colliders: Collider[] = [];
+  private shootables: THREE.Object3D[] = [];
+  private occluders: THREE.Object3D[] = [];
+  private glassPanes: BreakableGlass[] = [];
+  private flickering: FlickeringLight[] = [];
+  private fires: THREE.Mesh[] = [];
+  private breachColliders: Collider[] = [];
+  private breachBarrier = new THREE.Group();
+
+  private carpetMat!: THREE.MeshLambertMaterial;
+  private wallMat!: THREE.MeshLambertMaterial;
+  private ceilMat!: THREE.MeshLambertMaterial;
+  private deskMat!: THREE.MeshLambertMaterial;
+  private darkMetalMat!: THREE.MeshLambertMaterial;
+  private screenMat!: THREE.MeshBasicMaterial;
+  private plasticMat!: THREE.MeshLambertMaterial;
+  private coolerMat!: THREE.MeshLambertMaterial;
+
+  private truckParts!: ReturnType<typeof swatTruck>;
+
+  build(): Level3Data {
+    this.makeMaterials();
+    this.buildCorridor();
+    this.buildOfficeShell();
+    this.buildDesks();
+    this.buildBreakroom();
+    this.buildServices();
+    this.buildTruck();
+    this.buildLighting();
+
+    return {
+      group: this.group,
+      colliders: this.colliders,
+      shootables: this.shootables,
+      occluders: this.occluders,
+      waypoints: this.makeWaypoints(),
+      glassPanes: this.glassPanes,
+      flickering: this.flickering,
+      playerSpawn: new THREE.Vector3(HALL_X0 + 1.4, 0, 0),
+      playerSpawnYaw: -Math.PI / 2, // facing east, down the corridor
+      introStand: new THREE.Vector3(OFF_X0 + 1.5, 0, 0),
+      introYaw: -Math.PI / 2,
+      deskWorkers: [
+        { pos: new THREE.Vector3(-9.4, 0, -5.1), yaw: 0 },
+        { pos: new THREE.Vector3(-4.2, 0, -5.1), yaw: 0 },
+        { pos: new THREE.Vector3(-9.4, 0, 1.9), yaw: 0 },
+        { pos: new THREE.Vector3(-4.2, 0, 1.9), yaw: 0 },
+        { pos: new THREE.Vector3(1.0, 0, 1.9), yaw: 0 },
+        { pos: new THREE.Vector3(6.2, 0, -5.1), yaw: 0 }
+      ],
+      coolerWorker: { pos: new THREE.Vector3(-13.4, 0, 8.4), yaw: -Math.PI / 2 },
+      greeterStart: new THREE.Vector3(-8.0, 0, 5.6),
+      greeterTalkPos: new THREE.Vector3(OFF_X0 + 3.4, 0, 0.35),
+      truck: this.truckParts.group,
+      truckDoor: this.truckParts.doorPivot,
+      truckGunMount: this.truckParts.gunMount,
+      truckGunYaw: this.truckParts.gunYaw,
+      truckFrom: new THREE.Vector3(BREACH_X, 0, OFF_Z0 - 11),
+      truckTo: new THREE.Vector3(BREACH_X, 0, OFF_Z0 + 3.2),
+      gunnerSpawn: { pos: new THREE.Vector3(BREACH_X, 3.05, OFF_Z0 + 4.2), yaw: Math.PI },
+      agentSpawns: [
+        { pos: new THREE.Vector3(BREACH_X + 2.4, 0, OFF_Z0 + 2.0), yaw: Math.PI },
+        { pos: new THREE.Vector3(BREACH_X + 2.9, 0, OFF_Z0 + 3.6), yaw: Math.PI * 0.8 },
+        { pos: new THREE.Vector3(BREACH_X + 2.2, 0, OFF_Z0 + 5.0), yaw: Math.PI * 0.7 },
+        { pos: new THREE.Vector3(BREACH_X - 1.9, 0, OFF_Z0 + 2.6), yaw: Math.PI * 1.2 },
+        { pos: new THREE.Vector3(BREACH_X - 2.3, 0, OFF_Z0 + 4.4), yaw: Math.PI * 1.3 }
+      ],
+      breachBarrier: this.breachBarrier,
+      breachColliders: this.breachColliders,
+      fires: this.fires
+    };
+  }
+
+  // ------------------------------------------------------------- materials
+
+  private makeMaterials(): void {
+    this.carpetMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([50, 47, 42], 13), 16, 13) });
+    this.wallMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([198, 194, 184], 7), 5, 2) });
+    this.ceilMat = new THREE.MeshLambertMaterial({ map: makeTex(ceilingTileCanvas(), 16, 13) });
+    this.deskMat = new THREE.MeshLambertMaterial({ color: 0x8f7a5e });
+    this.darkMetalMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
+    this.screenMat = new THREE.MeshBasicMaterial({ map: makeTex(spreadsheetCanvas()) });
+    this.plasticMat = new THREE.MeshLambertMaterial({ color: 0x24272c });
+    this.coolerMat = new THREE.MeshLambertMaterial({ color: 0xd8dde2 });
+  }
+
+  // --------------------------------------------------------------- helpers
+
+  private solid(
+    w: number, h: number, d: number, x: number, y: number, z: number,
+    mat: THREE.Material,
+    opts: { occlude?: boolean; surface?: string; collide?: boolean; pierce?: boolean } = {}
+  ): THREE.Mesh {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y + h / 2, z);
+    mesh.userData.surface = opts.surface ?? 'concrete';
+    if (opts.pierce) mesh.userData.pierce = true;
+    this.group.add(mesh);
+    this.shootables.push(mesh);
+    if (opts.occlude !== false) this.occluders.push(mesh);
+    if (opts.collide !== false) {
+      const c: Collider = {
+        box: new THREE.Box3(
+          new THREE.Vector3(x - w / 2, y, z - d / 2),
+          new THREE.Vector3(x + w / 2, y + h, z + d / 2)
+        )
+      };
+      if (opts.pierce) c.pierceable = true;
+      this.colliders.push(c);
+    }
+    return mesh;
+  }
+
+  private wallX(x0: number, x1: number, z: number, h = WALL_H): void {
+    this.solid(Math.abs(x1 - x0), h, T, (x0 + x1) / 2, 0, z, this.wallMat);
+  }
+
+  private wallZ(z0: number, z1: number, x: number, h = WALL_H): void {
+    this.solid(T, h, Math.abs(z1 - z0), x, 0, (z0 + z1) / 2, this.wallMat);
+  }
+
+  private slabAt(x0: number, x1: number, z0: number, z1: number, y: number, mat: THREE.Material): void {
+    this.solid(x1 - x0, 0.3, z1 - z0, (x0 + x1) / 2, y, (z0 + z1) / 2, mat, { surface: 'concrete' });
+  }
+
+  /** Decorative group: placed, but no collider and not shot at. */
+  private place(g: THREE.Object3D, x: number, y: number, z: number, yaw = 0): THREE.Object3D {
+    g.position.set(x, y, z);
+    g.rotation.y = yaw;
+    this.group.add(g);
+    return g;
+  }
+
+  /** Monitor: solid shell, glowing face, neck and base. `y` is panel centre. */
+  private screen(w: number, h: number, x: number, y: number, z: number, yaw: number): void {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = yaw;
+    this.group.add(g);
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(w + 0.045, h + 0.045, 0.042), this.plasticMat);
+    shell.position.z = -0.022;
+    g.add(shell);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), this.screenMat);
+    face.position.z = 0.0015;
+    g.add(face);
+    const bottom = -h / 2;
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.05), this.darkMetalMat);
+    neck.position.set(0, bottom - 0.0225, -0.02);
+    g.add(neck);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.014, 0.13), this.darkMetalMat);
+    base.position.set(0, bottom - 0.048, -0.02);
+    g.add(base);
+  }
+
+  // --------------------------------------------------------------- corridor
+
+  private buildCorridor(): void {
+    this.slabAt(HALL_X0, HALL_X1 + 0.2, HALL_Z0, HALL_Z1, -0.3, this.carpetMat);
+    this.slabAt(HALL_X0, HALL_X1 + 0.2, HALL_Z0, HALL_Z1, WALL_H, this.ceilMat);
+    // Nothing off it — just the two long walls and the end cap
+    this.wallX(HALL_X0, HALL_X1, HALL_Z0);
+    this.wallX(HALL_X0, HALL_X1, HALL_Z1);
+    this.wallZ(HALL_Z0, HALL_Z1, HALL_X0);
+
+    // Doorway into the office at the far end
+    this.wallZ(HALL_Z0, -0.95, HALL_X1);
+    this.wallZ(0.95, HALL_Z1, HALL_X1);
+    this.solid(T, WALL_H - 2.3, 1.9, HALL_X1, 2.3, 0, this.wallMat, { collide: false });
+    const leaf = this.solid(0.1, 2.25, 1.8, HALL_X1 + 0.14, 0, 0, this.deskMat, {
+      surface: 'wood', occlude: false, collide: false
+    });
+    leaf.userData.surface = 'wood';
+
+    // Skirting details so eighteen metres of corridor isn't a blank tube
+    for (let x = HALL_X0 + 3; x < HALL_X1 - 1; x += 4.5) {
+      this.place(fireAlarm(), x, 1.45, HALL_Z0 + T / 2 + 0.03);
+      this.place(vent(0.55, 0.3), x + 2.2, 2.55, HALL_Z1 - T / 2 - 0.03, Math.PI);
+    }
+    for (let x = HALL_X0 + 2; x < HALL_X1; x += 6) {
+      const p = scatteredPaper(2, 0.5);
+      p.position.set(x, 0, (Math.random() - 0.5) * 2);
+      this.group.add(p);
+    }
+  }
+
+  // ------------------------------------------------------------ office shell
+
+  private buildOfficeShell(): void {
+    this.slabAt(OFF_X0, OFF_X1, OFF_Z0, OFF_Z1, -0.3, this.carpetMat);
+    // Ceiling, with a bite taken out of it over the breach. The truck stands
+    // 3.05m at the roof against a 3.2m ceiling, so a gunner up top has to
+    // have somewhere to be — and a lorry through the wall takes the slab
+    // above it with it anyway.
+    this.slabAt(OFF_X0, CEIL_HOLE_X0, OFF_Z0, OFF_Z1, WALL_H, this.ceilMat);
+    this.slabAt(CEIL_HOLE_X1, OFF_X1, OFF_Z0, OFF_Z1, WALL_H, this.ceilMat);
+    this.slabAt(CEIL_HOLE_X0, CEIL_HOLE_X1, CEIL_HOLE_Z1, OFF_Z1, WALL_H, this.ceilMat);
+
+    // North wall, with the stretch the truck destroys left out — the barrier
+    // group fills it after the crash.
+    this.wallX(OFF_X0, BREACH_X - BREACH_W / 2, OFF_Z0);
+    this.wallX(BREACH_X + BREACH_W / 2, OFF_X1, OFF_Z0);
+    this.wallX(OFF_X0, OFF_X1, OFF_Z1);
+    this.wallZ(OFF_Z0, OFF_Z1, OFF_X1);
+    // West wall, split round the corridor doorway
+    this.wallZ(OFF_Z0, -0.95, OFF_X0);
+    this.wallZ(0.95, OFF_Z1, OFF_X0);
+
+    // Ragged lip round the torn ceiling
+    for (const [lx, lz, lw, ld] of [
+      [CEIL_HOLE_X0, OFF_Z0, 0.5, CEIL_HOLE_Z1 - OFF_Z0],
+      [CEIL_HOLE_X1, OFF_Z0, 0.5, CEIL_HOLE_Z1 - OFF_Z0],
+      [BREACH_X, CEIL_HOLE_Z1, CEIL_HOLE_X1 - CEIL_HOLE_X0, 0.5]
+    ] as const) {
+      const lip = new THREE.Mesh(new THREE.BoxGeometry(lw, 0.22, ld), this.wallMat);
+      lip.position.set(lx, WALL_H + 0.04, lz + (ld > 1 ? ld / 2 : 0));
+      lip.rotation.z = (Math.random() - 0.5) * 0.08;
+      this.group.add(lip);
+    }
+
+    // Intact wall above the breach, so it reads as a hole punched through
+    this.solid(BREACH_W, WALL_H - 2.6, T, BREACH_X, 2.6, OFF_Z0, this.wallMat, { collide: false });
+  }
+
+  // ------------------------------------------------------------------ desks
+
+  /** One workstation: desk, monitor, keyboard, chair and a bit of clutter. */
+  private workstation(x: number, z: number, yaw: number): void {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = yaw;
+    this.group.add(g);
+
+    // Desk top (local: runs along X, occupant on the −Z side)
+    const top = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.06, 0.85), this.deskMat);
+    top.position.set(0, 0.69, 0);
+    top.userData.surface = 'wood';
+    g.add(top);
+    this.shootables.push(top);
+    for (const [lx, lz] of [[-0.88, -0.36], [0.88, -0.36], [-0.88, 0.36], [0.88, 0.36]] as const) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.66, 0.06), this.darkMetalMat);
+      leg.position.set(lx, 0.33, lz);
+      g.add(leg);
+    }
+    const modesty = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 0.03), this.deskMat);
+    modesty.position.set(0, 0.42, 0.4);
+    g.add(modesty);
+    // World-space collider (yaw is a quarter turn or none)
+    const swap = Math.abs(Math.sin(yaw)) > 0.5;
+    const hw = (swap ? 0.85 : 1.9) / 2;
+    const hd = (swap ? 1.9 : 0.85) / 2;
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(x - hw, 0, z - hd), new THREE.Vector3(x + hw, 0.72, z + hd))
+    });
+
+    // Monitor at the back of the desk, facing the occupant
+    const mz = z + Math.cos(yaw) * 0.26;
+    const mx = x - Math.sin(yaw) * 0.26;
+    this.screen(0.56, 0.36, mx, 0.72 + 0.055 + 0.18, mz, yaw + Math.PI);
+    // Keyboard, mouse, tower
+    const kb = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.022, 0.15), this.plasticMat);
+    kb.position.set(-0.02, 0.735, -0.24);
+    kb.rotation.y = (Math.random() - 0.5) * 0.2;
+    g.add(kb);
+    const mouse = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.028, 0.095), this.plasticMat);
+    mouse.position.set(0.36, 0.738, -0.22);
+    g.add(mouse);
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.44, 0.46), this.darkMetalMat);
+    tower.position.set(-0.78, 0.22, 0.2);
+    g.add(tower);
+
+    // Desk clutter — paper, a can, a snack, sometimes a mug
+    const pap = paperStack(4 + Math.floor(Math.random() * 4));
+    pap.position.set(0.62 * (Math.random() < 0.5 ? -1 : 1), 0.72, 0.1);
+    pap.rotation.y = Math.random();
+    g.add(pap);
+    if (Math.random() < 0.7) {
+      const can = sodaCan();
+      can.position.set(-0.5 + Math.random() * 0.3, 0.72, -0.16);
+      g.add(can);
+    }
+    if (Math.random() < 0.75) {
+      const kinds = ['nutbar', 'gumdrops', 'cakes', 'jerky'] as const;
+      const s = snack(kinds[Math.floor(Math.random() * kinds.length)]);
+      s.position.set(0.24 + Math.random() * 0.4, 0.72, -0.1);
+      s.rotation.z = Math.PI / 2; // lying flat
+      s.position.y = 0.72 + 0.03;
+      s.rotation.y = Math.random() * Math.PI;
+      g.add(s);
+    }
+    if (Math.random() < 0.5) {
+      const c = chipsBox();
+      c.position.set(-0.3, 0.72, 0.22);
+      c.rotation.z = Math.PI / 2;
+      c.position.y = 0.72 + 0.085;
+      g.add(c);
+    }
+
+    // Chair, tucked in
+    const chair = officeChair();
+    chair.position.set(x - Math.sin(yaw) * -0.78, 0, z + Math.cos(yaw) * -0.78);
+    chair.rotation.y = yaw;
+    this.group.add(chair);
+  }
+
+  private buildDesks(): void {
+    // Four rows of paired desks, all facing north — no cubicle panels
+    for (const z of [-5.1, 1.9]) {
+      for (const x of [-9.4, -4.2, 1.0, 6.2]) this.workstation(x, z, 0);
+    }
+    // A short row along the west side, turned a quarter
+    for (const z of [-9.6, -7.4]) this.workstation(-13.2, z, Math.PI / 2);
+  }
+
+  // -------------------------------------------------------------- breakroom
+
+  private buildBreakroom(): void {
+    // Partition walls with a doorway on the west side
+    this.wallZ(BR_Z0, OFF_Z1, BR_X0);
+    this.wallX(BR_X0, OFF_X1, BR_Z0, WALL_H);
+    // Doorway punched in the west partition
+    const gap0 = 8.2;
+    const gap1 = 9.6;
+    this.solid(T, WALL_H, gap0 - BR_Z0, BR_X0, 0, (BR_Z0 + gap0) / 2, this.wallMat);
+    this.solid(T, WALL_H, OFF_Z1 - gap1, BR_X0, 0, (gap1 + OFF_Z1) / 2, this.wallMat);
+    this.solid(T, WALL_H - 2.3, gap1 - gap0, BR_X0, 2.3, (gap0 + gap1) / 2, this.wallMat, { collide: false });
+
+    this.place(breakTable(), 10.4, 0, 8.2);
+    this.place(breakTable(), 13.6, 0, 11.0, 0.5);
+
+    // Machines against the east wall
+    const vm = vendingMachine();
+    this.place(vm, 14.4, 0, 6.6, -Math.PI / 2);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(14.0, 0, 6.1), new THREE.Vector3(15.2, 1.95, 7.1))
+    });
+    const vm2 = vendingMachine();
+    this.place(vm2, 14.4, 0, 8.0, -Math.PI / 2);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(14.0, 0, 7.5), new THREE.Vector3(15.2, 1.95, 8.5))
+    });
+
+    // Counter with a coffee machine and snacks
+    this.solid(3.0, 0.92, 0.6, 11.0, 0, OFF_Z1 - 0.5, this.darkMetalMat, { surface: 'metal' });
+    const coffee = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.32), this.plasticMat);
+    coffee.position.set(10.2, 1.13, OFF_Z1 - 0.5);
+    this.group.add(coffee);
+    for (const [sx, k] of [[11.3, 'cakes'], [11.7, 'nutbar'], [12.05, 'jerky']] as const) {
+      this.place(snack(k as 'cakes'), sx, 0.92, OFF_Z1 - 0.55, Math.random());
+    }
+    this.place(trashCan(), 8.9, 0, OFF_Z1 - 0.7);
+  }
+
+  // --------------------------------------------------------------- services
+
+  private buildServices(): void {
+    // Water cooler on the west wall — someone is filling a cup at it
+    this.waterCooler(-14.0, 8.4);
+    // Printers
+    this.place(printer(), -14.2, 0, -11.6, Math.PI / 2);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(-14.6, 0, -12.0), new THREE.Vector3(-13.8, 1.2, -11.2))
+    });
+    this.place(printer(), 12.0, 0, -11.9);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(11.6, 0, -12.3), new THREE.Vector3(12.4, 1.2, -11.5))
+    });
+
+    // Cabinets down the south wall and the east side
+    const cab = (x: number, z: number, yaw: number, drawers = 4): void => {
+      this.place(fileCabinet(0.6, 1.45, 1.8, drawers), x, 0, z, yaw);
+      const swap = Math.abs(Math.sin(yaw)) > 0.5;
+      const hw = (swap ? 1.8 : 0.6) / 2;
+      const hd = (swap ? 0.6 : 1.8) / 2;
+      this.colliders.push({
+        box: new THREE.Box3(new THREE.Vector3(x - hw, 0, z - hd), new THREE.Vector3(x + hw, 1.45, z + hd))
+      });
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, 1.45, hd * 2), this.darkMetalMat);
+      shell.position.set(x, 0.725, z);
+      shell.visible = false;
+      shell.userData.surface = 'metal';
+      this.group.add(shell);
+      this.shootables.push(shell);
+      this.occluders.push(shell);
+    };
+    cab(-15.2, -3.0, 0);
+    cab(-15.2, -0.6, 0);
+    cab(15.0, -8.0, 0);
+    cab(15.0, -5.6, 0);
+    cab(0.0, 11.9, Math.PI / 2, 3);
+    cab(3.0, 11.9, Math.PI / 2, 3);
+
+    // Vents and fire alarms round the walls — the alarms do nothing
+    for (const [x, z, yaw] of [
+      [-11, OFF_Z0 + T / 2, 0], [8, OFF_Z0 + T / 2, 0],
+      [-6, OFF_Z1 - T / 2, Math.PI], [4, OFF_Z1 - T / 2, Math.PI],
+      [OFF_X0 + T / 2, -8, Math.PI / 2], [OFF_X1 - T / 2, 2, -Math.PI / 2]
+    ] as const) {
+      this.place(fireAlarm(), x, 1.45, z, yaw);
+    }
+    for (const [x, z, yaw] of [
+      [-12, OFF_Z0 + T / 2, 0], [-3, OFF_Z0 + T / 2, 0], [10, OFF_Z0 + T / 2, 0],
+      [-9, OFF_Z1 - T / 2, Math.PI], [6, OFF_Z1 - T / 2, Math.PI],
+      [OFF_X0 + T / 2, 4, Math.PI / 2], [OFF_X1 - T / 2, -2, -Math.PI / 2]
+    ] as const) {
+      this.place(vent(0.62, 0.34), x, 2.65, z, yaw);
+    }
+    // Ceiling vents too
+    for (const [x, z] of [[-8, -2], [2, -2], [-8, 6], [6, 2]] as const) {
+      const v = vent(0.7, 0.7);
+      v.position.set(x, WALL_H - 0.02, z);
+      v.rotation.x = Math.PI / 2;
+      this.group.add(v);
+    }
+
+    // Floor dressing
+    for (const [x, z] of [[-6.5, -2.2], [3.4, -8.6], [-11.5, 3.0]] as const) {
+      const c = spilledCoffee();
+      c.position.set(x, 0, z);
+      this.group.add(c);
+    }
+    for (const [k, x, z] of [['persuade', -7.2, -8.9], ['scamming', 4.6, 4.2], ['comic', -12.0, 6.0]] as const) {
+      const b = book(k as 'persuade');
+      b.position.set(x, 0, z);
+      b.rotation.y = Math.random() * Math.PI;
+      this.group.add(b);
+    }
+    this.place(trashCan(), -10.6, 0, -2.4);
+    this.place(trashCan(), 5.0, 0, -2.4);
+    this.place(trashCan(), -15.0, 0, 11.4);
+  }
+
+  private waterCooler(x: number, z: number): void {
+    this.solid(0.42, 1.02, 0.42, x, 0, z, this.coolerMat, { surface: 'metal', occlude: false });
+    const g = new THREE.Group();
+    this.group.add(g);
+    for (const [dx, col] of [[-0.08, 0x2f6f9e], [0.08, 0xb4463c]] as const) {
+      const tap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.09, 0.05), new THREE.MeshLambertMaterial({ color: col }));
+      tap.position.set(x + 0.22, 0.78, z + dx);
+      g.add(tap);
+    }
+    const bottle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.2, 0.46, 14),
+      new THREE.MeshLambertMaterial({ color: 0x7fc4e8, transparent: true, opacity: 0.72 })
+    );
+    bottle.position.set(x, 1.28, z);
+    g.add(bottle);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.14, 12), this.coolerMat);
+    neck.position.set(x, 1.02, z);
+    g.add(neck);
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(x - 0.21, 0, z - 0.21), new THREE.Vector3(x + 0.21, 1.51, z + 0.21))
+    });
+  }
+
+  // ------------------------------------------------------------------ truck
+
+  private buildTruck(): void {
+    this.truckParts = swatTruck();
+    // Parked outside until the scene drives it in
+    this.truckParts.group.position.set(BREACH_X, 0, OFF_Z0 - 11);
+    this.group.add(this.truckParts.group);
+
+    // Rubble and fire that seal the hole once it's through. Hidden until then.
+    this.breachBarrier.visible = false;
+    this.group.add(this.breachBarrier);
+    const addRubble = (x: number, z: number, s: number): void => {
+      const r = rubblePile(s);
+      r.position.set(x, 0, z);
+      r.rotation.y = Math.random() * Math.PI;
+      this.breachBarrier.add(r);
+    };
+    // Piles either side of the truck, filling the gaps it doesn't
+    addRubble(BREACH_X - 3.1, OFF_Z0 + 0.5, 1.2);
+    addRubble(BREACH_X - 2.4, OFF_Z0 + 2.1, 1.0);
+    addRubble(BREACH_X + 3.2, OFF_Z0 + 0.4, 1.2);
+    addRubble(BREACH_X + 2.6, OFF_Z0 + 2.0, 1.0);
+    addRubble(BREACH_X, OFF_Z0 - 0.4, 1.4);
+
+    // Fires licking up out of it
+    const fireMat = () =>
+      new THREE.MeshBasicMaterial({
+        color: 0xff8a2b, transparent: true, opacity: 0.75, depthWrite: false, side: THREE.DoubleSide
+      });
+    for (const [fx, fz, sc] of [
+      [BREACH_X - 3.0, OFF_Z0 + 0.7, 1.0], [BREACH_X - 2.2, OFF_Z0 + 2.0, 0.8],
+      [BREACH_X + 3.1, OFF_Z0 + 0.6, 1.0], [BREACH_X + 2.5, OFF_Z0 + 2.1, 0.85],
+      [BREACH_X - 0.6, OFF_Z0 - 0.6, 0.9], [BREACH_X + 1.2, OFF_Z0 - 0.5, 0.9]
+    ] as const) {
+      for (let i = 0; i < 3; i++) {
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.28 * sc, 1.0 * sc, 6, 1, true), fireMat());
+        flame.position.set(fx + (Math.random() - 0.5) * 0.5, 0.5 * sc, fz + (Math.random() - 0.5) * 0.5);
+        flame.userData.baseY = flame.position.y;
+        flame.userData.phase = Math.random() * Math.PI * 2;
+        this.breachBarrier.add(flame);
+        this.fires.push(flame);
+      }
+      const glow = new THREE.PointLight(0xff7a2a, 3.2, 6, 1.9);
+      glow.position.set(fx, 0.8, fz);
+      this.breachBarrier.add(glow);
+    }
+
+    // Colliders that seal the breach — added to the live set after the crash
+    for (const [cx, cz, cw, cd] of [
+      [BREACH_X - 3.0, OFF_Z0 + 1.2, 2.2, 3.4],
+      [BREACH_X + 3.1, OFF_Z0 + 1.2, 2.2, 3.4],
+      [BREACH_X, OFF_Z0 - 0.5, 7.0, 1.6]
+    ] as const) {
+      this.breachColliders.push({
+        box: new THREE.Box3(
+          new THREE.Vector3(cx - cw / 2, 0, cz - cd / 2),
+          new THREE.Vector3(cx + cw / 2, 2.6, cz + cd / 2)
+        )
+      });
+    }
+  }
+
+  // ------------------------------------------------------------- lighting
+
+  private buildLighting(): void {
+    const g = this.group;
+    g.add(new THREE.AmbientLight(0x4a4436, 0.95));
+    g.add(new THREE.HemisphereLight(0xa39a86, 0x2a2620, 0.6));
+
+    const inHole = (x: number, z: number): boolean =>
+      x > CEIL_HOLE_X0 && x < CEIL_HOLE_X1 && z < CEIL_HOLE_Z1;
+
+    const addLight = (x: number, z: number, intensity = 8, dist = 12): void => {
+      const l = new THREE.PointLight(0xfff2dc, intensity, dist, 1.6);
+      l.position.set(x, WALL_H - 0.35, z);
+      g.add(l);
+      const fix = new THREE.Mesh(
+        new THREE.BoxGeometry(1.3, 0.07, 0.3),
+        new THREE.MeshStandardMaterial({ color: 0x999999, emissive: 0xfff6e0, emissiveIntensity: 1.4 })
+      );
+      fix.position.set(x, WALL_H - 0.23, z);
+      g.add(fix);
+      const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.16, 0.16), this.darkMetalMat);
+      canopy.position.set(x, WALL_H - 0.09, z);
+      g.add(canopy);
+    };
+
+    /** Light with no fixture — for the open sky over the breach. */
+    const addBare = (x: number, z: number, intensity: number, dist: number): void => {
+      const l = new THREE.PointLight(0xbcd0e8, intensity, dist, 1.7);
+      l.position.set(x, WALL_H + 1.2, z);
+      g.add(l);
+    };
+
+    // Corridor — a run of fixtures, one of them failing
+    for (let x = HALL_X0 + 3; x < HALL_X1; x += 4.5) addLight(x, 0, 6, 9);
+    this.flickering.push(new FlickeringLight(g, new THREE.Vector3(HALL_X1 - 3.4, WALL_H - 0.35, 0), 7, 8));
+
+    // Office floor
+    for (const z of [-9.5, -3.5, 2.5, 8.5]) {
+      for (const x of [-12, -6, 0, 6, 12]) {
+        // Nothing to hang a fixture from where the slab is gone — daylight
+        // comes in through the tear instead.
+        if (inHole(x, z)) addBare(x, z, 5, 14);
+        else addLight(x, z, 7, 12);
+      }
+    }
+    addLight(11.5, 9.5, 6, 10); // breakroom
+    addLight(14, 11.5, 5, 9);
+  }
+
+  // ------------------------------------------------------------ waypoints
+
+  private makeWaypoints(): Waypoint[] {
+    const pts: [number, number, number][] = [
+      [-14.5, 0, 0], // 0 office end of the corridor
+      [-11, 0, -8], [-3, 0, -8], [6, 0, -8], [13, 0, -8], // 1-4 north aisle
+      [-11, 0, -1.5], [-3, 0, -1.5], [6, 0, -1.5], [13, 0, -1.5], // 5-8 middle aisle
+      [-11, 0, 5.5], [-3, 0, 5.5], [6, 0, 5.5], [13, 0, 2.5], // 9-12
+      [-13, 0, 9], [-5, 0, 10.5], [4, 0, 10.5], // 13-15 south
+      [10.5, 0, 8.5], [13.5, 0, 11], // 16-17 breakroom
+      [BREACH_X, 0, -10.5] // 18 the breach
+    ];
+    const links: [number, number][] = [
+      [0, 5], [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11],
+      [1, 5], [2, 6], [3, 7], [4, 8], [5, 9], [6, 10], [7, 11], [8, 12], [11, 12],
+      [9, 13], [13, 14], [14, 15], [15, 11], [11, 16], [16, 17], [12, 16],
+      [2, 18], [18, 6]
+    ];
+    const wps: Waypoint[] = pts.map(([x, y, z]) => ({ pos: new THREE.Vector3(x, y, z), links: [] }));
+    for (const [a, b] of links) {
+      wps[a].links.push(b);
+      wps[b].links.push(a);
+    }
+    return wps;
+  }
+}

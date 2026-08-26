@@ -58,6 +58,13 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     e.returnValue = ''; // legacy browsers need this to show the prompt
   };
   private pooledCorpses = new Set<Enemy>();
+  /** Floor cleared: the service door unlocks. */
+  private cleared = false;
+  private leaving = false;
+  private handedOff = false;
+  private fade = 0;
+  private banner: HTMLElement | null = null;
+  private fadeEl: HTMLElement | null = null;
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -114,7 +121,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.weapon.onReloadEvent = (e) => {
       if (e === 'magOut') audio.magOut();
-      else if (e === 'magDrop') this.dropMagazine();
+      else if (e === 'magDrop') this.dropMagazine(this.weapon.ejectedMagPose());
       else if (e === 'magIn') audio.magIn();
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
@@ -233,6 +240,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     document.removeEventListener('keydown', this.keyHandler);
     window.removeEventListener('beforeunload', this.unloadGuard);
     this.hud.destroy();
+    this.banner?.remove();
+    this.fadeEl?.remove();
     this.ctx.input.exitPointerLock();
     // Free GPU resources
     this.scene.traverse((o) => {
@@ -522,10 +531,11 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       }
     }
     if (!this.over) this.updateCivilianHunt(dt);
+    this.checkExit(dt);
 
     for (const f of this.level.flickering) f.update(dt);
     for (const g of this.level.glassPanes) g.update(dt);
-    this.updateDroppedMags(dt);
+    this.updateDebris(dt);
     this.decals.update(dt);
     this.particles.update(dt);
     this.world.step(1 / 60, dt, 3);
@@ -538,56 +548,6 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   }
 
   // -------------------------------------------------------------- ballistics
-
-  // ---------------------------------------------------------- dropped mags
-
-  private droppedMags: { mesh: THREE.Group; body: CANNON.Body; life: number }[] = [];
-  private static MAG_LIFETIME = 60;
-
-  /** The ejected magazine becomes a real object: it flies, clatters, and lies where it lands. */
-  private dropMagazine(): void {
-    const { position, quaternion, direction } = this.weapon.ejectedMagPose();
-    const polymer = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 });
-    const mesh = new THREE.Group();
-    const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.1, 0.04), polymer);
-    mesh.add(bodyMesh);
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
-    plate.position.set(0, -0.053, 0.004);
-    mesh.add(plate);
-    mesh.position.copy(position);
-    mesh.quaternion.copy(quaternion);
-    this.scene.add(mesh);
-
-    const body = new CANNON.Body({
-      mass: 0.15,
-      shape: new CANNON.Box(new CANNON.Vec3(0.013, 0.056, 0.02)),
-      position: new CANNON.Vec3(position.x, position.y, position.z),
-      linearDamping: 0.05,
-      angularDamping: 0.2
-    });
-    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
-    // Spring-ejected along the well, plus whatever Ravi's moving at
-    const v = direction.clone().multiplyScalar(3.2 + Math.random()).add(this.player.velocity);
-    body.velocity.set(v.x, v.y, v.z);
-    body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
-    this.world.addBody(body);
-    this.droppedMags.push({ mesh, body, life: OfficeLevelScene.MAG_LIFETIME });
-  }
-
-  private updateDroppedMags(dt: number): void {
-    for (let i = this.droppedMags.length - 1; i >= 0; i--) {
-      const m = this.droppedMags[i];
-      m.life -= dt;
-      m.mesh.position.set(m.body.position.x, m.body.position.y, m.body.position.z);
-      m.mesh.quaternion.set(m.body.quaternion.x, m.body.quaternion.y, m.body.quaternion.z, m.body.quaternion.w);
-      // Fell out of the world (void / through a gap)? Don't simulate forever.
-      if (m.life <= 0 || m.body.position.y < -5) {
-        this.world.removeBody(m.body);
-        this.scene.remove(m.mesh);
-        this.droppedMags.splice(i, 1);
-      }
-    }
-  }
 
   /** Nearest living agent close enough and in front of Ravi to grab. */
   private takedownTarget(): Enemy | null {
@@ -669,7 +629,6 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     brass.position.y = -0.028;
     hull.add(brass);
     hull.position.copy(position);
-    this.scene.add(hull);
 
     const body = new CANNON.Body({
       mass: 0.04,
@@ -681,8 +640,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     const v = direction.clone().multiplyScalar(1.8 + Math.random() * 0.8).add(this.player.velocity);
     body.velocity.set(v.x, v.y, v.z);
     body.angularVelocity.set((Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18, (Math.random() - 0.5) * 18);
-    this.world.addBody(body);
-    this.droppedMags.push({ mesh: hull, body, life: OfficeLevelScene.MAG_LIFETIME });
+    this.addDebris(hull, body);
   }
 
   private playerShootShotgun(): void {
@@ -774,15 +732,60 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
     });
 
-    if (this.remaining <= 0) {
-      this.over = true;
-      this.won = true;
+    if (this.remaining <= 0 && !this.cleared) {
+      this.cleared = true;
       // Anyone still alive out there can stop running now
       for (const ai of this.civAIs) ai.calmDown();
-      bus.emit(Events.LevelComplete);
-      // Let the last one hit the floor before the shift-complete card (3 s)
-      window.setTimeout(() => this.ctx.input.exitPointerLock(), 3000);
+      // The service door unlocks: panel goes from red to green
+      this.level.exitPanel.emissive.setHex(0x2bff6a);
+      this.level.exitPanel.color.setHex(0x0a2a12);
+      this.level.exitPanelLight.color.setHex(0x2bff6a);
+      this.ctx.audio.uiBeep(true);
+      this.showBanner('FLOOR CLEAR — THE SERVICE DOOR IS OPEN');
     }
+  }
+
+  // ---------------------------------------------------------------- the way on
+
+  /** A one-line prompt across the middle of the screen. */
+  private showBanner(text: string): void {
+    if (!this.banner) {
+      this.banner = document.createElement('div');
+      this.banner.className = 'intro-objective';
+      this.ctx.uiRoot.appendChild(this.banner);
+    }
+    this.banner.textContent = text;
+    this.banner.classList.remove('show');
+    void this.banner.offsetWidth;
+    this.banner.classList.add('show');
+  }
+
+  /** Walk into the unlocked doorway to move on to the next level. */
+  private checkExit(dt: number): void {
+    if (this.leaving) {
+      this.fade = Math.min(1, this.fade + dt * 1.4);
+      if (this.fadeEl) this.fadeEl.style.opacity = String(this.fade);
+      if (this.fade >= 1 && !this.handedOff) {
+        this.handedOff = true;
+        this.ctx.bus.emit(Events.OfficeComplete);
+      }
+      return;
+    }
+    if (!this.player.alive || this.over) return;
+    const p = this.player.position;
+    if (!this.level.exitTrigger.containsPoint(new THREE.Vector3(p.x, p.y + 0.9, p.z))) return;
+    if (!this.cleared) {
+      this.showBanner('LOCKED — CLEAR THE FLOOR FIRST');
+      return;
+    }
+    this.leaving = true;
+    this.showBanner('');
+    if (!this.fadeEl) {
+      this.fadeEl = document.createElement('div');
+      this.fadeEl.className = 'intro-fade';
+      this.ctx.uiRoot.appendChild(this.fadeEl);
+    }
+    this.ctx.input.exitPointerLock();
   }
 
 }

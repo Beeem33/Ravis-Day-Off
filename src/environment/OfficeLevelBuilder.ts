@@ -44,6 +44,11 @@ export interface LevelData {
   civilianSpawns: EnemySpawn[];
   /** Staff who didn't make it — bodies already on the floor. */
   corpseSpawns: EnemySpawn[];
+  /** Panel over the exit door: red while the floor is hot, green when clear. */
+  exitPanel: THREE.MeshStandardMaterial;
+  exitPanelLight: THREE.PointLight;
+  /** Step in here, once the floor is clear, to move on. */
+  exitTrigger: THREE.Box3;
 }
 
 // ---------------------------------------------------------------- textures
@@ -135,6 +140,11 @@ const STAIR_Z_BOT = -4; // both flights run between these
 const STAIR_Z_TOP = -7;
 const LANDING_Z = -9; // half-landing occupies z LANDING_Z..STAIR_Z_TOP
 
+// Service door out of the east wall, just south of the stairwell: the way
+// on to the next level. Its panel stays red until the floor is clear.
+const EXIT_Z0 = 0.5;
+const EXIT_Z1 = 2.2;
+
 // Carpet and ceiling-tile textures are authored for the full 36.8 x 24.8
 // footprint; slabs of other sizes rescale their UVs against these.
 const SLAB_REPEAT_X = 18;
@@ -187,6 +197,8 @@ export class OfficeLevelBuilder {
   private beigeMat!: THREE.MeshLambertMaterial;
   private accentMats!: THREE.MeshLambertMaterial[];
   private stickyMats!: THREE.MeshLambertMaterial[];
+  private exitPanelMat!: THREE.MeshStandardMaterial;
+  private exitPanelLight!: THREE.PointLight;
 
   build(): LevelData {
     this.makeMaterials();
@@ -226,6 +238,12 @@ export class OfficeLevelBuilder {
         { pos: new THREE.Vector3(-3, FLOOR_H, 6.5), yaw: 2.8 }
       ],
       // And the ones who were already caught
+      exitPanel: this.exitPanelMat,
+      exitPanelLight: this.exitPanelLight,
+      exitTrigger: new THREE.Box3(
+        new THREE.Vector3(17.1, 0, EXIT_Z0 + 0.1),
+        new THREE.Vector3(18.35, 2.2, EXIT_Z1 - 0.1)
+      ),
       corpseSpawns: [
         { pos: new THREE.Vector3(-2.5, 0, 4.6), yaw: 1.1 },
         { pos: new THREE.Vector3(-11.8, 0, -6.2), yaw: -2.2 },
@@ -460,8 +478,19 @@ export class OfficeLevelBuilder {
         this.wallX(-18.3, 18.3, 12.3, y, WALL_H + SLAB_T);
       }
       this.wallZ(-12.3, 12.3, -18.3, y, WALL_H + SLAB_T); // west
-      this.wallZ(-12.3, 12.3, 18.3, y, WALL_H + SLAB_T); // east
+      if (y === 0) {
+        // East wall, with the service door out of the building — the way on
+        // to the next floor of the operation. Sits just south of the stairwell.
+        this.wallZ(-12.3, EXIT_Z0, 18.3, y, WALL_H + SLAB_T);
+        this.wallZ(EXIT_Z1, 12.3, 18.3, y, WALL_H + SLAB_T);
+        this.solid(0.22, WALL_H + SLAB_T - 2.25, EXIT_Z1 - EXIT_Z0, 18.3, 2.25, (EXIT_Z0 + EXIT_Z1) / 2, this.wallMat, {
+          collide: false
+        });
+      } else {
+        this.wallZ(-12.3, 12.3, 18.3, y, WALL_H + SLAB_T); // east
+      }
     }
+    this.buildExitDoor();
     // Entrance glass doors (breakable) in the south gap
     this.glass('x', -2, -0.05, 12.3, 0, 2.1);
     this.glass('x', 0.05, 2, 12.3, 0, 2.1);
@@ -491,6 +520,45 @@ export class OfficeLevelBuilder {
     this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_VOID_X, STAIR_Z_BOT, ry); // west
     this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_X1, LANDING_Z, ry); // north
     this.railing(DIVIDER_X0, STAIR_Z_BOT, SHAFT_X1, STAIR_Z_BOT, ry); // south, east of the opening
+  }
+
+  /**
+   * The way out to the next level: a service door in the east wall with a
+   * status panel over it. The panel is red — locked — until the last
+   * intruder on the floor is down, then it turns green.
+   */
+  private buildExitDoor(): void {
+    const cz = (EXIT_Z0 + EXIT_Z1) / 2;
+    const w = EXIT_Z1 - EXIT_Z0;
+    // Frame
+    for (const z of [EXIT_Z0, EXIT_Z1]) {
+      this.solid(0.26, 2.25, 0.08, 18.3, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.26, 0.09, w, 18.3, 2.25, cz, this.darkMetalMat, { surface: 'metal', collide: false });
+    // Leaf — no collider, the scene gates entry on the trigger instead
+    const leaf = this.solid(0.1, 2.2, w - 0.06, 18.18, 0, cz, this.deskMat, {
+      surface: 'wood', occlude: false, collide: false
+    });
+    leaf.userData.surface = 'wood';
+    this.solid(0.06, 0.26, 0.06, 18.1, 1.0, cz - w / 2 + 0.28, this.darkMetalMat, {
+      surface: 'metal', occlude: false, collide: false
+    }); // handle
+
+    // Status panel above the door
+    this.exitPanelMat = new THREE.MeshStandardMaterial({
+      color: 0x2a0a0a,
+      emissive: 0xff2b1c,
+      emissiveIntensity: 1.6
+    });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.3, w * 0.82), this.exitPanelMat);
+    panel.position.set(18.15, 2.62, cz);
+    this.group.add(panel);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, w * 0.9), this.darkMetalMat);
+    hood.position.set(18.2, 2.82, cz);
+    this.group.add(hood);
+    this.exitPanelLight = new THREE.PointLight(0xff3b28, 4.5, 5, 1.9);
+    this.exitPanelLight.position.set(17.7, 2.5, cz);
+    this.group.add(this.exitPanelLight);
   }
 
   private buildGroundFloor(): void {

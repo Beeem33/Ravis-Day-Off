@@ -64,6 +64,12 @@ export class Enemy {
   /** 0..1 — seated at a desk. */
   private sitBlend = 0;
   private sitTarget = 0;
+  /** 0..1 — balled up on the floor with arms over the head. */
+  private cowerBlend = 0;
+  private cowerTarget = 0;
+  /** 0..1 — down on both knees, pleading. */
+  private kneelBlend = 0;
+  private kneelTarget = 0;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
   beingExecuted = false;
   private struggleTime = 0;
@@ -441,6 +447,16 @@ export class Enemy {
   /** Civilian only: put your hands up. */
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
+  }
+
+  /** Drop and curl up, arms over the head. */
+  setCowering(on: boolean): void {
+    this.cowerTarget = on ? 1 : 0;
+  }
+
+  /** Down on both knees, hands up, begging. */
+  setKneeling(on: boolean): void {
+    this.kneelTarget = on ? 1 : 0;
   }
 
   /**
@@ -913,7 +929,26 @@ export class Enemy {
       this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -1.5, sit);
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -1.5, sit);
     }
-    const drop = bob - 0.355 * sit; // 0.82 hip height down to a 0.46 seat
+    // ---- Cowering: hunched right down, knees folded under, head tucked
+    this.cowerBlend += (this.cowerTarget - this.cowerBlend) * Math.min(1, dt * 5);
+    const cower = this.cowerBlend;
+    if (cower > 0.001) {
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 1.75, cower);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.75, cower);
+      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.3, cower);
+      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.3, cower);
+    }
+    // ---- Kneeling: thighs vertical, shins folded back under the seat
+    this.kneelBlend += (this.kneelTarget - this.kneelBlend) * Math.min(1, dt * 5);
+    const kneel = this.kneelBlend;
+    if (kneel > 0.001) {
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 0.15, kneel);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 0.15, kneel);
+      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.5, kneel);
+      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.5, kneel);
+    }
+    // Hip height: seated on a chair, hunched on the floor, or knees-down
+    const drop = bob - 0.355 * sit - 0.5 * cower - 0.38 * kneel;
 
     // Hips ride with the pelvis, or the legs detach from it as it sways
     this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
@@ -990,6 +1025,19 @@ export class Enemy {
       this.shinL.rotation.x = Math.max(0, Math.sin(s * 10.5)) * 0.3;
       this.shinR.rotation.x = Math.max(0, -Math.sin(s * 10.5 + 0.9)) * 0.3;
       return; // the walk/idle chest pose below must not overwrite the struggle
+    }
+
+    // Cowering: curl forward and clamp both arms over the head
+    if (cower > 0.001) {
+      const shake = Math.sin(this.animTime * 13) * 0.04 * cower;
+      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 1.0, cower);
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.5, cower);
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.7 + shake, cower);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.7 - shake, cower);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.15, cower);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.15, cower);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.6, cower);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -1.6, cower);
     }
 
     // Seated: forearms come up onto the desk in front of them

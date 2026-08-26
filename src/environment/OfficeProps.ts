@@ -428,6 +428,313 @@ export function chipsBox(): THREE.Group {
 }
 
 /**
+ * FBI breaching truck. Built facing +Z: cab at the back (−Z), armoured box
+ * forward, a roof hatch with a pintle-mounted LMG, and a big rear door on
+ * the +X side that swings open to let the team out.
+ *
+ * Returns the group plus the bits the scene animates.
+ */
+export function swatTruck(): {
+  group: THREE.Group;
+  doorPivot: THREE.Group;
+  gunMount: THREE.Group;
+  gunYaw: THREE.Group;
+  /** Local position of the doorway mouth, for spawning the team. */
+  doorMouth: THREE.Vector3;
+} {
+  const g = new THREE.Group();
+  const hull = lam(0x21262b);
+  const trim = lam(0x14181c);
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x0d1218, roughness: 0.15, metalness: 0.4, transparent: true, opacity: 0.72
+  });
+
+  const L = 6.4; // length along Z
+  const W = 2.6;
+  const H = 2.5;
+  // Armoured box
+  const box = new THREE.Mesh(new THREE.BoxGeometry(W, H, L * 0.68), hull);
+  box.position.set(0, H / 2 + 0.55, L * 0.12);
+  g.add(box);
+  // Cab
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(W - 0.1, H * 0.72, L * 0.3), hull);
+  cab.position.set(0, H * 0.36 + 0.55, -L * 0.34);
+  g.add(cab);
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(W - 0.36, 0.62, 0.06), glassMat);
+  windshield.position.set(0, 1.72, -L * 0.49);
+  g.add(windshield);
+  // Push bumper — the thing that went through the wall
+  const bumper = new THREE.Mesh(new THREE.BoxGeometry(W + 0.24, 0.72, 0.28), trim);
+  bumper.position.set(0, 0.86, -L * 0.52);
+  g.add(bumper);
+  for (const bx of [-0.8, -0.27, 0.27, 0.8]) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.15, 0.16), trim);
+    bar.position.set(bx, 1.1, -L * 0.55);
+    g.add(bar);
+  }
+  // Wheels
+  for (const wz of [-L * 0.36, L * 0.06, L * 0.3]) {
+    for (const wx of [-1, 1]) {
+      const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.34, 16), lam(0x0e1013));
+      tyre.rotation.z = Math.PI / 2;
+      tyre.position.set(wx * (W / 2 - 0.06), 0.55, wz);
+      g.add(tyre);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.36, 10), lam(0x5a6068));
+      hub.rotation.z = Math.PI / 2;
+      hub.position.set(wx * (W / 2 - 0.05), 0.55, wz);
+      g.add(hub);
+    }
+  }
+  // Livery
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.34, L * 0.6), lam(0xd8dde2));
+  stripe.position.set(-W / 2 - 0.005, 1.5, L * 0.12);
+  g.add(stripe);
+  const label = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 1.5), lam(0x1f3f8f));
+  label.position.set(-W / 2 - 0.02, 1.5, L * 0.12);
+  g.add(label);
+  // Roof light bar
+  for (const [lx, col] of [[-0.5, 0x2b5fd0], [0.5, 0xd02b2b]] as const) {
+    const l = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.12, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x101318, emissive: col, emissiveIntensity: 1.5 })
+    );
+    l.position.set(lx, H + 0.62, -L * 0.28);
+    g.add(l);
+  }
+
+  // Rear door on the +X side, hinged at the −Z edge so it opens outward
+  const doorPivot = new THREE.Group();
+  doorPivot.position.set(W / 2, 0.62, L * 0.36);
+  g.add(doorPivot);
+  const doorW = 2.0;
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.05, doorW), hull);
+  leaf.position.set(0, 1.03, -doorW / 2);
+  doorPivot.add(leaf);
+  const doorBar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.5), MAT.chrome);
+  doorBar.position.set(0.07, 1.0, -0.3);
+  doorPivot.add(doorBar);
+  // Dark interior behind it, so the opening reads as a way out
+  const bay = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.0, doorW), lam(0x05070a));
+  bay.position.set(W / 2 - 0.04, 1.65, L * 0.36 - doorW / 2);
+  g.add(bay);
+
+  // Pintle-mounted LMG on the roof: yaw ring, then the mount, then the gun
+  const gunYaw = new THREE.Group();
+  gunYaw.position.set(0, H + 0.55, L * 0.16);
+  g.add(gunYaw);
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.56, 0.16, 16), trim);
+  ring.position.y = 0.08;
+  gunYaw.add(ring);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.5, 10), MAT.midPlastic);
+  post.position.y = 0.4;
+  gunYaw.add(post);
+  const gunMount = new THREE.Group();
+  gunMount.position.y = 0.66;
+  gunYaw.add(gunMount);
+  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.16, 0.8), lam(0x1a1c20));
+  gunMount.add(receiver);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.9, 10), lam(0x121417));
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.z = -0.82;
+  gunMount.add(barrel);
+  const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.34), lam(0x22252a));
+  shroud.position.z = -0.55;
+  gunMount.add(shroud);
+  const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.26), lam(0x2e3a22));
+  ammoBox.position.set(0.17, -0.09, 0.1);
+  gunMount.add(ammoBox);
+  const shield = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.44, 0.05), lam(0x2a2f35));
+  shield.position.set(0, 0.06, -0.28);
+  gunMount.add(shield);
+
+  return { group: g, doorPivot, gunMount, gunYaw, doorMouth: new THREE.Vector3(W / 2 + 0.7, 0, L * 0.36 - 1.0) };
+}
+
+/** Broken masonry and twisted rebar, for the hole the truck came through. */
+export function rubblePile(scale = 1): THREE.Group {
+  const g = new THREE.Group();
+  const stone = [lam(0x8d8a80), lam(0x76736a), lam(0x9c988c)];
+  for (let i = 0; i < 9; i++) {
+    const s = (0.18 + Math.random() * 0.4) * scale;
+    const chunk = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), stone[i % 3]);
+    chunk.position.set((Math.random() - 0.5) * 1.6 * scale, s * 0.5, (Math.random() - 0.5) * 1.2 * scale);
+    chunk.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    chunk.scale.y = 0.6 + Math.random() * 0.4;
+    g.add(chunk);
+  }
+  for (let i = 0; i < 4; i++) {
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8 + Math.random() * 0.7, 5), lam(0x6b4a35));
+    bar.position.set((Math.random() - 0.5) * 1.4 * scale, 0.3 + Math.random() * 0.4, (Math.random() - 0.5) * 1.0 * scale);
+    bar.rotation.set(Math.random() * 2, Math.random() * 2, 0.7 + Math.random());
+    g.add(bar);
+  }
+  return g;
+}
+
+/** Office laser printer on a stand: paper tray, output shelf, control panel. */
+export function printer(): THREE.Group {
+  const g = new THREE.Group();
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.62, 0.6), lam(0x33383f));
+  stand.position.y = 0.31;
+  g.add(stand);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.52, 0.64), lam(0xd7d9d4));
+  body.position.y = 0.88;
+  g.add(body);
+  // Output shelf, scooped out of the top
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.03, 0.44), lam(0xb9bcb7));
+  shelf.position.set(0, 1.15, -0.04);
+  g.add(shelf);
+  const stack = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.02, 0.29), MAT.paper);
+  stack.position.set(0.02, 1.175, -0.06);
+  g.add(stack);
+  // Paper tray sticking out the front (-Z)
+  const tray = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.09, 0.16), lam(0xc3c6c1));
+  tray.position.set(0, 0.72, -0.36);
+  g.add(tray);
+  // Control panel, and a green ready lamp
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.03), MAT.darkPlastic);
+  panel.position.set(0.22, 1.03, -0.33);
+  panel.rotation.x = -0.5;
+  g.add(panel);
+  const lamp = new THREE.Mesh(
+    new THREE.BoxGeometry(0.03, 0.02, 0.01),
+    new THREE.MeshStandardMaterial({ color: 0x0a2a12, emissive: 0x35ff6a, emissiveIntensity: 1.4 })
+  );
+  lamp.position.set(0.15, 1.0, -0.34);
+  g.add(lamp);
+  return g;
+}
+
+/** Ceiling or wall air vent: louvred grille in a frame. */
+export function vent(w = 0.6, h = 0.34): THREE.Group {
+  const g = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.04), lam(0x9aa0a6));
+  g.add(frame);
+  const inner = new THREE.Mesh(new THREE.BoxGeometry(w - 0.07, h - 0.07, 0.02), lam(0x14181c));
+  inner.position.z = 0.012;
+  g.add(inner);
+  const slats = Math.max(3, Math.floor((h - 0.09) / 0.05));
+  for (let i = 0; i < slats; i++) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(w - 0.09, 0.022, 0.03), lam(0x8f959b));
+    s.position.set(0, -(h - 0.09) / 2 + 0.025 + i * ((h - 0.09) / slats), 0.02);
+    s.rotation.x = -0.5;
+    g.add(s);
+  }
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.01, 6), MAT.chrome);
+      screw.rotation.x = Math.PI / 2;
+      screw.position.set((sx * (w - 0.03)) / 2, (sy * (h - 0.03)) / 2, 0.022);
+      g.add(screw);
+    }
+  }
+  return g;
+}
+
+/** Wall fire alarm: red pull station with a white bar. Purely scenery. */
+export function fireAlarm(): THREE.Group {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.19, 0.05), lam(0xb01c14));
+  g.add(box);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.045, 0.02), lam(0xf0efe9));
+  bar.position.set(0, -0.02, 0.033);
+  g.add(bar);
+  const lens = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.03, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x3a0a08, emissive: 0xff3020, emissiveIntensity: 0.5 })
+  );
+  lens.position.set(0, 0.062, 0.033);
+  g.add(lens);
+  return g;
+}
+
+/** Breakroom table with four chairs round it. */
+export function breakTable(): THREE.Group {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.05, 20), lam(0xb9a888));
+  top.position.y = 0.73;
+  g.add(top);
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.7, 10), MAT.chrome);
+  col.position.y = 0.35;
+  g.add(col);
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 0.03, 16), MAT.midPlastic);
+  foot.position.y = 0.015;
+  g.add(foot);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    const c = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.4), lam(0x46505c));
+    seat.position.y = 0.45;
+    c.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.42, 0.05), lam(0x46505c));
+    back.position.set(0, 0.68, 0.19);
+    c.add(back);
+    for (const [lx, lz] of [[-0.17, -0.17], [0.17, -0.17], [-0.17, 0.17], [0.17, 0.17]] as const) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.45, 0.03), MAT.midPlastic);
+      leg.position.set(lx, 0.225, lz);
+      c.add(leg);
+    }
+    c.position.set(Math.cos(a) * 1.02, 0, Math.sin(a) * 1.02);
+    c.rotation.y = -a + Math.PI / 2;
+    g.add(c);
+  }
+  return g;
+}
+
+const snackMats = new Map<string, THREE.Material[]>();
+
+/**
+ * Vending snacks. Same six-face treatment as the chips box — every face
+ * gets a canvas at its own aspect so nothing stretches.
+ */
+export function snack(kind: 'nutbar' | 'gumdrops' | 'cakes' | 'jerky'): THREE.Group {
+  const spec = {
+    nutbar: { w: 0.055, h: 0.19, d: 0.03, bg: '#6b4423', ink: '#f2e2c0', name: 'NUT\nSLAB', sub: 'now with nuts' },
+    gumdrops: { w: 0.11, h: 0.16, d: 0.05, bg: '#127a5c', ink: '#eafff4', name: 'GUM\nDROPS', sub: 'chew responsibly' },
+    cakes: { w: 0.15, h: 0.1, d: 0.07, bg: '#c2185b', ink: '#ffe9f2', name: 'CUBE\nCAKES', sub: 'six per pack' },
+    jerky: { w: 0.1, h: 0.17, d: 0.035, bg: '#5d2f18', ink: '#f7d9a8', name: 'DESK\nJERKY', sub: 'meat-adjacent' }
+  }[kind];
+
+  let mats = snackMats.get(kind);
+  if (!mats) {
+    const face = (px: number, py: number, big: boolean): THREE.MeshLambertMaterial => {
+      const c = document.createElement('canvas');
+      c.width = Math.max(24, Math.round(px));
+      c.height = Math.max(24, Math.round(py));
+      const g2 = c.getContext('2d')!;
+      g2.fillStyle = spec.bg;
+      g2.fillRect(0, 0, c.width, c.height);
+      g2.fillStyle = 'rgba(255,255,255,0.14)';
+      g2.fillRect(0, c.height * 0.62, c.width, c.height * 0.14);
+      if (big) {
+        g2.fillStyle = spec.ink;
+        g2.textAlign = 'center';
+        const lines = spec.name.split('\n');
+        const size = Math.min(c.width / 4.4, c.height / 4.2);
+        g2.font = `bold ${size.toFixed(0)}px Impact, sans-serif`;
+        lines.forEach((l, i) => g2.fillText(l, c.width / 2, c.height * 0.34 + i * size * 1.05));
+        g2.font = `${Math.max(6, size * 0.34).toFixed(0)}px monospace`;
+        g2.fillText(spec.sub, c.width / 2, c.height * 0.85);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return new THREE.MeshLambertMaterial({ map: tex });
+    };
+    const K = 900; // pixels per metre, so every face matches its own shape
+    const side = face(spec.d * K, spec.h * K, false);
+    const end = face(spec.w * K, spec.d * K, false);
+    const front = face(spec.w * K, spec.h * K, true);
+    mats = [side, side, end, end, front, front];
+    snackMats.set(kind, mats);
+  }
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(spec.w, spec.h, spec.d), mats);
+  box.position.y = spec.h / 2;
+  g.add(box);
+  return g;
+}
+
+/**
  * Lateral file cabinet with real drawer fronts, recessed handles and a top
  * lip — the levels were drawing these as a single blank slab.
  * `w` x `d` footprint, `h` tall, split into `drawers` fronts facing -Z.

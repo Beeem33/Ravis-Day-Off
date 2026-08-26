@@ -6,6 +6,7 @@ import { AudioManager } from './core/AudioManager';
 import { MainMenuScene } from './scenes/MainMenuScene';
 import { IntroLevelScene } from './scenes/IntroLevelScene';
 import { OfficeLevelScene } from './scenes/OfficeLevelScene';
+import { Level3Scene } from './scenes/Level3Scene';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -46,6 +47,12 @@ bus.on(Events.RestartIntro, () => {
 });
 bus.on(Events.IntroComplete, () => {
   engine.setScene(new OfficeLevelScene(ctx));
+});
+bus.on(Events.OfficeComplete, () => {
+  engine.setScene(new Level3Scene(ctx));
+});
+bus.on(Events.RestartLevel3, () => {
+  engine.setScene(new Level3Scene(ctx));
 });
 bus.on(Events.RestartLevel, () => {
   engine.setScene(new OfficeLevelScene(ctx));

@@ -303,6 +303,68 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     if (ground) this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
   }
 
+  // ------------------------------------------------------------- debris
+
+  private debris: { mesh: THREE.Object3D; body: CANNON.Body; life: number }[] = [];
+  private static DEBRIS_LIFETIME = 60;
+
+  /**
+   * Hand a mesh over to physics and let it clatter about — spent magazines,
+   * ejected shells. Cleaned up once it settles out of interest or falls out
+   * of the world.
+   */
+  protected addDebris(mesh: THREE.Object3D, body: CANNON.Body): void {
+    this.scene.add(mesh);
+    this.world.addBody(body);
+    this.debris.push({ mesh, body, life: CombatScene.DEBRIS_LIFETIME });
+  }
+
+  /** The ejected magazine becomes a real object: it flies, clatters, and lies where it lands. */
+  protected dropMagazine(pose: {
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    direction: THREE.Vector3;
+  }): void {
+    const { position, quaternion, direction } = pose;
+    const polymer = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 });
+    const mesh = new THREE.Group();
+    mesh.add(new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.1, 0.04), polymer));
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
+    plate.position.set(0, -0.053, 0.004);
+    mesh.add(plate);
+    mesh.position.copy(position);
+    mesh.quaternion.copy(quaternion);
+
+    const body = new CANNON.Body({
+      mass: 0.15,
+      shape: new CANNON.Box(new CANNON.Vec3(0.013, 0.056, 0.02)),
+      position: new CANNON.Vec3(position.x, position.y, position.z),
+      linearDamping: 0.05,
+      angularDamping: 0.2
+    });
+    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+    // Spring-ejected along the well, plus whatever Ravi's moving at
+    const v = direction.clone().multiplyScalar(3.2 + Math.random()).add(this.player.velocity);
+    body.velocity.set(v.x, v.y, v.z);
+    body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+    this.addDebris(mesh, body);
+  }
+
+  protected updateDebris(dt: number): void {
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const d = this.debris[i];
+      d.life -= dt;
+      d.mesh.position.set(d.body.position.x, d.body.position.y, d.body.position.z);
+      d.mesh.quaternion.set(d.body.quaternion.x, d.body.quaternion.y, d.body.quaternion.z, d.body.quaternion.w);
+      // Fell out of the world (void / through a gap)? Don't simulate forever.
+      if (d.life <= 0 || d.body.position.y < -5) {
+        this.world.removeBody(d.body);
+        this.scene.remove(d.mesh);
+        this.debris.splice(i, 1);
+      }
+    }
+  }
+
   /** Blood pool under a corpse that has come to rest. */
   protected poolUnder(enemy: Enemy): void {
     const under = this.surfaceBelow(enemy.corpseBase(), 3);

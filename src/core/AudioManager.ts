@@ -226,6 +226,91 @@ export class AudioManager {
     bang.stop(t + 0.5);
   }
 
+  /**
+   * One character's worth of speech blip. Short, pitched per speaker, with a
+   * little random wobble so a run of them reads as talking rather than a
+   * metronome.
+   */
+  dialogueBlip(pitch = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const base = 330 * pitch * (0.94 + Math.random() * 0.12);
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(base, t);
+    osc.frequency.exponentialRampToValueAtTime(base * 0.82, t + 0.055);
+    // Soften the square a bit so it isn't pure buzz
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1500 * pitch;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.075, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    osc.connect(lp).connect(g).connect(this.sfxBus);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  }
+
+  /** Heavy diesel truck engine, for the thing coming through the wall. */
+  truckEngine(volume = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(42, t);
+    osc.frequency.linearRampToValueAtTime(78, t + 1.6);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 320;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.42 * volume, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.4);
+    osc.connect(lp).connect(g).connect(this.sfxBus);
+    osc.start(t);
+    osc.stop(t + 2.5);
+    this.noise(2.0, 'lowpass', 180, 0.22 * volume, true, 1);
+  }
+
+  /** A wall coming down: masonry, dust and a long low collapse. */
+  wallCollapse(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    // The hit
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.setValueAtTime(70, t);
+    boom.frequency.exponentialRampToValueAtTime(26, t + 0.9);
+    const bg = ctx.createGain();
+    bg.gain.setValueAtTime(0.0001, t);
+    bg.gain.exponentialRampToValueAtTime(0.95, t + 0.01);
+    bg.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    boom.connect(bg).connect(this.sfxBus);
+    boom.start(t);
+    boom.stop(t + 1.2);
+    // Masonry breaking up, then settling
+    this.noise(0.5, 'highpass', 900, 0.6, true, 1);
+    this.noise(1.8, 'bandpass', 420, 0.45, true, 0.8);
+    for (let i = 0; i < 7; i++) {
+      const d = 0.12 + Math.random() * 1.3;
+      const chunk = ctx.createOscillator();
+      chunk.type = 'triangle';
+      chunk.frequency.setValueAtTime(120 + Math.random() * 90, t + d);
+      chunk.frequency.exponentialRampToValueAtTime(50, t + d + 0.16);
+      const cg = ctx.createGain();
+      cg.gain.setValueAtTime(0.0001, t + d);
+      cg.gain.exponentialRampToValueAtTime(0.2, t + d + 0.006);
+      cg.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.22);
+      chunk.connect(cg).connect(this.sfxBus);
+      chunk.start(t + d);
+      chunk.stop(t + d + 0.3);
+    }
+  }
+
   /** Rough distance attenuation for world-positioned sounds. */
   private atten(distance: number, maxDist: number): number {
     return Math.max(0, 1 - distance / maxDist);

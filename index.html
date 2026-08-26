@@ -161,6 +161,29 @@
       position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none;
     }
 
+    /* ---------- Dialogue box ---------- */
+    .dialogue-box {
+      position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%) translateY(14px);
+      width: min(720px, 88vw); min-height: 118px; padding: 16px 22px 30px;
+      background: #050608; border: 4px solid #f0efe9; border-radius: 3px;
+      color: #f0efe9; opacity: 0; pointer-events: none;
+      transition: opacity 0.18s, transform 0.18s;
+      box-shadow: 0 0 0 4px #050608, 0 8px 26px rgba(0,0,0,0.7);
+    }
+    .dialogue-box.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .dialogue-box .dlg-name {
+      color: #ffd85e; font-size: 14px; letter-spacing: 2px; margin-bottom: 8px;
+    }
+    .dialogue-box .dlg-text {
+      font-size: 19px; line-height: 1.5; letter-spacing: 0.5px; white-space: pre-wrap;
+      min-height: 58px;
+    }
+    .dialogue-box .dlg-prompt {
+      position: absolute; right: 18px; bottom: 10px; color: #f0efe9; font-size: 16px;
+      opacity: 0; animation: dlg-bob 0.75s ease-in-out infinite;
+    }
+    @keyframes dlg-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+
     /* ---------- Death / Win overlays ---------- */
     .fullscreen-overlay {
       position: absolute; inset: 0; display: none; flex-direction: column;

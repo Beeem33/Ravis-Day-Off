@@ -59,6 +59,9 @@ export const Events = {
   /** Intro cleared — hand off to the main office level. */
   IntroComplete: 'intro-complete',
   RestartIntro: 'restart-intro',
+  /** Office floor cleared and the player walked out — on to level three. */
+  OfficeComplete: 'office-complete',
+  RestartLevel3: 'restart-level3',
   /** {lethal: boolean} */
   HitMarker: 'hit-marker',
   Resize: 'resize'

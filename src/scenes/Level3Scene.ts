@@ -338,12 +338,10 @@ export class Level3Scene extends CombatScene<Level3Data> {
     if (!e.alive) return;
     e.setSitting(false);
     const roll = Math.random();
-    if (roll < 0.45) {
+    if (roll < 0.68) {
       // Bolt for it
       e.setHandsUp(true);
       this.staffAI.set(e, new CivilianAI(e, this.level.waypoints, this.level.colliders, this.ctx.bus));
-    } else if (roll < 0.75) {
-      e.setCowering(true); // down on the floor, arms over the head
     } else {
       e.setKneeling(true); // on their knees, hands up, pleading
       e.setHandsUp(true);

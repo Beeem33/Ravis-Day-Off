@@ -123,25 +123,12 @@ export function makeTex(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): TH
 
 // ------------------------------------------------------------------ layout
 
-const FLOOR_H = 3.3; // walk level of upper floor
-const WALL_H = 3.0; // clear height per storey
+const WALL_H = 3.0; // clear interior height
 const SLAB_T = 0.3;
-
-// ---- Stairwell shaft: a switchback stair filling the east end of the
-// building. Every part of it keys off these so the enclosure walls, the
-// slab cutout, the flights and the guard rails stay flush with each other.
-const SHAFT_WALL_X = 13.3; // centre of the west enclosure wall (0.22 thick)
-const SHAFT_X0 = 13.41; // interior west face
-const SHAFT_X1 = 18.19; // interior east face (the exterior wall)
-const SHAFT_VOID_X = 13.19; // outer face of that wall — where the slab stops
-const DIVIDER_X0 = 15.35; // stair core between the two flights
-const DIVIDER_X1 = 16.25;
-const STAIR_Z_BOT = -4; // both flights run between these
-const STAIR_Z_TOP = -7;
-const LANDING_Z = -9; // half-landing occupies z LANDING_Z..STAIR_Z_TOP
 
 // Service door out of the east wall, just south of the stairwell: the way
 // on to the next level. Its panel stays red until the floor is clear.
+const EAST_X = 12.4; // east wall — the building used to run out to 18.4
 const EXIT_Z0 = 0.5;
 const EXIT_Z1 = 2.2;
 
@@ -204,8 +191,6 @@ export class OfficeLevelBuilder {
     this.makeMaterials();
     this.buildShell();
     this.buildGroundFloor();
-    this.buildStairs();
-    this.buildUpperFloor();
     this.buildVendingMachines();
     this.buildDebris();
     this.buildLighting();
@@ -222,9 +207,6 @@ export class OfficeLevelBuilder {
         { pos: new THREE.Vector3(9.5, 0, -3), yaw: Math.PI / 2 },
         { pos: new THREE.Vector3(-13, 0, -8.5), yaw: 0.4 },
         { pos: new THREE.Vector3(3.5, 0, -8.5), yaw: 2.6 },
-        { pos: new THREE.Vector3(10.5, FLOOR_H, -7), yaw: 0 },
-        { pos: new THREE.Vector3(-10.1, FLOOR_H, -4.5), yaw: 1.2 },
-        { pos: new THREE.Vector3(0, FLOOR_H, 8), yaw: Math.PI }
       ],
       playerSpawn: new THREE.Vector3(-16.5, 0, 0.1),
       playerSpawnYaw: -Math.PI / 2, // facing east down the cubicle aisle
@@ -235,20 +217,18 @@ export class OfficeLevelBuilder {
         { pos: new THREE.Vector3(-7.5, 0, 5.5), yaw: 0.3 },
         { pos: new THREE.Vector3(6.5, 0, -6.5), yaw: -1.2 },
         { pos: new THREE.Vector3(-15, 0, -3.5), yaw: 1.4 },
-        { pos: new THREE.Vector3(-3, FLOOR_H, 6.5), yaw: 2.8 }
       ],
       // And the ones who were already caught
       exitPanel: this.exitPanelMat,
       exitPanelLight: this.exitPanelLight,
       exitTrigger: new THREE.Box3(
-        new THREE.Vector3(17.1, 0, EXIT_Z0 + 0.1),
-        new THREE.Vector3(18.35, 2.2, EXIT_Z1 - 0.1)
+        new THREE.Vector3(EAST_X - 1.3, 0, EXIT_Z0 + 0.1),
+        new THREE.Vector3(EAST_X - 0.05, 2.2, EXIT_Z1 - 0.1)
       ),
       corpseSpawns: [
         { pos: new THREE.Vector3(-2.5, 0, 4.6), yaw: 1.1 },
         { pos: new THREE.Vector3(-11.8, 0, -6.2), yaw: -2.2 },
         { pos: new THREE.Vector3(8.6, 0, 2.4), yaw: 0.4 },
-        { pos: new THREE.Vector3(1.5, FLOOR_H, 5.2), yaw: 2.6 }
       ]
     };
   }
@@ -465,61 +445,24 @@ export class OfficeLevelBuilder {
   // --------------------------------------------------------- big structure
 
   private buildShell(): void {
-    // Ground slab and roof
-    this.slab(-18.4, 18.4, -12.4, 12.4, -SLAB_T, this.carpetMat);
-    this.slab(-18.4, 18.4, -12.4, 12.4, FLOOR_H + WALL_H, this.ceilMat);
+    // Single storey. The upper floor, the mezzanine and the stairwell that
+    // served it are all gone, so the roof sits straight on the walls.
+    this.slab(-18.4, EAST_X, -12.4, 12.4, -SLAB_T, this.carpetMat);
+    this.slab(-18.4, EAST_X, -12.4, 12.4, WALL_H, this.ceilMat);
 
-    // Exterior walls, both storeys (south wall has the entrance)
-    for (const y of [0, FLOOR_H]) {
-      this.wallX(-18.3, 18.3, -12.3, y, WALL_H + SLAB_T); // north
-      if (y === 0) {
-        this.wallXDoor(-18.3, 18.3, 12.3, y, WALL_H + SLAB_T, -2, 2); // south + entrance
-      } else {
-        this.wallX(-18.3, 18.3, 12.3, y, WALL_H + SLAB_T);
-      }
-      this.wallZ(-12.3, 12.3, -18.3, y, WALL_H + SLAB_T); // west
-      if (y === 0) {
-        // East wall, with the service door out of the building — the way on
-        // to the next floor of the operation. Sits just south of the stairwell.
-        this.wallZ(-12.3, EXIT_Z0, 18.3, y, WALL_H + SLAB_T);
-        this.wallZ(EXIT_Z1, 12.3, 18.3, y, WALL_H + SLAB_T);
-        this.solid(0.22, WALL_H + SLAB_T - 2.25, EXIT_Z1 - EXIT_Z0, 18.3, 2.25, (EXIT_Z0 + EXIT_Z1) / 2, this.wallMat, {
-          collide: false
-        });
-      } else {
-        this.wallZ(-12.3, 12.3, 18.3, y, WALL_H + SLAB_T); // east
-      }
-    }
+    this.wallX(-18.3, EAST_X - 0.1, -12.3, 0, WALL_H); // north
+    this.wallXDoor(-18.3, EAST_X - 0.1, 12.3, 0, WALL_H, -2, 2); // south + entrance
+    this.wallZ(-12.3, 12.3, -18.3, 0, WALL_H); // west
+    // East wall, with the service door on to the next level
+    this.wallZ(-12.3, EXIT_Z0, EAST_X - 0.1, 0, WALL_H);
+    this.wallZ(EXIT_Z1, 12.3, EAST_X - 0.1, 0, WALL_H);
+    this.solid(0.22, WALL_H - 2.25, EXIT_Z1 - EXIT_Z0, EAST_X - 0.1, 2.25, (EXIT_Z0 + EXIT_Z1) / 2, this.wallMat, {
+      collide: false
+    });
     this.buildExitDoor();
     // Entrance glass doors (breakable) in the south gap
     this.glass('x', -2, -0.05, 12.3, 0, 2.1);
     this.glass('x', 0.05, 2, 12.3, 0, 2.1);
-
-    // Upper floor slab with two openings:
-    //  H1 mezzanine over the cubicle farm: x[-10,0] z[-2,3]
-    //  H2 stairwell void: x[SHAFT_VOID_X,18.4] z[-9,-4]
-    const y = FLOOR_H - SLAB_T;
-    this.slab(-18.4, 18.4, -12.4, -9, y, this.carpetUpMat);
-    this.slab(-18.4, SHAFT_VOID_X, -9, -4, y, this.carpetUpMat);
-    this.slab(-18.4, 18.4, -4, -2, y, this.carpetUpMat);
-    this.slab(-18.4, -10, -2, 3, y, this.carpetUpMat);
-    this.slab(0, 18.4, -2, 3, y, this.carpetUpMat);
-    this.slab(-18.4, 18.4, 3, 12.4, y, this.carpetUpMat);
-
-    // Mezzanine railings (east edge has the broken section — the drop-down)
-    const ry = FLOOR_H;
-    this.railing(-10, -2, 0, -2, ry); // south edge
-    this.railing(-10, 3, 0, 3, ry); // north edge
-    this.railing(-10, -2, -10, 3, ry); // west edge
-    this.railing(0, -2, 0, 0, ry); // east edge lower part
-    this.railing(0, 0, 0, 2, ry, true); // BROKEN section — jump down here
-    this.railing(0, 2, 0, 3, ry); // east edge upper part
-
-    // Stairwell void: guard every upper-floor edge around it. The gap left
-    // at the south edge is where flight B arrives.
-    this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_VOID_X, STAIR_Z_BOT, ry); // west
-    this.railing(SHAFT_VOID_X, LANDING_Z, SHAFT_X1, LANDING_Z, ry); // north
-    this.railing(DIVIDER_X0, STAIR_Z_BOT, SHAFT_X1, STAIR_Z_BOT, ry); // south, east of the opening
   }
 
   /**
@@ -532,15 +475,15 @@ export class OfficeLevelBuilder {
     const w = EXIT_Z1 - EXIT_Z0;
     // Frame
     for (const z of [EXIT_Z0, EXIT_Z1]) {
-      this.solid(0.26, 2.25, 0.08, 18.3, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
+      this.solid(0.26, 2.25, 0.08, EAST_X - 0.1, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
     }
-    this.solid(0.26, 0.09, w, 18.3, 2.25, cz, this.darkMetalMat, { surface: 'metal', collide: false });
+    this.solid(0.26, 0.09, w, EAST_X - 0.1, 2.25, cz, this.darkMetalMat, { surface: 'metal', collide: false });
     // Leaf — no collider, the scene gates entry on the trigger instead
-    const leaf = this.solid(0.1, 2.2, w - 0.06, 18.18, 0, cz, this.deskMat, {
+    const leaf = this.solid(0.1, 2.2, w - 0.06, (EAST_X - 0.22), 0, cz, this.deskMat, {
       surface: 'wood', occlude: false, collide: false
     });
     leaf.userData.surface = 'wood';
-    this.solid(0.06, 0.26, 0.06, 18.1, 1.0, cz - w / 2 + 0.28, this.darkMetalMat, {
+    this.solid(0.06, 0.26, 0.06, (EAST_X - 0.3), 1.0, cz - w / 2 + 0.28, this.darkMetalMat, {
       surface: 'metal', occlude: false, collide: false
     }); // handle
 
@@ -551,13 +494,13 @@ export class OfficeLevelBuilder {
       emissiveIntensity: 1.6
     });
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.3, w * 0.82), this.exitPanelMat);
-    panel.position.set(18.15, 2.62, cz);
+    panel.position.set(EAST_X - 0.25, 2.62, cz);
     this.group.add(panel);
     const hood = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, w * 0.9), this.darkMetalMat);
-    hood.position.set(18.2, 2.82, cz);
+    hood.position.set(EAST_X - 0.2, 2.82, cz);
     this.group.add(hood);
     this.exitPanelLight = new THREE.PointLight(0xff3b28, 4.5, 5, 1.9);
-    this.exitPanelLight.position.set(17.7, 2.5, cz);
+    this.exitPanelLight.position.set(EAST_X - 0.7, 2.5, cz);
     this.group.add(this.exitPanelLight);
   }
 
@@ -572,26 +515,6 @@ export class OfficeLevelBuilder {
     sign.position.set(0, 2.4, 6.2);
     this.group.add(sign);
 
-    // Breakroom: x[-18,-9], z[-12,-5]
-    this.wallZDoor(-12.3, -5, -9, 0, WALL_H, -8.6, -7.6); // east wall w/ door
-    this.wallX(-18.3, -14.2, -5, 0, WALL_H); // north wall west part
-    this.wallX(-11.2, -9, -5, 0, WALL_H); // north wall east part
-    this.solid(2.95, 0.9, 0.22, -12.7, 0, -5, this.wallMat); // sill under window
-    this.glass('x', -14.2, -11.2, -5, 0.9, 1.6); // breakroom window
-    this.solid(0.22, WALL_H - 2.5, 3.0, -12.7, 2.5, -5, this.wallMat, { collide: false }); // header
-    // Breakroom furniture
-    this.solid(1.4, 2.0, 0.8, -17.4, 0, -8.5, this.darkMetalMat, { surface: 'metal' }); // vending machine
-    const vendGlow = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 1.1, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0x223344, emissive: 0x7fd4ff, emissiveIntensity: 0.7 })
-    );
-    vendGlow.position.set(-16.95, 1.2, -8.5);
-    vendGlow.rotation.y = Math.PI / 2;
-    this.group.add(vendGlow);
-    this.solid(1.6, 0.75, 1.6, -13, 0, -9.5, this.deskMat, { surface: 'wood', occlude: false }); // table
-    this.solid(1.6, 0.75, 1.6, -11, 0, -6.8, this.deskMat, { surface: 'wood', occlude: false }); // table
-    this.solid(1.0, 0.9, 0.6, -9.6, 0, -11.6, this.darkMetalMat, { surface: 'metal', occlude: false }); // counter w/ coffee
-
     // Cubicle farm: pods centered x {-13.5,-9.5,-5.5,-1.5}, banks at z -1.9 / 2.1
     for (const cx of [-13.5, -9.5, -5.5, -1.5]) {
       this.cubiclePod(cx, -1.9, 0); // facing north
@@ -605,10 +528,6 @@ export class OfficeLevelBuilder {
     this.deskCluster(2.5, -6.2, Math.PI / 2);
     this.solid(0.5, 1.1, 0.5, 11.2, 0, -10.5, this.darkMetalMat, { surface: 'metal', occlude: false }); // water cooler
 
-    // Stairwell enclosure: door on the west wall, which sits directly under
-    // the cut edge of the slab above so the shaft is a clean rectangle.
-    this.wallZDoor(-12.3, -2, SHAFT_WALL_X, 0, WALL_H, -3.4, -2.4);
-    this.wallX(SHAFT_WALL_X, 18.3, -2, 0, WALL_H);
   }
 
   /** A 3m-wide cubicle pod: U-shaped fabric panels + desk + monitor + chair. */
@@ -774,127 +693,12 @@ export class OfficeLevelBuilder {
   }
 
   /**
-   * Switchback stair filling the shaft: flight A up the east side to a
-   * half-landing, flight B back down the west side onto the upper floor.
-   * Both flights run wall-to-core with no slot either side, every tread is
-   * a solid column off the floor, and the landing spans the full width —
-   * which also seals the dead pocket at the north end of the shaft.
-   */
-  private buildStairs(): void {
-    const steps = 10;
-    const rise = FLOOR_H / 2 / steps; // 0.165
-    const going = 0.3; // tread depth
-    const flightW = DIVIDER_X0 - SHAFT_X0; // both flights are the same width
-    const flightAX = (DIVIDER_X1 + SHAFT_X1) / 2; // east flight centre
-    const flightBX = (SHAFT_X0 + DIVIDER_X0) / 2; // west flight centre
-    const tread = { surface: 'metal', occlude: false } as const;
-
-    // Flight A — east side, climbing north to the landing
-    for (let i = 0; i < steps; i++) {
-      const z = STAIR_Z_BOT - going * i - going / 2;
-      this.solid(flightW, rise * (i + 1), going, flightAX, 0, z, this.darkMetalMat, tread);
-    }
-
-    // Half-landing, wall to wall
-    this.solid(
-      SHAFT_X1 - SHAFT_X0, FLOOR_H / 2, STAIR_Z_TOP - LANDING_Z,
-      (SHAFT_X0 + SHAFT_X1) / 2, 0, (LANDING_Z + STAIR_Z_TOP) / 2,
-      this.darkMetalMat, tread
-    );
-
-    // Flight B — west side, climbing south onto the upper floor
-    for (let i = 0; i < steps; i++) {
-      const z = STAIR_Z_TOP + going * i + going / 2;
-      this.solid(flightW, FLOOR_H / 2 + rise * (i + 1), going, flightBX, 0, z, this.darkMetalMat, tread);
-    }
-
-    // Stair core between the flights — floor to just above the top flight
-    this.solid(
-      DIVIDER_X1 - DIVIDER_X0, FLOOR_H + 0.4, STAIR_Z_BOT - STAIR_Z_TOP,
-      (DIVIDER_X0 + DIVIDER_X1) / 2, 0, (STAIR_Z_BOT + STAIR_Z_TOP) / 2,
-      this.wallMat
-    );
-  }
-
-  private buildUpperFloor(): void {
-    const y = FLOOR_H;
-
-    // Server room: x[-18,-8], z[-12,-3]; entrance + observation glass on north wall
-    this.wallZ(-12.3, -3, -8, y, WALL_H); // east wall
-    this.wallX(-18.3, -13.5, -3, y, WALL_H); // north wall west part
-    this.wallX(-9.6, -8, -3, y, WALL_H); // north wall east stub
-    this.solid(2.9, 0.9, 0.22, -12.05, y, -3, this.wallMat); // sill
-    this.glass('x', -13.5, -10.6, -3, y + 0.9, 1.6); // observation window
-    this.solid(2.9, WALL_H - 2.5, 0.22, -12.05, y + 2.5, -3, this.wallMat, { collide: false }); // header
-    this.solid(1.0, WALL_H - 2.1, 0.22, -10.1, y + 2.1, -3, this.wallMat, { collide: false }); // door header
-    // Server racks (metal, tall, good hard cover) with blinky lights
-    for (const rx of [-16.5, -14.5, -12.5, -10.5]) {
-      this.solid(1.1, 2.2, 0.8, rx, y, -8.5, this.darkMetalMat, { surface: 'metal' });
-      this.solid(1.1, 2.2, 0.8, rx, y, -5.8, this.darkMetalMat, { surface: 'metal' });
-      const led = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.8, 1.6),
-        new THREE.MeshStandardMaterial({ color: 0x0a0f0a, emissive: 0x2bff88, emissiveIntensity: 0.5 })
-      );
-      led.position.set(rx, y + 1.2, -5.38);
-      this.group.add(led);
-    }
-
-    // Executive suites: x[2,12], z[-12,-4]; glass fronts along z=-4
-    this.wallZ(-12.3, -4, 2, y, WALL_H); // west wall
-    this.wallZ(-12.3, -4, 12, y, WALL_H); // east wall
-    this.wallZDoor(-12.3, -4, 7, y, WALL_H, -9, -8); // divider w/ connecting door
-    // Office A front: glass + door gap at x[3,4]
-    this.solid(1.0, WALL_H - 2.1, 0.22, 3.5, y + 2.1, -4, this.wallMat, { collide: false }); // door header
-    this.glass('x', 2.1, 2.95, -4, y, 2.6);
-    this.glass('x', 4.05, 6.95, -4, y, 2.6);
-    // Office B front: glass + door gap at x[10,11]
-    this.solid(1.0, WALL_H - 2.1, 0.22, 10.5, y + 2.1, -4, this.wallMat, { collide: false });
-    this.glass('x', 7.05, 9.95, -4, y, 2.6);
-    this.glass('x', 11.05, 11.9, -4, y, 2.6);
-    // Glass strip above fronts
-    this.solid(10, WALL_H - 2.6, 0.22, 7, y + 2.6, -4, this.wallMat, { collide: false });
-    // Exec furniture
-    this.deskClusterAt(4.5, y, -9, 0);
-    this.deskClusterAt(9.5, y, -9, 0);
-    this.cabinet(0.6, 1.5, 2.0, 2.4, y, -6, 0, 3); // cabinets A
-    this.cabinet(0.6, 1.5, 2.0, 11.6, y, -6, Math.PI, 3); // cabinets B
-
-    // North open lounge: couch, planters, copier — cover around the mezzanine
-    this.solid(2.6, 0.75, 1.0, -4, y, 6.5, new THREE.MeshLambertMaterial({ color: 0x5a2f2f }), { surface: 'wood' }); // couch
-    this.solid(1.0, 0.75, 2.6, 3.2, y, 7.5, new THREE.MeshLambertMaterial({ color: 0x5a2f2f }), { surface: 'wood' });
-    this.solid(1.5, 1.15, 0.8, 12, y, 10.8, this.darkMetalMat, { surface: 'metal' }); // copier
-    this.cabinet(0.6, 1.5, 2.4, -14, y, 8); // cabinets
-    this.solid(1.2, 0.72, 1.2, -14, y, 4, this.deskMat, { surface: 'wood', occlude: false }); // side table
-  }
-
-  /** Desk cluster helper for the upper floor (y offset). */
-  private deskClusterAt(cx: number, y: number, cz: number, rot: number): void {
-    const desk = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.72, 1.1), this.deskMat);
-    desk.position.set(cx, y + 0.36, cz);
-    desk.rotation.y = rot;
-    desk.userData.surface = 'wood';
-    this.group.add(desk);
-    this.shootables.push(desk);
-    this.colliders.push({
-      box: new THREE.Box3(new THREE.Vector3(cx - 1.2, y, cz - 0.55), new THREE.Vector3(cx + 1.2, y + 0.72, cz + 0.55))
-    });
-    this.screen(0.55, 0.35, cx, y + 0.95, cz, rot);
-
-    const clutter = this.deskClutter(1.2, (Math.random() - 0.5) * 1.0);
-    clutter.position.set(cx, y, cz);
-    clutter.rotation.y = rot;
-    this.group.add(clutter);
-  }
-
-  /**
    * Underside of whatever is overhead at a ground-floor point: normally the
    * upper-floor slab, but the roof where that slab is cut away (the
    * mezzanine void over the cubicle farm, and the stairwell void).
    */
-  private groundCeilingY(x: number, z: number): number {
-    const mezzanineVoid = x > -10 && x < 0 && z > -2 && z < 3;
-    const stairwellVoid = x > SHAFT_VOID_X && z > LANDING_Z && z < STAIR_Z_BOT;
-    return mezzanineVoid || stairwellVoid ? FLOOR_H + WALL_H : FLOOR_H - SLAB_T;
+  private groundCeilingY(_x: number, _z: number): number {
+    return WALL_H; // single storey: the roof is the only thing overhead
   }
 
   /**
@@ -924,8 +728,8 @@ export class OfficeLevelBuilder {
   }
 
   /**
-   * Vending machines: the breakroom bank downstairs and one on the upper
-   * lounge. Each gets a box collider — they're solid cover.
+   * Vending machines: the bank along the west strip plus one in the back
+   * office. Each gets a box collider — they're solid cover.
    */
   private buildVendingMachines(): void {
     const place = (x: number, y: number, z: number, yaw: number): void => {
@@ -944,14 +748,11 @@ export class OfficeLevelBuilder {
         )
       });
     };
-    // Breakroom, against the west wall next to the old drinks machine
+    // West strip, lined up against the outside wall
     place(-17.7, 0, -6.6, Math.PI / 2);
     place(-17.7, 0, -5.5, Math.PI / 2);
     // Back office, by the copier
-    place(9.0, 0, -11.7, 0);
-    // Upper lounge
-    place(-16.5, FLOOR_H, 9.6, Math.PI / 2);
-    place(5.5, FLOOR_H, 11.7, 0);
+    place(8.0, 0, -11.7, 0);
   }
 
   /**
@@ -965,7 +766,7 @@ export class OfficeLevelBuilder {
       p.position.set(x, y, z);
       this.group.add(p);
     };
-    // Ground floor: cubicle aisle, back office, lobby, breakroom
+    // Cubicle aisle, back office and lobby
     paperAt(-11.5, 0, 0.1, 7, 1.2);
     paperAt(-3.5, 0, 0.1, 5, 0.9);
     paperAt(-1.5, 0, -9.5, 8, 1.4);
@@ -973,11 +774,6 @@ export class OfficeLevelBuilder {
     paperAt(-0.5, 0, 6.5, 5, 1.0);
     paperAt(-13, 0, -8.0, 4, 0.8);
     paperAt(9.5, 0, -2.0, 5, 1.0);
-    // Upper floor: hallway and the lounge
-    paperAt(-4, FLOOR_H, -2.7, 6, 1.2);
-    paperAt(4.5, FLOOR_H, -8.5, 5, 0.9);
-    paperAt(-12.5, FLOOR_H, 4.0, 6, 1.1);
-    paperAt(2.0, FLOOR_H, 7.5, 5, 1.0);
 
     // Chairs shoved back or tipped over as people ran
     const chairAt = (x: number, y: number, z: number, yaw: number, tipped: boolean): void => {
@@ -995,11 +791,10 @@ export class OfficeLevelBuilder {
     chairAt(-13.5, 0, -0.4, 0.4, true);
     chairAt(2.2, 0, -6.0, 1.9, false);
     chairAt(-2.0, 0, -9.8, 0.8, true);
-    chairAt(4.6, FLOOR_H, -8.6, 2.2, true);
-    chairAt(9.4, FLOOR_H, -8.4, 0.6, false);
+
 
     // Bins over on their sides, and a couple of dropped cans
-    for (const [x, y, z] of [[-7.8, 0, 1.0], [3.6, 0, -9.6], [-16.0, 0, 4.2], [-13.8, FLOOR_H, 3.0]] as const) {
+    for (const [x, y, z] of [[-7.8, 0, 1.0], [3.6, 0, -9.6], [-16.0, 0, 4.2]] as const) {
       const b = trashCan();
       b.position.set(x, y + 0.16, z);
       b.rotation.z = Math.PI / 2;
@@ -1011,7 +806,6 @@ export class OfficeLevelBuilder {
     for (const [x, y, z] of [
       [-10.4, 0, 0.6], [1.2, 0, -8.4], [-6.6, 0, 1.2], [-14.6, 0, 0.4],
       [3.4, 0, 6.8], [-2.2, 0, -6.4], [10.2, 0, -1.6], [-16.2, 0, -9.4],
-      [-15.6, FLOOR_H, 5.0], [2.6, FLOOR_H, -3.2], [8.8, FLOOR_H, 8.4], [-11.2, FLOOR_H, -3.4]
     ] as const) {
       const can = sodaCan();
       can.position.set(x, y + 0.05, z);
@@ -1023,7 +817,6 @@ export class OfficeLevelBuilder {
     for (const [x, y, z] of [
       [-13.1, 0.72, -1.35], [-9.1, 0.72, -1.35], [-5.1, 0.72, 2.55], [-1.1, 0.72, -1.35],
       [0.9, 0.72, 7.05], [-2.1, 0.72, -10.3], [2.9, 0.72, -6.5], [-9.9, 0.9, -11.5],
-      [4.9, FLOOR_H + 0.72, -9.2], [9.9, FLOOR_H + 0.72, -8.8], [-13.6, FLOOR_H + 0.72, 4.05]
     ] as const) {
       const can = sodaCan();
       can.position.set(x, y, z);
@@ -1040,18 +833,12 @@ export class OfficeLevelBuilder {
     bookAt('persuade', -12.2, 0, 0.9); // the training manuals, on the aisle floor
     bookAt('scamming', -4.8, 0, -0.7);
     bookAt('persuade', 2.6, 0, -9.2);
-    bookAt('scamming', -13.4, 0, -7.2); // breakroom
-    bookAt('persuade', 3.8, FLOOR_H, -8.2); // exec office A
-    bookAt('scamming', 10.2, FLOOR_H, -7.6); // exec office B
     bookAt('comic', -8.2, 0, 1.1);
     bookAt('comic', -15.4, 0, 4.6);
-    bookAt('comic', 0.8, FLOOR_H, 7.2);
-    bookAt('comic', -12.8, FLOOR_H, 5.4);
 
     // Coffee gone over as people ran
     for (const [x, y, z] of [
-      [-9.2, 0, -0.4], [1.8, 0, 6.2], [-14.2, 0, -9.4],
-      [5.2, FLOOR_H, 4.6], [-6.4, FLOOR_H, -2.4]
+      [-9.2, 0, -0.4], [1.8, 0, 6.2],
     ] as const) {
       const c = spilledCoffee();
       c.position.set(x, y, z);
@@ -1070,15 +857,9 @@ export class OfficeLevelBuilder {
       }
       this.group.add(b);
     };
-    chipsAt(-16.9, 0, -4.6, true); // dropped by the breakroom machines
-    chipsAt(-16.6, 0, -7.5, true);
-    chipsAt(-12.6, 0, -9.3); // breakroom table
-    chipsAt(8.1, 0, -11.2, true); // by the back-office machine
+    chipsAt(7.1, 0, -11.2, true); // by the back-office machine
     chipsAt(-0.3, 0, 7.05); // reception desk
     chipsAt(-3.6, 0, 0.9, true); // cubicle aisle
-    chipsAt(-14.4, FLOOR_H, 9.4, true); // upper lounge machine
-    chipsAt(5.9, FLOOR_H, 10.9, true);
-    chipsAt(-13.9, FLOOR_H, 4.05); // side table
   }
 
   private buildLighting(): void {
@@ -1098,24 +879,7 @@ export class OfficeLevelBuilder {
       );
       fix.position.set(x, y + 0.12, z);
       g.add(fix);
-      const ceilY = y > FLOOR_H ? FLOOR_H + WALL_H : this.groundCeilingY(x, z);
-      this.mountFixture(x, z, y + 0.155, ceilY); // fixture box: centered y+0.12, 0.07 tall
-    };
-
-    /** Sconce bolted flat to a wall face, for the enclosed stairwell. */
-    const addSconce = (x: number, y: number, z: number, faceX: number, intensity: number) => {
-      const l = new THREE.PointLight(0xfff2dc, intensity, 9, 1.6);
-      l.position.set(x + faceX * 0.3, y, z);
-      g.add(l);
-      const fix = new THREE.Mesh(
-        new THREE.BoxGeometry(0.1, 0.34, 0.9),
-        new THREE.MeshStandardMaterial({ color: 0x999999, emissive: 0xfff6e0, emissiveIntensity: 1.2 })
-      );
-      fix.position.set(x + faceX * 0.06, y, z);
-      g.add(fix);
-      const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.16), this.darkMetalMat);
-      bracket.position.set(x, y + 0.2, z);
-      g.add(bracket);
+      this.mountFixture(x, z, y + 0.155, this.groundCeilingY(x, z)); // fixture box: centered y+0.12, 0.07 tall
     };
 
     // Ground floor (ceiling ~2.95)
@@ -1123,62 +887,33 @@ export class OfficeLevelBuilder {
     addLight(-7.5, 2.8, 0.1); // cubicles W
     addLight(-1.5, 2.8, 0.1); // cubicles E
     addLight(0, 2.8, -8, 8); // back office
-    addLight(-13, 2.8, -8.5, 7); // breakroom
     addLight(-16.5, 2.8, 3, 6); // west strip
     // Fill for the stretches that had nothing overhead: the east half of the
     // lobby, the run down to the stairwell door, the south-west corner of the
     // cubicle farm and the east end of the back office.
     addLight(8.5, 2.8, 8.0, 7); // lobby east
-    addLight(14.5, 2.8, 6.5, 6, 10); // south-east corner
     addLight(9.5, 2.8, 2.0, 6, 10); // east corridor north
     addLight(-11.5, 2.8, 6.5, 7); // lobby south-west
     addLight(-17.0, 2.8, 8.5, 5, 9); // west corner
     addLight(7.0, 2.8, -9.5, 7); // back office east
     addLight(-6.0, 2.8, -4.5, 6, 10); // between the farm and the back office
     addLight(-17.5, 2.8, -1.5, 5, 9); // west strip south
-    // Stairwell: the void runs up to the roof and the middle is filled by the
-    // divider wall, so light it from sconces on both faces of that wall. Each
-    // sits head-height above the flight it lights, and the flights are at
-    // different heights at this z.
-    addSconce(DIVIDER_X0, 3.3, -5.5, -1, 5); // west face → flight B (upper)
-    addSconce(DIVIDER_X1, 2.4, -5.5, 1, 5); // east face → flight A (lower)
 
     // Ground east corridor — flickering (dark hallway)
     this.addFlickering(9.5, 2.8, -3, 8, 10);
 
-    // Upper floor (ceiling ~6.2)
-    addLight(0, 6.15, 8); // lounge center
-    addLight(-12, 6.15, 5, 7); // lounge west
-    addLight(9, 6.15, 6, 7); // lounge east
-    addLight(-13, 6.15, -7.5, 7, 10, 0xbfd9ff); // server room, cold blue
-    addLight(4.5, 6.15, -8, 7); // office A
-    addLight(9.5, 6.15, -8, 7); // office B
-    // Upper fill: the east end of the lounge, the corners, and the stretch of
-    // hallway past the flickering tubes that had nothing of its own.
-    addLight(15.5, 6.15, 6.5, 6, 10); // lounge far east
-    addLight(15.0, 6.15, -2.8, 6, 10); // hallway east / stair arrival
-    addLight(-16.5, 6.15, 8.5, 5, 9); // lounge north-west corner
-    addLight(6.5, 6.15, 10.0, 6, 10); // lounge north-east
-    addLight(-10.5, 6.15, 0.5, 6, 10); // west of the mezzanine
-    addLight(-17.0, 6.15, -10.5, 5, 9, 0xbfd9ff); // server room far corner
-
-    // Upper hallway — the two flickering tubes
-    this.addFlickering(1, 6.15, -2.9, 9, 9);
-    this.addFlickering(-6, 6.15, -2.9, 9, 9);
   }
 
   /** Flickering tube plus the hardware holding it to the ceiling. */
   private addFlickering(x: number, y: number, z: number, intensity: number, dist: number): void {
     this.flickering.push(new FlickeringLight(this.group, new THREE.Vector3(x, y, z), intensity, dist));
-    const ceilY = y > FLOOR_H ? FLOOR_H + WALL_H : this.groundCeilingY(x, z);
-    this.mountFixture(x, z, y + 0.115, ceilY); // fixture box: centered y+0.08, 0.07 tall
+    this.mountFixture(x, z, y + 0.115, this.groundCeilingY(x, z)); // fixture box: centered y+0.08, 0.07 tall
   }
 
   // ------------------------------------------------------------- waypoints
 
   private makeWaypoints(): Waypoint[] {
     const y0 = 0;
-    const y1 = FLOOR_H;
     const pts: [number, number, number][] = [
       [0, y0, 8], // 0 reception
       [-8, y0, 8], // 1 lobby west
@@ -1187,41 +922,17 @@ export class OfficeLevelBuilder {
       [9.5, y0, -7], // 4 east corridor S
       [-3.5, y0, -7], // 5 back office W
       [3.5, y0, -8.5], // 6 back office E
-      [-13, y0, -8.5], // 7 breakroom
+      [-13, y0, -8.5], // 7 west back corner
       [-16.5, y0, 6], // 8 west strip N
       [-11.5, y0, 0.1], // 9 central aisle W
       [-3.5, y0, 0.1], // 10 central aisle E
       [-16.5, y0, -2], // 11 west strip S
       [2, y0, 0.1], // 12 cubicle exit E
-      [-11.5, y0, 6], // 13 lobby SW
-      // Upper floor
-      [14.5, y1, -2.7], // 14 stair arrival
-      [10.5, y1, -2.7], // 15 hallway E
-      [3.5, y1, -2.7], // 16 hallway mid-E
-      [-4, y1, -2.7], // 17 hallway mid-W
-      [-10.1, y1, -2.6], // 18 hallway W / server door
-      [-10.1, y1, -5], // 19 server room entry
-      [-13, y1, -8], // 20 server room deep
-      [3.5, y1, -7], // 21 office A
-      [10.5, y1, -7], // 22 office B
-      [5, y1, 4], // 23 lounge SE
-      [0, y1, 8], // 24 lounge N center
-      [-8, y1, 8], // 25 lounge NW
-      [-14, y1, 2], // 26 lounge W
-      // Stairwell route — lets patrols cross between floors
-      [11.8, y0, -2.9], // 27 outside the stairwell door
-      [14.6, y0, -2.9], // 28 inside the stairwell, vestibule
-      [17.22, y0, -3.4], // 29 foot of flight A
-      [17.22, y0 + FLOOR_H / 2, -7.9], // 30 landing, east end
-      [14.38, y0 + FLOOR_H / 2, -7.9], // 31 landing, west end (foot of flight B)
-      [14.38, y1, -3.7] // 32 top of flight B, on the upper floor
+      [-11.5, y0, 6] // 13 lobby SW
     ];
     const links: [number, number][] = [
       [0, 1], [0, 2], [1, 8], [1, 13], [2, 3], [3, 12], [3, 4], [4, 6], [6, 5],
-      [5, 7], [5, 10], [10, 12], [10, 9], [9, 13], [13, 8], [8, 11],
-      [14, 15], [15, 16], [16, 17], [17, 18], [18, 19], [19, 20],
-      [16, 21], [15, 22], [16, 23], [23, 24], [24, 25], [25, 26], [26, 18],
-      [3, 27], [4, 27], [27, 28], [28, 29], [29, 30], [30, 31], [31, 32], [32, 14]
+      [5, 7], [5, 10], [10, 12], [10, 9], [9, 13], [13, 8], [8, 11]
     ];
     const wps: Waypoint[] = pts.map(([x, y, z]) => ({ pos: new THREE.Vector3(x, y, z), links: [] }));
     for (const [a, b] of links) {

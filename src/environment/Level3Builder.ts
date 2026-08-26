@@ -149,8 +149,7 @@ export class Level3Builder {
       wanderers: [
         { pos: new THREE.Vector3(-6.5, 0, -2.2), yaw: -Math.PI / 2 },
         { pos: new THREE.Vector3(3.5, 0, -3.4), yaw: Math.PI },
-        { pos: new THREE.Vector3(-1.5, 0, 5.4), yaw: Math.PI / 2 },
-        { pos: new THREE.Vector3(8.0, 0, -2.0), yaw: 0 }
+        { pos: new THREE.Vector3(-1.5, 0, 5.4), yaw: Math.PI / 2 }
       ],
       greeterStart: new THREE.Vector3(-8.5, 0, 4.4),
       greeterTalkPos: new THREE.Vector3(OFF_X0 + 3.4, 0, 0.35),

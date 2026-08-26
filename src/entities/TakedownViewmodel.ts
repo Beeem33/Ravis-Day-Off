@@ -18,14 +18,16 @@ export class TakedownViewmodel {
   active = false;
   private t = 0;
   private fired = new Set<string>();
-  /** 'grab' | 'draw' | 'stab' (first, the kill) | 'stab2' | 'stab3' | 'done' */
-  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'stab2' | 'stab3' | 'done') => void) | null = null;
+  /** 'grab' | 'draw' | 'stab' (blade in, held) | 'release' (the kill) | 'done' */
+  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'release' | 'done') => void) | null = null;
 
   static readonly GRAB_T = 0.35;
   static readonly DRAW_T = 0.5;
-  static readonly STAB_T = 1.1; // first thrust comes straight off the draw — no standing around
-  static readonly STAB_CYCLE = 0.62; // per-stab rhythm of the triple — deliberate, not frantic
-  static readonly DIE_T = 1.35;
+  static readonly RAISE_T = 0.95; // knife cocked overhead
+  static readonly STAB_T = 1.25; // the single overhand strike lands
+  static readonly RELEASE_T = 3.2; // he lets go — and only now do they fall
+
+  static readonly DIE_T = 3.3;
   static readonly TOTAL_T = 4.0;
 
   constructor(camera: THREE.PerspectiveCamera) {
@@ -103,7 +105,7 @@ export class TakedownViewmodel {
     this.root.visible = false;
   }
 
-  private event(name: 'grab' | 'draw' | 'stab' | 'stab2' | 'stab3' | 'done'): void {
+  private event(name: 'grab' | 'draw' | 'stab' | 'release' | 'done'): void {
     if (this.fired.has(name)) return;
     this.fired.add(name);
     this.onEvent?.(name);
@@ -113,7 +115,7 @@ export class TakedownViewmodel {
   get struggle(): number {
     if (!this.active) return 0;
     const T = TakedownViewmodel;
-    if (this.t < T.GRAB_T || this.t > T.STAB_T + T.STAB_CYCLE * 3) return 0;
+    if (this.t < T.GRAB_T || this.t > T.RELEASE_T + 0.2) return 0;
     if (this.t > T.STAB_T) return 1.4; // the stabs kick hardest
     return Math.min(1, (this.t - T.GRAB_T) / 0.4);
   }
@@ -137,8 +139,9 @@ export class TakedownViewmodel {
     // of centre — the right side of their face as Ravi sees it)
     const lFrom = new THREE.Vector3(-0.42, -0.5, -0.25);
     const lGrab = new THREE.Vector3(0.13, -0.01, -0.62);
-    const reach = ease(c01(t / T.GRAB_T));
-    // After the LAST stab: drop back out of frame
+    // The left hand holds them up the whole time — and LETS GO at the release
+    const reach = ease(c01(t / T.GRAB_T)) * (1 - ease(c01((t - T.RELEASE_T) / 0.3)));
+    // After the release: drop back out of frame
     const out = ease(c01((t - (T.TOTAL_T - 0.55)) / 0.5));
     this.armL.position.lerpVectors(lFrom, lGrab, reach);
     this.armL.position.x += jx;
@@ -147,48 +150,57 @@ export class TakedownViewmodel {
     this.armL.rotation.set(-0.5 + 0.45 * reach + jy * 3, 0.5 - 0.35 * reach, 0.35 - 0.35 * reach);
     if (reach >= 1) this.event('grab');
 
-    // ---- Right arm: waits at the hip, draws the knife, holds ready during
-    // the struggle, then drives up under the jaw
+    // ---- Right arm: draws the knife, raises it HIGH, drives it down into
+    // the chest ONCE, and keeps it buried there — leaning on it — until the
+    // release. Ravi is angry, not efficient.
     const rPocket = new THREE.Vector3(0.3, -0.55, -0.2);
     const rReady = new THREE.Vector3(0.26, -0.3, -0.38);
-    const rStab = new THREE.Vector3(0.03, -0.26, -0.7); // full extension, driven into the CHEST
-    // The forearm stays low so the cuff never swallows the frame — it's the
-    // KNIFE that pitches up for the thrust, in the hand.
+    const rRaise = new THREE.Vector3(0.22, 0.16, -0.34); // cocked overhead
+    const rStab = new THREE.Vector3(0.03, -0.2, -0.7); // buried in the chest at full reach
     if (t < T.DRAW_T) {
       this.armR.position.copy(rPocket);
       this.armR.rotation.set(-0.25, -0.2, 0);
       this.knife.rotation.set(-0.15, 0, 0);
-    } else if (t < T.STAB_T) {
+    } else if (t < T.RAISE_T) {
+      // Draw to the ready
       const k = ease(c01((t - T.DRAW_T) / 0.3));
       this.event('draw');
       this.armR.position.lerpVectors(rPocket, rReady, k);
       this.armR.position.x += jx * 0.7;
       this.armR.position.y += jy * 0.7;
-      // Hand turned in so the blade reads in profile, not edge-on
       this.armR.rotation.set(-0.35 * k - 0.25 * (1 - k) + jy * 2, -0.55 * k - 0.2 * (1 - k), 0.1 * k);
-      this.knife.rotation.set(-0.15 - 0.3 * k, 0, 0.35 * k); // blade cocked upward, ready
-    } else {
-      // THREE fast stabs. The arm drives past the grab hand so the blade
-      // visibly buries in the chest (the enemy is held ~0.95m out; the tip
-      // reaches ~1.15m at full extension), rips back to mid, drives in again.
-      const rPull = new THREE.Vector3(0.17, -0.24, -0.42); // between stabs: blade back out, chest height
-      const tt = t - T.STAB_T;
-      const idx = Math.min(2, Math.floor(tt / T.STAB_CYCLE));
-      const ph = tt - idx * T.STAB_CYCLE;
-      let k: number;
-      if (ph < 0.18) k = ease(c01(ph / 0.18)); // drive in
-      else if (ph < 0.34) k = 1; // buried to the guard
-      else if (idx < 2) k = 1 - ease(c01((ph - 0.34) / 0.22)); // draw it back out
-      else k = 1 - 0.3 * ease(c01((ph - 0.34) / 0.6)); // the last one stays in and sags
-      const from = idx === 0 ? rReady : rPull;
-      this.armR.position.lerpVectors(from, rStab, k);
+      this.knife.rotation.set(-0.15 - 0.3 * k, 0, 0.35 * k);
+    } else if (t < T.STAB_T) {
+      // Cock it overhead, blade turned down for the overhand strike
+      const k = ease(c01((t - T.RAISE_T) / (T.STAB_T - T.RAISE_T)));
+      this.armR.position.lerpVectors(rReady, rRaise, k);
+      this.armR.position.x += jx * 0.7;
+      this.armR.position.y += jy * 0.7;
+      this.armR.rotation.set(-0.35 + 0.75 * k + jy * 2, -0.55 + 0.15 * k, 0.1);
+      this.knife.rotation.set(-0.45 - 1.15 * k, 0, 0.35 * (1 - k)); // blade swings to point DOWN-forward
+    } else if (t < T.RELEASE_T) {
+      // The strike: one hard overhand thrust down into the chest — then it
+      // STAYS there, hand grinding on the handle while he holds them up.
+      const k = ease(c01((t - T.STAB_T) / 0.16));
+      this.armR.position.lerpVectors(rRaise, rStab, k);
       this.armR.position.x += jx;
       this.armR.position.y += jy;
-      const grind = k >= 1 ? Math.sin(t * 22) * 0.04 : 0;
-      this.armR.rotation.set(-0.5 * k - 0.3 * (1 - k) + grind, -0.45 + 0.2 * k, 0.1 + grind * 0.6);
-      // Blade stays near-level so the thrust reads as INTO the throat, not up past it
-      this.knife.rotation.set(-0.28 - 0.17 * k + grind, 0, 0.3 - 0.2 * k + grind * 0.4);
-      if (k >= 1) this.event(idx === 0 ? 'stab' : idx === 1 ? 'stab2' : 'stab3');
+      const held = t > T.STAB_T + 0.16;
+      const grind = held ? Math.sin(t * 9) * 0.05 + Math.sin(t * 14.7) * 0.025 : 0;
+      // Leaning his weight onto the buried knife
+      const lean = held ? Math.sin((t - T.STAB_T) * 2.1) * 0.02 : 0;
+      this.armR.position.z += lean;
+      this.armR.rotation.set(0.4 - 0.9 * k + grind, -0.4 + 0.2 * k, 0.1 + grind * 0.5);
+      this.knife.rotation.set(-1.6 + 0.55 * k + grind * 0.7, 0, 0);
+      if (k >= 1) this.event('stab');
+    } else {
+      // Let go: the left hand releases, the knife is wrenched back out —
+      // and THAT is when they drop.
+      const k = ease(c01((t - T.RELEASE_T) / 0.3));
+      this.event('release');
+      this.armR.position.lerpVectors(rStab, new THREE.Vector3(0.28, -0.38, -0.3), k);
+      this.armR.rotation.set(-0.5 - 0.3 * k, -0.2, 0.1);
+      this.knife.rotation.set(-1.05 + 0.6 * k, 0, 0.1 * k);
     }
 
     // Recover: everything sinks out of the frame together

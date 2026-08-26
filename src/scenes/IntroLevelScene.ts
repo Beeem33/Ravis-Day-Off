@@ -125,6 +125,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       } else if (e === 'draw') {
         audio.knifeDraw();
       } else if (e === 'stab') {
+        // Blade in — held up on the knife, not dropped yet
         if (victim && victim.alive) {
           const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
           const spray = this.player
@@ -134,19 +135,16 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
             .add(new THREE.Vector3(0, 0.9, 0))
             .normalize();
           audio.knifeStab();
+          this.spatter(chest, spray, true);
+        }
+      } else if (e === 'release') {
+        // The knife comes out, the hand lets go — NOW they drop.
+        if (victim && victim.alive) {
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
           const slump = this.player.forwardDir().clone();
           slump.y = -0.3;
           this.killEnemy(victim, chest, slump.normalize(), true, false, 'torso', 0.2);
-          this.spatter(chest, spray, true);
-        }
-      } else if (e === 'stab2' || e === 'stab3') {
-        // Second and third thrusts land in the held body
-        audio.knifeStab();
-        if (victim) {
-          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-          const jab = this.player.forwardDir().clone();
-          victim.hitCorpse(chest, jab);
-          this.spatter(chest, jab.clone().negate().setY(0.5).normalize(), false);
+          this.spatter(chest, slump.clone().negate().setY(0.4).normalize(), false);
         }
       } else if (e === 'done') {
         this.takedown = null;

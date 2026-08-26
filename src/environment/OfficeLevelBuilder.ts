@@ -820,7 +820,7 @@ export class OfficeLevelBuilder {
     const NORTH = -12.16;
     const SOUTH = 12.16;
     const WEST = -18.16;
-    const EAST = EAST_X - 0.16;
+    const EAST = EAST_X - 0.24;
 
     const hang = (k: Parameters<typeof wallArt>[0], x: number, y: number, z: number, yaw: number): void => {
       const a = wallArt(k);

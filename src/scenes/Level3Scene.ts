@@ -109,6 +109,15 @@ export class Level3Scene extends CombatScene<Level3Data> {
     const cw = this.level.coolerWorker;
     const atCooler = new Enemy(cw.pos, cw.yaw, 9, { name: 'STAFF', civilian: true });
     this.addStaff(atCooler);
+    // A few more crossing the floor on errands, so the place looks staffed
+    this.level.wanderers.forEach((w, i) => {
+      const e = new Enemy(w.pos, w.yaw, i + 11, { name: 'STAFF', civilian: true });
+      this.addStaff(e);
+      const ai = new CivilianAI(e, this.level.waypoints, this.level.colliders, bus);
+      ai.calmDown(); // strolling, not fleeing — nothing has happened yet
+      this.staffAI.set(e, ai);
+    });
+
     // The one who comes over for a chat
     this.greeter = new Enemy(this.level.greeterStart, 0, 4, { name: 'DEV', civilian: true });
     this.addStaff(this.greeter);
@@ -379,7 +388,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // Burst fire at the staff
     this.gunnerBurst -= dt;
     if (this.gunnerBurst <= 0) {
-      this.gunnerBurst = 0.11;
+      this.gunnerBurst = 0.1;
       const victim = this.staff.find((s) => s.alive);
       this.ctx.audio.enemyGunshot(g.position.distanceTo(this.player.position) * 0.6);
       g.flashMuzzle();
@@ -388,7 +397,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
       const muzzle = new THREE.Vector3(0, 0, -1.3);
       L.truckGunMount.localToWorld(muzzle);
       this.particles.concreteChips(muzzle, new THREE.Vector3(0, 1, 0), 0xffc46a);
-      if (victim && Math.random() < 0.045) {
+if (victim && Math.random() < 0.06) {
         const chest = victim.position.clone().add(new THREE.Vector3(0, 1.15, 0));
         const dir = chest.clone().sub(muzzle).normalize();
         this.particles.tracer(muzzle, chest, 0xffe0b0);

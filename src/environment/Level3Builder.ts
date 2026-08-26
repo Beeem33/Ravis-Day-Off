@@ -27,6 +27,8 @@ export interface Level3Data {
   deskWorkers: EnemySpawn[];
   /** The one filling a cup at the cooler. */
   coolerWorker: EnemySpawn;
+  /** Staff crossing the floor on errands before any of it kicks off. */
+  wanderers: EnemySpawn[];
   /** The one who walks over to talk to Ravi: where he starts, where he stops. */
   greeterStart: THREE.Vector3;
   greeterTalkPos: THREE.Vector3;
@@ -144,6 +146,12 @@ export class Level3Builder {
         { pos: new THREE.Vector3(-9.4, 0, -10.18), yaw: Math.PI }
       ],
       coolerWorker: { pos: new THREE.Vector3(-5.6, 0, OFF_Z1 - 1.35), yaw: 0 },
+      wanderers: [
+        { pos: new THREE.Vector3(-6.5, 0, -2.2), yaw: -Math.PI / 2 },
+        { pos: new THREE.Vector3(3.5, 0, -3.4), yaw: Math.PI },
+        { pos: new THREE.Vector3(-1.5, 0, 5.4), yaw: Math.PI / 2 },
+        { pos: new THREE.Vector3(8.0, 0, -2.0), yaw: 0 }
+      ],
       greeterStart: new THREE.Vector3(-8.5, 0, 4.4),
       greeterTalkPos: new THREE.Vector3(OFF_X0 + 3.4, 0, 0.35),
       truck: this.truckParts.group,
@@ -427,7 +435,7 @@ export class Level3Builder {
     // Monitor at the back of the desk, facing the occupant
     const mz = z + Math.cos(yaw) * 0.26;
     const mx = x - Math.sin(yaw) * 0.26;
-    this.screen(0.56, 0.36, mx, 0.72 + 0.055 + 0.18, mz, yaw + Math.PI);
+    this.screen(0.56, 0.36, mx, 0.72 + 0.055 + 0.18, mz, Math.PI - yaw);
     // Keyboard, mouse, tower
     const kb = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.022, 0.15), this.plasticMat);
     kb.position.set(-0.02, 0.735, -0.24);
@@ -470,7 +478,7 @@ export class Level3Builder {
     // Chair, tucked in
     const chair = officeChair();
     chair.position.set(x - Math.sin(yaw) * -0.78, 0, z + Math.cos(yaw) * -0.78);
-    chair.rotation.y = yaw;
+    chair.rotation.y = yaw + Math.PI;
     this.group.add(chair);
   }
 
@@ -671,7 +679,7 @@ export class Level3Builder {
    */
   private buildSouthSide(): void {
     // Copy bay against the south wall
-    this.place(printer(), -8.0, 0, OFF_Z1 - 0.7, Math.PI);
+    this.place(printer(), -8.0, 0, OFF_Z1 - 0.7, 0);
     this.colliders.push({
       box: new THREE.Box3(new THREE.Vector3(-8.4, 0, OFF_Z1 - 1.1), new THREE.Vector3(-7.6, 1.2, OFF_Z1 - 0.3))
     });

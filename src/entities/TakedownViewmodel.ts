@@ -25,10 +25,10 @@ export class TakedownViewmodel {
   static readonly DRAW_T = 0.5;
   static readonly RAISE_T = 0.95; // knife cocked overhead
   static readonly STAB_T = 1.25; // the single overhand strike lands
-  static readonly RELEASE_T = 3.2; // he lets go — and only now do they fall
+  static readonly RELEASE_T = 1.75; // he lets go — and only now do they fall
 
-  static readonly DIE_T = 3.3;
-  static readonly TOTAL_T = 4.0;
+  static readonly DIE_T = 1.85;
+  static readonly TOTAL_T = 2.45;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -42,11 +42,13 @@ export class TakedownViewmodel {
 
     // An arm: forearm running back toward the shoulder, cuff, hand
     const mkArm = (group: THREE.Group, handOpen: boolean) => {
-      const fore = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), skin);
-      fore.position.set(0, -0.02, 0.19);
+      // Runs well back past the near plane: at full extension a 0.3 forearm
+      // stopped in mid-air in front of the camera and you saw the end of it.
+      const fore = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.66), skin);
+      fore.position.set(0, -0.02, 0.36);
       group.add(fore);
-      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.075, 0.07), sleeve);
-      cuff.position.set(0, -0.02, 0.33);
+      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.078, 0.09), sleeve);
+      cuff.position.set(0, -0.02, 0.2);
       group.add(cuff);
       const hand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.09), skin);
       group.add(hand);
@@ -140,7 +142,7 @@ export class TakedownViewmodel {
     // ---- Left arm: from low off-screen up to clamp the face (screen right
     // of centre — the right side of their face as Ravi sees it)
     const lFrom = new THREE.Vector3(-0.42, -0.5, -0.25);
-    const lGrab = new THREE.Vector3(0.13, -0.01, -0.62);
+    const lGrab = new THREE.Vector3(0.12, -0.02, -0.5);
     // The left hand holds them up the whole time — and LETS GO at the release
     const reach = ease(c01(t / T.GRAB_T)) * (1 - ease(c01((t - T.RELEASE_T) / 0.3)));
     // After the release: drop back out of frame
@@ -158,7 +160,7 @@ export class TakedownViewmodel {
     const rPocket = new THREE.Vector3(0.3, -0.55, -0.2);
     const rReady = new THREE.Vector3(0.26, -0.3, -0.38);
     const rRaise = new THREE.Vector3(0.22, 0.16, -0.34); // cocked overhead
-    const rStab = new THREE.Vector3(0.03, -0.2, -0.7); // buried in the chest at full reach
+    const rStab = new THREE.Vector3(0.05, -0.17, -0.52); // buried in the chest
     if (t < T.DRAW_T) {
       this.armR.position.copy(rPocket);
       this.armR.rotation.set(-0.25, -0.2, 0);
@@ -193,7 +195,9 @@ export class TakedownViewmodel {
       const lean = held ? Math.sin((t - T.STAB_T) * 2.1) * 0.02 : 0;
       this.armR.position.z += lean;
       this.armR.rotation.set(0.4 - 0.9 * k + grind, -0.4 + 0.2 * k, 0.1 + grind * 0.5);
-      this.knife.rotation.set(-1.6 + 0.55 * k + grind * 0.7, 0, 0);
+      // Combined with the arm this puts the blade about 28 degrees below
+      // horizontal, driving forward INTO the chest rather than hanging down.
+      this.knife.rotation.set(-1.6 + 1.55 * k + grind * 0.7, 0, 0);
       if (k >= 1) this.event('stab');
     } else {
       // Let go: the left hand releases, the knife is wrenched back out —
@@ -202,7 +206,7 @@ export class TakedownViewmodel {
       this.event('release');
       this.armR.position.lerpVectors(rStab, new THREE.Vector3(0.28, -0.38, -0.3), k);
       this.armR.rotation.set(-0.5 - 0.3 * k, -0.2, 0.1);
-      this.knife.rotation.set(-1.05 + 0.6 * k, 0, 0.1 * k);
+      this.knife.rotation.set(-0.05 - 0.45 * k, 0, 0.1 * k);
     }
 
     // Recover: everything sinks out of the frame together

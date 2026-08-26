@@ -320,10 +320,13 @@ const CHIP_D = 0.07;
 let chipsMats: THREE.Material[] | null = null;
 
 function chipsCanvas(px: number, py: number, draw: (g: CanvasRenderingContext2D) => void): THREE.MeshLambertMaterial {
+  const S = 2;
   const c = document.createElement('canvas');
-  c.width = px;
-  c.height = py;
+  c.width = px * S;
+  c.height = py * S;
   const g = c.getContext('2d')!;
+  g.imageSmoothingEnabled = false;
+  g.scale(S, S);
   const grad = g.createLinearGradient(0, 0, 0, py);
   grad.addColorStop(0, '#f2a13a');
   grad.addColorStop(1, '#c85f1a');
@@ -332,6 +335,8 @@ function chipsCanvas(px: number, py: number, draw: (g: CanvasRenderingContext2D)
   draw(g);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.NearestFilter;
+  tex.anisotropy = 4;
   return new THREE.MeshLambertMaterial({ map: tex });
 }
 
@@ -975,9 +980,11 @@ export function snack(kind: 'nutbar' | 'gumdrops' | 'cakes' | 'jerky'): THREE.Gr
       }
       const tex = new THREE.CanvasTexture(c);
       tex.colorSpace = THREE.SRGBColorSpace;
+      tex.magFilter = THREE.NearestFilter;
+      tex.anisotropy = 4;
       return new THREE.MeshLambertMaterial({ map: tex });
     };
-    const K = 900; // pixels per metre, so every face matches its own shape
+    const K = 2400; // pixels per metre — the labels have to be legible in hand
     const side = face(spec.d * K, spec.h * K, false);
     const end = face(spec.w * K, spec.d * K, false);
     const front = face(spec.w * K, spec.h * K, true);
@@ -1086,12 +1093,18 @@ let vendFrontMat: THREE.MeshStandardMaterial | null = null;
 /** Front graphic: lit shelves of named product behind the glass. */
 function vendingFront(): THREE.MeshStandardMaterial {
   if (vendFrontMat) return vendFrontMat;
-  const px = 260;
-  const py = 420;
+  // Drawn at 2x and sampled with NearestFilter: readable up close, and the
+  // hard edges give the labels a deliberate pixel-art look rather than a
+  // smeared one.
+  const S = 2;
+  const px = 260 * S;
+  const py = 420 * S;
   const c = document.createElement('canvas');
   c.width = px;
   c.height = py;
   const x = c.getContext('2d')!;
+  x.imageSmoothingEnabled = false;
+  x.scale(S, S);
   x.fillStyle = '#0e1a24';
   x.fillRect(0, 0, px, py);
 
@@ -1120,12 +1133,12 @@ function vendingFront(): THREE.MeshStandardMaterial {
       x.rotate(-Math.PI / 2);
       x.fillStyle = d.ink;
       x.textAlign = 'center';
-      x.font = 'bold 13px Impact, Arial Black, sans-serif';
+      x.font = 'bold 15px Impact, Arial Black, sans-serif';
       x.fillText(d.name, 0, 5);
       x.restore();
       // Selection code under each slot
       x.fillStyle = '#7f8b95';
-      x.font = 'bold 9px monospace';
+      x.font = 'bold 11px monospace';
       x.textAlign = 'center';
       x.fillText(`${String.fromCharCode(65 + r)}${i + 1}`, cx + 20, shelfY + 88);
     }
@@ -1152,6 +1165,9 @@ function vendingFront(): THREE.MeshStandardMaterial {
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = 4;
   vendFrontMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0x2a3f55, emissiveIntensity: 0.65 });
   return vendFrontMat;
 }
@@ -1162,9 +1178,11 @@ let vendSideMat: THREE.MeshLambertMaterial | null = null;
 function vendingSide(): THREE.MeshLambertMaterial {
   if (vendSideMat) return vendSideMat;
   const c = document.createElement('canvas');
-  c.width = 200;
-  c.height = 420;
+  c.width = 400;
+  c.height = 840;
   const g = c.getContext('2d')!;
+  g.imageSmoothingEnabled = false;
+  g.scale(2, 2);
   const grad = g.createLinearGradient(0, 0, 0, 420);
   grad.addColorStop(0, '#243040');
   grad.addColorStop(1, '#161d27');
@@ -1185,6 +1203,8 @@ function vendingSide(): THREE.MeshLambertMaterial {
   g.restore();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.NearestFilter;
+  tex.anisotropy = 4;
   vendSideMat = new THREE.MeshLambertMaterial({ map: tex });
   return vendSideMat;
 }

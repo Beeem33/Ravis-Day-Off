@@ -543,6 +543,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   }
 
   render(renderer: THREE.WebGLRenderer): void {
+    // First frame of the level pays for every shader at once, behind the fade
+    this.warmUp(renderer, this.player.camera);
     renderer.render(this.scene, this.player.camera);
   }
 

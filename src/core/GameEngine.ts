@@ -41,10 +41,38 @@ export class GameEngine {
     });
   }
 
-  setScene(scene: GameScene): void {
+  /** Where loading cards mount. Set once by main. */
+  uiRoot: HTMLElement | null = null;
+  private loadingCard: HTMLElement | null = null;
+  private framesUntilReady = 0;
+
+  /**
+   * Swap scenes behind a loading card.
+   *
+   * Building a level and compiling its shaders both cost far more than a
+   * frame's budget, and paying either while the player is already looking at
+   * the world reads as a freeze. The card goes up first, the work happens
+   * under it, and it only comes down once the new scene has actually drawn a
+   * frame — which is when `CombatScene.warmUp` has finished.
+   */
+  setScene(scene: GameScene, label = ''): void {
+    const card = this.showLoading(label);
     this.scene?.exit();
     this.scene = scene;
     scene.enter();
+    this.framesUntilReady = 2; // this frame, then the warm-up frame
+    this.loadingCard = card;
+  }
+
+  private showLoading(label: string): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'level-load';
+    el.innerHTML =
+      '<div class="ll-title">' + (label || 'LOADING') + '</div>' +
+      '<div class="ll-bar"><i></i></div>' +
+      '<div class="ll-sub">PREPARING</div>';
+    (this.uiRoot ?? document.body).appendChild(el);
+    return el;
   }
 
   start(): void {
@@ -58,6 +86,14 @@ export class GameEngine {
       if (this.scene) {
         this.scene.update(dt, this.elapsed);
         this.scene.render(this.renderer);
+      }
+      // The card comes down a frame after the scene has drawn once, so the
+      // warm-up hitch lands underneath it rather than in front of the player.
+      if (this.loadingCard && --this.framesUntilReady <= 0) {
+        const card = this.loadingCard;
+        this.loadingCard = null;
+        card.classList.add('gone');
+        setTimeout(() => card.remove(), 400);
       }
     });
   }

@@ -118,6 +118,12 @@ class ParticlePool {
     p.floorY = floorY;
   }
 
+  /** Kill every live particle. The shader warm-up spawns throwaways. */
+  clear(): void {
+    for (const p of this.particles) p.alive = false;
+    this.geo.setDrawRange(0, 0);
+  }
+
   update(dt: number): void {
     let n = 0;
     for (const p of this.particles) {
@@ -270,6 +276,14 @@ export class ParticleManager {
         floorY
       );
     }
+  }
+
+  /** Drop every live particle and tracer — used after the shader warm-up. */
+  clear(): void {
+    this.solid.clear();
+    this.glow.clear();
+    for (const t of this.tracers) this.scene.remove(t.mesh);
+    this.tracers.length = 0;
   }
 
   tracer(from: THREE.Vector3, to: THREE.Vector3, color = 0xffd9a0): void {

@@ -70,6 +70,8 @@ export class Enemy {
   /** 0..1 — down on both knees, pleading. */
   private kneelBlend = 0;
   private kneelTarget = 0;
+  private wardBlend = 0;
+  private wardTarget = 0;
   /** Manning a vehicle turret: no personal weapon, hands on the spades. */
   private turret = false;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
@@ -116,6 +118,7 @@ export class Enemy {
   private static faceDeadCivilian: THREE.MeshStandardMaterial | null = null;
   private static faceWorried: THREE.MeshStandardMaterial | null = null;
   private static faceCalm: THREE.MeshStandardMaterial | null = null;
+  private static faceShaken: THREE.MeshStandardMaterial | null = null;
 
   /** The civilian at rest: level brows, normal eyes, a slight smile. */
   private static drawCalmFace(): THREE.MeshStandardMaterial {
@@ -150,6 +153,55 @@ export class Enemy {
     g.lineWidth = 2.2;
     g.beginPath();
     g.arc(32, 44, 9, 0.22 * Math.PI, 0.78 * Math.PI);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
+
+  /**
+   * After the shooting stops: no longer screaming, but not fine either.
+   * Inner brow ends lifted, eyes normal but tired, mouth a flat line.
+   */
+  private static drawShakenFace(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#8a5c3b';
+    g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = '#1c120b';
+    g.lineCap = 'round';
+    // Brows level at the outside, lifted at the inside — the worry tell
+    g.lineWidth = 3.5;
+    g.beginPath();
+    g.moveTo(13, 23);
+    g.lineTo(27, 20);
+    g.moveTo(51, 23);
+    g.lineTo(37, 20);
+    g.stroke();
+    // Eyes back to a normal opening, pupils a touch small
+    g.fillStyle = '#f6f4ef';
+    g.beginPath();
+    g.ellipse(21, 32, 6.8, 5.2, 0, 0, Math.PI * 2);
+    g.ellipse(43, 32, 6.8, 5.2, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#17110c';
+    g.beginPath();
+    g.ellipse(21, 32, 2.7, 3, 0, 0, Math.PI * 2);
+    g.ellipse(43, 32, 2.7, 3, 0, 0, Math.PI * 2);
+    g.fill();
+    // Shadow under each eye
+    g.fillStyle = 'rgba(70,44,30,0.35)';
+    g.fillRect(15, 38, 12, 2);
+    g.fillRect(37, 38, 12, 2);
+    // Flat mouth, corners just down
+    g.strokeStyle = '#5a3020';
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(24, 47);
+    g.lineTo(32, 46);
+    g.lineTo(40, 47);
     g.stroke();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -364,6 +416,7 @@ export class Enemy {
     if (!Enemy.faceDeadCivilian) Enemy.faceDeadCivilian = Enemy.drawFace(true, '#7d5233');
     if (!Enemy.faceWorried) Enemy.faceWorried = Enemy.drawWorriedFace();
     if (!Enemy.faceCalm) Enemy.faceCalm = Enemy.drawCalmFace();
+    if (!Enemy.faceShaken) Enemy.faceShaken = Enemy.drawShakenFace();
     // Staff start calm; the scared face is switched in when they panic
     const faceMat = this.civilian ? Enemy.faceCalm : Enemy.faceAngry;
     this.head = this.addPart(
@@ -511,6 +564,42 @@ export class Enemy {
   setKneeling(on: boolean): void {
     this.kneelTarget = on ? 1 : 0;
     if (on) this.setScared();
+  }
+
+  /**
+   * Warding the shooter off: both arms out in front, palms toward them,
+   * shoulders hunched away. Stood up rather than kneeling, so it reads as
+   * "don't" rather than "please".
+   */
+  setWarding(on: boolean): void {
+    this.wardTarget = on ? 1 : 0;
+    if (on) this.setScared();
+  }
+
+  /** Shaken but back on their feet — the face for after the shooting stops. */
+  setShaken(): void {
+    if (!this.civilian || !Enemy.faceShaken) return;
+    const mats = (this.head as THREE.Mesh).material;
+    if (Array.isArray(mats)) mats[5] = Enemy.faceShaken;
+  }
+
+  /**
+   * Out of every panic pose and back upright. Used when the floor goes quiet:
+   * anyone still kneeling or warding stands up and can walk again.
+   */
+  standDown(): void {
+    this.kneelTarget = 0;
+    this.wardTarget = 0;
+    this.handsUpTarget = 0;
+    this.setShaken();
+  }
+
+  /**
+   * True while a pose pins them in place. Kneeling and warding are both
+   * planted stances — an AI that walks them anyway makes them glide.
+   */
+  get rooted(): boolean {
+    return this.kneelTarget > 0 || this.wardTarget > 0 || this.kneelBlend > 0.05 || this.wardBlend > 0.05;
   }
 
   /**
@@ -1123,6 +1212,26 @@ export class Enemy {
       // Slightly bent, not locked straight back
       this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.18, h);
       this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.18, h);
+    }
+
+    // Warding off — arms straight out in front, palms up at the shooter,
+    // head turned away from what is about to happen.
+    this.wardBlend += (this.wardTarget - this.wardBlend) * Math.min(1, dt * 6);
+    if (this.wardBlend > 0.001) {
+      const w = this.wardBlend;
+      const shake = Math.sin(at * 12.5) * 0.045 * w;
+      // +x swings a hanging arm forward; ~1.6 puts it level with the shoulder
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 1.62 + shake, w);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 1.62 - shake, w);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.2, w);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.2, w);
+      // Elbows just short of locked, so the arms read as pushed out flat
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.3, w);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.3, w);
+      // Shrink away from it: shoulders up, chin tucked and turned aside
+      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, -0.16, w);
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.2, w);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.32, w);
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still

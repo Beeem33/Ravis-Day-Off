@@ -503,12 +503,76 @@ export function swatTruck(): {
   const DECK = 0.55; // chassis height
   const roofY = DECK + H;
 
-  // Armoured box: the rear two thirds, so towards -Z
+  // Armoured box: the rear two thirds, so towards -Z. Built as panels rather
+  // than one solid block — the side door opens onto a real bay, and walking
+  // round the back of a sealed box with a door glued to it looked wrong.
   const boxL = L * 0.62;
   const boxZ = -L * 0.16;
-  const box = new THREE.Mesh(new THREE.BoxGeometry(W, H, boxL), hull);
-  box.position.set(0, DECK + H / 2, boxZ);
-  g.add(box);
+  const SKIN = 0.07;
+  const doorW = 1.9;
+  const doorZ = boxZ - boxL * 0.1;
+  const doorH = H - 0.2;
+  const bayFloorY = DECK + SKIN / 2;
+
+  const panel = (w: number, h: number, d: number, x: number, y: number, z: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hull);
+    m.position.set(x, y, z);
+    g.add(m);
+  };
+  // Roof and bay floor
+  panel(W, SKIN, boxL, 0, DECK + H - SKIN / 2, boxZ);
+  panel(W, SKIN, boxL, 0, bayFloorY, boxZ);
+  // Blind flank, front bulkhead and rear wall
+  panel(SKIN, H, boxL, -(W / 2 - SKIN / 2), DECK + H / 2, boxZ);
+  panel(W, H, SKIN, 0, DECK + H / 2, boxZ + boxL / 2 - SKIN / 2);
+  panel(W, H, SKIN, 0, DECK + H / 2, boxZ - boxL / 2 + SKIN / 2);
+  // Door flank, split round the opening: a pillar fore and aft, header above
+  const flankX = W / 2 - SKIN / 2;
+  const foreLen = boxZ + boxL / 2 - (doorZ + doorW / 2);
+  const aftLen = doorZ - doorW / 2 - (boxZ - boxL / 2);
+  if (foreLen > 0.01) panel(SKIN, H, foreLen, flankX, DECK + H / 2, doorZ + doorW / 2 + foreLen / 2);
+  if (aftLen > 0.01) panel(SKIN, H, aftLen, flankX, DECK + H / 2, doorZ - doorW / 2 - aftLen / 2);
+  panel(SKIN, H - doorH, doorW, flankX, DECK + doorH + (H - doorH) / 2, doorZ);
+
+  // Bay interior: dark lining, a bench down each side and a grab rail
+  const bayMat = lam(0x2a3038);
+  const liner = (w: number, h: number, d: number, x: number, y: number, z: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), bayMat);
+    m.position.set(x, y, z);
+    g.add(m);
+  };
+  liner(W - SKIN * 2.4, 0.02, boxL - SKIN * 2.4, 0, bayFloorY + SKIN / 2 + 0.011, boxZ);
+  for (const sx of [-1, 1]) {
+    const benchZ = boxZ + 0.1;
+    const benchL = boxL - SKIN * 3;
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, benchL), lam(0x1d2228));
+    bench.position.set(sx * (W / 2 - 0.28), DECK + 0.52, benchZ);
+    g.add(bench);
+    const backRest = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.42, benchL), lam(0x222830));
+    backRest.position.set(sx * (W / 2 - SKIN - 0.03), DECK + 0.75, benchZ);
+    g.add(backRest);
+    for (const lz of [benchZ - benchL / 2 + 0.2, benchZ + benchL / 2 - 0.2]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.46, 0.05), lam(0x1d2228));
+      leg.position.set(sx * (W / 2 - 0.28), DECK + 0.26, lz);
+      g.add(leg);
+    }
+  }
+  // Grab rail along the ceiling of the bay
+  const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, boxL - 0.5, 8), MAT.chrome);
+  rail.rotation.x = Math.PI / 2;
+  rail.position.set(0, DECK + H - 0.22, boxZ);
+  g.add(rail);
+  // A dome light so the bay is not a black hole when the door swings
+  const domeY = DECK + H - SKIN - 0.03;
+  const dome = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.04, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x1b1f24, emissive: 0xffd9a8, emissiveIntensity: 1.1 })
+  );
+  dome.position.set(0, domeY, boxZ + 0.3);
+  g.add(dome);
+  const bayLight = new THREE.PointLight(0xffd2a0, 2.2, 3.4, 2);
+  bayLight.position.set(0, domeY - 0.15, boxZ);
+  g.add(bayLight);
   // FBI livery down both flanks
   for (const sx of [-1, 1]) {
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(boxL * 0.92, H * 0.62), fbiLivery());
@@ -614,21 +678,24 @@ export function swatTruck(): {
     g.add(l);
   }
 
-  // Side door on the +X flank, toward the rear, hinged at its -Z edge
-  const doorW = 1.9;
-  const doorZ = boxZ - boxL * 0.1;
+  // Side door leaf, hinged at the -Z edge of the opening cut above
   const doorPivot = new THREE.Group();
   doorPivot.position.set(W / 2, DECK, doorZ + doorW / 2);
   g.add(doorPivot);
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.08, H - 0.2, doorW), hull);
-  leaf.position.set(0, (H - 0.2) / 2, -doorW / 2);
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.06, doorH, doorW), hull);
+  leaf.position.set(0, doorH / 2, -doorW / 2);
   doorPivot.add(leaf);
+  // Inner face is the bay lining colour, so the open leaf reads two-sided
+  const leafInner = new THREE.Mesh(new THREE.BoxGeometry(0.012, doorH - 0.08, doorW - 0.08), bayMat);
+  leafInner.position.set(-0.036, doorH / 2, -doorW / 2);
+  doorPivot.add(leafInner);
   const doorBar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.5), MAT.chrome);
-  doorBar.position.set(0.07, (H - 0.2) * 0.55, -0.35);
+  doorBar.position.set(0.06, doorH * 0.55, -0.35);
   doorPivot.add(doorBar);
-  const bay = new THREE.Mesh(new THREE.BoxGeometry(0.06, H - 0.24, doorW), lam(0x05070a));
-  bay.position.set(W / 2 - 0.05, DECK + (H - 0.24) / 2, doorZ);
-  g.add(bay);
+  // Step down out of the bay
+  const step = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, doorW - 0.3), lam(0x1d2228));
+  step.position.set(W / 2 + 0.12, DECK - 0.16, doorZ);
+  g.add(step);
 
   // Pintle-mounted LMG on the roof: yaw ring, mount, gun, spade grips
   const gunYaw = new THREE.Group();

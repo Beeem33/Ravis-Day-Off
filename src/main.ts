@@ -40,27 +40,28 @@ document.addEventListener('keydown', unlockOnce);
 // A new game opens on the intro, which hands off to the call centre.
 bus.on(Events.StartGame, () => {
   audio.stopMenuMusic();
-  engine.setScene(new IntroLevelScene(ctx));
+  engine.setScene(new IntroLevelScene(ctx), 'THE CALL FLOOR');
 });
 bus.on(Events.RestartIntro, () => {
-  engine.setScene(new IntroLevelScene(ctx));
+  engine.setScene(new IntroLevelScene(ctx), 'THE CALL FLOOR');
 });
 bus.on(Events.IntroComplete, () => {
-  engine.setScene(new OfficeLevelScene(ctx));
+  engine.setScene(new OfficeLevelScene(ctx), 'LEVEL 2 — RAVI-CALL SYSTEMS');
 });
 bus.on(Events.OfficeComplete, () => {
-  engine.setScene(new Level3Scene(ctx));
+  engine.setScene(new Level3Scene(ctx), 'LEVEL 3 — THE OTHER FLOOR');
 });
 bus.on(Events.RestartLevel3, () => {
-  engine.setScene(new Level3Scene(ctx));
+  engine.setScene(new Level3Scene(ctx), 'LEVEL 3 — THE OTHER FLOOR');
 });
 bus.on(Events.RestartLevel, () => {
-  engine.setScene(new OfficeLevelScene(ctx));
+  engine.setScene(new OfficeLevelScene(ctx), 'LEVEL 2 — RAVI-CALL SYSTEMS');
 });
 bus.on(Events.ReturnToMenu, () => {
   engine.setScene(new MainMenuScene(ctx));
 });
 
+engine.uiRoot = uiRoot;
 engine.setScene(new MainMenuScene(ctx));
 engine.start();
 

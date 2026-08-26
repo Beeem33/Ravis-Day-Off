@@ -180,6 +180,19 @@ export class BloodDecalSystem {
     return true;
   }
 
+  /** How many decals are placed. The shader warm-up uses it as a mark. */
+  get count(): number {
+    return this.decals.length;
+  }
+
+  /** Drop every decal placed after mark `n` — undoes the warm-up ones. */
+  trimTo(n: number): void {
+    while (this.decals.length > n) {
+      const m = this.decals.pop();
+      if (m) this.scene.remove(m);
+    }
+  }
+
   /**
    * Place a decal on a surface.
    * @param point  world hit point

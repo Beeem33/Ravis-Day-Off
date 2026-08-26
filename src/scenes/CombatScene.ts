@@ -61,6 +61,66 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     hitPart?: string
   ): void;
 
+  // ------------------------------------------------------------- warm-up
+
+  /** Set once the shader warm-up has run for this scene. */
+  private warmedUp = false;
+
+  /**
+   * Compile every shader the level will ever need, before the player can
+   * see a hitch.
+   *
+   * WebGL compiles and links a program the first time a material is
+   * actually drawn, and uploads its textures with it. Everything that only
+   * appears mid-fight — the muzzle flash, tracers, blood decals, bullet
+   * holes, the particle pools, and anything built `visible = false` and
+   * revealed later — therefore paid for itself on the frame it was needed.
+   * That is the stutter on the first shot of a level, and the one when the
+   * truck's rubble and fire appear.
+   *
+   * So: force-show the hidden objects, spawn one of every effect far under
+   * the floor, draw a single throwaway frame, then put it all back. One
+   * expensive frame during the fade instead of one in the middle of a fight.
+   */
+  protected warmUp(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    if (this.warmedUp) return;
+    this.warmedUp = true;
+
+    const hidden: THREE.Object3D[] = [];
+    this.scene.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+
+    // One of every effect, parked well below the floor where nothing shows
+    const far = new THREE.Vector3(0, -60, 0);
+    const up = new THREE.Vector3(0, 1, 0);
+    const nDecals = this.decals ? this.decals.count : 0;
+    if (this.particles) {
+      this.particles.tracer(far, far.clone().add(new THREE.Vector3(0, 0, 3)));
+      this.particles.muzzleFlash(far, up);
+      this.particles.bloodSpray(far, up, true, -61);
+      this.particles.concreteChips(far, up);
+      this.particles.glassShards(far, up, -61);
+    }
+    if (this.decals) {
+      this.decals.place('blood', far, up);
+      this.decals.place('pool', far, up);
+      this.decals.place('bullethole', far, up);
+    }
+
+    // compile() covers materials already in the graph; the throwaway draw
+    // catches anything it misses and forces the texture uploads.
+    renderer.compile(this.scene, camera);
+    renderer.render(this.scene, camera);
+
+    for (const o of hidden) o.visible = false;
+    if (this.decals) this.decals.trimTo(nDecals);
+    if (this.particles) this.particles.clear();
+  }
+
   // ------------------------------------------------------------- world setup
 
   /**

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level3Builder, Level3Data } from '../environment/Level3Builder';
@@ -66,6 +67,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private clickHandler = (): void => this.onClick();
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private pooled = new Set<Enemy>();
+  /** Staff on their knees pleading — kept turned towards the agents. */
+  private begging = new Set<Enemy>();
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -265,6 +268,19 @@ export class Level3Scene extends CombatScene<Level3Data> {
       if (wallIdx >= 0) this.level.shootables.splice(wallIdx, 1);
       L.breachBarrier.visible = true;
       for (const c of L.breachColliders) L.colliders.push(c);
+      // The vehicle itself becomes solid now it has stopped
+      for (const c of L.truckColliders) {
+        L.colliders.push(c);
+        const size = new THREE.Vector3();
+        const centre = new THREE.Vector3();
+        c.box.getSize(size);
+        c.box.getCenter(centre);
+        this.world.addBody(new CANNON.Body({
+          type: CANNON.Body.STATIC,
+          shape: new CANNON.Box(new CANNON.Vec3(size.x / 2, size.y / 2, size.z / 2)),
+          position: new CANNON.Vec3(centre.x, centre.y, centre.z)
+        }));
+      }
       // Everyone on the floor loses it
       for (const e of this.staff) this.panic(e);
       this.setObjective('');
@@ -314,8 +330,9 @@ export class Level3Scene extends CombatScene<Level3Data> {
     } else if (roll < 0.75) {
       e.setCowering(true); // down on the floor, arms over the head
     } else {
-      e.setKneeling(true); // on their knees, pleading
+      e.setKneeling(true); // on their knees, hands up, pleading
       e.setHandsUp(true);
+      this.begging.add(e);
     }
   }
 
@@ -483,6 +500,17 @@ export class Level3Scene extends CombatScene<Level3Data> {
       this.weapon.startReload();
     }
     this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
+
+    // Anyone pleading keeps facing the raid — begging at a wall reads as a
+    // bug rather than a person.
+    if (this.begging.size) {
+      const threat = this.agents.find((a) => a.alive)?.position
+        ?? (this.gunner?.alive ? this.gunner.position : this.level.truck.position);
+      for (const e of this.begging) {
+        if (e.alive) e.faceToward(threat, dt, 2.4);
+        else this.begging.delete(e);
+      }
+    }
 
     // Everyone on the floor
     let attacking = false;

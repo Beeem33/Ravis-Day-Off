@@ -444,14 +444,21 @@ function fbiLivery(): THREE.MeshLambertMaterial {
   g.fillRect(0, 36, 512, 8);
   g.fillRect(0, 118, 512, 8);
   g.fillStyle = '#f4f6f8';
-  g.font = 'bold 74px Impact, Arial Black, sans-serif';
-  g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText('F B I', 168, 82);
-  g.font = 'bold 21px monospace';
-  g.fillText('FEDERAL BUREAU OF INVESTIGATION', 366, 74);
-  g.font = 'bold 15px monospace';
-  g.fillText('TACTICAL RESPONSE', 366, 100);
+  // Mark on the left third, long name stacked on the right, both left-aligned
+  // from fixed columns so the two can never run into each other.
+  g.textAlign = 'left';
+  g.font = 'bold 78px Impact, Arial Black, sans-serif';
+  g.fillText('FBI', 26, 82);
+  g.fillStyle = '#9fb6e8';
+  g.fillRect(196, 52, 4, 58);
+  g.fillStyle = '#f4f6f8';
+  g.font = 'bold 20px monospace';
+  g.fillText('FEDERAL BUREAU', 218, 66);
+  g.fillText('OF INVESTIGATION', 218, 90);
+  g.font = 'bold 13px monospace';
+  g.fillStyle = '#9fb6e8';
+  g.fillText('TACTICAL RESPONSE UNIT', 218, 110);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   fbiMat = new THREE.MeshLambertMaterial({ map: tex });
@@ -472,12 +479,17 @@ export function swatTruck(): {
   doorMouth: THREE.Vector3;
   /** World height of the roof deck, where the gunner stands. */
   roofY: number;
+  /** Solid footprint in truck-local space, for the level colliders. */
+  bounds: { hw: number; z0: number; z1: number; top: number };
 } {
   const g = new THREE.Group();
-  const hull = lam(0x21262b);
-  const trim = lam(0x14181c);
+  // Painted steel: light enough to read in a dark office and metallic, so
+  // the fixtures pick it out. Flat black just swallowed all the light.
+  const hull = new THREE.MeshStandardMaterial({ color: 0x4a545e, roughness: 0.42, metalness: 0.72 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0x2a3138, roughness: 0.5, metalness: 0.8 });
   const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x0d1218, roughness: 0.15, metalness: 0.4, transparent: true, opacity: 0.72
+    color: 0x6d8496, roughness: 0.08, metalness: 0.25, transparent: true, opacity: 0.55,
+    emissive: 0x1b2836, emissiveIntensity: 0.5
   });
 
   const L = 6.4;
@@ -510,9 +522,40 @@ export function swatTruck(): {
   const cab = new THREE.Mesh(new THREE.BoxGeometry(W - 0.1, cabH, cabL), hull);
   cab.position.set(0, DECK + cabH / 2, cabZ);
   g.add(cab);
-  const windshield = new THREE.Mesh(new THREE.BoxGeometry(W - 0.42, cabH * 0.44, 0.06), glassMat);
-  windshield.position.set(0, DECK + cabH * 0.68, cabZ + cabL / 2 + 0.01);
+  // Bridge cab to box — they were separate blocks with daylight between them
+  const joinZ0 = boxZ + boxL / 2;
+  const joinZ1 = cabZ - cabL / 2;
+  const join = new THREE.Mesh(new THREE.BoxGeometry(W - 0.04, cabH, Math.max(0.05, joinZ1 - joinZ0) + 0.08), hull);
+  join.position.set(0, DECK + cabH / 2, (joinZ0 + joinZ1) / 2);
+  g.add(join);
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(W + 0.02, cabH, 0.05), trim);
+  seam.position.set(0, DECK + cabH / 2, joinZ1);
+  g.add(seam);
+  // Windscreen in a frame, so its edges read instead of being a black void
+  const wsW = W - 0.42;
+  const wsH = cabH * 0.44;
+  const wsZ = cabZ + cabL / 2 + 0.02;
+  const wsY = DECK + cabH * 0.68;
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(wsW, wsH, 0.05), glassMat);
+  windshield.position.set(0, wsY, wsZ);
   g.add(windshield);
+  for (const [fw, fh, fx, fy] of [
+    [wsW + 0.12, 0.07, 0, wsY + wsH / 2], [wsW + 0.12, 0.07, 0, wsY - wsH / 2],
+    [0.07, wsH + 0.14, wsW / 2, wsY], [0.07, wsH + 0.14, -wsW / 2, wsY]
+  ] as const) {
+    const f = new THREE.Mesh(new THREE.BoxGeometry(fw, fh, 0.07), trim);
+    f.position.set(fx, fy, wsZ + 0.005);
+    g.add(f);
+  }
+  const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.05, wsH, 0.07), trim);
+  pillar.position.set(0, wsY, wsZ + 0.005);
+  g.add(pillar);
+  for (const wx of [-0.55, 0.55]) {
+    const wiper = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.03), trim);
+    wiper.position.set(wx, wsY - wsH / 2 + 0.08, wsZ + 0.05);
+    wiper.rotation.z = wx > 0 ? 0.22 : -0.22;
+    g.add(wiper);
+  }
   for (const sx of [-1, 1]) {
     const sideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, cabH * 0.36, cabL * 0.5), glassMat);
     sideGlass.position.set(sx * (W / 2 - 0.06), DECK + cabH * 0.7, cabZ);
@@ -619,7 +662,8 @@ export function swatTruck(): {
   return {
     group: g, doorPivot, gunMount, gunYaw,
     doorMouth: new THREE.Vector3(W / 2 + 0.8, 0, doorZ),
-    roofY
+    roofY,
+    bounds: { hw: W / 2 + 0.15, z0: boxZ - boxL / 2 - 0.1, z1: noseZ + 0.4, top: roofY }
   };
 }
 
@@ -643,6 +687,145 @@ export function rubblePile(scale = 1): THREE.Group {
     g.add(bar);
   }
   return g;
+}
+
+const artMats = new Map<string, THREE.MeshLambertMaterial>();
+
+/**
+ * Framed wall art. Motivational tat for the call floor, plus a few
+ * landscapes — the sort of thing bought by the metre for an office.
+ */
+export function wallArt(kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks'): THREE.Group {
+  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : 1.15;
+  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : 0.8;
+
+  let mat = artMats.get(kind);
+  if (!mat) {
+    const px = Math.round(W * 260);
+    const py = Math.round(H * 260);
+    const c = document.createElement('canvas');
+    c.width = px;
+    c.height = py;
+    const g = c.getContext('2d')!;
+
+    if (kind === 'together') {
+      g.fillStyle = '#101828';
+      g.fillRect(0, 0, px, py);
+      g.fillStyle = '#f4f2ec';
+      g.textAlign = 'center';
+      g.font = `bold ${Math.round(py * 0.14)}px Impact, Arial Black, sans-serif`;
+      g.fillText('CALL TOGETHER,', px / 2, py * 0.21);
+      g.fillText('FALL TOGETHER', px / 2, py * 0.37);
+      // A row of figures along the bottom, hands joined between them
+      const n = 6;
+      const gapX = px / (n + 1);
+      const footY = py * 0.95;
+      const headY = py * 0.6;
+      const armY = py * 0.75;
+      g.strokeStyle = '#7fa6d8';
+      g.fillStyle = '#7fa6d8';
+      g.lineWidth = Math.max(3, px * 0.008);
+      g.lineCap = 'round';
+      for (let i = 0; i < n; i++) {
+        const x = gapX * (i + 1);
+        g.beginPath();
+        g.arc(x, headY, px * 0.02, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.moveTo(x, headY + px * 0.022);
+        g.lineTo(x, py * 0.82);
+        g.moveTo(x, py * 0.82);
+        g.lineTo(x - px * 0.018, footY);
+        g.moveTo(x, py * 0.82);
+        g.lineTo(x + px * 0.018, footY);
+        // Arms reaching to the neighbour on each side, meeting halfway
+        if (i > 0) {
+          g.moveTo(x, headY + px * 0.038);
+          g.lineTo(x - gapX / 2, armY);
+        }
+        if (i < n - 1) {
+          g.moveTo(x, headY + px * 0.038);
+          g.lineTo(x + gapX / 2, armY);
+        }
+        g.stroke();
+      }
+    } else if (kind === 'dial') {
+      g.fillStyle = '#f6f1e2';
+      g.fillRect(0, 0, px, py);
+      g.fillStyle = '#b8271f';
+      g.fillRect(0, 0, px, py * 0.05);
+      g.fillRect(0, py * 0.95, px, py * 0.05);
+      g.fillStyle = '#b8271f';
+      g.textAlign = 'center';
+      g.font = `bold ${Math.round(py * 0.1)}px Impact, Arial Black, sans-serif`;
+      g.fillText('DIAL LIKE', px / 2, py * 0.22);
+      g.fillText('YOU MEAN IT!', px / 2, py * 0.34);
+      // Desk phone: base, cradle, handset, coiled cord, keypad
+      const bx = px / 2;
+      const by = py * 0.62;
+      g.fillStyle = '#24272c';
+      g.beginPath();
+      g.roundRect(bx - px * 0.25, by, px * 0.5, py * 0.19, px * 0.02);
+      g.fill();
+      g.fillStyle = '#3a3f46';
+      g.beginPath();
+      g.roundRect(bx - px * 0.27, by - py * 0.11, px * 0.54, py * 0.1, px * 0.035);
+      g.fill();
+      g.fillStyle = '#8d939b';
+      for (let r = 0; r < 3; r++) {
+        for (let col = 0; col < 3; col++) {
+          g.fillRect(bx - px * 0.12 + col * px * 0.09, by + py * 0.03 + r * py * 0.045, px * 0.055, py * 0.03);
+        }
+      }
+      g.strokeStyle = '#24272c';
+      g.lineWidth = Math.max(2, px * 0.014);
+      g.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const cx = bx + px * 0.24 + Math.sin(i * 1.7) * px * 0.035;
+        g.moveTo(cx, by - py * 0.04 + i * py * 0.026);
+        g.lineTo(cx + px * 0.05, by - py * 0.03 + i * py * 0.026);
+      }
+      g.stroke();
+    } else {
+      // Landscapes: banded sky, a sun, a horizon silhouette
+      const palettes = {
+        dunes: ['#f3c98b', '#e8a765', '#c9703c', '#8c4a2f'],
+        coast: ['#bfe3f0', '#79c2dd', '#3f8fb5', '#1d4f6b'],
+        peaks: ['#dfe7f2', '#a9bcd4', '#6d84a3', '#3c4a63']
+      }[kind];
+      for (let i = 0; i < 4; i++) {
+        g.fillStyle = palettes[i];
+        g.fillRect(0, (py * i) / 4, px, py / 4 + 1);
+      }
+      g.fillStyle = 'rgba(255,247,222,0.9)';
+      g.beginPath();
+      g.arc(px * 0.72, py * 0.28, py * 0.11, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = palettes[3];
+      g.beginPath();
+      g.moveTo(0, py);
+      for (let i = 0; i <= 10; i++) {
+        const hx = (px * i) / 10;
+        const hy = py * (kind === 'peaks' ? 0.5 + Math.abs(Math.sin(i * 1.1)) * 0.22 : 0.66 + Math.sin(i * 0.8) * 0.05);
+        g.lineTo(hx, hy);
+      }
+      g.lineTo(px, py);
+      g.closePath();
+      g.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshLambertMaterial({ map: tex });
+    artMats.set(kind, mat);
+  }
+
+  const g2 = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(W + 0.09, H + 0.09, 0.05), lam(0x2b2118));
+  g2.add(frame);
+  const pic = new THREE.Mesh(new THREE.PlaneGeometry(W, H), mat);
+  pic.position.z = 0.028;
+  g2.add(pic);
+  return g2;
 }
 
 /** Office laser printer on a stand: paper tray, output shelf, control panel. */
@@ -868,8 +1051,7 @@ export function paperStack(sheets = 7, spread = 0.06): THREE.Group {
     g.add(clip);
   }
   return g;
-}
-
+}
 /** A few sheets scattered flat on the floor, as if swept off a desk. */
 export function scatteredPaper(count = 5, radius = 0.8): THREE.Group {
   const g = new THREE.Group();
@@ -888,74 +1070,338 @@ export function scatteredPaper(count = 5, radius = 0.8): THREE.Group {
   return g;
 }
 
+
+/** The drinks the machines actually stock, and what their cans look like. */
+const DRINKS: { name: string; sub: string; body: string; band: string; ink: string }[] = [
+  { name: 'DEADBULL', sub: 'IT GIVES YOU NOTHING', body: '#dfe3e8', band: '#1a3f8f', ink: '#f2f4f6' },
+  { name: 'DR PUH', sub: '23 MYSTERY FLAVOURS', body: '#7a1d18', band: '#4a0f0c', ink: '#f6e3c8' },
+  { name: 'COK', sub: 'THE REAL-ISH THING', body: '#c1121f', band: '#8b0d16', ink: '#fdfdfd' },
+  { name: 'BERRY BALLS', sub: 'SPHERICAL FRUIT SODA', body: '#6b2fa0', band: '#431c68', ink: '#f0e2ff' },
+  { name: 'LEMN', sub: 'CITRUS ADJACENT', body: '#e0c534', band: '#a8901c', ink: '#3a3208' },
+  { name: 'GRAY WATER', sub: 'STILL. VERY STILL.', body: '#9aa6ad', band: '#697680', ink: '#1c2226' }
+];
+
 let vendFrontMat: THREE.MeshStandardMaterial | null = null;
 
+/** Front graphic: lit shelves of named product behind the glass. */
+function vendingFront(): THREE.MeshStandardMaterial {
+  if (vendFrontMat) return vendFrontMat;
+  const px = 260;
+  const py = 420;
+  const c = document.createElement('canvas');
+  c.width = px;
+  c.height = py;
+  const x = c.getContext('2d')!;
+  x.fillStyle = '#0e1a24';
+  x.fillRect(0, 0, px, py);
+
+  // Two shelves of cans up top, snacks in coils below
+  const rows = 3;
+  const perRow = 4;
+  for (let r = 0; r < rows; r++) {
+    const shelfY = 26 + r * 92;
+    x.fillStyle = '#1d2a35';
+    x.fillRect(6, shelfY + 74, px - 12, 6);
+    for (let i = 0; i < perRow; i++) {
+      const d = DRINKS[(r * perRow + i) % DRINKS.length];
+      const cx = 20 + i * 58;
+      // Can body
+      x.fillStyle = d.body;
+      x.fillRect(cx, shelfY, 40, 74);
+      x.fillStyle = d.band;
+      x.fillRect(cx, shelfY + 26, 40, 26);
+      // Silver top and bottom
+      x.fillStyle = '#c9ced4';
+      x.fillRect(cx, shelfY, 40, 6);
+      x.fillRect(cx, shelfY + 68, 40, 6);
+      // Name down the can, rotated to fit
+      x.save();
+      x.translate(cx + 20, shelfY + 39);
+      x.rotate(-Math.PI / 2);
+      x.fillStyle = d.ink;
+      x.textAlign = 'center';
+      x.font = 'bold 13px Impact, Arial Black, sans-serif';
+      x.fillText(d.name, 0, 5);
+      x.restore();
+      // Selection code under each slot
+      x.fillStyle = '#7f8b95';
+      x.font = 'bold 9px monospace';
+      x.textAlign = 'center';
+      x.fillText(`${String.fromCharCode(65 + r)}${i + 1}`, cx + 20, shelfY + 88);
+    }
+  }
+  // Bottom row: snack bags on coils
+  const snackY = 26 + rows * 92;
+  x.fillStyle = '#1d2a35';
+  x.fillRect(6, snackY + 62, px - 12, 6);
+  const bagCols = ['#d2691e', '#6b4423', '#127a5c', '#c2185b'];
+  for (let i = 0; i < 4; i++) {
+    x.fillStyle = bagCols[i];
+    x.fillRect(16 + i * 58, snackY + 6, 44, 54);
+    x.fillStyle = 'rgba(255,255,255,0.22)';
+    x.fillRect(16 + i * 58, snackY + 6, 44, 12);
+    // Coil in front
+    x.strokeStyle = '#5d666e';
+    x.lineWidth = 2;
+    x.beginPath();
+    for (let t = 0; t < 8; t++) {
+      x.moveTo(16 + i * 58, snackY + 12 + t * 6);
+      x.lineTo(60 + i * 58, snackY + 15 + t * 6);
+    }
+    x.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  vendFrontMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0x2a3f55, emissiveIntensity: 0.65 });
+  return vendFrontMat;
+}
+
+let vendSideMat: THREE.MeshLambertMaterial | null = null;
+
+/** Branded flank for the machine cabinet. */
+function vendingSide(): THREE.MeshLambertMaterial {
+  if (vendSideMat) return vendSideMat;
+  const c = document.createElement('canvas');
+  c.width = 200;
+  c.height = 420;
+  const g = c.getContext('2d')!;
+  const grad = g.createLinearGradient(0, 0, 0, 420);
+  grad.addColorStop(0, '#243040');
+  grad.addColorStop(1, '#161d27');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 200, 420);
+  g.fillStyle = '#12306e';
+  g.fillRect(0, 60, 200, 90);
+  g.save();
+  g.translate(100, 250);
+  g.rotate(-Math.PI / 2);
+  g.fillStyle = '#f0f3f6';
+  g.textAlign = 'center';
+  g.font = 'bold 34px Impact, Arial Black, sans-serif';
+  g.fillText('REFRESH-O-MAT', 0, 0);
+  g.font = 'bold 13px monospace';
+  g.fillStyle = '#9fb6e8';
+  g.fillText('COINS · CARD · REGRET', 0, 26);
+  g.restore();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  vendSideMat = new THREE.MeshLambertMaterial({ map: tex });
+  return vendSideMat;
+}
+
 /**
- * Snack vending machine: dark cabinet, lit product window with rows of
- * product, keypad and delivery flap. `w` x `d` footprint, 1.95 tall.
+ * Drinks and snack machine: lit product window with named stock behind
+ * glass, a keypad with real buttons, coin slot, card reader, coin return
+ * and a delivery flap.
  */
 export function vendingMachine(): THREE.Group {
   const g = new THREE.Group();
   const W = 1.0;
   const D = 0.78;
   const H = 1.95;
-  // Cabinet: sides, top, back
-  const shell = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), lam(0x1e2228));
+  const side = vendingSide();
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), [
+    side, side, lam(0x1a2029), lam(0x14181c), lam(0x1e2228), lam(0x1a2029)
+  ]);
   shell.position.y = H / 2;
   g.add(shell);
+  // Kick plate and levelling feet
+  const kick = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.09, D - 0.06), lam(0x0d1116));
+  kick.position.y = 0.045;
+  g.add(kick);
+
   // Lit product window on the front (-Z)
-  if (!vendFrontMat) {
-    const c = document.createElement('canvas');
-    c.width = 96;
-    c.height = 160;
-    const x = c.getContext('2d')!;
-    x.fillStyle = '#0e1a24';
-    x.fillRect(0, 0, 96, 160);
-    // Shelves of product in assorted wrappers
-    const cols = ['#c8483c', '#e0a53a', '#3f8a55', '#2f6f9e', '#b0553f', '#7a4f8c'];
-    for (let row = 0; row < 6; row++) {
-      x.fillStyle = '#26323c';
-      x.fillRect(4, 8 + row * 25, 88, 3);
-      for (let col = 0; col < 5; col++) {
-        x.fillStyle = cols[(row * 5 + col) % cols.length];
-        x.fillRect(7 + col * 17, 12 + row * 25, 13, 17);
-        x.fillStyle = 'rgba(255,255,255,0.25)';
-        x.fillRect(7 + col * 17, 12 + row * 25, 13, 4);
-      }
-    }
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    vendFrontMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0x2a3f55, emissiveIntensity: 0.55 });
-  }
-  const win = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.62, H * 0.68), vendFrontMat);
-  win.position.set(-W * 0.14, H * 0.58, -D / 2 - 0.005);
+  const win = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.62, H * 0.7), vendingFront());
+  win.position.set(-W * 0.15, H * 0.58, -D / 2 - 0.005);
   win.rotation.y = Math.PI;
   g.add(win);
-  // Glass over it
   const glass = new THREE.Mesh(
-    new THREE.PlaneGeometry(W * 0.64, H * 0.7),
-    new THREE.MeshStandardMaterial({ color: 0xbfd6e6, transparent: true, opacity: 0.16, roughness: 0.1 })
+    new THREE.PlaneGeometry(W * 0.64, H * 0.72),
+    new THREE.MeshStandardMaterial({ color: 0xbfd6e6, transparent: true, opacity: 0.14, roughness: 0.06 })
   );
-  glass.position.set(-W * 0.14, H * 0.58, -D / 2 - 0.012);
+  glass.position.set(-W * 0.15, H * 0.58, -D / 2 - 0.014);
   glass.rotation.y = Math.PI;
   g.add(glass);
-  // Keypad column, delivery flap, branding strip
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.03), lam(0x2c3138));
-  pad.position.set(W * 0.34, H * 0.62, -D / 2 - 0.01);
-  g.add(pad);
-  for (let i = 0; i < 8; i++) {
-    const btn = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.012), lam(0x8c9299));
-    btn.position.set(W * 0.3 + (i % 2) * 0.07, H * 0.8 - Math.floor(i / 2) * 0.07, -D / 2 - 0.02);
-    g.add(btn);
+  // Window surround
+  for (const [fw, fh, fx, fy] of [
+    [W * 0.68, 0.04, -W * 0.15, H * 0.58 + (H * 0.72) / 2],
+    [W * 0.68, 0.04, -W * 0.15, H * 0.58 - (H * 0.72) / 2],
+    [0.04, H * 0.76, -W * 0.15 - (W * 0.64) / 2, H * 0.58],
+    [0.04, H * 0.76, -W * 0.15 + (W * 0.64) / 2, H * 0.58]
+  ] as const) {
+    const f = new THREE.Mesh(new THREE.BoxGeometry(fw, fh, 0.03), lam(0x2c3138));
+    f.position.set(fx, fy, -D / 2 - 0.018);
+    g.add(f);
   }
-  const flap = new THREE.Mesh(new THREE.BoxGeometry(W * 0.6, 0.22, 0.03), lam(0x14181d));
-  flap.position.set(-W * 0.14, 0.28, -D / 2 - 0.012);
-  g.add(flap);
-  const strip = new THREE.Mesh(
-    new THREE.BoxGeometry(W * 0.94, 0.2, 0.03),
-    new THREE.MeshStandardMaterial({ color: 0x12306e, emissive: 0x2b5fd0, emissiveIntensity: 0.8 })
+
+  // Control column: keypad, coin slot, card reader, coin return
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.72, 0.03), lam(0x2c3138));
+  pad.position.set(W * 0.33, H * 0.66, -D / 2 - 0.014);
+  g.add(pad);
+  const codes = ['A', 'B', 'C', '1', '2', '3', '4', '5'];
+  codes.forEach((_, i) => {
+    const btn = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.038, 0.014), lam(i < 3 ? 0xb8b23a : 0x9aa1a8));
+    btn.position.set(W * 0.28 + (i % 2) * 0.09, H * 0.92 - Math.floor(i / 2) * 0.06, -D / 2 - 0.026);
+    g.add(btn);
+  });
+  const readout = new THREE.Mesh(
+    new THREE.BoxGeometry(0.17, 0.06, 0.012),
+    new THREE.MeshStandardMaterial({ color: 0x0a1a10, emissive: 0x35ff6a, emissiveIntensity: 1.1 })
   );
-  strip.position.set(0, H - 0.16, -D / 2 - 0.012);
+  readout.position.set(W * 0.33, H * 0.53, -D / 2 - 0.024);
+  g.add(readout);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.012), MAT.chrome);
+  slot.position.set(W * 0.36, H * 0.44, -D / 2 - 0.024);
+  g.add(slot);
+  const card = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.02), lam(0x1c2026));
+  card.position.set(W * 0.31, H * 0.37, -D / 2 - 0.026);
+  g.add(card);
+  const coinReturn = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.05, 0.02), lam(0x0d1116));
+  coinReturn.position.set(W * 0.32, 0.5, -D / 2 - 0.022);
+  g.add(coinReturn);
+
+  // Delivery flap with a rubber lip
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(W * 0.58, 0.24, 0.03), lam(0x0d1116));
+  flap.position.set(-W * 0.15, 0.3, -D / 2 - 0.016);
+  g.add(flap);
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(W * 0.6, 0.03, 0.05), lam(0x25292f));
+  lip.position.set(-W * 0.15, 0.43, -D / 2 - 0.02);
+  g.add(lip);
+
+  // Lit header
+  const strip = new THREE.Mesh(
+    new THREE.BoxGeometry(W * 0.94, 0.22, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0x12306e, emissive: 0x2b5fd0, emissiveIntensity: 0.9 })
+  );
+  strip.position.set(0, H - 0.16, -D / 2 - 0.014);
   g.add(strip);
+  return g;
+}
+
+/** Countertop microwave: door with a window, handle, keypad, vents. */
+export function microwave(): THREE.Group {
+  const g = new THREE.Group();
+  const W = 0.52;
+  const H = 0.31;
+  const D = 0.38;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), lam(0xd3d6d1));
+  body.position.y = H / 2;
+  g.add(body);
+  // Door on the front (-Z), with a dark mesh window
+  const door = new THREE.Mesh(new THREE.BoxGeometry(W * 0.68, H - 0.03, 0.02), lam(0xc4c8c3));
+  door.position.set(-W * 0.14, H / 2, -D / 2 - 0.012);
+  g.add(door);
+  const win = new THREE.Mesh(new THREE.BoxGeometry(W * 0.5, H - 0.11, 0.014), lam(0x14181b));
+  win.position.set(-W * 0.14, H / 2 + 0.015, -D / 2 - 0.024);
+  g.add(win);
+  const meshFront = new THREE.Mesh(
+    new THREE.PlaneGeometry(W * 0.46, H - 0.13),
+    new THREE.MeshLambertMaterial({ color: 0x2e3438 })
+  );
+  meshFront.position.set(-W * 0.14, H / 2 + 0.015, -D / 2 - 0.032);
+  meshFront.rotation.y = Math.PI;
+  g.add(meshFront);
+  // Handle
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, H - 0.08, 0.03), lam(0x8f959b));
+  handle.position.set(W * 0.16, H / 2, -D / 2 - 0.04);
+  g.add(handle);
+  // Keypad and display
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(W * 0.2, H - 0.05, 0.015), lam(0x2c3138));
+  pad.position.set(W * 0.34, H / 2, -D / 2 - 0.014);
+  g.add(pad);
+  const disp = new THREE.Mesh(
+    new THREE.BoxGeometry(W * 0.16, 0.035, 0.01),
+    new THREE.MeshStandardMaterial({ color: 0x0a1a10, emissive: 0x35d86a, emissiveIntensity: 1.0 })
+  );
+  disp.position.set(W * 0.34, H * 0.78, -D / 2 - 0.024);
+  g.add(disp);
+  for (let i = 0; i < 8; i++) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.022, 0.01), lam(0x9aa1a8));
+    b.position.set(W * 0.29 + (i % 2) * 0.045, H * 0.6 - Math.floor(i / 2) * 0.045, -D / 2 - 0.023);
+    g.add(b);
+  }
+  // Cooling vents down the side
+  for (let i = 0; i < 5; i++) {
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, D * 0.5), lam(0xa8aca7));
+    v.position.set(W / 2 + 0.004, H * 0.3 + i * 0.032, 0.02);
+    g.add(v);
+  }
+  return g;
+}
+
+/** Stainless sink set into a run of counter: bowl, mixer tap, dirty plates. */
+export function kitchenSink(): THREE.Group {
+  const g = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({ color: 0xb8bdc2, roughness: 0.28, metalness: 0.85 });
+  // Draining board and rim
+  const rim = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.03, 0.52), steel);
+  rim.position.y = 0.015;
+  g.add(rim);
+  // Bowl: four walls and a base, so it reads as recessed
+  const bw = 0.44;
+  const bd = 0.36;
+  const bh = 0.17;
+  for (const [w, d, x, z] of [
+    [bw, 0.02, -0.16, -bd / 2], [bw, 0.02, -0.16, bd / 2],
+    [0.02, bd, -0.16 - bw / 2, 0], [0.02, bd, -0.16 + bw / 2, 0]
+  ] as const) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, bh, d), steel);
+    wall.position.set(x, -bh / 2, z);
+    g.add(wall);
+  }
+  const base = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.02, bd), steel);
+  base.position.set(-0.16, -bh, 0);
+  g.add(base);
+  const drain = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.012, 12), lam(0x6e757b));
+  drain.position.set(-0.16, -bh + 0.012, 0);
+  g.add(drain);
+  // Draining grooves on the right half
+  for (let i = 0; i < 5; i++) {
+    const groove = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.008, 0.36), lam(0x9aa1a6));
+    groove.position.set(0.16 + i * 0.05, 0.028, 0);
+    g.add(groove);
+  }
+  // Mixer tap
+  const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.26, 10), steel);
+  spout.position.set(-0.16, 0.14, -0.21);
+  g.add(spout);
+  const neck = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.017, 6, 12, Math.PI / 2), steel);
+  neck.position.set(-0.16, 0.27, -0.12);
+  neck.rotation.set(0, Math.PI / 2, 0);
+  g.add(neck);
+  const lever = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.02, 0.02), steel);
+  lever.position.set(-0.07, 0.24, -0.21);
+  lever.rotation.z = 0.35;
+  g.add(lever);
+  // Somebody's washing up, left in the bowl
+  const plateMat = lam(0xe8e6de);
+  for (let i = 0; i < 3; i++) {
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.105, 0.014, 16), plateMat);
+    plate.position.set(-0.16 + (Math.random() - 0.5) * 0.08, -bh + 0.03 + i * 0.018, (Math.random() - 0.5) * 0.08);
+    plate.rotation.z = (Math.random() - 0.5) * 0.25;
+    g.add(plate);
+  }
+  const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.09, 12), lam(0xb4463c));
+  mug.position.set(-0.05, -bh + 0.07, 0.1);
+  mug.rotation.z = 1.2;
+  g.add(mug);
+  return g;
+}
+
+/** A run of wall cupboards above a counter. */
+export function wallCupboards(width = 1.8): THREE.Group {
+  const g = new THREE.Group();
+  const doors = Math.max(2, Math.round(width / 0.6));
+  const carcass = new THREE.Mesh(new THREE.BoxGeometry(width, 0.6, 0.34), lam(0x9a8a70));
+  g.add(carcass);
+  const dw = (width - 0.04) / doors;
+  for (let i = 0; i < doors; i++) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(dw - 0.02, 0.56, 0.02), lam(0xb0a086));
+    door.position.set(-width / 2 + 0.02 + dw / 2 + i * dw, 0, -0.18);
+    g.add(door);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.1, 0.012), MAT.chrome);
+    handle.position.set(door.position.x + dw / 2 - 0.06, -0.18, -0.2);
+    g.add(handle);
+  }
   return g;
 }

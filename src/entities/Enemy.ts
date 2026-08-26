@@ -1002,10 +1002,12 @@ export class Enemy {
     this.cowerBlend += (this.cowerTarget - this.cowerBlend) * Math.min(1, dt * 5);
     const cower = this.cowerBlend;
     if (cower > 0.001) {
-      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 1.75, cower);
-      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.75, cower);
-      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.3, cower);
-      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.3, cower);
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 2.05, cower);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 2.05, cower);
+      this.legL.rotation.z = THREE.MathUtils.lerp(this.legL.rotation.z, -0.16, cower);
+      this.legR.rotation.z = THREE.MathUtils.lerp(this.legR.rotation.z, 0.16, cower);
+      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.45, cower);
+      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.45, cower);
     }
     // ---- Kneeling: thighs vertical, shins folded back under the seat
     this.kneelBlend += (this.kneelTarget - this.kneelBlend) * Math.min(1, dt * 5);
@@ -1017,7 +1019,8 @@ export class Enemy {
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.5, kneel);
     }
     // Hip height: seated on a chair, hunched on the floor, or knees-down
-    const drop = bob - 0.355 * sit - 0.5 * cower - 0.38 * kneel;
+    // Cowering drops them right down onto the floor, not into a half-squat
+    const drop = bob - 0.355 * sit - 0.66 * cower - 0.38 * kneel;
 
     // Hips ride with the pelvis, or the legs detach from it as it sways
     this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
@@ -1098,17 +1101,19 @@ export class Enemy {
 
     // Cowering: curl forward and clamp both arms over the head
     if (cower > 0.001) {
-      const shake = Math.sin(at * 13) * 0.04 * cower;
-      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 1.0, cower);
-      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.5, cower);
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.45 + shake, cower);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.45 - shake, cower);
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.15, cower);
-      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.15, cower);
-      // Elbows fold to about a right angle — -1.6 bent them back past the
-      // joint, which is what made the arms look broken.
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.15, cower);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -1.15, cower);
+      const shake = Math.sin(at * 13) * 0.035 * cower;
+      // Curled right forward over the knees, head tucked down into the chest
+      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 1.35, cower);
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.75, cower);
+      // Upper arms forward and IN along the head, elbows tucked to the ears —
+      // swinging them up and outward read as looming over something.
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 1.95 + shake, cower);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 1.95 - shake, cower);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.42, cower);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, 0.42, cower);
+      // Forearms fold back across the top of the skull, hands meeting behind
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -2.35, cower);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -2.35, cower);
     }
 
     // Seated and working: forearms out over the keyboard, hands ticking away

@@ -161,10 +161,14 @@ export class MainMenuScene implements GameScene {
     buttPad.position.set(0.44, -0.035, 0);
     buttPad.rotation.z = -0.12;
     shotgun.add(buttPad);
-    // Onto its side: rolled flat, muzzle to his right, resting on the wood
-    shotgun.rotation.set(-Math.PI / 2, 0.12, 0);
-    shotgun.position.set(0, 0.858, 0.5);
-    s.add(shotgun);
+    // Onto its side: a pure 90° roll so it lies DEAD FLAT on the wood; the
+    // slight yaw comes from a parent group so it can't tip the barrel up.
+    shotgun.rotation.set(-Math.PI / 2, 0, 0);
+    const gunRest = new THREE.Group();
+    gunRest.add(shotgun);
+    gunRest.rotation.y = 0.12;
+    gunRest.position.set(0, 0.851, 0.5);
+    s.add(gunRest);
 
     // ONE hard light overhead, slightly in front — everything the shot has
     this.spot = new THREE.SpotLight(0xdfe8f0, 55, 9, 0.62, 0.55, 1.4);

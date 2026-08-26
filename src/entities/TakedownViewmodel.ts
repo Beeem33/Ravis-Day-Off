@@ -74,18 +74,20 @@ export class TakedownViewmodel {
     guard.position.set(0, 0, -0.06);
     this.knife.add(guard);
     const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.055, 0.38), steel);
-    blade.position.set(0, -0.005, -0.255);
+    blade.position.set(0, 0.005, -0.255);
     this.knife.add(blade);
     // Clip point: a narrowing tip section angled down to a point
     const tip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.034, 0.09), steel);
-    tip.position.set(0, 0.005, -0.485);
-    tip.rotation.x = 0.16; // clip point rides the SPINE — edge faces the target, not the sky
+    tip.position.set(0, -0.005, -0.485);
+    tip.rotation.x = -0.16;
     this.knife.add(tip);
     // Fuller groove line along the flat
     const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.0095, 0.009, 0.33), darkSteel);
-    fuller.position.set(0, -0.02, -0.24);
+    fuller.position.set(0, 0.02, -0.24);
     this.knife.add(fuller);
-    this.knife.position.set(0, 0.045, -0.04);
+    // ICEPICK grip: the handle sits IN the fist and the blade exits the
+    // pinky side — under the hand — so the overhand strike reads right-way-up.
+    this.knife.position.set(0, -0.055, -0.025);
     this.armR.add(this.knife);
 
     this.root.add(this.armL);

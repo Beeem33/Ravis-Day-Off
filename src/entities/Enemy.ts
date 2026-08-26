@@ -43,6 +43,8 @@ export class Enemy {
   private muzzle = new THREE.Object3D();
 
   private walkPhase = 0;
+  /** Random per-person offset so idles do not run in lockstep. */
+  private animPhase = Math.random() * 100;
   private animTime = 0;
   /** Eased walkSpeed, so strides start and stop smoothly. */
   private strideBlend = 0;
@@ -70,6 +72,8 @@ export class Enemy {
   /** 0..1 — down on both knees, pleading. */
   private kneelBlend = 0;
   private kneelTarget = 0;
+  /** Manning a vehicle turret: no personal weapon, hands on the spades. */
+  private turret = false;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
   beingExecuted = false;
   private struggleTime = 0;
@@ -113,6 +117,47 @@ export class Enemy {
   private static faceDead: THREE.MeshStandardMaterial | null = null;
   private static faceDeadCivilian: THREE.MeshStandardMaterial | null = null;
   private static faceWorried: THREE.MeshStandardMaterial | null = null;
+  private static faceCalm: THREE.MeshStandardMaterial | null = null;
+
+  /** The civilian at rest: level brows, normal eyes, a slight smile. */
+  private static drawCalmFace(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#8a5c3b';
+    g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = '#1c120b';
+    g.lineCap = 'round';
+    // Level brows, sitting well above the eyes
+    g.lineWidth = 3.5;
+    g.beginPath();
+    g.moveTo(13, 22);
+    g.lineTo(27, 21);
+    g.moveTo(51, 22);
+    g.lineTo(37, 21);
+    g.stroke();
+    // Relaxed eyes — lids covering the top of the iris
+    g.fillStyle = '#f6f4ef';
+    g.beginPath();
+    g.ellipse(21, 32, 6.5, 4.4, 0, 0, Math.PI * 2);
+    g.ellipse(43, 32, 6.5, 4.4, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#17110c';
+    g.beginPath();
+    g.ellipse(21, 32, 2.6, 2.9, 0, 0, Math.PI * 2);
+    g.ellipse(43, 32, 2.6, 2.9, 0, 0, Math.PI * 2);
+    g.fill();
+    // Faint smile
+    g.strokeStyle = '#5a3020';
+    g.lineWidth = 2.2;
+    g.beginPath();
+    g.arc(32, 44, 9, 0.22 * Math.PI, 0.78 * Math.PI);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
 
   /** The civilian's face: brows up, wide eyes, open mouth. */
   private static drawWorriedFace(): THREE.MeshStandardMaterial {
@@ -320,7 +365,9 @@ export class Enemy {
     if (!Enemy.faceDead) Enemy.faceDead = Enemy.drawFace(true);
     if (!Enemy.faceDeadCivilian) Enemy.faceDeadCivilian = Enemy.drawFace(true, '#7d5233');
     if (!Enemy.faceWorried) Enemy.faceWorried = Enemy.drawWorriedFace();
-    const faceMat = this.civilian ? Enemy.faceWorried : Enemy.faceAngry;
+    if (!Enemy.faceCalm) Enemy.faceCalm = Enemy.drawCalmFace();
+    // Staff start calm; the scared face is switched in when they panic
+    const faceMat = this.civilian ? Enemy.faceCalm : Enemy.faceAngry;
     this.head = this.addPart(
       new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.27, 0.24, 5, 0.075), [skin, skin, skin, skin, skin, faceMat]),
       'head'
@@ -444,19 +491,39 @@ export class Enemy {
     this.foreR.add(this.rifle);
   }
 
-  /** Civilian only: put your hands up. */
+  /** Civilian only: put your hands up. Also drops the calm face. */
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
+    if (on) this.setScared();
+  }
+
+  /** Swap the calm face for the frightened one. */
+  setScared(): void {
+    if (!this.civilian || !Enemy.faceWorried) return;
+    const mats = this.head.material;
+    if (Array.isArray(mats)) mats[5] = Enemy.faceWorried;
+  }
+
+  /**
+   * Man a mounted gun. The rifle goes away entirely and both arms come up
+   * onto the spade grips in front — the weapon they are firing belongs to
+   * the vehicle, not to them.
+   */
+  setTurretGunner(on: boolean): void {
+    this.turret = on;
+    this.rifle.visible = !on;
   }
 
   /** Drop and curl up, arms over the head. */
   setCowering(on: boolean): void {
     this.cowerTarget = on ? 1 : 0;
+    if (on) this.setScared();
   }
 
   /** Down on both knees, hands up, begging. */
   setKneeling(on: boolean): void {
     this.kneelTarget = on ? 1 : 0;
+    if (on) this.setScared();
   }
 
   /**
@@ -896,6 +963,8 @@ export class Enemy {
 
     // ---- Walk cycle
     this.animTime += dt; // always runs, for idle motion while standing still
+    const at = this.animTime + this.animPhase; // offset, so a room of people
+    // typing does not all hit the same key on the same frame
     // Ease the stride in and out so starting and stopping isn't a snap
     this.strideBlend += (this.walkSpeed - this.strideBlend) * Math.min(1, dt * 6);
     const stride = this.strideBlend;
@@ -1029,30 +1098,55 @@ export class Enemy {
 
     // Cowering: curl forward and clamp both arms over the head
     if (cower > 0.001) {
-      const shake = Math.sin(this.animTime * 13) * 0.04 * cower;
+      const shake = Math.sin(at * 13) * 0.04 * cower;
       this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 1.0, cower);
       this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.5, cower);
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.7 + shake, cower);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.7 - shake, cower);
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.45 + shake, cower);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.45 - shake, cower);
       this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.15, cower);
       this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.15, cower);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.6, cower);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -1.6, cower);
+      // Elbows fold to about a right angle — -1.6 bent them back past the
+      // joint, which is what made the arms look broken.
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.15, cower);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -1.15, cower);
     }
 
-    // Seated: forearms come up onto the desk in front of them
-    if (sit > 0.001 && this.handsUp < 0.5) {
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.55, sit);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 0.55, sit);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, 0.5, sit);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.5, sit);
+    // Seated and working: forearms out over the keyboard, hands ticking away
+    // at slightly different rates so it reads as typing rather than a twitch.
+    if (sit > 0.001 && this.handsUp < 0.5 && cower < 0.5) {
+      const tR = Math.sin(at * 9.2) * 0.07 + Math.sin(at * 14.3) * 0.03;
+      const tL = Math.sin(at * 8.1 + 1.7) * 0.07 + Math.sin(at * 13.1 + 0.6) * 0.03;
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.62, sit);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 0.62, sit);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.12, sit);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, 0.12, sit);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, 0.62 + tR, sit);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.62 + tL, sit);
+      // Leaning in at the screen, with a slow breathing sway
+      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 0.14, sit);
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.1, sit);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, Math.sin(at * 0.7) * 0.12, sit);
+    }
+
+    // Turret gunner: both hands forward and slightly apart on the grips,
+    // shoulders squared, leaning into the recoil.
+    if (this.turret) {
+      const kick = Math.sin(this.animTime * 26) * 0.03 * (this.flashTime > 0 ? 1 : 0);
+      this.armR.rotation.x = 1.42 + kick;
+      this.armL.rotation.x = 1.42 + kick;
+      this.armR.rotation.z = -0.2;
+      this.armL.rotation.z = 0.2;
+      this.foreR.rotation.x = -0.45;
+      this.foreL.rotation.x = -0.45;
+      this.torso.rotation.x = 0.22 + kick * 0.5;
+      this.head.rotation.x = -0.12;
     }
 
     // Hands up — overrides the arm swing entirely as it blends in
     this.handsUp += (this.handsUpTarget - this.handsUp) * Math.min(1, dt * 6);
     if (this.handsUp > 0.001) {
       const h = this.handsUp;
-      const tremble = Math.sin(this.animTime * 11) * 0.035 * h;
+      const tremble = Math.sin(at * 11) * 0.035 * h;
       // Z has to splay the arms OUTWARD from the shoulders. Rotating them
       // inward brought both hands together over the head, which read as a
       // dive rather than surrender.
@@ -1061,12 +1155,13 @@ export class Enemy {
       this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 0.42, h);
       this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.42, h);
       // Elbows almost straight, so the hands clear the top of the head
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.25, h);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.25, h);
+      // Slightly bent, not locked straight back
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -0.18, h);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -0.18, h);
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still
-    this.torso.position.set(sway * 0.85, 1.27 + drop + Math.sin(this.animTime * 2.2) * 0.008 * (1 - stride), 0);
+    this.torso.position.set(sway * 0.85, 1.27 + drop + Math.sin(at * 2.2) * 0.008 * (1 - stride), 0);
     this.torso.rotation.x = lean;
     this.torso.rotation.z = -sway * 2.2;
   }

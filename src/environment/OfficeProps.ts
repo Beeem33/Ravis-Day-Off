@@ -427,19 +427,48 @@ export function chipsBox(): THREE.Group {
   return g;
 }
 
+let fbiMat: THREE.MeshLambertMaterial | null = null;
+
+/** FBI livery for the truck flanks: blue band, big white lettering. */
+function fbiLivery(): THREE.MeshLambertMaterial {
+  if (fbiMat) return fbiMat;
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 160;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#20252b';
+  g.fillRect(0, 0, 512, 160);
+  g.fillStyle = '#12306e';
+  g.fillRect(0, 44, 512, 74);
+  g.fillStyle = '#d8dde2';
+  g.fillRect(0, 36, 512, 8);
+  g.fillRect(0, 118, 512, 8);
+  g.fillStyle = '#f4f6f8';
+  g.font = 'bold 74px Impact, Arial Black, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('F B I', 168, 82);
+  g.font = 'bold 21px monospace';
+  g.fillText('FEDERAL BUREAU OF INVESTIGATION', 366, 74);
+  g.font = 'bold 15px monospace';
+  g.fillText('TACTICAL RESPONSE', 366, 100);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  fbiMat = new THREE.MeshLambertMaterial({ map: tex });
+  return fbiMat;
+}
+
 /**
- * FBI breaching truck. Built facing +Z: cab at the back (−Z), armoured box
- * forward, a roof hatch with a pintle-mounted LMG, and a big rear door on
- * the +X side that swings open to let the team out.
- *
- * Returns the group plus the bits the scene animates.
+ * FBI breaching truck. Built nose-first along +Z: cab and push bumper at the
+ * +Z end, so driving it forward leads with the ram. Armoured box behind, a
+ * roof hatch with a pintle-mounted LMG, and a side door toward the rear that
+ * swings open to let the team out.
  */
 export function swatTruck(): {
   group: THREE.Group;
   doorPivot: THREE.Group;
   gunMount: THREE.Group;
   gunYaw: THREE.Group;
-  /** Local position of the doorway mouth, for spawning the team. */
   doorMouth: THREE.Vector3;
   /** World height of the roof deck, where the gunner stands. */
   roofY: number;
@@ -451,31 +480,66 @@ export function swatTruck(): {
     color: 0x0d1218, roughness: 0.15, metalness: 0.4, transparent: true, opacity: 0.72
   });
 
-  const L = 6.4; // length along Z
+  const L = 6.4;
   const W = 2.6;
-  const H = 1.95; // low enough that a roof gunner clears the ceiling indoors
-  // Armoured box
-  const box = new THREE.Mesh(new THREE.BoxGeometry(W, H, L * 0.68), hull);
-  box.position.set(0, H / 2 + 0.55, L * 0.12);
+  const H = 1.95; // low enough that a roof gunner clears an indoor ceiling
+  const DECK = 0.55; // chassis height
+  const roofY = DECK + H;
+
+  // Armoured box: the rear two thirds, so towards -Z
+  const boxL = L * 0.62;
+  const boxZ = -L * 0.16;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(W, H, boxL), hull);
+  box.position.set(0, DECK + H / 2, boxZ);
   g.add(box);
-  // Cab
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(W - 0.1, H * 0.72, L * 0.3), hull);
-  cab.position.set(0, H * 0.36 + 0.55, -L * 0.34);
+  // FBI livery down both flanks
+  for (const sx of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(boxL * 0.92, H * 0.62), fbiLivery());
+    panel.position.set(sx * (W / 2 + 0.012), DECK + H * 0.52, boxZ);
+    panel.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2;
+    g.add(panel);
+  }
+  const rear = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, H - 0.12, 0.06), trim);
+  rear.position.set(0, DECK + H / 2, boxZ - boxL / 2 - 0.02);
+  g.add(rear);
+
+  // Cab at the FRONT (+Z)
+  const cabL = L * 0.3;
+  const cabZ = L * 0.34;
+  const cabH = H * 0.86;
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(W - 0.1, cabH, cabL), hull);
+  cab.position.set(0, DECK + cabH / 2, cabZ);
   g.add(cab);
-  const windshield = new THREE.Mesh(new THREE.BoxGeometry(W - 0.36, 0.62, 0.06), glassMat);
-  windshield.position.set(0, 1.72, -L * 0.49);
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(W - 0.42, cabH * 0.44, 0.06), glassMat);
+  windshield.position.set(0, DECK + cabH * 0.68, cabZ + cabL / 2 + 0.01);
   g.add(windshield);
-  // Push bumper — the thing that went through the wall
-  const bumper = new THREE.Mesh(new THREE.BoxGeometry(W + 0.24, 0.72, 0.28), trim);
-  bumper.position.set(0, 0.86, -L * 0.52);
+  for (const sx of [-1, 1]) {
+    const sideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, cabH * 0.36, cabL * 0.5), glassMat);
+    sideGlass.position.set(sx * (W / 2 - 0.06), DECK + cabH * 0.7, cabZ);
+    g.add(sideGlass);
+  }
+
+  // Push bumper — this is the end that goes through the wall
+  const noseZ = cabZ + cabL / 2;
+  const bumper = new THREE.Mesh(new THREE.BoxGeometry(W + 0.3, 0.66, 0.3), trim);
+  bumper.position.set(0, 0.82, noseZ + 0.2);
   g.add(bumper);
-  for (const bx of [-0.8, -0.27, 0.27, 0.8]) {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.15, 0.16), trim);
-    bar.position.set(bx, 1.1, -L * 0.55);
+  for (const bx of [-0.86, -0.29, 0.29, 0.86]) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.5, 0.18), trim);
+    bar.position.set(bx, 1.12, noseZ + 0.28);
     g.add(bar);
   }
+  for (const hx of [-0.9, 0.9]) {
+    const lamp = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.18, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x2a2c30, emissive: 0xfff0c0, emissiveIntensity: 1.3 })
+    );
+    lamp.position.set(hx, 1.3, noseZ + 0.02);
+    g.add(lamp);
+  }
+
   // Wheels
-  for (const wz of [-L * 0.36, L * 0.06, L * 0.3]) {
+  for (const wz of [cabZ - 0.25, boxZ + 0.7, boxZ - boxL * 0.32]) {
     for (const wx of [-1, 1]) {
       const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.34, 16), lam(0x0e1013));
       tyre.rotation.z = Math.PI / 2;
@@ -487,74 +551,78 @@ export function swatTruck(): {
       g.add(hub);
     }
   }
-  // Livery
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.34, L * 0.6), lam(0xd8dde2));
-  stripe.position.set(-W / 2 - 0.005, 1.5, L * 0.12);
-  g.add(stripe);
-  const label = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 1.5), lam(0x1f3f8f));
-  label.position.set(-W / 2 - 0.02, 1.5, L * 0.12);
-  g.add(label);
-  // Roof light bar
-  for (const [lx, col] of [[-0.5, 0x2b5fd0], [0.5, 0xd02b2b]] as const) {
+
+  // Light bar sitting ON the cab roof rather than hovering above it
+  const barY = DECK + cabH + 0.03;
+  const barBase = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 0.26), trim);
+  barBase.position.set(0, barY, cabZ);
+  g.add(barBase);
+  for (const [lx, col] of [[-0.44, 0x2b5fd0], [0.44, 0xd02b2b]] as const) {
     const l = new THREE.Mesh(
-      new THREE.BoxGeometry(0.5, 0.12, 0.2),
-      new THREE.MeshStandardMaterial({ color: 0x101318, emissive: col, emissiveIntensity: 1.5 })
+      new THREE.BoxGeometry(0.62, 0.12, 0.22),
+      new THREE.MeshStandardMaterial({ color: 0x101318, emissive: col, emissiveIntensity: 1.6 })
     );
-    l.position.set(lx, H + 0.62, -L * 0.28);
+    l.position.set(lx, barY + 0.09, cabZ);
     g.add(l);
   }
 
-  // Rear door on the +X side, hinged at the −Z edge so it opens outward
+  // Side door on the +X flank, toward the rear, hinged at its -Z edge
+  const doorW = 1.9;
+  const doorZ = boxZ - boxL * 0.1;
   const doorPivot = new THREE.Group();
-  doorPivot.position.set(W / 2, 0.62, L * 0.36);
+  doorPivot.position.set(W / 2, DECK, doorZ + doorW / 2);
   g.add(doorPivot);
-  const doorW = 2.0;
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.05, doorW), hull);
-  leaf.position.set(0, 1.03, -doorW / 2);
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.08, H - 0.2, doorW), hull);
+  leaf.position.set(0, (H - 0.2) / 2, -doorW / 2);
   doorPivot.add(leaf);
   const doorBar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.5), MAT.chrome);
-  doorBar.position.set(0.07, 1.0, -0.3);
+  doorBar.position.set(0.07, (H - 0.2) * 0.55, -0.35);
   doorPivot.add(doorBar);
-  // Dark interior behind it, so the opening reads as a way out
-  const bay = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.0, doorW), lam(0x05070a));
-  bay.position.set(W / 2 - 0.04, 1.65, L * 0.36 - doorW / 2);
+  const bay = new THREE.Mesh(new THREE.BoxGeometry(0.06, H - 0.24, doorW), lam(0x05070a));
+  bay.position.set(W / 2 - 0.05, DECK + (H - 0.24) / 2, doorZ);
   g.add(bay);
 
-  // Pintle-mounted LMG on the roof: yaw ring, then the mount, then the gun
+  // Pintle-mounted LMG on the roof: yaw ring, mount, gun, spade grips
   const gunYaw = new THREE.Group();
-  gunYaw.position.set(0, H + 0.55, L * 0.16);
+  gunYaw.position.set(0, roofY, boxZ + boxL * 0.16);
   g.add(gunYaw);
-  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.56, 0.16, 16), trim);
-  ring.position.y = 0.08;
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.54, 0.58, 0.14, 16), trim);
+  ring.position.y = 0.07;
   gunYaw.add(ring);
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.5, 10), MAT.midPlastic);
-  post.position.y = 0.4;
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.62, 10), MAT.midPlastic);
+  post.position.y = 0.44;
   gunYaw.add(post);
   const gunMount = new THREE.Group();
-  gunMount.position.y = 0.66;
+  gunMount.position.y = 0.78;
   gunYaw.add(gunMount);
-  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.16, 0.8), lam(0x1a1c20));
-  gunMount.add(receiver);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.9, 10), lam(0x121417));
+  gunMount.add(new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.17, 0.84), lam(0x1a1c20)));
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.042, 0.95, 10), lam(0x121417));
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.z = -0.82;
+  barrel.position.z = -0.86;
   gunMount.add(barrel);
-  const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.34), lam(0x22252a));
-  shroud.position.z = -0.55;
+  const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.11, 0.36), lam(0x22252a));
+  shroud.position.z = -0.58;
   gunMount.add(shroud);
-  const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.26), lam(0x2e3a22));
-  ammoBox.position.set(0.17, -0.09, 0.1);
+  const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.28), lam(0x2e3a22));
+  ammoBox.position.set(0.19, -0.1, 0.12);
   gunMount.add(ammoBox);
-  const shield = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.44, 0.05), lam(0x2a2f35));
-  shield.position.set(0, 0.06, -0.28);
+  const shield = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.46, 0.05), lam(0x2a2f35));
+  shield.position.set(0, 0.08, -0.3);
   gunMount.add(shield);
+  for (const sx of [-1, 1]) {
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.22, 0.045), lam(0x15171a));
+    grip.position.set(sx * 0.15, -0.02, 0.36);
+    grip.rotation.x = -0.25;
+    gunMount.add(grip);
+  }
 
   return {
     group: g, doorPivot, gunMount, gunYaw,
-    doorMouth: new THREE.Vector3(W / 2 + 0.7, 0, L * 0.36 - 1.0),
-    roofY: H + 0.55
+    doorMouth: new THREE.Vector3(W / 2 + 0.8, 0, doorZ),
+    roofY
   };
 }
+
 
 /** Broken masonry and twisted rebar, for the hole the truck came through. */
 export function rubblePile(scale = 1): THREE.Group {

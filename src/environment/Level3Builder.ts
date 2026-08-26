@@ -44,6 +44,9 @@ export interface Level3Data {
   /** Rubble + fire that seals the hole; enabled after the crash. */
   breachBarrier: THREE.Group;
   breachColliders: Collider[];
+  /** The wall panel the truck destroys, and its collider index. */
+  breachWall: THREE.Mesh;
+  breachColliderIndex: number;
   /** Fire licks, animated by the scene. */
   fires: THREE.Mesh[];
 }
@@ -59,12 +62,12 @@ const HALL_X1 = -16;
 const HALL_Z0 = -2.2;
 const HALL_Z1 = 2.2;
 const OFF_X0 = -16;
-const OFF_X1 = 16;
+const OFF_X1 = 13;
 const OFF_Z0 = -13;
-const OFF_Z1 = 13;
+const OFF_Z1 = 8;
 // Breakroom in the south-east corner
-const BR_X0 = 7.5;
-const BR_Z0 = 5.5;
+const BR_X0 = 6.0;
+const BR_Z0 = 2.6;
 // The truck comes through the north wall here
 const BREACH_X = 1.0;
 const BREACH_W = 7.0;
@@ -88,6 +91,8 @@ export class Level3Builder {
   private fires: THREE.Mesh[] = [];
   private breachColliders: Collider[] = [];
   private breachBarrier = new THREE.Group();
+  private breachWall!: THREE.Mesh;
+  private breachColliderIndex = -1;
 
   private carpetMat!: THREE.MeshLambertMaterial;
   private wallMat!: THREE.MeshLambertMaterial;
@@ -127,13 +132,13 @@ export class Level3Builder {
       deskWorkers: [
         { pos: new THREE.Vector3(-9.4, 0, -5.88), yaw: Math.PI },
         { pos: new THREE.Vector3(-4.2, 0, -5.88), yaw: Math.PI },
-        { pos: new THREE.Vector3(-9.4, 0, 1.12), yaw: Math.PI },
-        { pos: new THREE.Vector3(-4.2, 0, 1.12), yaw: Math.PI },
-        { pos: new THREE.Vector3(1.0, 0, 1.12), yaw: Math.PI },
-        { pos: new THREE.Vector3(6.2, 0, -5.88), yaw: Math.PI }
+        { pos: new THREE.Vector3(-9.4, 0, 0.42), yaw: Math.PI },
+        { pos: new THREE.Vector3(-4.2, 0, 0.42), yaw: Math.PI },
+        { pos: new THREE.Vector3(1.0, 0, 0.42), yaw: Math.PI },
+        { pos: new THREE.Vector3(-9.4, 0, -10.18), yaw: Math.PI }
       ],
-      coolerWorker: { pos: new THREE.Vector3(-13.4, 0, 8.4), yaw: -Math.PI / 2 },
-      greeterStart: new THREE.Vector3(-8.0, 0, 5.6),
+      coolerWorker: { pos: new THREE.Vector3(-5.6, 0, OFF_Z1 - 1.35), yaw: 0 },
+      greeterStart: new THREE.Vector3(-8.5, 0, 4.4),
       greeterTalkPos: new THREE.Vector3(OFF_X0 + 3.4, 0, 0.35),
       truck: this.truckParts.group,
       truckDoor: this.truckParts.doorPivot,
@@ -151,6 +156,8 @@ export class Level3Builder {
       ],
       breachBarrier: this.breachBarrier,
       breachColliders: this.breachColliders,
+      breachWall: this.breachWall,
+      breachColliderIndex: this.breachColliderIndex,
       fires: this.fires
     };
   }
@@ -213,6 +220,23 @@ export class Level3Builder {
     g.rotation.y = yaw;
     this.group.add(g);
     return g;
+  }
+
+  /** Breakable pane spanning [a0,a1] along one axis at a fixed cross position. */
+  private glass(axis: 'x' | 'z', a0: number, a1: number, cross: number, yBase: number, h: number): void {
+    const width = a1 - a0;
+    const pane = new BreakableGlass(width, h, axis);
+    if (axis === 'x') pane.group.position.set((a0 + a1) / 2, yBase + h / 2, cross);
+    else pane.group.position.set(cross, yBase + h / 2, (a0 + a1) / 2);
+    this.group.add(pane.group);
+    this.shootables.push(pane.mesh);
+    this.glassPanes.push(pane);
+    const box =
+      axis === 'x'
+        ? new THREE.Box3(new THREE.Vector3(a0, yBase, cross - 0.06), new THREE.Vector3(a1, yBase + h, cross + 0.06))
+        : new THREE.Box3(new THREE.Vector3(cross - 0.06, yBase, a0), new THREE.Vector3(cross + 0.06, yBase + h, a1));
+    pane.colliderIndex = this.colliders.length;
+    this.colliders.push({ box, glass: pane });
   }
 
   /** Monitor: solid shell, glowing face, neck and base. `y` is panel centre. */
@@ -281,6 +305,10 @@ export class Level3Builder {
     // group fills it after the crash.
     this.wallX(OFF_X0, BREACH_X - BREACH_W / 2, OFF_Z0, OFF_H);
     this.wallX(BREACH_X + BREACH_W / 2, OFF_X1, OFF_Z0, OFF_H);
+    // The stretch the truck destroys. Solid like the rest of the building
+    // until impact, when the scene hides it and disables its collider.
+    this.breachWall = this.solid(BREACH_W, OFF_H, T, BREACH_X, 0, OFF_Z0, this.wallMat);
+    this.breachColliderIndex = this.colliders.length - 1;
     this.wallX(OFF_X0, OFF_X1, OFF_Z1, OFF_H);
     this.wallZ(OFF_Z0, OFF_Z1, OFF_X1, OFF_H);
     // West wall, split round the doorway in from the corridor. This is the
@@ -291,8 +319,9 @@ export class Level3Builder {
     this.solid(T, OFF_H - 2.35, DOOR_HW * 2, OFF_X0, 2.35, 0, this.wallMat, { collide: false });
     this.buildEntryDoor();
 
-    // Intact wall above the breach, so it reads as a hole punched through
-    this.solid(BREACH_W, OFF_H - 2.9, T, BREACH_X, 2.9, OFF_Z0, this.wallMat, { collide: false });
+    // Header that survives the impact, so the hole reads as punched through
+    // rather than the wall simply vanishing.
+    this.solid(BREACH_W, OFF_H - 3.0, T, BREACH_X, 3.0, OFF_Z0, this.wallMat, { collide: false });
   }
 
   /** Frame plus a leaf standing open flat against the office wall. */
@@ -394,68 +423,67 @@ export class Level3Builder {
 
   private buildDesks(): void {
     // Four rows of paired desks, all facing north — no cubicle panels
-    for (const z of [-5.1, 1.9]) {
-      for (const x of [-9.4, -4.2, 1.0, 6.2]) this.workstation(x, z, 0);
+    for (const z of [-5.1, 1.2]) {
+      for (const x of [-9.4, -4.2, 1.0]) this.workstation(x, z, 0);
     }
-    // A short row along the west side, turned a quarter
-    for (const z of [-9.6, -7.4]) this.workstation(-13.2, z, Math.PI / 2);
+    for (const x of [-9.4, -4.2]) this.workstation(x, -9.4, 0);
+    // A short row along the east side, turned a quarter
+    for (const z of [-9.4, -6.4]) this.workstation(9.6, z, Math.PI / 2);
   }
 
   // -------------------------------------------------------------- breakroom
 
   private buildBreakroom(): void {
-    // Partition walls with a doorway on the west side
-    this.wallZ(BR_Z0, OFF_Z1, BR_X0);
-    this.wallX(BR_X0, OFF_X1, BR_Z0, WALL_H);
-    // Doorway punched in the west partition
-    const gap0 = 8.2;
-    const gap1 = 9.6;
-    this.solid(T, WALL_H, gap0 - BR_Z0, BR_X0, 0, (BR_Z0 + gap0) / 2, this.wallMat);
-    this.solid(T, WALL_H, OFF_Z1 - gap1, BR_X0, 0, (gap1 + OFF_Z1) / 2, this.wallMat);
-    this.solid(T, WALL_H - 2.3, gap1 - gap0, BR_X0, 2.3, (gap0 + gap1) / 2, this.wallMat, { collide: false });
+    const gap0 = 4.2; // doorway in the west partition
+    const gap1 = 5.6;
+    // West partition: waist-high below, glazed above, so you can see in
+    this.solid(T, 1.05, gap0 - BR_Z0, BR_X0, 0, (BR_Z0 + gap0) / 2, this.wallMat);
+    this.glass('z', BR_Z0, gap0, BR_X0, 1.05, 1.5);
+    this.solid(T, OFF_H - 2.55, gap0 - BR_Z0, BR_X0, 2.55, (BR_Z0 + gap0) / 2, this.wallMat, { collide: false });
+    this.solid(T, OFF_H, OFF_Z1 - gap1, BR_X0, 0, (gap1 + OFF_Z1) / 2, this.wallMat);
+    this.solid(T, OFF_H - 2.35, gap1 - gap0, BR_X0, 2.35, (gap0 + gap1) / 2, this.wallMat, { collide: false });
+    // North partition, also glazed above the counter line
+    this.solid(OFF_X1 - BR_X0, 1.05, T, (BR_X0 + OFF_X1) / 2, 0, BR_Z0, this.wallMat);
+    this.glass('x', BR_X0, OFF_X1, BR_Z0, 1.05, 1.5);
+    this.solid(OFF_X1 - BR_X0, OFF_H - 2.55, T, (BR_X0 + OFF_X1) / 2, 2.55, BR_Z0, this.wallMat, { collide: false });
 
-    this.place(breakTable(), 10.4, 0, 8.2);
-    this.place(breakTable(), 13.6, 0, 11.0, 0.5);
+    this.place(breakTable(), 9.0, 0, 5.4);
 
-    // Machines against the east wall
-    const vm = vendingMachine();
-    this.place(vm, 14.4, 0, 6.6, -Math.PI / 2);
-    this.colliders.push({
-      box: new THREE.Box3(new THREE.Vector3(14.0, 0, 6.1), new THREE.Vector3(15.2, 1.95, 7.1))
-    });
-    const vm2 = vendingMachine();
-    this.place(vm2, 14.4, 0, 8.0, -Math.PI / 2);
-    this.colliders.push({
-      box: new THREE.Box3(new THREE.Vector3(14.0, 0, 7.5), new THREE.Vector3(15.2, 1.95, 8.5))
-    });
-
-    // Counter with a coffee machine and snacks
-    this.solid(3.0, 0.92, 0.6, 11.0, 0, OFF_Z1 - 0.5, this.darkMetalMat, { surface: 'metal' });
+    // Machines against the east wall, backs to it
+    for (const vz of [4.0, 5.6]) {
+      this.place(vendingMachine(), OFF_X1 - 0.5, 0, vz, -Math.PI / 2);
+      this.colliders.push({
+        box: new THREE.Box3(new THREE.Vector3(OFF_X1 - 0.95, 0, vz - 0.5), new THREE.Vector3(OFF_X1 - 0.05, 1.95, vz + 0.5))
+      });
+    }
+    // Counter along the south wall
+    this.solid(2.8, 0.92, 0.6, 8.6, 0, OFF_Z1 - 0.5, this.darkMetalMat, { surface: 'metal' });
     const coffee = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.32), this.plasticMat);
-    coffee.position.set(10.2, 1.13, OFF_Z1 - 0.5);
+    coffee.position.set(7.7, 1.13, OFF_Z1 - 0.5);
     this.group.add(coffee);
-    for (const [sx, k] of [[11.3, 'cakes'], [11.7, 'nutbar'], [12.05, 'jerky']] as const) {
+    for (const [sx, k] of [[8.7, 'cakes'], [9.1, 'nutbar'], [9.45, 'jerky']] as const) {
       this.place(snack(k as 'cakes'), sx, 0.92, OFF_Z1 - 0.55, Math.random());
     }
-    this.place(trashCan(), 8.9, 0, OFF_Z1 - 0.7);
+    this.place(trashCan(), 6.7, 0, OFF_Z1 - 0.7);
   }
 
   // --------------------------------------------------------------- services
 
   private buildServices(): void {
-    // Water cooler on the west wall — someone is filling a cup at it
-    this.waterCooler(-14.0, 8.4);
-    // Printers
-    this.place(printer(), -14.2, 0, -11.6, Math.PI / 2);
+    // Water cooler on the south wall, straight ahead from the door — in
+    // frame for the opening, and still tucked against a wall.
+    this.waterCooler(-5.6, OFF_Z1 - 0.55);
+
+    // Printers, backs to the wall, controls facing the room
+    this.place(printer(), -13.0, 0, OFF_Z0 + 0.75, Math.PI);
     this.colliders.push({
-      box: new THREE.Box3(new THREE.Vector3(-14.6, 0, -12.0), new THREE.Vector3(-13.8, 1.2, -11.2))
+      box: new THREE.Box3(new THREE.Vector3(-13.4, 0, OFF_Z0 + 0.4), new THREE.Vector3(-12.6, 1.2, OFF_Z0 + 1.15))
     });
-    this.place(printer(), 12.0, 0, -11.9);
+    this.place(printer(), 11.4, 0, OFF_Z0 + 0.75, Math.PI);
     this.colliders.push({
-      box: new THREE.Box3(new THREE.Vector3(11.6, 0, -12.3), new THREE.Vector3(12.4, 1.2, -11.5))
+      box: new THREE.Box3(new THREE.Vector3(11.0, 0, OFF_Z0 + 0.4), new THREE.Vector3(11.8, 1.2, OFF_Z0 + 1.15))
     });
 
-    // Cabinets down the south wall and the east side
     const cab = (x: number, z: number, yaw: number, drawers = 4): void => {
       this.place(fileCabinet(0.6, 1.45, 1.8, drawers), x, 0, z, yaw);
       const swap = Math.abs(Math.sin(yaw)) > 0.5;
@@ -472,31 +500,32 @@ export class Level3Builder {
       this.shootables.push(shell);
       this.occluders.push(shell);
     };
-    // Well clear of the doorway at z = 0 — these used to sit right in it
-    cab(-15.2, -6.4, 0);
-    cab(-15.2, -4.0, 0);
-    cab(15.0, -8.0, 0);
-    cab(15.0, -5.6, 0);
-    cab(0.0, 11.9, Math.PI / 2, 3);
-    cab(3.0, 11.9, Math.PI / 2, 3);
+    // West wall: backs to it, drawers opening east into the room
+    cab(OFF_X0 + 0.42, -6.4, Math.PI);
+    cab(OFF_X0 + 0.42, -4.4, Math.PI);
+    // East wall: drawers opening west
+    cab(OFF_X1 - 0.42, -7.6, 0);
+    cab(OFF_X1 - 0.42, -5.6, 0);
+    // North wall, well clear of the breach: drawers opening south
+    cab(-8.5, OFF_Z0 + 0.42, Math.PI / 2, 3);
+    cab(-6.5, OFF_Z0 + 0.42, Math.PI / 2, 3);
 
-    // Vents and fire alarms round the walls — the alarms do nothing
+    // Vents and fire alarms — the alarms do nothing
     for (const [x, z, yaw] of [
       [-11, OFF_Z0 + T / 2, 0], [8, OFF_Z0 + T / 2, 0],
-      [-6, OFF_Z1 - T / 2, Math.PI], [4, OFF_Z1 - T / 2, Math.PI],
-      [OFF_X0 + T / 2, -8, Math.PI / 2], [OFF_X1 - T / 2, 2, -Math.PI / 2]
+      [-6, OFF_Z1 - T / 2, Math.PI], [2, OFF_Z1 - T / 2, Math.PI],
+      [OFF_X0 + T / 2, -8, Math.PI / 2]
     ] as const) {
       this.place(fireAlarm(), x, 1.45, z, yaw);
     }
     for (const [x, z, yaw] of [
-      [-12, OFF_Z0 + T / 2, 0], [-3, OFF_Z0 + T / 2, 0], [10, OFF_Z0 + T / 2, 0],
-      [-9, OFF_Z1 - T / 2, Math.PI], [6, OFF_Z1 - T / 2, Math.PI],
-      [OFF_X0 + T / 2, 4, Math.PI / 2], [OFF_X1 - T / 2, -2, -Math.PI / 2]
+      [-12, OFF_Z0 + T / 2, 0], [-3, OFF_Z0 + T / 2, 0],
+      [-9, OFF_Z1 - T / 2, Math.PI], [4, OFF_Z1 - T / 2, Math.PI],
+      [OFF_X0 + T / 2, 3, Math.PI / 2], [OFF_X1 - T / 2, -2, -Math.PI / 2]
     ] as const) {
       this.place(vent(0.62, 0.34), x, 3.1, z, yaw);
     }
-    // Ceiling vents too
-    for (const [x, z] of [[-8, -2], [2, -2], [-8, 6], [6, 2]] as const) {
+    for (const [x, z] of [[-8, -2], [2, -2], [-8, 5], [5, 0]] as const) {
       const v = vent(0.7, 0.7);
       v.position.set(x, OFF_H - 0.02, z);
       v.rotation.x = Math.PI / 2;
@@ -509,24 +538,25 @@ export class Level3Builder {
       c.position.set(x, 0, z);
       this.group.add(c);
     }
-    for (const [k, x, z] of [['persuade', -7.2, -8.9], ['scamming', 4.6, 4.2], ['comic', -12.0, 6.0]] as const) {
+    for (const [k, x, z] of [['persuade', -7.2, -8.9], ['scamming', 2.6, 4.2], ['comic', -12.0, 5.0]] as const) {
       const b = book(k as 'persuade');
       b.position.set(x, 0, z);
       b.rotation.y = Math.random() * Math.PI;
       this.group.add(b);
     }
     this.place(trashCan(), -10.6, 0, -2.4);
-    this.place(trashCan(), 5.0, 0, -2.4);
-    this.place(trashCan(), -15.0, 0, 11.4);
+    this.place(trashCan(), 4.2, 0, -2.4);
+    this.place(trashCan(), -14.6, 0, 6.6);
   }
 
+  /** Cooler against the south wall, taps and bottle facing into the room. */
   private waterCooler(x: number, z: number): void {
     this.solid(0.42, 1.02, 0.42, x, 0, z, this.coolerMat, { surface: 'metal', occlude: false });
     const g = new THREE.Group();
     this.group.add(g);
     for (const [dx, col] of [[-0.08, 0x2f6f9e], [0.08, 0xb4463c]] as const) {
       const tap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.09, 0.05), new THREE.MeshLambertMaterial({ color: col }));
-      tap.position.set(x + 0.22, 0.78, z + dx);
+      tap.position.set(x + dx, 0.78, z - 0.22);
       g.add(tap);
     }
     const bottle = new THREE.Mesh(
@@ -633,11 +663,10 @@ export class Level3Builder {
     this.flickering.push(new FlickeringLight(g, new THREE.Vector3(HALL_X1 - 3.4, WALL_H - 0.35, 0), 7, 8));
 
     // Office floor
-    for (const z of [-9.5, -3.5, 2.5, 8.5]) {
-      for (const x of [-12, -6, 0, 6, 12]) addLight(x, z, 9, 15, OFF_H);
+    for (const z of [-10, -5, 0, 5]) {
+      for (const x of [-12, -6, 0, 6, 11]) addLight(x, z, 9, 15, OFF_H);
     }
-    addLight(11.5, 9.5, 7, 12, OFF_H); // breakroom
-    addLight(14, 11.5, 6, 11, OFF_H);
+    addLight(9.5, 5.5, 7, 12, OFF_H); // breakroom
   }
 
   // ------------------------------------------------------------ waypoints
@@ -645,18 +674,18 @@ export class Level3Builder {
   private makeWaypoints(): Waypoint[] {
     const pts: [number, number, number][] = [
       [-14.5, 0, 0], // 0 office end of the corridor
-      [-11, 0, -8], [-3, 0, -8], [6, 0, -8], [13, 0, -8], // 1-4 north aisle
-      [-11, 0, -1.5], [-3, 0, -1.5], [6, 0, -1.5], [13, 0, -1.5], // 5-8 middle aisle
-      [-11, 0, 5.5], [-3, 0, 5.5], [6, 0, 5.5], [13, 0, 2.5], // 9-12
-      [-13, 0, 9], [-5, 0, 10.5], [4, 0, 10.5], // 13-15 south
-      [10.5, 0, 8.5], [13.5, 0, 11], // 16-17 breakroom
-      [BREACH_X, 0, -10.5] // 18 the breach
+      [-11, 0, -8], [-3, 0, -8], [6, 0, -8], [11, 0, -8], // 1-4 north aisle
+      [-11, 0, -2], [-3, 0, -2], [6, 0, -2], [11, 0, -2], // 5-8 middle aisle
+      [-11, 0, 4], [-3, 0, 4], [3, 0, 4], // 9-11 south aisle
+      [-14, 0, 6.5], [-6, 0, 6.8], [1, 0, 6.8], // 12-14 south wall
+      [8.5, 0, 5.0], [11, 0, 6.5], // 15-16 breakroom
+      [BREACH_X, 0, -10.5] // 17 the breach
     ];
     const links: [number, number][] = [
       [0, 5], [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11],
-      [1, 5], [2, 6], [3, 7], [4, 8], [5, 9], [6, 10], [7, 11], [8, 12], [11, 12],
-      [9, 13], [13, 14], [14, 15], [15, 11], [11, 16], [16, 17], [12, 16],
-      [2, 18], [18, 6]
+      [1, 5], [2, 6], [3, 7], [4, 8], [5, 9], [6, 10], [7, 11],
+      [9, 12], [12, 13], [13, 14], [14, 11], [11, 15], [15, 16], [8, 15],
+      [2, 17], [17, 6]
     ];
     const wps: Waypoint[] = pts.map(([x, y, z]) => ({ pos: new THREE.Vector3(x, y, z), links: [] }));
     for (const [a, b] of links) {

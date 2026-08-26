@@ -56,6 +56,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private over = false;
   private gunnerBurst = 0;
   private shake = 0;
+  /** Roof-deck height of the truck, so the gunner stands on it. */
+  private roofY = 2.5;
 
   private ui!: HTMLElement;
   private objective!: HTMLElement;
@@ -255,7 +257,12 @@ export class Level3Scene extends CombatScene<Level3Data> {
         const n = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8, 0.6 + Math.random()).normalize();
         this.particles.concreteChips(p, n, 0xb9b3a8);
       }
-      // The hole is sealed by rubble and fire — no way out this way
+      // The wall comes down: panel gone, its collider dead, and rubble and
+      // fire take its place so there is still no way out.
+      L.breachWall.visible = false;
+      if (L.breachColliderIndex >= 0) L.colliders[L.breachColliderIndex].disabled = true;
+      const wallIdx = this.level.shootables.indexOf(L.breachWall);
+      if (wallIdx >= 0) this.level.shootables.splice(wallIdx, 1);
       L.breachBarrier.visible = true;
       for (const c of L.breachColliders) L.colliders.push(c);
       // Everyone on the floor loses it
@@ -266,8 +273,9 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // The gunner opens up on the room
     this.beat('gunner', T_GUNNER, () => {
       const g = L.gunnerSpawn;
+      this.roofY = g.pos.y;
       this.gunner = new Enemy(g.pos, g.yaw, 3, { name: 'LMG GUNNER' });
-      this.gunner.setAiming(true);
+      this.gunner.setTurretGunner(true);
       this.scene.add(this.gunner.root);
       for (const p of this.gunner.parts) this.level.shootables.push(p);
       this.remaining++;
@@ -318,13 +326,32 @@ export class Level3Scene extends CombatScene<Level3Data> {
       if (g && !g.alive) L.truckGunYaw.rotation.y *= 1 - Math.min(1, dt * 2);
       return;
     }
-    // Traverse the mount towards whoever is left on the floor
-    const target = this.staff.find((s) => s.alive) ?? this.player;
-    const tp = 'position' in target ? target.position : this.player.position;
+    // Traverse the mount onto whoever he's shooting at, and keep the gunner
+    // squared up behind it — he rides the ring, so the two never disagree.
+    const victim = this.staff.find((s) => s.alive);
+    const tp = victim ? victim.position : this.player.position;
+    L.truck.updateMatrixWorld(true);
     const local = L.truck.worldToLocal(tp.clone());
-    const want = Math.atan2(-local.x, -local.z);
-    L.truckGunYaw.rotation.y += (want - L.truckGunYaw.rotation.y) * Math.min(1, dt * 2.2);
-    g.faceToward(tp, dt, 3);
+    let want = Math.atan2(-local.x, -local.z);
+    let delta = want - L.truckGunYaw.rotation.y;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    L.truckGunYaw.rotation.y += delta * Math.min(1, dt * 2.6);
+    // Depress the barrel onto the target
+    const flat = Math.hypot(local.x, local.z);
+    const wantPitch = Math.atan2(tp.y + 1.0 - (L.truck.position.y + L.truckGunYaw.position.y + 0.78), flat);
+    L.truckGunMount.rotation.x += (wantPitch - L.truckGunMount.rotation.x) * Math.min(1, dt * 3);
+    // Gunner stands on the ring behind the gun, facing the same way
+    const ringWorld = new THREE.Vector3();
+    L.truckGunYaw.getWorldPosition(ringWorld);
+    const gunHeading = L.truck.rotation.y + L.truckGunYaw.rotation.y;
+    g.position.set(
+      ringWorld.x + Math.sin(gunHeading) * 0.62,
+      L.truck.position.y + this.roofY,
+      ringWorld.z + Math.cos(gunHeading) * 0.62
+    );
+    g.yaw = gunHeading;
+    g.root.rotation.y = gunHeading;
 
     // Burst fire at the staff
     this.gunnerBurst -= dt;
@@ -333,8 +360,11 @@ export class Level3Scene extends CombatScene<Level3Data> {
       const victim = this.staff.find((s) => s.alive);
       this.ctx.audio.enemyGunshot(g.position.distanceTo(this.player.position) * 0.6);
       g.flashMuzzle();
-      const muzzle = new THREE.Vector3(0, 0, -1.2);
+      // Rounds leave the vehicle gun, not anything in his hands
+      L.truckGunMount.updateWorldMatrix(true, false);
+      const muzzle = new THREE.Vector3(0, 0, -1.3);
       L.truckGunMount.localToWorld(muzzle);
+      this.particles.concreteChips(muzzle, new THREE.Vector3(0, 1, 0), 0xffc46a);
       if (victim && Math.random() < 0.045) {
         const chest = victim.position.clone().add(new THREE.Vector3(0, 1.15, 0));
         const dir = chest.clone().sub(muzzle).normalize();

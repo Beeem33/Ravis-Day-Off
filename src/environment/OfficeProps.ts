@@ -441,6 +441,8 @@ export function swatTruck(): {
   gunYaw: THREE.Group;
   /** Local position of the doorway mouth, for spawning the team. */
   doorMouth: THREE.Vector3;
+  /** World height of the roof deck, where the gunner stands. */
+  roofY: number;
 } {
   const g = new THREE.Group();
   const hull = lam(0x21262b);
@@ -451,7 +453,7 @@ export function swatTruck(): {
 
   const L = 6.4; // length along Z
   const W = 2.6;
-  const H = 2.5;
+  const H = 1.95; // low enough that a roof gunner clears the ceiling indoors
   // Armoured box
   const box = new THREE.Mesh(new THREE.BoxGeometry(W, H, L * 0.68), hull);
   box.position.set(0, H / 2 + 0.55, L * 0.12);
@@ -547,7 +549,11 @@ export function swatTruck(): {
   shield.position.set(0, 0.06, -0.28);
   gunMount.add(shield);
 
-  return { group: g, doorPivot, gunMount, gunYaw, doorMouth: new THREE.Vector3(W / 2 + 0.7, 0, L * 0.36 - 1.0) };
+  return {
+    group: g, doorPivot, gunMount, gunYaw,
+    doorMouth: new THREE.Vector3(W / 2 + 0.7, 0, L * 0.36 - 1.0),
+    roofY: H + 0.55
+  };
 }
 
 /** Broken masonry and twisted rebar, for the hole the truck came through. */

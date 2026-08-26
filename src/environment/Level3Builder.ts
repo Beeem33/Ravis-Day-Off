@@ -48,7 +48,9 @@ export interface Level3Data {
   fires: THREE.Mesh[];
 }
 
-const WALL_H = 3.2;
+const WALL_H = 3.2; // corridor
+const OFF_H = 4.6; // the office floor is a tall open-plan space, so a
+// gunner on the truck roof fits under the ceiling without tearing it open
 const T = 0.24;
 
 // ---- Footprint: a long corridor in from the west, then the office floor.
@@ -66,11 +68,7 @@ const BR_Z0 = 5.5;
 // The truck comes through the north wall here
 const BREACH_X = 1.0;
 const BREACH_W = 7.0;
-// The ceiling is torn open above the breach so the roof gunner is exposed
-const CEIL_HOLE_X0 = BREACH_X - 4.6;
-const CEIL_HOLE_X1 = BREACH_X + 4.6;
-const CEIL_HOLE_Z1 = OFF_Z0 + 10.0; // deep enough that the gunner is
-// shootable from most of the floor, not only from under his muzzle
+const DOOR_HW = 1.05; // half-width of the corridor doorway
 
 /**
  * Level3Builder — the sister office. A long featureless corridor in, then a
@@ -124,13 +122,15 @@ export class Level3Builder {
       playerSpawnYaw: -Math.PI / 2, // facing east, down the corridor
       introStand: new THREE.Vector3(OFF_X0 + 1.5, 0, 0),
       introYaw: -Math.PI / 2,
+      // At the chairs, not on the desks, and turned to face their screens —
+      // which puts their backs to the wall the truck comes through.
       deskWorkers: [
-        { pos: new THREE.Vector3(-9.4, 0, -5.1), yaw: 0 },
-        { pos: new THREE.Vector3(-4.2, 0, -5.1), yaw: 0 },
-        { pos: new THREE.Vector3(-9.4, 0, 1.9), yaw: 0 },
-        { pos: new THREE.Vector3(-4.2, 0, 1.9), yaw: 0 },
-        { pos: new THREE.Vector3(1.0, 0, 1.9), yaw: 0 },
-        { pos: new THREE.Vector3(6.2, 0, -5.1), yaw: 0 }
+        { pos: new THREE.Vector3(-9.4, 0, -5.88), yaw: Math.PI },
+        { pos: new THREE.Vector3(-4.2, 0, -5.88), yaw: Math.PI },
+        { pos: new THREE.Vector3(-9.4, 0, 1.12), yaw: Math.PI },
+        { pos: new THREE.Vector3(-4.2, 0, 1.12), yaw: Math.PI },
+        { pos: new THREE.Vector3(1.0, 0, 1.12), yaw: Math.PI },
+        { pos: new THREE.Vector3(6.2, 0, -5.88), yaw: Math.PI }
       ],
       coolerWorker: { pos: new THREE.Vector3(-13.4, 0, 8.4), yaw: -Math.PI / 2 },
       greeterStart: new THREE.Vector3(-8.0, 0, 5.6),
@@ -141,7 +141,7 @@ export class Level3Builder {
       truckGunYaw: this.truckParts.gunYaw,
       truckFrom: new THREE.Vector3(BREACH_X, 0, OFF_Z0 - 11),
       truckTo: new THREE.Vector3(BREACH_X, 0, OFF_Z0 + 3.2),
-      gunnerSpawn: { pos: new THREE.Vector3(BREACH_X, 3.05, OFF_Z0 + 4.2), yaw: Math.PI },
+      gunnerSpawn: { pos: new THREE.Vector3(BREACH_X, this.truckParts.roofY, OFF_Z0 + 4.2), yaw: Math.PI },
       agentSpawns: [
         { pos: new THREE.Vector3(BREACH_X + 2.4, 0, OFF_Z0 + 2.0), yaw: Math.PI },
         { pos: new THREE.Vector3(BREACH_X + 2.9, 0, OFF_Z0 + 3.6), yaw: Math.PI * 0.8 },
@@ -244,21 +244,25 @@ export class Level3Builder {
     // Nothing off it — just the two long walls and the end cap
     this.wallX(HALL_X0, HALL_X1, HALL_Z0);
     this.wallX(HALL_X0, HALL_X1, HALL_Z1);
-    this.wallZ(HALL_Z0, HALL_Z1, HALL_X0);
+    // The door he came in by, shut behind him
+    this.wallZ(HALL_Z0, -DOOR_HW, HALL_X0);
+    this.wallZ(DOOR_HW, HALL_Z1, HALL_X0);
+    this.solid(T, WALL_H - 2.35, DOOR_HW * 2, HALL_X0, 2.35, 0, this.wallMat, { collide: false });
+    const back = this.solid(0.09, 2.3, DOOR_HW * 2 - 0.08, HALL_X0 + 0.1, 0, 0, this.deskMat, { surface: 'wood', occlude: false });
+    back.userData.surface = 'wood';
+    for (const dz of [-DOOR_HW, DOOR_HW]) {
+      this.solid(0.28, 2.35, 0.1, HALL_X0 + 0.05, 0, dz, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.28, 0.1, DOOR_HW * 2, HALL_X0 + 0.05, 2.35, 0, this.darkMetalMat, { surface: 'metal', collide: false });
+    this.solid(0.06, 0.26, 0.06, HALL_X0 + 0.17, 1.0, DOOR_HW - 0.3, this.darkMetalMat, { surface: 'metal', occlude: false, collide: false });
 
-    // Doorway into the office at the far end
-    this.wallZ(HALL_Z0, -0.95, HALL_X1);
-    this.wallZ(0.95, HALL_Z1, HALL_X1);
-    this.solid(T, WALL_H - 2.3, 1.9, HALL_X1, 2.3, 0, this.wallMat, { collide: false });
-    const leaf = this.solid(0.1, 2.25, 1.8, HALL_X1 + 0.14, 0, 0, this.deskMat, {
-      surface: 'wood', occlude: false, collide: false
-    });
-    leaf.userData.surface = 'wood';
 
     // Skirting details so eighteen metres of corridor isn't a blank tube
-    for (let x = HALL_X0 + 3; x < HALL_X1 - 1; x += 4.5) {
-      this.place(fireAlarm(), x, 1.45, HALL_Z0 + T / 2 + 0.03);
-      this.place(vent(0.55, 0.3), x + 2.2, 2.55, HALL_Z1 - T / 2 - 0.03, Math.PI);
+    // One alarm by the door and a couple of vents — a corridor does not have
+    // a pull station every four metres.
+    this.place(fireAlarm(), HALL_X0 + 2.2, 1.45, HALL_Z0 + T / 2 + 0.03);
+    for (const x of [HALL_X0 + 6, HALL_X0 + 13]) {
+      this.place(vent(0.55, 0.3), x, 2.55, HALL_Z1 - T / 2 - 0.03, Math.PI);
     }
     for (let x = HALL_X0 + 2; x < HALL_X1; x += 6) {
       const p = scatteredPaper(2, 0.5);
@@ -271,38 +275,40 @@ export class Level3Builder {
 
   private buildOfficeShell(): void {
     this.slabAt(OFF_X0, OFF_X1, OFF_Z0, OFF_Z1, -0.3, this.carpetMat);
-    // Ceiling, with a bite taken out of it over the breach. The truck stands
-    // 3.05m at the roof against a 3.2m ceiling, so a gunner up top has to
-    // have somewhere to be — and a lorry through the wall takes the slab
-    // above it with it anyway.
-    this.slabAt(OFF_X0, CEIL_HOLE_X0, OFF_Z0, OFF_Z1, WALL_H, this.ceilMat);
-    this.slabAt(CEIL_HOLE_X1, OFF_X1, OFF_Z0, OFF_Z1, WALL_H, this.ceilMat);
-    this.slabAt(CEIL_HOLE_X0, CEIL_HOLE_X1, CEIL_HOLE_Z1, OFF_Z1, WALL_H, this.ceilMat);
+    this.slabAt(OFF_X0, OFF_X1, OFF_Z0, OFF_Z1, OFF_H, this.ceilMat);
 
     // North wall, with the stretch the truck destroys left out — the barrier
     // group fills it after the crash.
-    this.wallX(OFF_X0, BREACH_X - BREACH_W / 2, OFF_Z0);
-    this.wallX(BREACH_X + BREACH_W / 2, OFF_X1, OFF_Z0);
-    this.wallX(OFF_X0, OFF_X1, OFF_Z1);
-    this.wallZ(OFF_Z0, OFF_Z1, OFF_X1);
-    // West wall, split round the corridor doorway
-    this.wallZ(OFF_Z0, -0.95, OFF_X0);
-    this.wallZ(0.95, OFF_Z1, OFF_X0);
-
-    // Ragged lip round the torn ceiling
-    for (const [lx, lz, lw, ld] of [
-      [CEIL_HOLE_X0, OFF_Z0, 0.5, CEIL_HOLE_Z1 - OFF_Z0],
-      [CEIL_HOLE_X1, OFF_Z0, 0.5, CEIL_HOLE_Z1 - OFF_Z0],
-      [BREACH_X, CEIL_HOLE_Z1, CEIL_HOLE_X1 - CEIL_HOLE_X0, 0.5]
-    ] as const) {
-      const lip = new THREE.Mesh(new THREE.BoxGeometry(lw, 0.22, ld), this.wallMat);
-      lip.position.set(lx, WALL_H + 0.04, lz + (ld > 1 ? ld / 2 : 0));
-      lip.rotation.z = (Math.random() - 0.5) * 0.08;
-      this.group.add(lip);
-    }
+    this.wallX(OFF_X0, BREACH_X - BREACH_W / 2, OFF_Z0, OFF_H);
+    this.wallX(BREACH_X + BREACH_W / 2, OFF_X1, OFF_Z0, OFF_H);
+    this.wallX(OFF_X0, OFF_X1, OFF_Z1, OFF_H);
+    this.wallZ(OFF_Z0, OFF_Z1, OFF_X1, OFF_H);
+    // West wall, split round the doorway in from the corridor. This is the
+    // only wall at x = OFF_X0 — the corridor does not build its own, or the
+    // two overlap and leave slivers the player can squeeze through.
+    this.wallZ(OFF_Z0, -DOOR_HW, OFF_X0, OFF_H);
+    this.wallZ(DOOR_HW, OFF_Z1, OFF_X0, OFF_H);
+    this.solid(T, OFF_H - 2.35, DOOR_HW * 2, OFF_X0, 2.35, 0, this.wallMat, { collide: false });
+    this.buildEntryDoor();
 
     // Intact wall above the breach, so it reads as a hole punched through
-    this.solid(BREACH_W, WALL_H - 2.6, T, BREACH_X, 2.6, OFF_Z0, this.wallMat, { collide: false });
+    this.solid(BREACH_W, OFF_H - 2.9, T, BREACH_X, 2.9, OFF_Z0, this.wallMat, { collide: false });
+  }
+
+  /** Frame plus a leaf standing open flat against the office wall. */
+  private buildEntryDoor(): void {
+    for (const dz of [-DOOR_HW, DOOR_HW]) {
+      this.solid(0.3, 2.35, 0.1, OFF_X0, 0, dz, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.3, 0.1, DOOR_HW * 2, OFF_X0, 2.35, 0, this.darkMetalMat, { surface: 'metal', collide: false });
+    // Swung right back against the wall, out of the opening
+    const leaf = this.solid(2.0, 2.3, 0.08, OFF_X0 + 1.05, 0, DOOR_HW + 0.12, this.deskMat, {
+      surface: 'wood', occlude: false, collide: false
+    });
+    leaf.userData.surface = 'wood';
+    this.solid(0.06, 0.26, 0.06, OFF_X0 + 1.9, 1.0, DOOR_HW + 0.02, this.darkMetalMat, {
+      surface: 'metal', occlude: false, collide: false
+    });
   }
 
   // ------------------------------------------------------------------ desks
@@ -466,8 +472,9 @@ export class Level3Builder {
       this.shootables.push(shell);
       this.occluders.push(shell);
     };
-    cab(-15.2, -3.0, 0);
-    cab(-15.2, -0.6, 0);
+    // Well clear of the doorway at z = 0 — these used to sit right in it
+    cab(-15.2, -6.4, 0);
+    cab(-15.2, -4.0, 0);
     cab(15.0, -8.0, 0);
     cab(15.0, -5.6, 0);
     cab(0.0, 11.9, Math.PI / 2, 3);
@@ -486,12 +493,12 @@ export class Level3Builder {
       [-9, OFF_Z1 - T / 2, Math.PI], [6, OFF_Z1 - T / 2, Math.PI],
       [OFF_X0 + T / 2, 4, Math.PI / 2], [OFF_X1 - T / 2, -2, -Math.PI / 2]
     ] as const) {
-      this.place(vent(0.62, 0.34), x, 2.65, z, yaw);
+      this.place(vent(0.62, 0.34), x, 3.1, z, yaw);
     }
     // Ceiling vents too
     for (const [x, z] of [[-8, -2], [2, -2], [-8, 6], [6, 2]] as const) {
       const v = vent(0.7, 0.7);
-      v.position.set(x, WALL_H - 0.02, z);
+      v.position.set(x, OFF_H - 0.02, z);
       v.rotation.x = Math.PI / 2;
       this.group.add(v);
     }
@@ -605,30 +612,21 @@ export class Level3Builder {
     g.add(new THREE.AmbientLight(0x4a4436, 0.95));
     g.add(new THREE.HemisphereLight(0xa39a86, 0x2a2620, 0.6));
 
-    const inHole = (x: number, z: number): boolean =>
-      x > CEIL_HOLE_X0 && x < CEIL_HOLE_X1 && z < CEIL_HOLE_Z1;
-
-    const addLight = (x: number, z: number, intensity = 8, dist = 12): void => {
+    const addLight = (x: number, z: number, intensity = 8, dist = 12, ceil = WALL_H): void => {
       const l = new THREE.PointLight(0xfff2dc, intensity, dist, 1.6);
-      l.position.set(x, WALL_H - 0.35, z);
+      l.position.set(x, ceil - 0.35, z);
       g.add(l);
       const fix = new THREE.Mesh(
         new THREE.BoxGeometry(1.3, 0.07, 0.3),
         new THREE.MeshStandardMaterial({ color: 0x999999, emissive: 0xfff6e0, emissiveIntensity: 1.4 })
       );
-      fix.position.set(x, WALL_H - 0.23, z);
+      fix.position.set(x, ceil - 0.23, z);
       g.add(fix);
       const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.16, 0.16), this.darkMetalMat);
-      canopy.position.set(x, WALL_H - 0.09, z);
+      canopy.position.set(x, ceil - 0.09, z);
       g.add(canopy);
     };
 
-    /** Light with no fixture — for the open sky over the breach. */
-    const addBare = (x: number, z: number, intensity: number, dist: number): void => {
-      const l = new THREE.PointLight(0xbcd0e8, intensity, dist, 1.7);
-      l.position.set(x, WALL_H + 1.2, z);
-      g.add(l);
-    };
 
     // Corridor — a run of fixtures, one of them failing
     for (let x = HALL_X0 + 3; x < HALL_X1; x += 4.5) addLight(x, 0, 6, 9);
@@ -636,15 +634,10 @@ export class Level3Builder {
 
     // Office floor
     for (const z of [-9.5, -3.5, 2.5, 8.5]) {
-      for (const x of [-12, -6, 0, 6, 12]) {
-        // Nothing to hang a fixture from where the slab is gone — daylight
-        // comes in through the tear instead.
-        if (inHole(x, z)) addBare(x, z, 5, 14);
-        else addLight(x, z, 7, 12);
-      }
+      for (const x of [-12, -6, 0, 6, 12]) addLight(x, z, 9, 15, OFF_H);
     }
-    addLight(11.5, 9.5, 6, 10); // breakroom
-    addLight(14, 11.5, 5, 9);
+    addLight(11.5, 9.5, 7, 12, OFF_H); // breakroom
+    addLight(14, 11.5, 6, 11, OFF_H);
   }
 
   // ------------------------------------------------------------ waypoints

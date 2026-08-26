@@ -9,6 +9,7 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
+import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
@@ -33,6 +34,9 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   private active: 'pistol' | 'shotgun' = 'pistol';
   private wanted: 'pistol' | 'shotgun' = 'pistol';
   private shells = TUBE_SIZE;
+  private takedownVm!: TakedownViewmodel;
+  /** The enemy currently held for a knife execution, if any. */
+  private takedown: Enemy | null = null;
   private enemies: Enemy[] = [];
   private ais: EnemyAI[] = [];
   private civilians: Enemy[] = [];
@@ -94,6 +98,35 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       if (e === 'shellIn') {
         audio.shellIn();
         this.shells = Math.min(TUBE_SIZE, this.shells + 1);
+      }
+    };
+    // Knife takedown arms (F next to an enemy)
+    this.takedownVm = new TakedownViewmodel(this.player.camera);
+    this.takedownVm.onEvent = (e) => {
+      const victim = this.takedown;
+      if (e === 'grab') {
+        if (victim) audio.enemyShout(1);
+      } else if (e === 'draw') {
+        audio.knifeDraw();
+      } else if (e === 'stab') {
+        if (victim && victim.alive) {
+          const neck = victim.position.clone().add(new THREE.Vector3(0, 1.42, 0));
+          const spray = this.player
+            .forwardDir()
+            .clone()
+            .multiplyScalar(0.45)
+            .add(new THREE.Vector3(0, 0.9, 0))
+            .normalize();
+          audio.knifeStab();
+          const slump = this.player.forwardDir().clone();
+          slump.y = -0.3;
+          // Gentle impulse: they crumple off the blade, not fly off it
+          this.killEnemy(victim, neck, slump.normalize(), true, false, 'head', 0.2);
+          this.spatter(neck, spray, true);
+        }
+      } else if (e === 'done') {
+        this.takedown = null;
+        this.player.cinematic = false;
       }
     };
 
@@ -207,7 +240,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   private updateCivilianHunt(dt: number): void {
     for (let i = 0; i < this.enemies.length; i++) {
       const enemy = this.enemies[i];
-      if (!enemy.alive) continue;
+      if (!enemy.alive || enemy.beingExecuted) continue;
       const busyWithPlayer = this.ais[i].state === 'attack';
       let timer = this.civShotTimers.get(enemy) ?? 3 + Math.random() * 5;
       timer -= dt;
@@ -296,14 +329,47 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       input.requestPointerLock();
     }
 
+    // ---- Knife takedown: F next to an enemy grabs him, blade does the rest
+    const tdTarget = this.takedown ? null : this.takedownTarget();
+    this.hud.setTakedownHint(!!tdTarget && input.pointerLocked);
+    if (
+      tdTarget &&
+      input.wasPressed('KeyF') &&
+      input.pointerLocked &&
+      !this.weapon.reloading &&
+      !this.shotgun.reloading
+    ) {
+      this.takedown = tdTarget;
+      this.player.cinematic = true; // the scene owns the camera until it's over
+      this.player.aiming = false;
+      tdTarget.beginExecution(this.world);
+      this.takedownVm.start();
+    }
+    if (this.takedown) {
+      if (!this.player.alive) {
+        // Shot dead mid-execution: let go of everything
+        this.takedownVm.abort();
+        this.takedown = null;
+        this.player.cinematic = false;
+      } else {
+        this.updateTakedownCamera(dt, _time);
+      }
+    }
+    this.takedownVm.update(dt);
+    const inTakedown = this.takedown !== null;
+
     // Weapon slots: 1 = pistol, 2 = shotgun. The current gun swings down out
     // of frame, then the other comes up — no switching mid-reload.
     const heldVm = this.active === 'pistol' ? this.weapon : this.shotgun;
-    if (this.player.alive && !this.over && !heldVm.reloading) {
+    if (this.player.alive && !this.over && !heldVm.reloading && !inTakedown) {
       if (input.wasPressed('Digit1')) this.wanted = 'pistol';
       if (input.wasPressed('Digit2')) this.wanted = 'shotgun';
     }
-    if (this.wanted !== this.active) {
+    if (inTakedown) {
+      // Both hands are busy with the knife — whatever was held drops from frame
+      this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
+      this.shotgun.stow = Math.min(1, this.shotgun.stow + dt * 6);
+    } else if (this.wanted !== this.active) {
       heldVm.stow = Math.min(1, heldVm.stow + dt * 5);
       if (heldVm.stow >= 1) this.active = this.wanted;
     } else {
@@ -311,12 +377,18 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     }
     const vm = this.active === 'pistol' ? this.weapon : this.shotgun;
     const stowedVm = this.active === 'pistol' ? this.shotgun : this.weapon;
-    if (this.wanted === this.active) stowedVm.stow = 1;
+    if (this.wanted === this.active && !inTakedown) stowedVm.stow = 1;
     const switching = this.wanted !== this.active || vm.stow > 0.1;
 
     // Aim down sights on right mouse (sprinting drops the aim)
     const aiming =
-      input.rightHeld && input.pointerLocked && this.player.alive && !this.over && !vm.reloading && !switching;
+      input.rightHeld &&
+      input.pointerLocked &&
+      this.player.alive &&
+      !this.over &&
+      !vm.reloading &&
+      !switching &&
+      !inTakedown;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
@@ -378,8 +450,11 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     for (let i = 0; i < this.enemies.length; i++) {
       this.enemies[i].update(dt);
       if (this.enemies[i].alive) {
-        this.ais[i].update(dt);
-        if (this.ais[i].state === 'attack') anyAttacking = true;
+        // A man being executed has no AI any more — only the struggle
+        if (!this.enemies[i].beingExecuted) {
+          this.ais[i].update(dt);
+          if (this.ais[i].state === 'attack') anyAttacking = true;
+        }
       } else if (this.enemies[i].settled && !this.pooledCorpses.has(this.enemies[i])) {
         // Corpse has come to rest — pool of blood
         this.pooledCorpses.add(this.enemies[i]);
@@ -471,6 +546,58 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
         this.droppedMags.splice(i, 1);
       }
     }
+  }
+
+  /** Nearest living agent close enough and in front of Ravi to grab. */
+  private takedownTarget(): Enemy | null {
+    if (!this.player.alive || this.over) return null;
+    const fwd = this.player.forwardDir();
+    let best: Enemy | null = null;
+    let bestD = 2.3;
+    for (const e of this.enemies) {
+      if (!e.alive || e.beingExecuted) continue;
+      const to = e.position.clone().sub(this.player.position);
+      if (Math.abs(to.y) > 1.2) continue; // same floor only
+      to.y = 0;
+      const d = to.length();
+      if (d > bestD || d < 0.05) continue;
+      if (to.normalize().dot(fwd) < 0.5) continue; // must be roughly ahead
+      best = e;
+      bestD = d;
+    }
+    return best;
+  }
+
+  /**
+   * While the takedown runs the scene drives the camera: Ravi squares up
+   * ~0.95m from the target, the view drags onto his face, and the whole
+   * frame shakes with the struggle.
+   */
+  private updateTakedownCamera(dt: number, time: number): void {
+    const enemy = this.takedown!;
+    // He wrenches around to face Ravi; Ravi is pulled to grappling range
+    enemy.faceToward(this.player.position, dt, 12);
+    const away = this.player.position.clone().sub(enemy.position).setY(0).normalize();
+    const anchor = enemy.position.clone().addScaledVector(away, 0.95);
+    anchor.y = this.player.position.y;
+    this.player.position.lerp(anchor, Math.min(1, dt * 6));
+
+    // Drag the view onto his face
+    const head = enemy.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+    const dir = head.sub(this.player.eyePosition());
+    const targetYaw = Math.atan2(-dir.x, -dir.z);
+    const targetPitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
+    let dYaw = targetYaw - this.player.yaw;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    const k = Math.min(1, dt * 9);
+    this.player.yaw += dYaw * k;
+    this.player.pitch += (targetPitch - this.player.pitch) * k;
+
+    // The struggle rattles the camera
+    const s = this.takedownVm.struggle;
+    this.player.yaw += (Math.sin(time * 12.7) * 0.6 + Math.sin(time * 8.3 + 1.9) * 0.4) * 0.006 * s;
+    this.player.pitch += (Math.sin(time * 10.9 + 0.7) * 0.6 + Math.sin(time * 7.1 + 2.6) * 0.4) * 0.005 * s;
   }
 
   private startReload(): void {
@@ -572,10 +699,11 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     dir: THREE.Vector3,
     byPlayer: boolean,
     headshot: boolean,
-    hitPart = 'torso'
+    hitPart = 'torso',
+    impulseScale = 1
   ): void {
     const { audio, bus } = this.ctx;
-    enemy.die(point, dir, this.world, hitPart);
+    enemy.die(point, dir, this.world, hitPart, impulseScale);
     audio.fleshHit();
     this.spatter(point, dir, true);
 

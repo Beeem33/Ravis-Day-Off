@@ -64,6 +64,10 @@ export class Enemy {
   /** 0..1 — seated at a desk. */
   private sitBlend = 0;
   private sitTarget = 0;
+  /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
+  beingExecuted = false;
+  private struggleTime = 0;
+  private rifleDropped = false;
   private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
@@ -453,6 +457,49 @@ export class Enemy {
     return this.sitBlend < 0.05;
   }
 
+  /**
+   * The rifle leaves their hands — becomes its own physics body and clatters
+   * away along `dir`. Used by both death and the knife takedown.
+   */
+  private dropRifle(world: CANNON.World, dir: THREE.Vector3): void {
+    if (this.rifleDropped) return;
+    this.rifleDropped = true;
+    const parent = this.root.parent ?? this.root;
+    this.rifle.updateWorldMatrix(true, false);
+    const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());
+    const gunQ = this.rifle.getWorldQuaternion(new THREE.Quaternion());
+    this.foreR.remove(this.rifle);
+    this.rifle.position.copy(gunPos);
+    this.rifle.quaternion.copy(gunQ);
+    parent.add(this.rifle);
+    this.gunBody = new CANNON.Body({
+      mass: 3.5,
+      shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.045, 0.31)),
+      position: new CANNON.Vec3(gunPos.x, gunPos.y, gunPos.z),
+      linearDamping: 0.1,
+      angularDamping: 0.3
+    });
+    this.gunBody.quaternion.set(gunQ.x, gunQ.y, gunQ.z, gunQ.w);
+    this.gunBody.velocity.set(
+      dir.x * 1.5 + (Math.random() - 0.5) * 2,
+      1 + Math.random() * 1.5,
+      dir.z * 1.5 + (Math.random() - 0.5) * 2
+    );
+    this.gunBody.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
+    world.addBody(this.gunBody);
+  }
+
+  /** Grabbed for a knife takedown: gun hits the floor, hands come up to claw. */
+  beginExecution(world: CANNON.World): void {
+    if (!this.alive || this.beingExecuted) return;
+    this.beingExecuted = true;
+    this.struggleTime = 0;
+    this.aimTarget = 0;
+    this.walkSpeed = 0;
+    // The gun tumbles out ahead of them, roughly toward their attacker
+    this.dropRifle(world, this.forwardDir(new THREE.Vector3()).multiplyScalar(0.6));
+  }
+
   // Scratch vectors — gripRifle runs every frame for every live enemy.
   private static _gripTarget = new THREE.Vector3();
   private static _gripLocal = new THREE.Vector3();
@@ -551,7 +598,13 @@ export class Enemy {
    * bullet impulse lands on whichever part was hit, and the whole thing
    * folds, flops and slides to rest on its own.
    */
-  die(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, world: CANNON.World, hitPart: string = 'torso'): void {
+  die(
+    hitPoint: THREE.Vector3,
+    bulletDir: THREE.Vector3,
+    world: CANNON.World,
+    hitPart: string = 'torso',
+    impulseScale = 1
+  ): void {
     if (!this.alive) return;
     this.alive = false;
     // The lights go out behind the eyes
@@ -589,7 +642,14 @@ export class Enemy {
           : new CANNON.Box(new CANNON.Vec3(limb.half.x, limb.half.y, limb.half.z)),
         position: new CANNON.Vec3(worldCenter.x, worldCenter.y, worldCenter.z),
         linearDamping: 0.04,
-        angularDamping: 0.08,
+        // A body keeps some tone even in death — damp every limb so it swings
+        // once and settles instead of flapping, legs hardest of all
+        angularDamping:
+          name.startsWith('leg') || name.startsWith('shin')
+            ? 0.55
+            : name.startsWith('arm') || name.startsWith('fore')
+              ? 0.25
+              : 0.2,
         // Ragdoll parts don't collide with EACH OTHER (group 2 only hits group 1:
         // the level, mags, guns). Thigh/shin and arm boxes overlap at every
         // joint, so self-collision was jamming the knees and elbows stiff.
@@ -616,13 +676,29 @@ export class Enemy {
       this.ragdollByName.set(name, body);
     }
 
-    // Ball joints: neck, shoulders, hips. (Pivots in each body's local frame.)
-    const joint = (a: string, b: string, pivot: THREE.Vector3) => {
+    // Joints: free ball joints for the shoulders/elbows, cone-limited for the
+    // waist, hips and knees so the body can't fold flat like paper — `limit`
+    // is the max bend angle (rad) between the two limbs, `twist` the max
+    // roll around the limb's own axis.
+    const joint = (a: string, b: string, pivot: THREE.Vector3, limit?: { angle: number; twist: number }) => {
       const A = this.ragdollByName.get(a)!;
       const B = this.ragdollByName.get(b)!;
       const pa = pivot.clone().sub(limbs[a].center);
       const pb = pivot.clone().sub(limbs[b].center);
-      const c = new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4);
+      let c: CANNON.Constraint;
+      if (limit) {
+        c = new CANNON.ConeTwistConstraint(A, B, {
+          pivotA: new CANNON.Vec3(pa.x, pa.y, pa.z),
+          pivotB: new CANNON.Vec3(pb.x, pb.y, pb.z),
+          axisA: new CANNON.Vec3(0, 1, 0),
+          axisB: new CANNON.Vec3(0, 1, 0),
+          angle: limit.angle,
+          twistAngle: limit.twist,
+          maxForce: 1e4
+        });
+      } else {
+        c = new CANNON.PointToPointConstraint(A, new CANNON.Vec3(pa.x, pa.y, pa.z), B, new CANNON.Vec3(pb.x, pb.y, pb.z), 1e4);
+      }
       c.collideConnected = false; // free hinge — no contact between the two halves of a joint
       world.addConstraint(c);
     };
@@ -646,15 +722,18 @@ export class Enemy {
         })
       );
     }
-    joint('torso', 'armL', new THREE.Vector3(-0.29, 1.4, 0));
-    joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0));
-    joint('armL', 'foreL', new THREE.Vector3(-0.29, 1.11, 0)); // elbows
-    joint('armR', 'foreR', new THREE.Vector3(0.29, 1.11, 0));
-    joint('torso', 'pelvis', new THREE.Vector3(0, 1.1, 0)); // stomach — lets them fold at the waist
-    joint('pelvis', 'legL', new THREE.Vector3(-0.115, 0.82, 0));
-    joint('pelvis', 'legR', new THREE.Vector3(0.115, 0.82, 0));
-    joint('legL', 'shinL', new THREE.Vector3(-0.115, 0.41, 0)); // knees
-    joint('legR', 'shinR', new THREE.Vector3(0.115, 0.41, 0));
+    // Shoulders swing wide but not clean through the torso; elbows are elbows
+    joint('torso', 'armL', new THREE.Vector3(-0.29, 1.4, 0), { angle: 1.4, twist: 0.6 });
+    joint('torso', 'armR', new THREE.Vector3(0.29, 1.4, 0), { angle: 1.4, twist: 0.6 });
+    joint('armL', 'foreL', new THREE.Vector3(-0.29, 1.11, 0), { angle: 1.0, twist: 0.3 }); // elbows
+    joint('armR', 'foreR', new THREE.Vector3(0.29, 1.11, 0), { angle: 1.0, twist: 0.3 });
+    // Waist still slumps but can't fold flat in half
+    joint('torso', 'pelvis', new THREE.Vector3(0, 1.1, 0), { angle: 0.45, twist: 0.3 });
+    // Hips swing but don't splay to the splits; knees bend part-way, not backwards flat
+    joint('pelvis', 'legL', new THREE.Vector3(-0.115, 0.82, 0), { angle: 0.6, twist: 0.25 });
+    joint('pelvis', 'legR', new THREE.Vector3(0.115, 0.82, 0), { angle: 0.6, twist: 0.25 });
+    joint('legL', 'shinL', new THREE.Vector3(-0.115, 0.41, 0), { angle: 0.55, twist: 0.15 }); // knees
+    joint('legR', 'shinR', new THREE.Vector3(0.115, 0.41, 0), { angle: 0.55, twist: 0.15 });
 
     // The bullet's punch goes into whichever part it struck, plus a smaller
     // shove to the torso so the whole body goes with it.
@@ -668,7 +747,7 @@ export class Enemy {
       }
     }
     const punch = (body: CANNON.Body, scale: number) => {
-      const mag = (125 + Math.random() * 65) * scale * (body.mass / 30);
+      const mag = (125 + Math.random() * 65) * scale * impulseScale * (body.mass / 30);
       const impulse = new CANNON.Vec3(bulletDir.x * mag, bulletDir.y * mag * 0.4 + 12 * scale, bulletDir.z * mag);
       const rel = new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z);
       body.applyImpulse(impulse, rel);
@@ -683,8 +762,10 @@ export class Enemy {
     const fwdDir = this.forwardDir(new THREE.Vector3());
     const rightDir = new THREE.Vector3(fwdDir.z === 0 && fwdDir.x === 0 ? 1 : -fwdDir.z, 0, fwdDir.x).normalize();
     const r = () => Math.random();
-    const nudge = (b: CANNON.Body, v: THREE.Vector3) => b.velocity.vadd(new CANNON.Vec3(v.x, v.y, v.z), b.velocity);
-    const spin = (b: CANNON.Body, v: THREE.Vector3) => b.angularVelocity.vadd(new CANNON.Vec3(v.x, v.y, v.z), b.angularVelocity);
+    const nudge = (b: CANNON.Body, v: THREE.Vector3) =>
+      b.velocity.vadd(new CANNON.Vec3(v.x * impulseScale, v.y * impulseScale, v.z * impulseScale), b.velocity);
+    const spin = (b: CANNON.Body, v: THREE.Vector3) =>
+      b.angularVelocity.vadd(new CANNON.Vec3(v.x * impulseScale, v.y * impulseScale, v.z * impulseScale), b.angularVelocity);
     // Hit offset in the enemy's own frame: +side = their right, height above the feet
     const rel = hitPoint.clone().sub(this.root.position);
     const side = rel.dot(rightDir); // metres right (+) / left (−) of the spine
@@ -767,28 +848,7 @@ export class Enemy {
     this.addWound(hitPoint, bulletDir, struck);
 
     // The rifle leaves their hands: it becomes its own body and clatters away
-    this.rifle.updateWorldMatrix(true, false);
-    const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());
-    const gunQ = this.rifle.getWorldQuaternion(new THREE.Quaternion());
-    this.foreR.remove(this.rifle);
-    this.rifle.position.copy(gunPos);
-    this.rifle.quaternion.copy(gunQ);
-    parent.add(this.rifle);
-    this.gunBody = new CANNON.Body({
-      mass: 3.5,
-      shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.045, 0.31)),
-      position: new CANNON.Vec3(gunPos.x, gunPos.y, gunPos.z),
-      linearDamping: 0.1,
-      angularDamping: 0.3
-    });
-    this.gunBody.quaternion.set(gunQ.x, gunQ.y, gunQ.z, gunQ.w);
-    this.gunBody.velocity.set(
-      bulletDir.x * 1.5 + (Math.random() - 0.5) * 2,
-      1 + Math.random() * 1.5,
-      bulletDir.z * 1.5 + (Math.random() - 0.5) * 2
-    );
-    this.gunBody.angularVelocity.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
-    world.addBody(this.gunBody);
+    this.dropRifle(world, bulletDir);
 
     // Limbs just let go. Nothing is posed: every limb simply inherits a
     // share of the bullet's momentum (a bit more the closer it is to the
@@ -797,7 +857,7 @@ export class Enemy {
     for (const { body } of this.ragdoll) {
       if (body === struck) continue;
       const near = Math.max(0.15, 1 - body.position.distanceTo(hitV) / 1.4);
-      const carry = (0.6 + Math.random() * 1.4) * near;
+      const carry = (0.6 + Math.random() * 1.4) * near * impulseScale;
       body.velocity.x += bulletDir.x * carry + (Math.random() - 0.5) * 0.9;
       body.velocity.y += bulletDir.y * carry * 0.5 + (Math.random() - 0.5) * 0.6;
       body.velocity.z += bulletDir.z * carry + (Math.random() - 0.5) * 0.9;
@@ -884,14 +944,52 @@ export class Enemy {
     // Rifle points forward whatever the arms are doing. Cancelling the arm
     // rotations one Euler axis at a time leaves a yaw behind, so undo the
     // whole parent rotation instead and set the pose we actually want.
-    Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend), 0, 0); // muzzle dips when carried
-    Enemy._rifleQuat.copy(this.armR.quaternion).multiply(this.foreR.quaternion).invert();
-    this.rifle.quaternion.copy(Enemy._rifleQuat).multiply(Enemy._rifleAim.setFromEuler(Enemy._rifleEuler));
+    // (Skip all of it once the rifle is on the floor as its own body.)
+    if (!this.rifleDropped) {
+      Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend), 0, 0); // muzzle dips when carried
+      Enemy._rifleQuat.copy(this.armR.quaternion).multiply(this.foreR.quaternion).invert();
+      this.rifle.quaternion.copy(Enemy._rifleQuat).multiply(Enemy._rifleAim.setFromEuler(Enemy._rifleEuler));
 
-    // Support hand: reach the left arm out to the handguard so it is actually
-    // holding the weapon, instead of hanging in the air beside it.
-    if (!this.civilian && this.aimBlend > 0.01) {
-      this.gripRifle(this.aimBlend);
+      // Support hand: reach the left arm out to the handguard so it is actually
+      // holding the weapon, instead of hanging in the air beside it.
+      if (!this.civilian && this.aimBlend > 0.01) {
+        this.gripRifle(this.aimBlend);
+      }
+    } else if (this.gunBody) {
+      // Dropped while still alive (takedown): the visual tracks the physics
+      this.rifle.position.set(this.gunBody.position.x, this.gunBody.position.y, this.gunBody.position.z);
+      this.rifle.quaternion.set(
+        this.gunBody.quaternion.x,
+        this.gunBody.quaternion.y,
+        this.gunBody.quaternion.z,
+        this.gunBody.quaternion.w
+      );
+    }
+
+    // Held for execution — panic overrides everything: both hands come up to
+    // claw at the grip on their face, head wrenched back, body bucking
+    if (this.beingExecuted) {
+      this.struggleTime += dt;
+      const s = this.struggleTime;
+      const buck = Math.sin(s * 12.5) * 0.1 + Math.sin(s * 7.3 + 1.2) * 0.06;
+      const claw = Math.sin(s * 15) * 0.14;
+      this.armR.rotation.x = 2.1 + claw;
+      this.armL.rotation.x = 2.15 - claw * 0.8;
+      this.armR.rotation.z = -0.25 + buck * 0.5;
+      this.armL.rotation.z = 0.3 - buck * 0.4;
+      this.foreR.rotation.x = 0.55 + Math.sin(s * 13.7) * 0.18;
+      this.foreL.rotation.x = 0.6 - Math.sin(s * 11.1 + 0.6) * 0.18;
+      this.head.rotation.x = 0.38 + buck * 0.35; // wrenched back by the grip
+      this.head.rotation.z = Math.sin(s * 9) * 0.08;
+      this.torso.position.set(0, 1.27, 0);
+      this.torso.rotation.x = -0.1 + buck * 0.4; // leaning away, bucking
+      this.torso.rotation.z = buck * 0.3;
+      // Feet scrabbling for purchase
+      this.legL.rotation.x = 0.12 + Math.sin(s * 10.5) * 0.16;
+      this.legR.rotation.x = 0.1 - Math.sin(s * 10.5 + 0.9) * 0.16;
+      this.shinL.rotation.x = Math.max(0, Math.sin(s * 10.5)) * 0.3;
+      this.shinR.rotation.x = Math.max(0, -Math.sin(s * 10.5 + 0.9)) * 0.3;
+      return; // the walk/idle chest pose below must not overwrite the struggle
     }
 
     // Seated: forearms come up onto the desk in front of them

@@ -430,6 +430,21 @@ export class AudioManager {
     this.tone('square', 1100, 700, 0.03, 0.1);
   }
 
+  /** Bowie knife clearing the sheath: a bright metallic shing. */
+  knifeDraw(): void {
+    this.noise(0.12, 'bandpass', 5200, 0.18, true, 5);
+    this.tone('sine', 3200, 4600, 0.14, 0.06);
+    this.noise(0.05, 'highpass', 3000, 0.12);
+  }
+
+  /** The blade going in: a wet punch with a low body. */
+  knifeStab(): void {
+    this.noise(0.06, 'lowpass', 350, 0.6);
+    this.noise(0.14, 'lowpass', 900, 0.35);
+    this.tone('sine', 180, 45, 0.16, 0.4);
+    this.noise(0.25, 'bandpass', 600, 0.1, true, 1.2);
+  }
+
   uiBeep(high = false): void {
     this.tone('square', high ? 1150 : 740, high ? 1150 : 740, 0.06, 0.06);
   }

@@ -219,6 +219,22 @@ export class FPSHUD {
     this.ammoEl.classList.toggle('reloading', reloading);
   }
 
+  private takedownEl: HTMLElement | null = null;
+
+  /** "F — TAKEDOWN" prompt when an enemy is close enough to grab. */
+  setTakedownHint(show: boolean): void {
+    if (show && !this.takedownEl) {
+      this.takedownEl = document.createElement('div');
+      this.takedownEl.textContent = 'F — TAKEDOWN';
+      this.takedownEl.style.cssText =
+        'position:absolute;left:50%;top:58%;transform:translateX(-50%);' +
+        'font:bold 15px monospace;color:#ff5b4a;letter-spacing:0.2em;' +
+        'text-shadow:0 0 8px rgba(255,60,40,0.6);pointer-events:none;';
+      this.hud.appendChild(this.takedownEl);
+    }
+    if (this.takedownEl) this.takedownEl.style.display = show ? '' : 'none';
+  }
+
   /** Hide the crosshair while aiming down sights — the iron sights take over. */
   setAiming(on: boolean): void {
     const ch = this.hud.querySelector<HTMLElement>('.crosshair');

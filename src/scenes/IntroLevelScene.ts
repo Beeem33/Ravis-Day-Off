@@ -8,6 +8,7 @@ import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
+import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -55,6 +56,9 @@ function track(keys: readonly (readonly [number, number])[], t: number): number 
  */
 export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private weapon!: WeaponViewmodel;
+  private takedownVm!: TakedownViewmodel;
+  /** The agent, if he's currently held for a knife execution. */
+  private takedown: Enemy | null = null;
   private agent!: Enemy;
   private agentAI: EnemyAI | null = null;
   private coworker!: Enemy;
@@ -111,6 +115,34 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       else if (e === 'magIn') audio.magIn();
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
+    };
+    // Knife takedown arms (F next to the agent)
+    this.takedownVm = new TakedownViewmodel(this.player.camera);
+    this.takedownVm.onEvent = (e) => {
+      const victim = this.takedown;
+      if (e === 'grab') {
+        if (victim) audio.enemyShout(1);
+      } else if (e === 'draw') {
+        audio.knifeDraw();
+      } else if (e === 'stab') {
+        if (victim && victim.alive) {
+          const neck = victim.position.clone().add(new THREE.Vector3(0, 1.42, 0));
+          const spray = this.player
+            .forwardDir()
+            .clone()
+            .multiplyScalar(0.45)
+            .add(new THREE.Vector3(0, 0.9, 0))
+            .normalize();
+          audio.knifeStab();
+          const slump = this.player.forwardDir().clone();
+          slump.y = -0.3;
+          this.killEnemy(victim, neck, slump.normalize(), true, false, 'head', 0.2);
+          this.spatter(neck, spray, true);
+        }
+      } else if (e === 'done') {
+        this.takedown = null;
+        this.player.cinematic = false;
+      }
     };
 
     this.particles = new ParticleManager(this.scene);
@@ -412,7 +444,35 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     const playable = this.phase === 'play';
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
-    const aiming = playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading;
+    // ---- Knife takedown: F next to the agent
+    const tdTarget = playable && !this.takedown ? this.takedownTarget() : null;
+    this.hud.setTakedownHint(!!tdTarget && input.pointerLocked);
+    if (tdTarget && input.wasPressed('KeyF') && input.pointerLocked && !this.weapon.reloading) {
+      this.takedown = tdTarget;
+      this.player.cinematic = true;
+      this.player.aiming = false;
+      tdTarget.beginExecution(this.world);
+      this.takedownVm.start();
+    }
+    if (this.takedown) {
+      if (!this.player.alive) {
+        this.takedownVm.abort();
+        this.takedown = null;
+        this.player.cinematic = false;
+      } else {
+        this.updateTakedownCamera(dt, _time);
+      }
+    }
+    this.takedownVm.update(dt);
+    const inTakedown = this.takedown !== null;
+    if (playable) {
+      // The pistol drops out of frame while both hands are on the knife
+      if (inTakedown) this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
+      else this.weapon.stow = Math.max(0, this.weapon.stow - dt * 5);
+    }
+
+    const aiming =
+      playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !inTakedown;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
@@ -427,7 +487,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.fireCooldown -= dt;
     const canFire =
       playable && this.player.alive && this.fireCooldown <= 0 && input.pointerLocked &&
-      !this.player.sprinting && !this.weapon.reloading;
+      !this.player.sprinting && !this.weapon.reloading && !inTakedown;
     if (input.consumeClick() && canFire) {
       if (this.ammo > 0) {
         this.fireCooldown = FIRE_COOLDOWN;
@@ -438,14 +498,14 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
         this.weapon.startReload();
       }
     }
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting) {
+    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting && !inTakedown) {
       this.weapon.startReload();
     }
     this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
 
     // The agent
     this.agent.update(dt);
-    if (this.agent.alive) {
+    if (this.agent.alive && !this.agent.beingExecuted) {
       this.agentAI?.update(dt);
       this.hud.setAlert(this.agentAI?.state === 'attack' && this.player.alive);
     } else {
@@ -461,6 +521,43 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
 
     this.stepWorld(dt);
     input.endFrame();
+  }
+
+  /** The agent, if he's alive, close, and roughly ahead of Ravi. */
+  private takedownTarget(): Enemy | null {
+    if (!this.player.alive || !this.agent.alive || this.agent.beingExecuted) return null;
+    const to = this.agent.position.clone().sub(this.player.position);
+    if (Math.abs(to.y) > 1.2) return null;
+    to.y = 0;
+    const d = to.length();
+    if (d > 2.3 || d < 0.05) return null;
+    if (to.normalize().dot(this.player.forwardDir()) < 0.5) return null;
+    return this.agent;
+  }
+
+  /** Same choreography as the office level: square up, lock on, shake. */
+  private updateTakedownCamera(dt: number, time: number): void {
+    const enemy = this.takedown!;
+    enemy.faceToward(this.player.position, dt, 12);
+    const away = this.player.position.clone().sub(enemy.position).setY(0).normalize();
+    const anchor = enemy.position.clone().addScaledVector(away, 0.95);
+    anchor.y = this.player.position.y;
+    this.player.position.lerp(anchor, Math.min(1, dt * 6));
+
+    const head = enemy.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+    const dir = head.sub(this.player.eyePosition());
+    const targetYaw = Math.atan2(-dir.x, -dir.z);
+    const targetPitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
+    let dYaw = targetYaw - this.player.yaw;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    const k = Math.min(1, dt * 9);
+    this.player.yaw += dYaw * k;
+    this.player.pitch += (targetPitch - this.player.pitch) * k;
+
+    const s = this.takedownVm.struggle;
+    this.player.yaw += (Math.sin(time * 12.7) * 0.6 + Math.sin(time * 8.3 + 1.9) * 0.4) * 0.006 * s;
+    this.player.pitch += (Math.sin(time * 10.9 + 0.7) * 0.6 + Math.sin(time * 7.1 + 2.6) * 0.4) * 0.005 * s;
   }
 
   private stepWorld(dt: number): void {
@@ -540,10 +637,11 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     dir: THREE.Vector3,
     byPlayer: boolean,
     headshot: boolean,
-    hitPart = 'torso'
+    hitPart = 'torso',
+    impulseScale = 1
   ): void {
     const { audio, bus } = this.ctx;
-    enemy.die(point, dir, this.world, hitPart);
+    enemy.die(point, dir, this.world, hitPart, impulseScale);
     audio.fleshHit();
     if (byPlayer) {
       audio.killConfirm();

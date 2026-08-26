@@ -35,6 +35,8 @@ export interface Level3Data {
   truckDoor: THREE.Group;
   truckGunMount: THREE.Group;
   truckGunYaw: THREE.Group;
+  /** Where the team steps out, in truck-local space. */
+  truckDoorMouth: THREE.Vector3;
   /** Where the truck starts (outside) and where it ends up (inside). */
   truckFrom: THREE.Vector3;
   truckTo: THREE.Vector3;
@@ -148,6 +150,7 @@ export class Level3Builder {
       truckDoor: this.truckParts.doorPivot,
       truckGunMount: this.truckParts.gunMount,
       truckGunYaw: this.truckParts.gunYaw,
+      truckDoorMouth: this.truckParts.doorMouth,
       truckFrom: new THREE.Vector3(BREACH_X, 0, OFF_Z0 - 11),
       truckTo: new THREE.Vector3(BREACH_X, 0, OFF_Z0 + 3.2),
       gunnerSpawn: { pos: new THREE.Vector3(BREACH_X, this.truckParts.roofY, OFF_Z0 + 4.2), yaw: Math.PI },
@@ -329,6 +332,49 @@ export class Level3Builder {
     // Header that survives the impact, so the hole reads as punched through
     // rather than the wall simply vanishing.
     this.solid(BREACH_W, OFF_H - 3.0, T, BREACH_X, 3.0, OFF_Z0, this.wallMat, { collide: false });
+    this.buildBreachEdge();
+  }
+
+  /**
+   * Broken masonry round the opening, so the hole is a tear rather than a
+   * clean rectangle. Blocks are cut from the same wall material and hung
+   * off the header and the jambs at angles, revealed with the barrier.
+   */
+  private buildBreachEdge(): void {
+    const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
+    // Teeth hanging down off the surviving header
+    for (let i = 0; i < 11; i++) {
+      const w = rnd(0.28, 0.72);
+      const h = rnd(0.18, 0.95);
+      const x = BREACH_X - BREACH_W / 2 + (BREACH_W * (i + 0.5)) / 11 + rnd(-0.14, 0.14);
+      const tooth = new THREE.Mesh(new THREE.BoxGeometry(w, h, T * rnd(0.7, 1.05)), this.wallMat);
+      tooth.position.set(x, 3.0 - h / 2 + 0.02, OFF_Z0 + rnd(-0.03, 0.03));
+      tooth.rotation.z = rnd(-0.18, 0.18);
+      tooth.rotation.y = rnd(-0.12, 0.12);
+      this.breachBarrier.add(tooth);
+    }
+    // Ragged jambs either side, biting into the opening
+    for (const side of [-1, 1]) {
+      const jx = BREACH_X + (side * BREACH_W) / 2;
+      for (let i = 0; i < 7; i++) {
+        const w = rnd(0.2, 0.62);
+        const h = rnd(0.24, 0.6);
+        const chunk = new THREE.Mesh(new THREE.BoxGeometry(w, h, T * rnd(0.7, 1.05)), this.wallMat);
+        chunk.position.set(jx - side * rnd(0.02, 0.4), 0.25 + i * 0.42 + rnd(-0.1, 0.1), OFF_Z0 + rnd(-0.03, 0.03));
+        chunk.rotation.z = rnd(-0.3, 0.3);
+        this.breachBarrier.add(chunk);
+      }
+    }
+    // Slabs that fell inward off the wall face
+    for (let i = 0; i < 8; i++) {
+      const slab = new THREE.Mesh(
+        new THREE.BoxGeometry(rnd(0.4, 1.0), rnd(0.08, 0.2), rnd(0.3, 0.8)),
+        this.wallMat
+      );
+      slab.position.set(BREACH_X + rnd(-3.6, 3.6), rnd(0.04, 0.3), OFF_Z0 + rnd(0.2, 1.6));
+      slab.rotation.set(rnd(-0.4, 0.4), rnd(0, 3.14), rnd(-0.4, 0.4));
+      this.breachBarrier.add(slab);
+    }
   }
 
   /** Frame plus a leaf standing open flat against the office wall. */
@@ -457,8 +503,9 @@ export class Level3Builder {
     this.place(breakTable(), 9.0, 0, 5.4);
 
     // Machines against the east wall, backs to it
+    // Backs to the east wall, fronts facing WEST into the room
     for (const vz of [4.0, 5.6]) {
-      this.place(vendingMachine(), OFF_X1 - 0.5, 0, vz, -Math.PI / 2);
+      this.place(vendingMachine(), OFF_X1 - 0.5, 0, vz, Math.PI / 2);
       this.colliders.push({
         box: new THREE.Box3(new THREE.Vector3(OFF_X1 - 0.95, 0, vz - 0.5), new THREE.Vector3(OFF_X1 - 0.05, 1.95, vz + 0.5))
       });
@@ -482,11 +529,12 @@ export class Level3Builder {
     this.place(wallCupboards(1.6), 11.2, 1.86, counterZ + 0.14, 0);
 
     // Sink, with somebody's washing up still in it
-    this.place(kitchenSink(), 8.2, 0.94, counterZ);
-    // Microwave further along
-    this.place(microwave(), 11.2, 0.94, counterZ - 0.02, Math.PI);
+    // yaw PI puts the tap at the back against the wall, bowl open to the room
+    this.place(kitchenSink(), 8.2, 0.94, counterZ, Math.PI);
+    // Counter is against the SOUTH wall, so everything on it faces NORTH
+    this.place(microwave(), 11.2, 0.94, counterZ - 0.02, 0);
     const coffee = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.32), this.plasticMat);
-    coffee.position.set(12.3, 1.15, counterZ);
+    coffee.position.set(11.95, 1.15, counterZ);
     this.group.add(coffee);
 
     // Dirty plates and mugs stacked beside the sink
@@ -503,7 +551,7 @@ export class Level3Builder {
       this.group.add(mug);
     }
     // Snacks left out on the counter
-    for (const [sx, k] of [[10.6, 'cakes'], [10.9, 'nutbar'], [12.6, 'jerky']] as const) {
+    for (const [sx, k] of [[10.0, 'cakes'], [10.3, 'nutbar'], [10.6, 'jerky']] as const) {
       this.place(snack(k as 'cakes'), sx, 0.94, counterZ - 0.1, Math.random());
     }
     const cb = chipsBox();
@@ -680,6 +728,15 @@ export class Level3Builder {
     // Parked outside until the scene drives it in
     this.truckParts.group.position.set(BREACH_X, 0, OFF_Z0 - 11);
     this.group.add(this.truckParts.group);
+    // Every panel of it stops a bullet. Without this the hull was invisible
+    // to the raycast and rounds passed clean through the vehicle.
+    this.truckParts.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.userData.surface = 'metal';
+      this.shootables.push(m);
+      this.occluders.push(m);
+    });
 
     // Where it ends up is solid: nobody walks through a truck. Built for the
     // parked pose and pushed into the live set once it has stopped.

@@ -302,12 +302,18 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // The side door swings and the team piles out — this is the handover
     this.beat('doors', T_DOORS, () => {
       audio.slideRack();
-      L.agentSpawns.forEach((s, i) => {
-        const e = new Enemy(s.pos, s.yaw, i + 5, { name: 'FBI AGENT' });
+      // They come OUT of the doorway one at a time and each walks to its own
+      // spot. Dropping them all on their final marks at once had five men
+      // materialise in a heap and then path to the same waypoint together.
+      const mouth = L.truck.position.clone().add(L.truckDoorMouth);
+      L.agentSpawns.forEach((sp, i) => {
+        const e = new Enemy(mouth, sp.yaw, i + 5, { name: 'FBI AGENT' });
+        e.setAiming(true);
         this.scene.add(e.root);
         this.agents.push(e);
         for (const p of e.parts) this.level.shootables.push(p);
         this.remaining++;
+        this.deploying.push({ e, from: mouth.clone(), to: sp.pos.clone(), t: -i * 0.45 });
       });
     });
     if (this.t >= T_DOORS) {
@@ -401,26 +407,82 @@ export class Level3Scene extends CombatScene<Level3Data> {
     }
   }
 
+  /** Agents filing out of the truck to their positions, one after another. */
+  private deploying: { e: Enemy; from: THREE.Vector3; to: THREE.Vector3; t: number }[] = [];
+
+  private updateDeploy(dt: number): void {
+    for (let i = this.deploying.length - 1; i >= 0; i--) {
+      const d = this.deploying[i];
+      d.t += dt;
+      if (d.t < 0) continue; // still waiting its turn inside
+      if (!d.e.alive) {
+        this.deploying.splice(i, 1);
+        continue;
+      }
+      const u = Math.min(1, d.t / 1.3);
+      const k = u * u * (3 - 2 * u);
+      d.e.position.lerpVectors(d.from, d.to, k);
+      d.e.setWalk(1);
+      d.e.faceToward(d.to, dt, 6);
+      if (u >= 1) {
+        d.e.setWalk(0);
+        this.startAgentAI(d.e);
+        this.deploying.splice(i, 1);
+      }
+    }
+  }
+
+  /** Hand one agent over to its own AI once it is clear of the truck. */
+  private startAgentAI(e: Enemy): void {
+    const { bus, audio } = this.ctx;
+    this.agentAI.push(
+      new EnemyAI(e, {
+        player: this.player,
+        waypoints: this.level.waypoints,
+        occluders: this.level.occluders,
+        colliders: this.level.colliders,
+        bus,
+        audio,
+        enemyFire: (x) => this.enemyFire(x)
+      })
+    );
+  }
+
+  /**
+   * Keep them out of each other. Waypoint following alone had four of them
+   * standing in the same square metre.
+   */
+  private separateAgents(dt: number): void {
+    const MIN = 1.15;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive) continue;
+      for (let j = i + 1; j < this.agents.length; j++) {
+        const b = this.agents[j];
+        if (!b.alive) continue;
+        const dx = b.position.x - a.position.x;
+        const dz = b.position.z - a.position.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > MIN * MIN || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2);
+        const push = ((MIN - d) / MIN) * dt * 2.2;
+        const nx = (dx / d) * push;
+        const nz = (dz / d) * push;
+        a.position.x -= nx;
+        a.position.z -= nz;
+        b.position.x += nx;
+        b.position.z += nz;
+      }
+    }
+  }
+
   private handOver(): void {
     if (this.phase === 'play') return;
     this.phase = 'play';
     this.player.cinematic = false;
     this.letterbox.classList.add('open');
     this.setObjective('THEY BROUGHT A TRUCK. PUT THEM DOWN.');
-    const { bus, audio } = this.ctx;
-    for (const e of this.agents) {
-      this.agentAI.push(
-        new EnemyAI(e, {
-          player: this.player,
-          waypoints: this.level.waypoints,
-          occluders: this.level.occluders,
-          colliders: this.level.colliders,
-          bus,
-          audio,
-          enemyFire: (x) => this.enemyFire(x)
-        })
-      );
-    }
+    // Their AIs come online individually as each one finishes deploying
     this.ctx.input.requestPointerLock();
   }
 
@@ -466,6 +528,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
     if (this.phase === 'walk' && this.player.position.x > TRIGGER_X) this.beginScene();
     if (this.phase === 'talk') this.updateTalk(dt);
     if (this.phase === 'crash') this.updateCrash(dt);
+    if (this.deploying.length) this.updateDeploy(dt);
+    if (this.agents.length) this.separateAgents(dt);
     // The gunner keeps working after the handover too
     if (this.phase === 'play') this.updateGunner(dt);
 

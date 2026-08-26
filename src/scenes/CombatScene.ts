@@ -8,6 +8,7 @@ import type { BreakableGlass } from '../environment/BreakableGlass';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import type { Enemy } from '../entities/Enemy';
 import type { ParticleManager } from '../fx/ParticleManager';
+import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
 
 /** The parts of a level's data that the shared combat code touches. */
@@ -38,6 +39,8 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
   protected world!: CANNON.World;
   protected player!: FPSPlayer;
   protected particles!: ParticleManager;
+  /** Shared muzzle lights — see MuzzleFlashPool for why they are shared. */
+  protected flashPool!: MuzzleFlashPool;
   protected decals!: BloodDecalSystem;
 
   constructor(protected ctx: GameContext) {}
@@ -88,7 +91,12 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
 
     const hidden: THREE.Object3D[] = [];
     this.scene.traverse((o) => {
-      if (!o.visible) {
+      // Lights are deliberately left alone: the number of VISIBLE lights is
+      // part of every material's program key, so switching one on here would
+      // compile the wrong variant and the real one would still cost a full
+      // recompile the first time it was needed. Nothing in the game toggles
+      // light visibility any more — see MuzzleFlashPool.
+      if (!o.visible && !(o as THREE.Light).isLight) {
         hidden.push(o);
         o.visible = true;
       }

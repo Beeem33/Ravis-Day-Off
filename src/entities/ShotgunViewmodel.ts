@@ -190,7 +190,8 @@ export class ShotgunViewmodel {
     this.flashSprite.visible = false;
     this.muzzle.add(this.flashSprite);
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 6, 1.8);
-    this.flashLight.visible = false;
+    // Stays in the scene for good: switching a light off changes the
+    // scene's visible light count, which recompiles every material in it.
     this.muzzle.add(this.flashLight);
   }
 
@@ -243,7 +244,6 @@ export class ShotgunViewmodel {
     this.flashTimer = 0.05;
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
-    this.flashLight.visible = true;
     this.flashLight.intensity = 5;
     this.pumpT = 0;
     this.pumpFired.clear();
@@ -408,7 +408,8 @@ export class ShotgunViewmodel {
       this.flashLight.intensity *= 0.6;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;
-        this.flashLight.visible = false;
+        // Stays in the scene for good: switching a light off changes the
+    // scene's visible light count, which recompiles every material in it.
       }
     }
   }

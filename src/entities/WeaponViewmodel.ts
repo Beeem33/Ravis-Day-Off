@@ -346,7 +346,8 @@ export class WeaponViewmodel {
     this.flashSprite.visible = false;
     this.muzzle.add(this.flashSprite);
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 4.5, 2.0);
-    this.flashLight.visible = false;
+    // Stays in the scene for good: switching a light off changes the
+    // scene's visible light count, which recompiles every material in it.
     this.muzzle.add(this.flashLight);
   }
 
@@ -386,7 +387,6 @@ export class WeaponViewmodel {
     this.flashTimer = 0.045;
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
-    this.flashLight.visible = true;
     this.flashLight.intensity = 3.5;
   }
 
@@ -465,7 +465,8 @@ export class WeaponViewmodel {
       this.flashLight.intensity *= 0.6;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;
-        this.flashLight.visible = false;
+        // Stays in the scene for good: switching a light off changes the
+    // scene's visible light count, which recompiles every material in it.
       }
     }
   }

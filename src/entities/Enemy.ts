@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 const AMERICAN_NAMES = [
@@ -78,7 +79,6 @@ export class Enemy {
   beingExecuted = false;
   private struggleTime = 0;
   private rifleDropped = false;
-  private muzzleFlashLight: THREE.PointLight;
   private flashTime = 0;
 
   constructor(
@@ -95,10 +95,16 @@ export class Enemy {
     this.root.rotation.y = yaw;
     this.buildBody();
 
-    this.muzzleFlashLight = new THREE.PointLight(0xffb45e, 0, 7, 1.8);
-    this.muzzleFlashLight.visible = false;
-    this.muzzle.add(this.muzzleFlashLight);
   }
+
+  /**
+   * Where everyone's muzzle flashes come from. Each figure used to own a
+   * PointLight it switched on to fire, which moved the scene's visible light
+   * count and made three.js recompile every material in it — half a second,
+   * mid-fight, every time a new number of guns went off at once. One shared
+   * ring of always-on lights keeps the count still.
+   */
+  static flashPool: MuzzleFlashPool | null = null;
 
   private mat(color: number, rough = 0.85): THREE.MeshStandardMaterial {
     return new THREE.MeshStandardMaterial({ color, roughness: rough });
@@ -745,8 +751,7 @@ export class Enemy {
 
   flashMuzzle(): void {
     this.flashTime = 0.05;
-    this.muzzleFlashLight.visible = true;
-    this.muzzleFlashLight.intensity = 10;
+    Enemy.flashPool?.flash(this.muzzleWorld());
   }
 
   // ------------------------------------------------------------------ death
@@ -1026,11 +1031,7 @@ export class Enemy {
   }
 
   update(dt: number): void {
-    if (this.flashTime > 0) {
-      this.flashTime -= dt;
-      this.muzzleFlashLight.intensity *= 0.7;
-      if (this.flashTime <= 0) this.muzzleFlashLight.visible = false;
-    }
+    if (this.flashTime > 0) this.flashTime -= dt;
 
     if (!this.alive) {
       this.updateDead(dt);

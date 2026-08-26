@@ -6,6 +6,7 @@ import { OfficeLevelBuilder, LevelData } from '../environment/OfficeLevelBuilder
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
+import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
@@ -178,6 +179,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     };
 
     this.particles = new ParticleManager(this.scene);
+    this.flashPool = new MuzzleFlashPool(this.scene);
+    Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
 
     // Spawn the intruders
@@ -537,6 +540,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.updateDebris(dt);
     this.decals.update(dt);
     this.particles.update(dt);
+    this.flashPool.update(dt);
     this.world.step(1 / 60, dt, 3);
 
     input.endFrame();

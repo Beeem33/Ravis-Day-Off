@@ -6,6 +6,7 @@ import { Level3Builder, Level3Data } from '../environment/Level3Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
+import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { Enemy } from '../entities/Enemy';
@@ -120,6 +121,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
     };
 
     this.particles = new ParticleManager(this.scene);
+    this.flashPool = new MuzzleFlashPool(this.scene);
+    Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
 
     // ---- Staff, going about their day. None of them know yet.
@@ -866,6 +869,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.updateDebris(dt);
     this.decals.update(dt);
     this.particles.update(dt);
+    this.flashPool.update(dt);
     this.world.step(1 / 60, dt, 3);
     input.endFrame();
   }

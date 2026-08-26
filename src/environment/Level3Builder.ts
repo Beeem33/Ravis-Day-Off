@@ -148,8 +148,7 @@ export class Level3Builder {
       coolerWorker: { pos: new THREE.Vector3(-5.6, 0, OFF_Z1 - 1.35), yaw: 0 },
       wanderers: [
         { pos: new THREE.Vector3(-6.5, 0, -2.2), yaw: -Math.PI / 2 },
-        { pos: new THREE.Vector3(3.5, 0, -3.4), yaw: Math.PI },
-        { pos: new THREE.Vector3(-1.5, 0, 5.4), yaw: Math.PI / 2 }
+        { pos: new THREE.Vector3(3.5, 0, -3.4), yaw: Math.PI }
       ],
       greeterStart: new THREE.Vector3(-8.5, 0, 4.4),
       greeterTalkPos: new THREE.Vector3(OFF_X0 + 3.4, 0, 0.35),

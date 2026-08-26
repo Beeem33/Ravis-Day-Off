@@ -67,8 +67,6 @@ export class Enemy {
   private sitBlend = 0;
   private sitTarget = 0;
   /** 0..1 — balled up on the floor with arms over the head. */
-  private cowerBlend = 0;
-  private cowerTarget = 0;
   /** 0..1 — down on both knees, pleading. */
   private kneelBlend = 0;
   private kneelTarget = 0;
@@ -514,12 +512,6 @@ export class Enemy {
   setTurretGunner(on: boolean): void {
     this.turret = on;
     this.rifle.visible = !on;
-  }
-
-  /** Drop and curl up, arms over the head. */
-  setCowering(on: boolean): void {
-    this.cowerTarget = on ? 1 : 0;
-    if (on) this.setScared();
   }
 
   /** Down on both knees, hands up, begging. */
@@ -1000,19 +992,6 @@ export class Enemy {
       this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -1.5, sit);
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -1.5, sit);
     }
-    // ---- Cowering: hunched right down, knees folded under, head tucked
-    this.cowerBlend += (this.cowerTarget - this.cowerBlend) * Math.min(1, dt * 5);
-    const cower = this.cowerBlend;
-    if (cower > 0.001) {
-      // Duck and cover: down on the knees with the shins folded back under,
-      // not sat on the floor with the legs stuck out.
-      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 0.32, cower);
-      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 0.32, cower);
-      this.legL.rotation.z = THREE.MathUtils.lerp(this.legL.rotation.z, -0.13, cower);
-      this.legR.rotation.z = THREE.MathUtils.lerp(this.legR.rotation.z, 0.13, cower);
-      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.55, cower);
-      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.55, cower);
-    }
     // ---- Kneeling: thighs vertical, shins folded back under the seat
     this.kneelBlend += (this.kneelTarget - this.kneelBlend) * Math.min(1, dt * 5);
     const kneel = this.kneelBlend;
@@ -1022,28 +1001,20 @@ export class Enemy {
       this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -2.5, kneel);
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.5, kneel);
     }
-    // Hip height: seated on a chair, hunched on the floor, or knees-down
-    // Cowering drops them right down onto the floor, not into a half-squat
-    const drop = bob - 0.355 * sit - 0.42 * cower - 0.38 * kneel;
+    // Hip height: seated on a chair, or down on the knees
+    const drop = bob - 0.355 * sit - 0.38 * kneel;
 
     // Hips ride with the pelvis, or the legs detach from it as it sways
     this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
     this.legR.position.set(0.115 + sway, 0.82 + drop, 0);
     this.pelvis.position.set(sway, 0.96 + drop, 0);
     this.pelvis.rotation.z = -sway * 1.6;
-    // Shoulders and head are parented to the root, not the chest, so a
-    // forward fold has to be carried to them by hand — otherwise the torso
-    // tips over and the head and arms stay standing upright in mid air.
-    const fold = 1.35 * cower;
-    const pivotY = 0.98 + drop; // base of the spine
-    const sf = Math.sin(fold);
-    const cf = Math.cos(fold);
-    const shoulderR = 1.4 + drop - pivotY;
-    const headR = 1.585 + drop - pivotY;
-    this.head.position.set(sway * 0.6, pivotY + headR * cf, -headR * sf);
+    // Shoulders and head hang off the root rather than the chest, so the
+    // hip drop has to be carried up to them by hand.
+    this.head.position.set(sway * 0.6, 1.585 + drop, 0);
     this.head.rotation.x = -lean * 0.7; // head stays level as the chest tips
     for (const [g, side] of [[this.armL, -1], [this.armR, 1]] as const) {
-      g.position.set(side * 0.29 + sway * 0.7, pivotY + shoulderR * cf, -shoulderR * sf);
+      g.position.set(side * 0.29 + sway * 0.7, 1.4 + drop, 0);
     }
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
@@ -1112,25 +1083,9 @@ export class Enemy {
       return; // the walk/idle chest pose below must not overwrite the struggle
     }
 
-    // Cowering: curl forward and clamp both arms over the head
-    if (cower > 0.001) {
-      const shake = Math.sin(at * 13) * 0.035 * cower;
-      // Chest folded down over the thighs, head tucked right in
-      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, 1.35, cower);
-      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.62, cower);
-      // Elbows up and forward, forearms folded back so the hands clasp the
-      // back of the skull — the duck-and-cover position.
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 2.62 + shake, cower);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, 2.62 - shake, cower);
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.34, cower);
-      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, 0.34, cower);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.95, cower);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -1.95, cower);
-    }
-
     // Seated and working: forearms out over the keyboard, hands ticking away
     // at slightly different rates so it reads as typing rather than a twitch.
-    if (sit > 0.001 && this.handsUp < 0.5 && cower < 0.5) {
+    if (sit > 0.001 && this.handsUp < 0.5) {
       const tR = Math.sin(at * 9.2) * 0.07 + Math.sin(at * 14.3) * 0.03;
       const tL = Math.sin(at * 8.1 + 1.7) * 0.07 + Math.sin(at * 13.1 + 0.6) * 0.03;
       this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.62, sit);

@@ -6,12 +6,18 @@ import { Events } from '../core/EventBus';
 import { CRTPass } from '../fx/CRTShader';
 import { MenuUI } from '../ui/MenuUI';
 
+interface SmokePuff {
+  mesh: THREE.Mesh;
+  age: number;
+  life: number;
+  drift: number;
+}
+
 /**
- * MainMenuScene — a cinematic hero shot: Ravi stands in the wrecked office
- * after the shift, blood on his shirt, slowly inspecting the shotgun —
- * turning it in his hands, riding the pump. Behind him: cubicles, a
- * flickering fluorescent, and the bodies of the men who picked the wrong
- * call center. The whole frame goes through the CRT post shader.
+ * MainMenuScene — after the shift. Ravi sits in a chair in a dark room,
+ * facing the camera, shotgun resting across his lap, cigar going, a single
+ * candle burning on the table beside him. The whole frame goes through the
+ * CRT post shader.
  */
 export class MainMenuScene implements GameScene {
   private scene = new THREE.Scene();
@@ -23,11 +29,16 @@ export class MainMenuScene implements GameScene {
 
   // Animated bits
   private ravi!: THREE.Group;
-  private gun!: THREE.Group;
-  private pump!: THREE.Group;
   private head!: THREE.Group;
-  private tubeLight!: THREE.PointLight;
-  private tubeMat!: THREE.MeshStandardMaterial;
+  private gun!: THREE.Group;
+  private candleLight!: THREE.PointLight;
+  private flame!: THREE.Mesh;
+  private ember!: THREE.Mesh;
+  private emberLight!: THREE.PointLight;
+  private cigarTip = new THREE.Vector3();
+  private smoke: SmokePuff[] = [];
+  private smokeMat: THREE.MeshBasicMaterial;
+  private smokeTimer = 0;
   private mouse = { x: 0, y: 0 };
   private mouseHandler = (e: MouseEvent): void => {
     this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
@@ -35,177 +46,138 @@ export class MainMenuScene implements GameScene {
   };
 
   constructor(private ctx: GameContext) {
-    this.camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.05, 60);
-    this.buildSet();
+    this.camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.05, 40);
+    this.smokeMat = new THREE.MeshBasicMaterial({
+      map: MainMenuScene.smokeTexture(),
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false
+    });
+    this.buildRoom();
     this.buildRavi();
     this.crt = new CRTPass(window.innerWidth, window.innerHeight);
   }
-
-  // ----------------------------------------------------------------- set
 
   private lam(c: number): THREE.MeshLambertMaterial {
     return new THREE.MeshLambertMaterial({ color: c });
   }
 
-  private buildSet(): void {
-    const s = this.scene;
-    s.background = new THREE.Color(0x04060a);
-    s.fog = new THREE.Fog(0x04060a, 6, 18);
-
-    // Floor + walls
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(20, 0.2, 16), this.lam(0x23262c));
-    floor.position.set(0, -0.1, 0);
-    s.add(floor);
-    const backWall = new THREE.Mesh(new THREE.BoxGeometry(20, 3.4, 0.2), this.lam(0x2a2e36));
-    backWall.position.set(0, 1.7, -6);
-    s.add(backWall);
-    const sideWall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.4, 16), this.lam(0x262a31));
-    sideWall.position.set(-7, 1.7, 0);
-    s.add(sideWall);
-    const ceiling = new THREE.Mesh(new THREE.BoxGeometry(20, 0.2, 16), this.lam(0x191c21));
-    ceiling.position.set(0, 3.3, 0);
-    s.add(ceiling);
-
-    // Windows in the back wall with a cold city glow behind them
-    for (const wx of [-4.5, -1, 2.5]) {
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.5, 0.1), this.lam(0x1a1d22));
-      frame.position.set(wx, 1.9, -5.93);
-      s.add(frame);
-      const glassGlow = new THREE.Mesh(
-        new THREE.PlaneGeometry(2.2, 1.3),
-        new THREE.MeshBasicMaterial({ color: 0x2c3f58 })
-      );
-      glassGlow.position.set(wx, 1.9, -5.87);
-      s.add(glassGlow);
-    }
-    const cityLight = new THREE.PointLight(0x40587c, 3, 12, 1.6);
-    cityLight.position.set(-1, 2.2, -5.2);
-    s.add(cityLight);
-
-    // Cubicle row behind Ravi
-    for (let i = 0; i < 3; i++) {
-      const x = -4.2 + i * 3.1;
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.5, 0.08), this.lam(0x4b5260));
-      panel.position.set(x, 0.75, -3.4);
-      s.add(panel);
-      const desk = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.8), this.lam(0x6a5949));
-      desk.position.set(x, 0.74, -2.9);
-      s.add(desk);
-      const monitor = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.12), this.lam(0x14161a));
-      monitor.position.set(x - 0.5 + i * 0.4, 1.02, -3.1);
-      monitor.rotation.y = (i - 1) * 0.4;
-      s.add(monitor);
-    }
-    // Scattered paper
-    const paper = new THREE.MeshLambertMaterial({ color: 0xd8d4c8 });
-    for (let i = 0; i < 14; i++) {
-      const sheet = new THREE.Mesh(new THREE.PlaneGeometry(0.21, 0.29), paper);
-      sheet.rotation.set(-Math.PI / 2, 0, Math.random() * Math.PI * 2);
-      sheet.position.set(-4 + Math.random() * 8, 0.005 + Math.random() * 0.01, -3.5 + Math.random() * 5);
-      s.add(sheet);
-    }
-
-    // The men who came in. They're not leaving.
-    this.corpse(new THREE.Vector3(-2.4, 0, -1.6), 2.4, false);
-    this.corpse(new THREE.Vector3(1.9, 0, -2.4), -0.5, true);
-    this.corpse(new THREE.Vector3(-4.6, 0, -0.4), 1.1, false);
-
-    // A dropped rifle by the nearest body
-    const gunmetal = this.lam(0x1a1c20);
-    const rifle = new THREE.Group();
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.62), gunmetal);
-    rifle.add(receiver);
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.08), gunmetal);
-    mag.position.set(0, -0.06, 0.05);
-    rifle.add(mag);
-    rifle.position.set(-1.6, 0.05, -1.1);
-    rifle.rotation.set(Math.PI / 2, 0, 0.8);
-    s.add(rifle);
-
-    // The fluorescent above the shot — tired, humming, flickering
-    const fixtureHousing = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.09, 0.36), this.lam(0x5a5e63));
-    fixtureHousing.position.set(0.3, 3.2, -0.6);
-    s.add(fixtureHousing);
-    this.tubeMat = new THREE.MeshStandardMaterial({
-      color: 0x9aa39c,
-      emissive: new THREE.Color(0xd6e6da),
-      emissiveIntensity: 1.6
-    });
-    const tube = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.14), this.tubeMat);
-    tube.position.set(0.3, 3.14, -0.6);
-    s.add(tube);
-    this.tubeLight = new THREE.PointLight(0xcfe3d6, 14, 9, 1.7);
-    this.tubeLight.position.set(0.3, 3.05, -0.6);
-    s.add(this.tubeLight);
-
-    // Cinematic lighting: warm key from the side, cold rim from behind
-    s.add(new THREE.AmbientLight(0x1c2430, 1.0));
-    const key = new THREE.PointLight(0xffd9a0, 5, 8, 1.7);
-    key.position.set(1.8, 1.9, 1.6);
-    s.add(key);
-    const rim = new THREE.PointLight(0x7ea8d8, 8, 7, 1.8);
-    rim.position.set(-1.2, 2.2, -2.2);
-    s.add(rim);
-
-    // Low, slightly off-axis hero framing
-    this.camera.position.set(-0.85, 1.25, 2.5);
-    this.camera.lookAt(0.1, 1.25, 0);
+  private static smokeTexture(): THREE.Texture {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(200,200,205,0.75)');
+    grad.addColorStop(0.6, 'rgba(180,180,188,0.28)');
+    grad.addColorStop(1, 'rgba(170,170,180,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
   }
 
-  /** A suited body on the floor with a pool under it. */
-  private corpse(at: THREE.Vector3, yaw: number, faceDown: boolean): void {
+  /** Ravi's face for the close-up: tired eyes, set jaw. Not angry. Done. */
+  private static faceTexture(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#b98f68';
+    g.fillRect(0, 0, 64, 64);
+    g.fillStyle = 'rgba(60,40,30,0.2)';
+    for (let i = 0; i < 70; i++) g.fillRect(10 + Math.random() * 44, 38 + Math.random() * 20, 1, 1);
+    g.strokeStyle = '#2a1d15';
+    g.lineCap = 'round';
+    // Heavy lids — half-closed eyes
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(14, 24);
+    g.lineTo(27, 25);
+    g.moveTo(37, 25);
+    g.lineTo(50, 24);
+    g.stroke();
+    g.fillStyle = '#f0ece4';
+    g.fillRect(16, 27, 10, 4);
+    g.fillRect(38, 27, 10, 4);
+    g.fillStyle = '#1a1a1a';
+    g.fillRect(20, 27, 4, 4);
+    g.fillRect(41, 27, 4, 4);
+    // Shadows under the eyes
+    g.fillStyle = 'rgba(70,45,35,0.35)';
+    g.fillRect(16, 32, 10, 3);
+    g.fillRect(38, 32, 10, 3);
+    // Flat mouth, cigar corner
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(24, 49);
+    g.lineTo(41, 48);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
+
+  // ----------------------------------------------------------------- room
+
+  private buildRoom(): void {
     const s = this.scene;
-    const suit = this.lam(0x15161a);
-    const shirt = this.lam(0xe9e6df);
-    const skin = this.lam(0xc59a76);
-    const g = new THREE.Group();
-    g.position.copy(at).setY(0.13);
-    g.rotation.y = yaw;
+    s.background = new THREE.Color(0x020304);
+    s.fog = new THREE.Fog(0x020304, 3.5, 10);
 
-    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.26, 0.6, 3, 0.07), suit);
-    g.add(torso);
-    if (!faceDown) {
-      const shirtFront = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.4), shirt);
-      shirtFront.rotation.x = -Math.PI / 2;
-      shirtFront.position.set(0, 0.135, 0.02);
-      g.add(shirtFront);
-      // The wound that put him down
-      const wound = new THREE.Mesh(new THREE.CircleGeometry(0.07, 10), new THREE.MeshBasicMaterial({ color: 0x4a0708 }));
-      wound.rotation.x = -Math.PI / 2;
-      wound.position.set(0.03, 0.14, 0.05);
-      g.add(wound);
-    }
-    const head = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.2, 0.26, 3, 0.06), skin);
-    head.position.set(0.06, -0.01, 0.46);
-    head.rotation.z = faceDown ? 0.4 : -0.3;
-    g.add(head);
-    // Limbs sprawled
-    const limb = (w: number, len: number, x: number, z: number, rot: number, mat: THREE.Material) => {
-      const m = new THREE.Mesh(new THREE.CapsuleGeometry(w, len, 3, 8), mat);
-      m.rotation.set(Math.PI / 2, 0, rot);
-      m.position.set(x, -0.02, z);
-      g.add(m);
-    };
-    limb(0.06, 0.34, -0.33, 0.1, 0.9, suit); // arm out
-    limb(0.06, 0.3, 0.32, -0.05, -1.2, suit); // arm folded
-    limb(0.08, 0.4, -0.12, -0.55, 0.25, suit); // legs
-    limb(0.08, 0.42, 0.14, -0.58, -0.2, suit);
-    s.add(g);
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(12, 0.2, 12), this.lam(0x1a1c20));
+    floor.position.set(0, -0.1, 0);
+    s.add(floor);
+    // Walls barely there — swallowed by the dark
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(12, 3.2, 0.2), this.lam(0x15171b));
+    backWall.position.set(0, 1.6, -2.4);
+    s.add(backWall);
 
-    const pool = new THREE.Mesh(new THREE.CircleGeometry(0.5, 22), new THREE.MeshBasicMaterial({ color: 0x4a0708 }));
-    pool.rotation.x = -Math.PI / 2;
-    pool.position.set(at.x + 0.1, 0.004, at.z + 0.1);
-    pool.scale.set(1, 0.7, 1);
-    s.add(pool);
-    for (let i = 0; i < 4; i++) {
-      const spot = new THREE.Mesh(
-        new THREE.CircleGeometry(0.03 + Math.random() * 0.06, 8),
-        new THREE.MeshBasicMaterial({ color: 0x4a0708 })
-      );
-      spot.rotation.x = -Math.PI / 2;
-      spot.position.set(at.x + (Math.random() - 0.5) * 1.6, 0.004, at.z + (Math.random() - 0.5) * 1.6);
-      s.add(spot);
-    }
+    // The side table, and the candle on it
+    const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.04, 16), this.lam(0x3e3226));
+    tableTop.position.set(-0.95, 0.62, -0.35);
+    s.add(tableTop);
+    const tableLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.6, 10), this.lam(0x2b2219));
+    tableLeg.position.set(-0.95, 0.31, -0.35);
+    s.add(tableLeg);
+
+    const candle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.028, 0.032, 0.16, 12),
+      new THREE.MeshStandardMaterial({ color: 0xe8dfc8, roughness: 0.6 })
+    );
+    candle.position.set(-0.95, 0.72, -0.35);
+    s.add(candle);
+    // Melted wax pooling at the base
+    const wax = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.055, 0.015, 12),
+      new THREE.MeshStandardMaterial({ color: 0xded4ba, roughness: 0.5 })
+    );
+    wax.position.set(-0.95, 0.648, -0.35);
+    s.add(wax);
+    const wick = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.02, 6), this.lam(0x111));
+    wick.position.set(-0.95, 0.81, -0.35);
+    s.add(wick);
+    // Flame: a soft additive teardrop
+    this.flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.02, 0.07, 10),
+      new THREE.MeshBasicMaterial({ color: 0xffca6a, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending })
+    );
+    this.flame.position.set(-0.95, 0.85, -0.35);
+    s.add(this.flame);
+    // The candle is the key light for the whole shot
+    this.candleLight = new THREE.PointLight(0xffb45e, 9, 6, 1.6);
+    this.candleLight.position.set(-0.95, 0.9, -0.35);
+    s.add(this.candleLight);
+
+    // A whisper of cold fill so his dark side isn't a void
+    s.add(new THREE.AmbientLight(0x11151d, 1.0));
+    const fill = new THREE.PointLight(0x3a4a66, 1.6, 6, 1.8);
+    fill.position.set(1.6, 1.8, 1.4);
+    s.add(fill);
+
+    // Framing: dead-on, seated height
+    this.camera.position.set(0, 1.05, 2.2);
+    this.camera.lookAt(0, 0.95, 0);
   }
 
   // ----------------------------------------------------------------- Ravi
@@ -213,115 +185,110 @@ export class MainMenuScene implements GameScene {
   private buildRavi(): void {
     const s = this.scene;
     this.ravi = new THREE.Group();
-    this.ravi.position.set(0.1, 0, 0.1);
-    this.ravi.rotation.y = 0.35; // three-quarter to camera
+    s.add(this.ravi);
 
-    const shirtMat = new THREE.MeshStandardMaterial({ color: 0x9db6c6, roughness: 0.9 });
+    const shirtMat = new THREE.MeshStandardMaterial({ color: 0x8ea6b6, roughness: 0.9 });
     const trouser = this.lam(0x252a33);
-    const skin = this.lam(0xc59a76);
+    const skin = this.lam(0xb98f68);
     const shoe = this.lam(0x14161a);
     const hair = this.lam(0x14100c);
 
-    // Legs planted wide
-    for (const [sx, rz] of [
-      [-0.13, 0.07],
-      [0.14, -0.09]
-    ] as const) {
+    // The chair — a plain office job, facing the camera
+    const chair = this.lam(0x1e2126);
+    const seat = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.08, 0.6, 3, 0.03), chair);
+    seat.position.set(0, 0.52, -0.12);
+    this.ravi.add(seat);
+    const back = new THREE.Mesh(new RoundedBoxGeometry(0.6, 0.85, 0.1, 3, 0.03), chair);
+    back.position.set(0, 1.0, -0.42);
+    back.rotation.x = 0.12;
+    this.ravi.add(back);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 10), this.lam(0x101114));
+    post.position.set(0, 0.27, -0.12);
+    this.ravi.add(post);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.3), this.lam(0x101114));
+      leg.position.set(Math.sin(a) * 0.17, 0.035, -0.12 + Math.cos(a) * 0.17);
+      leg.rotation.y = a;
+      this.ravi.add(leg);
+    }
+
+    // Seated body: thighs forward to the knees, shins down, feet planted
+    for (const sx of [-0.13, 0.14]) {
       const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.3, 4, 10), trouser);
-      thigh.position.set(sx, 0.62, 0);
-      thigh.rotation.z = rz;
+      thigh.rotation.x = Math.PI / 2 - 0.08;
+      thigh.position.set(sx, 0.6, 0.12);
       this.ravi.add(thigh);
-      const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.3, 4, 10), trouser);
-      shin.position.set(sx + rz * -2 * 0.15, 0.22, 0);
+      const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.3, 4, 10), trouser);
+      shin.position.set(sx, 0.28, 0.32);
+      shin.rotation.x = 0.15;
       this.ravi.add(shin);
       const foot = new THREE.Mesh(new RoundedBoxGeometry(0.15, 0.08, 0.27, 3, 0.03), shoe);
-      foot.position.set(sx + rz * -2 * 0.15, 0.04, -0.05);
+      foot.position.set(sx, 0.04, 0.42);
       this.ravi.add(foot);
     }
 
-    // Shirt torso — sleeves rolled, tie yanked loose, blood on it
-    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.52, 0.25, 4, 0.08), shirtMat);
-    torso.position.set(0, 1.06, 0);
+    // Torso leaned back into the chair, shirt with loose tie, blood still on it
+    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.54, 0.24, 4, 0.08), shirtMat);
+    torso.position.set(0, 0.98, -0.14);
+    torso.rotation.x = 0.12;
     this.ravi.add(torso);
     const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.3), this.lam(0x6b1a1a));
-    tie.position.set(0.05, -0.02, -0.128);
-    tie.rotation.y = Math.PI;
-    tie.rotation.z = 0.18; // loosened, hanging crooked
+    tie.position.set(0.04, -0.03, 0.125);
+    tie.rotation.z = -0.2;
     torso.add(tie);
-    // Blood spatter across the shirt — someone else's
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       const b = new THREE.Mesh(
-        new THREE.CircleGeometry(0.02 + Math.random() * 0.035, 8),
+        new THREE.CircleGeometry(0.018 + Math.random() * 0.03, 8),
         new THREE.MeshBasicMaterial({ color: 0x5a0a0c })
       );
-      b.position.set(-0.12 + Math.random() * 0.22, -0.15 + Math.random() * 0.3, -0.127);
-      b.rotation.y = Math.PI;
+      b.position.set(-0.13 + Math.random() * 0.24, -0.16 + Math.random() * 0.32, 0.124);
       torso.add(b);
     }
-    // ID badge on a lanyard, because he still works here
-    const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.09), this.lam(0xd8d4c8));
-    badge.position.set(-0.1, -0.1, -0.13);
-    badge.rotation.y = Math.PI;
-    badge.rotation.z = -0.15;
-    torso.add(badge);
 
-    // Head — looking down at the weapon in his hands
+    // Head, facing the camera, cigar in the corner of his mouth
     this.head = new THREE.Group();
-    this.head.position.set(0, 1.47, 0);
-    const skull = new THREE.Mesh(new RoundedBoxGeometry(0.23, 0.26, 0.23, 4, 0.07), skin);
+    this.head.position.set(0, 1.44, -0.1);
+    const skull = new THREE.Mesh(
+      new RoundedBoxGeometry(0.23, 0.26, 0.23, 4, 0.07),
+      [skin, skin, skin, skin, MainMenuScene.faceTexture(), skin]
+    );
     this.head.add(skull);
     const crop = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.07, 0.24, 3, 0.03), hair);
     crop.position.y = 0.12;
     this.head.add(crop);
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.08, 10), skin);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.09, 10), skin);
     neck.position.y = -0.16;
     this.head.add(neck);
-    this.head.rotation.x = 0.45; // chin down, eyes on the gun
-    this.head.rotation.y = -0.15;
+    // The cigar: dark wrap, ash-grey tip, ember
+    const cigar = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.11, 8), this.lam(0x3d2a1a));
+    body.rotation.x = Math.PI / 2;
+    cigar.add(body);
+    const ash = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.015, 8), this.lam(0x8f8f8a));
+    ash.rotation.x = Math.PI / 2;
+    ash.position.z = 0.06;
+    cigar.add(ash);
+    this.ember = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0105, 0.0105, 0.006, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff5a1e })
+    );
+    this.ember.rotation.x = Math.PI / 2;
+    this.ember.position.z = 0.07;
+    cigar.add(this.ember);
+    this.emberLight = new THREE.PointLight(0xff6a22, 0.5, 0.6, 2);
+    this.emberLight.position.z = 0.07;
+    cigar.add(this.emberLight);
+    cigar.position.set(0.055, -0.065, 0.12);
+    cigar.rotation.set(0.25, -0.18, 0);
+    this.head.add(cigar);
     this.ravi.add(this.head);
 
-    // The shotgun, held across the chest — hands are children of the gun so
-    // everything moves together as he turns it over
-    this.gun = new THREE.Group();
-    this.gun.position.set(0.02, 1.06, -0.3);
-    this.gun.rotation.set(0.1, 0.9, -0.12); // across the body, muzzle screen-left
-
-    const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.4, metalness: 0.7 });
-    const walnut = new THREE.MeshStandardMaterial({ color: 0x4d3a26, roughness: 0.8 });
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.62, 12), steel);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.035, -0.28);
-    this.gun.add(barrel);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.5, 10), steel);
-    tube.rotation.x = Math.PI / 2;
-    tube.position.set(0, -0.005, -0.25);
-    this.gun.add(tube);
-    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.055, 0.09, 0.24, 3, 0.015), steel);
-    receiver.position.set(0, 0.01, 0.03);
-    this.gun.add(receiver);
-    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.05, 0.11, 0.3, 3, 0.02), walnut);
-    stock.position.set(0, -0.01, 0.26);
-    stock.rotation.x = 0.12;
-    this.gun.add(stock);
-    this.pump = new THREE.Group();
-    this.pump.position.set(0, -0.005, -0.22);
-    const forend = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.16, 10), walnut);
-    forend.rotation.x = Math.PI / 2;
-    this.pump.add(forend);
-    this.gun.add(this.pump);
-
-    // Hands: right on the grip, left cradling the forend
-    const handR = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.09, 0.09, 3, 0.025), skin);
-    handR.position.set(0, -0.03, 0.12);
-    this.gun.add(handR);
-    const handL = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.08, 0.1, 3, 0.025), skin);
-    handL.position.set(0, -0.04, 0);
-    this.pump.add(handL);
-
-    // Arms: rolled light-blue sleeves to the elbow, bare forearms to the hands
-    const mkArm = (shoulder: THREE.Vector3, hand: THREE.Vector3) => {
+    // Arms down to the lap, hands resting on the shotgun
+    const mkArm = (shoulder: THREE.Vector3, hand: THREE.Vector3, out: number) => {
       const elbow = shoulder.clone().lerp(hand, 0.5);
-      elbow.y -= 0.1;
+      elbow.x += out;
+      elbow.z += 0.04;
       const seg = (a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
         const len = a.distanceTo(b);
         const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.05, len - r), 3, 8), mat);
@@ -330,15 +297,45 @@ export class MainMenuScene implements GameScene {
         m.rotateX(Math.PI / 2);
         this.ravi.add(m);
       };
-      seg(shoulder, elbow, 0.06, shirtMat); // rolled sleeve
-      seg(elbow, hand, 0.05, skin); // forearm
+      seg(shoulder, elbow, 0.058, shirtMat); // rolled sleeve
+      seg(elbow, hand, 0.048, skin); // bare forearm
     };
-    // Hand positions in Ravi-local space (gun sits at z −0.3)
-    mkArm(new THREE.Vector3(0.24, 1.32, 0), new THREE.Vector3(0.1, 1.02, -0.2));
-    mkArm(new THREE.Vector3(-0.24, 1.32, 0), new THREE.Vector3(-0.12, 1.0, -0.32));
+    mkArm(new THREE.Vector3(0.24, 1.24, -0.12), new THREE.Vector3(0.2, 0.72, 0.14), 0.07);
+    mkArm(new THREE.Vector3(-0.24, 1.24, -0.12), new THREE.Vector3(-0.22, 0.72, 0.14), -0.07);
 
+    // The shotgun, resting across his lap
+    this.gun = new THREE.Group();
+    this.gun.position.set(0, 0.71, 0.16);
+    this.gun.rotation.set(0.04, 0.16, 0.05);
+    const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.4, metalness: 0.7 });
+    const walnut = new THREE.MeshStandardMaterial({ color: 0x4d3a26, roughness: 0.8 });
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.62, 12), steel);
+    barrel.rotation.z = Math.PI / 2;
+    barrel.position.set(-0.28, 0.03, 0);
+    this.gun.add(barrel);
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.5, 10), steel);
+    tube.rotation.z = Math.PI / 2;
+    tube.position.set(-0.25, -0.01, 0);
+    this.gun.add(tube);
+    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.09, 0.055, 3, 0.015), steel);
+    receiver.position.set(0.03, 0.005, 0);
+    this.gun.add(receiver);
+    const forend = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.16, 10), walnut);
+    forend.rotation.z = Math.PI / 2;
+    forend.position.set(-0.22, -0.01, 0);
+    this.gun.add(forend);
+    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.11, 0.05, 3, 0.02), walnut);
+    stock.position.set(0.28, -0.015, 0);
+    stock.rotation.z = -0.1;
+    this.gun.add(stock);
+    // Hands resting on it
+    const handR = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.07, 0.09, 3, 0.025), skin);
+    handR.position.set(0.2, 0.045, 0);
+    this.gun.add(handR);
+    const handL = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.07, 0.1, 3, 0.025), skin);
+    handL.position.set(-0.22, 0.045, 0);
+    this.gun.add(handL);
     this.ravi.add(this.gun);
-    s.add(this.ravi);
   }
 
   // -------------------------------------------------------------- lifecycle
@@ -368,38 +365,65 @@ export class MainMenuScene implements GameScene {
   }
 
   update(dt: number, time: number): void {
-    void dt;
     if (!this.musicStarted && this.ctx.audio.ready) {
       this.ctx.audio.startMenuMusic();
       this.musicStarted = true;
     }
 
-    // Inspecting the weapon: a slow turn in the hands, a considering tilt,
-    // and every few seconds he rides the pump back and lets it home.
-    const sway = Math.sin(time * 0.5);
-    this.gun.rotation.set(0.1 + Math.sin(time * 0.35) * 0.1, 0.9 + sway * 0.14, -0.12 + Math.sin(time * 0.27) * 0.08);
-    this.gun.position.y = 1.06 + Math.sin(time * 0.8) * 0.012; // breathing
-    const pumpCycle = time % 6;
-    let slide = 0;
-    if (pumpCycle > 4.4 && pumpCycle < 4.75) slide = (pumpCycle - 4.4) / 0.35; // draw it back
-    else if (pumpCycle >= 4.75 && pumpCycle < 4.95) slide = 1 - (pumpCycle - 4.75) / 0.2; // snap home
-    this.pump.position.z = -0.22 + slide * 0.09;
-    // The head follows the weapon
-    this.head.rotation.x = 0.45 + Math.sin(time * 0.35) * 0.04;
-    this.head.rotation.y = -0.15 + sway * 0.08;
-    // Whole figure breathes
-    this.ravi.position.y = Math.sin(time * 0.8) * 0.006;
+    // Candle: restless flame, restless light
+    const flick = 0.85 + Math.sin(time * 9.3) * 0.07 + Math.sin(time * 23.7) * 0.05 + Math.sin(time * 3.1) * 0.03;
+    this.candleLight.intensity = 9 * flick;
+    this.flame.scale.set(flick, 0.85 + (flick - 0.85) * 2.2, flick);
+    this.flame.rotation.z = Math.sin(time * 7.7) * 0.1;
 
-    // Tired fluorescent overhead
-    const hum = 0.92 + 0.08 * Math.sin(time * 120);
-    const sputter = Math.sin(time * 0.7) > 0.985 ? 0.5 : 1;
-    this.tubeLight.intensity = 14 * hum * sputter;
-    this.tubeMat.emissiveIntensity = 1.6 * hum * sputter;
+    // The cigar: a slow draw every eight seconds — ember flares, then smoke
+    const drag = time % 8;
+    const drawing = drag > 5.4 && drag < 6.6;
+    const glow = drawing ? 0.75 + Math.sin(((drag - 5.4) / 1.2) * Math.PI) : 0.45 + Math.sin(time * 2.2) * 0.1;
+    (this.ember.material as THREE.MeshBasicMaterial).color.setHSL(0.045, 1, 0.25 + glow * 0.3);
+    this.emberLight.intensity = glow * 1.1;
 
-    // Slow cinematic drift + mouse parallax
-    const drift = Math.sin(time * 0.09) * 0.25;
-    this.camera.position.set(-0.85 + drift + this.mouse.x * 0.1, 1.25 - this.mouse.y * 0.06, 2.5 - Math.sin(time * 0.07) * 0.15);
-    this.camera.lookAt(0.1, 1.22, 0);
+    // Breathing + the small motions of a man thinking
+    this.ravi.position.y = Math.sin(time * 0.7) * 0.006;
+    this.head.rotation.x = 0.06 + Math.sin(time * 0.32) * 0.03;
+    this.head.rotation.y = Math.sin(time * 0.21) * 0.06;
+    this.head.rotation.z = Math.sin(time * 0.17) * 0.02;
+    this.gun.rotation.z = 0.05 + Math.sin(time * 0.7) * 0.004; // rises with the chest
+
+    // Smoke curling off the cigar (and heavier right after a drag)
+    this.smokeTimer -= dt;
+    if (this.smokeTimer <= 0) {
+      this.smokeTimer = drawing ? 0.18 : 0.5 + Math.random() * 0.3;
+      this.head.updateWorldMatrix(true, true);
+      this.cigarTip.set(0.055, -0.065, 0.19).applyMatrix4(this.head.matrixWorld);
+      const puff = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.06), this.smokeMat);
+      puff.position.copy(this.cigarTip);
+      this.scene.add(puff);
+      this.smoke.push({ mesh: puff, age: 0, life: 2.6 + Math.random(), drift: Math.random() * Math.PI * 2 });
+    }
+    for (let i = this.smoke.length - 1; i >= 0; i--) {
+      const p = this.smoke[i];
+      p.age += dt;
+      const k = p.age / p.life;
+      p.mesh.position.y += dt * (0.14 + k * 0.1);
+      p.mesh.position.x += Math.sin(p.age * 1.3 + p.drift) * dt * 0.03;
+      p.mesh.position.z += Math.cos(p.age * 1.1 + p.drift) * dt * 0.02;
+      p.mesh.scale.setScalar(1 + k * 3.2);
+      p.mesh.quaternion.copy(this.camera.quaternion);
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.28 * (1 - k);
+      if (k >= 1) {
+        this.scene.remove(p.mesh);
+        this.smoke.splice(i, 1);
+      }
+    }
+
+    // Slow drift + mouse parallax, always returning to his eyes
+    this.camera.position.set(
+      Math.sin(time * 0.07) * 0.12 + this.mouse.x * 0.08,
+      1.05 - this.mouse.y * 0.05,
+      2.2 + Math.sin(time * 0.05) * 0.08
+    );
+    this.camera.lookAt(0, 0.98, 0);
   }
 
   render(renderer: THREE.WebGLRenderer): void {

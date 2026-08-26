@@ -109,6 +109,32 @@ export class MainMenuScene implements GameScene {
       s.add(round);
     }
 
+    // The shotgun, laid across the middle of the table in front of him
+    const walnut = new THREE.MeshStandardMaterial({ color: 0x4d3a26, roughness: 0.8 });
+    const shotgun = new THREE.Group();
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.62, 12), steel);
+    barrel.rotation.z = Math.PI / 2;
+    barrel.position.set(-0.28, 0.018, 0);
+    shotgun.add(barrel);
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.5, 10), steel);
+    tube.rotation.z = Math.PI / 2;
+    tube.position.set(-0.25, -0.012, 0);
+    shotgun.add(tube);
+    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.09, 0.055, 3, 0.015), steel);
+    receiver.position.set(0.03, 0, 0);
+    shotgun.add(receiver);
+    const forend = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.16, 10), walnut);
+    forend.rotation.z = Math.PI / 2;
+    forend.position.set(-0.22, -0.012, 0);
+    shotgun.add(forend);
+    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.1, 0.05, 3, 0.02), walnut);
+    stock.position.set(0.28, -0.005, 0);
+    stock.rotation.z = -0.08;
+    shotgun.add(stock);
+    shotgun.rotation.set(0.06, 0.1, 0); // lying flat, muzzle to his right
+    shotgun.position.set(0, 0.87, 0.5);
+    s.add(shotgun);
+
     // ONE hard light overhead, slightly in front — everything the shot has
     this.spot = new THREE.SpotLight(0xdfe8f0, 55, 9, 0.62, 0.55, 1.4);
     this.spot.position.set(0, 3.6, 1.1);
@@ -130,64 +156,59 @@ export class MainMenuScene implements GameScene {
     this.ravi = new THREE.Group();
     s.add(this.ravi);
 
-    // A dark jacket now — pulled on over the bloody shirt when the night got cold
-    const jacket = new THREE.MeshStandardMaterial({ color: 0x2e3238, roughness: 0.95 });
+    // Ravi as he is in the game: the call-center man. Light blue shirt with
+    // the sleeves rolled, loose dark-red tie, dark cropped hair — no hat, no
+    // jacket. Same bowed pose under the same light.
     const shirt = new THREE.MeshStandardMaterial({ color: 0x8ea6b6, roughness: 0.9 });
-    const skin = this.lam(0xb98f68);
-    const felt = new THREE.MeshStandardMaterial({ color: 0x74787e, roughness: 0.9 });
+    const skin = this.lam(0x8a5c3b);
+    const hair = new THREE.MeshStandardMaterial({ color: 0x120d09, roughness: 0.95 });
 
     // Torso leaning slightly forward over the table
-    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.58, 0.28, 4, 0.09), jacket);
+    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.58, 0.26, 4, 0.09), shirt);
     torso.position.set(0, 1.02, -0.28);
     torso.rotation.x = -0.14; // leaning IN, not back
     this.ravi.add(torso);
-    // Open lapels with the shirt and loose tie in the gap
-    const shirtV = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.3), shirt);
-    shirtV.position.set(0, 0.1, 0.143);
-    torso.add(shirtV);
-    const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.24), this.lam(0x6b1a1a));
-    tie.position.set(0.015, 0.06, 0.145);
-    tie.rotation.z = -0.12;
+    const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.28), this.lam(0x6b1a1a));
+    tie.position.set(0.02, 0.08, 0.134);
+    tie.rotation.z = -0.14; // yanked loose, hanging crooked
     torso.add(tie);
-    for (const side of [-1, 1]) {
-      const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.3), new THREE.MeshStandardMaterial({ color: 0x272b30, roughness: 0.95 }));
-      lapel.position.set(side * 0.08, 0.1, 0.146);
-      lapel.rotation.z = side * 0.22;
-      torso.add(lapel);
+    const collar = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.05, 0.2, 2, 0.02), shirt);
+    collar.position.set(0, 0.3, -0.01);
+    torso.add(collar);
+    // The shift left its mark on the shirt
+    for (let i = 0; i < 4; i++) {
+      const b = new THREE.Mesh(
+        new THREE.CircleGeometry(0.016 + Math.random() * 0.028, 8),
+        new THREE.MeshBasicMaterial({ color: 0x5a0a0c })
+      );
+      b.position.set(-0.14 + Math.random() * 0.26, -0.14 + Math.random() * 0.34, 0.132);
+      torso.add(b);
     }
-    // Shoulders bulked by the jacket
+    // Shoulders (shirt, not padded)
     for (const side of [-1, 1]) {
-      const pad = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), jacket);
-      pad.position.set(side * 0.26, 1.26, -0.28);
-      pad.scale.set(1.1, 0.85, 1);
-      this.ravi.add(pad);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.095, 10, 8), shirt);
+      cap.position.set(side * 0.24, 1.25, -0.28);
+      cap.scale.set(1.05, 0.8, 1);
+      this.ravi.add(cap);
     }
 
-    // Head BOWED — the brim hides the face; only jaw and shadow beneath
+    // Head BOWED, chin to chest — from this angle it's mostly the dark crown
+    // of his hair over the clasped hands
     this.head = new THREE.Group();
     this.head.position.set(0, 1.42, -0.22);
-    this.head.rotation.x = 0.58; // chin to chest
+    this.head.rotation.x = 0.58;
     const skull = new THREE.Mesh(new RoundedBoxGeometry(0.23, 0.26, 0.23, 4, 0.07), skin);
     this.head.add(skull);
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.1, 10), skin);
     neck.position.set(0, -0.16, -0.02);
     this.head.add(neck);
-    // The fedora: crown with a pinch, band, wide down-turned brim
-    const crown = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.15, 0.27, 4, 0.06), felt);
-    crown.position.set(0, 0.19, 0);
-    this.head.add(crown);
-    const pinch = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.06, 0.2, 3, 0.03), felt);
-    pinch.position.set(0, 0.27, 0);
-    this.head.add(pinch);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.15, 0.045, 16), this.lam(0x1c1e22));
-    band.position.set(0, 0.135, 0);
-    band.scale.set(1, 1, 1.12);
-    this.head.add(band);
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.275, 0.02, 20), felt);
-    brim.position.set(0, 0.1, 0.01);
-    brim.scale.set(1, 1, 1.18);
-    brim.rotation.x = 0.06; // dipped at the front
-    this.head.add(brim);
+    // Cropped dark hair: crown cap plus a short back
+    const crop = new THREE.Mesh(new RoundedBoxGeometry(0.245, 0.09, 0.245, 3, 0.04), hair);
+    crop.position.set(0, 0.115, 0.005);
+    this.head.add(crop);
+    const backHair = new THREE.Mesh(new RoundedBoxGeometry(0.24, 0.14, 0.05, 3, 0.02), hair);
+    backHair.position.set(0, 0.03, 0.105);
+    this.head.add(backHair);
     this.ravi.add(this.head);
 
     // Arms: elbows planted wide on the table, forearms rising to the
@@ -203,12 +224,12 @@ export class MainMenuScene implements GameScene {
       m.rotateX(Math.PI / 2);
       this.ravi.add(m);
     };
-    // Upper arms from the shoulders down-forward to the elbows (jacket sleeves)
-    seg(new THREE.Vector3(-0.28, 1.24, -0.26), elbowL, 0.065, jacket);
-    seg(new THREE.Vector3(0.28, 1.24, -0.26), elbowR, 0.065, jacket);
-    // Forearms angling up and in (sleeves stay down at the wrist — jacket on)
-    seg(elbowL, clasp.clone().add(new THREE.Vector3(-0.05, -0.04, 0)), 0.055, jacket);
-    seg(elbowR, clasp.clone().add(new THREE.Vector3(0.05, -0.04, 0)), 0.055, jacket);
+    // Upper arms from the shoulders down-forward to the elbows (shirt sleeves)
+    seg(new THREE.Vector3(-0.26, 1.24, -0.26), elbowL, 0.06, shirt);
+    seg(new THREE.Vector3(0.26, 1.24, -0.26), elbowR, 0.06, shirt);
+    // Sleeves rolled at the elbow — bare forearms up to the clasped hands
+    seg(elbowL, clasp.clone().add(new THREE.Vector3(-0.05, -0.04, 0)), 0.048, skin);
+    seg(elbowR, clasp.clone().add(new THREE.Vector3(0.05, -0.04, 0)), 0.048, skin);
 
     // The clasped hands: two mitts interlocked, knuckles forward
     this.hands = new THREE.Group();

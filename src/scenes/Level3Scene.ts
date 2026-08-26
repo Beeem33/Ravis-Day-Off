@@ -69,6 +69,16 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private pooled = new Set<Enemy>();
   /** Staff on their knees pleading — kept turned towards the agents. */
   private begging = new Set<Enemy>();
+  /** Staff with their arms out, warding the shooters off. */
+  private warding = new Set<Enemy>();
+  /** Staff stood watching Ravi once the floor is quiet. */
+  private staring = new Set<Enemy>();
+  /** True once the bumper has gone through the wall. */
+  private breached = false;
+  /** Seconds of masonry still raining out of the hole. */
+  private debrisTimer = 0;
+  /** Per-agent cooldown before they take a shot at a member of staff. */
+  private staffShotTimers = new Map<Enemy, number>();
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -255,28 +265,43 @@ export class Level3Scene extends CombatScene<Level3Data> {
       const u = Math.min(1, (this.t - T_ENGINE) / (T_IMPACT - T_ENGINE));
       L.truck.position.lerpVectors(L.truckFrom, L.truckTo, u * u); // accelerating
     }
-    this.beat('impact', T_IMPACT, () => {
-      L.truck.position.copy(L.truckTo);
+
+    // The wall goes the moment the bumper reaches it, not when the truck
+    // finally parks — driven off the nose position rather than a timer, so
+    // it stays right if the approach is ever retimed. Everything the hole
+    // costs (hiding the panel, revealing the rubble, the first burst of
+    // masonry) happens here, while the vehicle is still moving and the
+    // screen is shaking, where a frame of work is invisible.
+    if (!this.breached && L.truck.position.z + L.truckNoseZ >= L.breachZ) {
+      this.breached = true;
       audio.wallCollapse();
-      this.shake = 1;
-      // Masonry everywhere
-      const at = L.truckTo.clone();
-      at.z -= 1.5;
-      for (let i = 0; i < 26; i++) {
-        const p = at.clone().add(
-          new THREE.Vector3((Math.random() - 0.5) * 8, Math.random() * 2.8, (Math.random() - 0.5) * 2.4)
-        );
-        const n = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8, 0.6 + Math.random()).normalize();
-        this.particles.concreteChips(p, n, 0xb9b3a8);
-      }
-      // The wall comes down: panel gone, its collider dead, and rubble and
-      // fire take its place so there is still no way out.
+      this.shake = 0.85;
+      this.debrisTimer = 1.6;
       L.breachWall.visible = false;
       if (L.breachColliderIndex >= 0) L.colliders[L.breachColliderIndex].disabled = true;
       const wallIdx = this.level.shootables.indexOf(L.breachWall);
       if (wallIdx >= 0) this.level.shootables.splice(wallIdx, 1);
       L.breachBarrier.visible = true;
       for (const c of L.breachColliders) L.colliders.push(c);
+      this.burstMasonry(34, 1.0);
+      // They start reacting to the wall coming in, not to the truck stopping
+      for (const e of this.staff) this.panic(e);
+      this.setObjective('');
+    }
+
+    // Masonry keeps coming out of the hole for a beat after it opens: dust
+    // rolling in off the floor, then chunks off the header above.
+    if (this.debrisTimer > 0) {
+      this.debrisTimer -= dt;
+      this.rainDebris(dt);
+    }
+
+    this.beat('impact', T_IMPACT, () => {
+      L.truck.position.copy(L.truckTo);
+      // Second, harder jolt as it grounds out against the floor slab
+      this.shake = Math.max(this.shake, 1);
+      this.burstMasonry(18, 0.55);
+      audio.wallCollapse();
       // The vehicle itself becomes solid now it has stopped
       for (const c of L.truckColliders) {
         L.colliders.push(c);
@@ -290,9 +315,6 @@ export class Level3Scene extends CombatScene<Level3Data> {
           position: new CANNON.Vec3(centre.x, centre.y, centre.z)
         }));
       }
-      // Everyone on the floor loses it
-      for (const e of this.staff) this.panic(e);
-      this.setObjective('');
     });
 
     // The gunner opens up on the room
@@ -333,19 +355,117 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.beat('handover', T_HANDOVER, () => this.handOver());
   }
 
+  /** A shower of masonry off the breach, thrown in off the wall line. */
+  private burstMasonry(count: number, scale: number): void {
+    const L = this.level;
+    const at = new THREE.Vector3(L.truck.position.x, 0, L.breachZ);
+    for (let i = 0; i < count; i++) {
+      const p = at.clone().add(new THREE.Vector3(
+        (Math.random() - 0.5) * 8 * scale,
+        Math.random() * 3.4,
+        (Math.random() - 0.5) * 2.2
+      ));
+      const n = new THREE.Vector3(
+        (Math.random() - 0.5) * 1.4,
+        Math.random() * 0.9,
+        0.6 + Math.random()
+      ).normalize();
+      this.particles.concreteChips(p, n, i % 4 === 0 ? 0xd6d0c4 : 0xb9b3a8);
+    }
+  }
+
+  /**
+   * The tail of the collapse: dust drifting in off the floor and lumps
+   * still letting go of the header. Rate-limited by dt so it reads the same
+   * however fast the machine is running.
+   */
+  private rainDebris(dt: number): void {
+    const L = this.level;
+    const n = Math.min(6, Math.floor(dt * 90 + Math.random()));
+    for (let i = 0; i < n; i++) {
+      const x = L.truck.position.x + (Math.random() - 0.5) * 7.5;
+      // Chunks off the surviving header, dropping straight down
+      if (Math.random() < 0.45) {
+        this.particles.concreteChips(
+          new THREE.Vector3(x, 2.6 + Math.random() * 0.7, L.breachZ + (Math.random() - 0.5) * 0.5),
+          new THREE.Vector3((Math.random() - 0.5) * 0.4, -1, (Math.random() - 0.5) * 0.4).normalize(),
+          0xc4beb2
+        );
+      } else {
+        // Dust rolling into the room along the floor
+        this.particles.concreteChips(
+          new THREE.Vector3(x, 0.1 + Math.random() * 0.8, L.breachZ + Math.random() * 1.2),
+          new THREE.Vector3((Math.random() - 0.5) * 0.9, 0.35 + Math.random() * 0.5, 0.7 + Math.random()).normalize(),
+          0xd8d3c8
+        );
+      }
+    }
+  }
+
   /** Panic, from whatever they were doing. Blends run so it isn't a snap. */
   private panic(e: Enemy): void {
     if (!e.alive) return;
     e.setSitting(false);
     const roll = Math.random();
-    if (roll < 0.68) {
+    if (roll < 0.58) {
       // Bolt for it
       e.setHandsUp(true);
       this.staffAI.set(e, new CivilianAI(e, this.level.waypoints, this.level.colliders, this.ctx.bus));
-    } else {
-      e.setKneeling(true); // on their knees, hands up, pleading
+    } else if (roll < 0.82) {
+      // On their knees, hands up, pleading. Anyone who was already walking
+      // has to lose their AI here or it keeps driving them along and they
+      // glide across the carpet in the kneel.
+      this.plant(e);
+      e.setKneeling(true);
       e.setHandsUp(true);
       this.begging.add(e);
+    } else {
+      // Stood their ground with both arms out — "don't"
+      this.plant(e);
+      e.setWarding(true);
+      this.warding.add(e);
+    }
+  }
+
+  /**
+   * Pin someone where they stand. The planted poses have no walk cycle, so
+   * an AI still steering them just slides the whole pose over the floor.
+   */
+  private plant(e: Enemy): void {
+    const ai = this.staffAI.get(e);
+    if (!ai) return;
+    ai.dispose();
+    this.staffAI.delete(e);
+    e.setWalk(0);
+  }
+
+  /**
+   * The shooting is over. Everyone still alive comes out of their pose,
+   * stands up, and looks at the man who is still holding a gun.
+   */
+  private standDownStaff(): void {
+    for (const e of this.staff) {
+      if (!e.alive) continue;
+      e.standDown();
+      this.begging.delete(e);
+      this.warding.delete(e);
+      const ai = this.staffAI.get(e);
+      // Most of them just stand and stare at Ravi; a couple go back to
+      // moving, so the floor is not a room of statues.
+      if (Math.random() < 0.78) {
+        if (ai) {
+          ai.dispose();
+          this.staffAI.delete(e);
+        }
+        e.setWalk(0);
+        this.staring.add(e);
+      } else if (ai) {
+        ai.calmDown();
+      } else {
+        const walk = new CivilianAI(e, this.level.waypoints, this.level.colliders, this.ctx.bus);
+        walk.calmDown();
+        this.staffAI.set(e, walk);
+      }
     }
   }
 
@@ -415,7 +535,7 @@ if (victim && Math.random() < 0.06) {
   }
 
   /** Agents filing out of the truck to their positions, one after another. */
-  private deploying: { e: Enemy; from: THREE.Vector3; to: THREE.Vector3; t: number }[] = [];
+  private deploying: { e: Enemy; from: THREE.Vector3; to: THREE.Vector3; t: number; armed?: boolean }[] = [];
 
   private updateDeploy(dt: number): void {
     for (let i = this.deploying.length - 1; i >= 0; i--) {
@@ -426,17 +546,95 @@ if (victim && Math.random() < 0.06) {
         this.deploying.splice(i, 1);
         continue;
       }
-      const u = Math.min(1, d.t / 1.3);
+      // Out of the door and straight onto their own mark. Faster than a
+      // walk — this is a stack coming off a step, not a stroll — and their
+      // AI comes online at the halfway point rather than at the end, so
+      // they are already working the room before they have finished moving.
+      const u = Math.min(1, d.t / 0.8);
       const k = u * u * (3 - 2 * u);
       d.e.position.lerpVectors(d.from, d.to, k);
       d.e.setWalk(1);
-      d.e.faceToward(d.to, dt, 6);
+      d.e.faceToward(d.to, dt, 9);
+      if (u >= 0.55 && !d.armed) {
+        d.armed = true;
+        this.startAgentAI(d.e);
+      }
       if (u >= 1) {
         d.e.setWalk(0);
-        this.startAgentAI(d.e);
         this.deploying.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * They did not come here for Ravi. Every agent that is not currently
+   * trading fire with the player looks for someone from the call floor and
+   * puts them down — which is what makes the room feel like a raid rather
+   * than five men waiting to be shot at.
+   */
+  private agentsWorkTheRoom(dt: number): void {
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive) continue;
+      const onPlayer = this.agentAI[i]?.state === 'attack';
+      let timer = this.staffShotTimers.get(a) ?? 0.3 + Math.random() * 1.2;
+      timer -= dt;
+      if (onPlayer || timer > 0) {
+        this.staffShotTimers.set(a, onPlayer ? Math.max(timer, 1.2) : timer);
+        continue;
+      }
+      const victim = this.visibleStaff(a);
+      if (!victim) {
+        this.staffShotTimers.set(a, 0.6);
+        continue;
+      }
+      a.faceToward(victim.position, dt, 12);
+      a.setAiming(true);
+      this.shootStaff(a, victim);
+      this.staffShotTimers.set(a, 2.4 + Math.random() * 3.4);
+    }
+  }
+
+  /** Nearest member of staff this agent can actually see. */
+  private visibleStaff(agent: Enemy): Enemy | null {
+    const eye = agent.eyePosition();
+    const facing = agent.forwardDir();
+    let best: Enemy | null = null;
+    let bestD = 16;
+    for (const c of this.staff) {
+      if (!c.alive) continue;
+      const d = eye.distanceTo(c.position);
+      if (d > bestD) continue;
+      const toward = c.position.clone().sub(agent.position).setY(0).normalize();
+      if (toward.dot(facing) < 0.2) continue; // no shooting over a shoulder
+      const to = c.position.clone().add(new THREE.Vector3(0, 1.2, 0)).sub(eye);
+      const dist = to.length();
+      this.raycaster.set(eye, to.normalize());
+      this.raycaster.far = dist - 0.3;
+      if (this.raycaster.intersectObjects(this.level.occluders, false).length > 0) continue;
+      best = c;
+      bestD = d;
+    }
+    return best;
+  }
+
+  private shootStaff(agent: Enemy, victim: Enemy): void {
+    const { audio, bus } = this.ctx;
+    audio.enemyGunshot(agent.position.distanceTo(this.player.position));
+    agent.flashMuzzle();
+    bus.emit(Events.Sound, { position: agent.position.clone(), radius: 25, kind: 'gunshot' });
+    const muzzle = agent.muzzleWorld();
+    const chest = victim.position.clone().add(new THREE.Vector3(0, 1.15, 0));
+    const dir = chest.clone().sub(muzzle).normalize();
+    this.particles.tracer(muzzle, chest, 0xffe0b0);
+    victim.die(chest, dir, this.world, 'torso');
+    audio.fleshHit();
+    this.spatter(chest, dir, true);
+    this.begging.delete(victim);
+    this.warding.delete(victim);
+    this.staring.delete(victim);
+    this.staffAI.get(victim)?.dispose();
+    this.staffAI.delete(victim);
   }
 
   /** Hand one agent over to its own AI once it is clear of the truck. */
@@ -460,7 +658,7 @@ if (victim && Math.random() < 0.06) {
    * standing in the same square metre.
    */
   private separateAgents(dt: number): void {
-    const MIN = 1.15;
+    const MIN = 2.1; // they hold a proper interval, not a huddle
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
       if (!a.alive) continue;
@@ -472,7 +670,7 @@ if (victim && Math.random() < 0.06) {
         const d2 = dx * dx + dz * dz;
         if (d2 > MIN * MIN || d2 < 1e-6) continue;
         const d = Math.sqrt(d2);
-        const push = ((MIN - d) / MIN) * dt * 2.2;
+        const push = ((MIN - d) / MIN) * dt * 3.4;
         const nx = (dx / d) * push;
         const nz = (dz / d) * push;
         a.position.x -= nx;
@@ -537,6 +735,7 @@ if (victim && Math.random() < 0.06) {
     if (this.phase === 'crash') this.updateCrash(dt);
     if (this.deploying.length) this.updateDeploy(dt);
     if (this.agents.length) this.separateAgents(dt);
+    if (this.agents.length) this.agentsWorkTheRoom(dt);
     // The gunner keeps working after the handover too
     if (this.phase === 'play') this.updateGunner(dt);
 
@@ -574,12 +773,23 @@ if (victim && Math.random() < 0.06) {
 
     // Anyone pleading keeps facing the raid — begging at a wall reads as a
     // bug rather than a person.
-    if (this.begging.size) {
+    if (this.begging.size || this.warding.size) {
       const threat = this.agents.find((a) => a.alive)?.position
         ?? (this.gunner?.alive ? this.gunner.position : this.level.truck.position);
       for (const e of this.begging) {
         if (e.alive) e.faceToward(threat, dt, 2.4);
         else this.begging.delete(e);
+      }
+      for (const e of this.warding) {
+        if (e.alive) e.faceToward(threat, dt, 3.2);
+        else this.warding.delete(e);
+      }
+    }
+    // Afterwards they watch the one still holding a gun
+    if (this.staring.size) {
+      for (const e of this.staring) {
+        if (e.alive) e.faceToward(this.player.position, dt, 2.0);
+        else this.staring.delete(e);
       }
     }
 
@@ -587,7 +797,9 @@ if (victim && Math.random() < 0.06) {
     let attacking = false;
     for (const e of this.staff) {
       e.update(dt);
-      if (e.alive) this.staffAI.get(e)?.update(dt);
+      // A rooted pose has no walk cycle — running an AI over it slides the
+      // whole body across the floor without moving a leg.
+      if (e.alive && !e.rooted) this.staffAI.get(e)?.update(dt);
       else this.poolCorpse(e);
     }
     this.gunner?.update(dt);
@@ -686,7 +898,7 @@ if (victim && Math.random() < 0.06) {
     });
     if (this.remaining <= 0 && this.phase === 'play') {
       this.setObjective('FLOOR CLEAR');
-      for (const ai of this.staffAI.values()) ai.calmDown();
+      this.standDownStaff();
     }
   }
 }

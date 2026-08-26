@@ -54,6 +54,10 @@ export interface Level3Data {
   breachColliderIndex: number;
   /** The parked vehicle itself, as something solid to walk into. */
   truckColliders: Collider[];
+  /** World z of the wall the truck comes through. */
+  breachZ: number;
+  /** How far the push bumper reaches ahead of the truck group origin. */
+  truckNoseZ: number;
   /** Fire licks, animated by the scene. */
   fires: THREE.Mesh[];
 }
@@ -162,18 +166,26 @@ export class Level3Builder {
       gunnerSpawn: { pos: new THREE.Vector3(BREACH_X, this.truckParts.roofY, OFF_Z0 + 4.2), yaw: Math.PI },
       // All on the door side of the vehicle — spawning to the west put them
       // inside the hull.
+      // A stack fanning out to cover the whole floor, not a queue down one
+      // side of the truck. Marks run from the west aisle round to the east
+      // wall so they are spread the moment they are through the door.
       agentSpawns: [
-        { pos: new THREE.Vector3(BREACH_X + 2.5, 0, OFF_Z0 + 1.4), yaw: Math.PI * 0.85 },
-        { pos: new THREE.Vector3(BREACH_X + 3.4, 0, OFF_Z0 + 2.6), yaw: Math.PI * 0.8 },
-        { pos: new THREE.Vector3(BREACH_X + 2.7, 0, OFF_Z0 + 4.0), yaw: Math.PI * 0.72 },
-        { pos: new THREE.Vector3(BREACH_X + 3.8, 0, OFF_Z0 + 5.2), yaw: Math.PI * 0.68 },
-        { pos: new THREE.Vector3(BREACH_X + 2.3, 0, OFF_Z0 + 6.2), yaw: Math.PI * 0.6 }
+        { pos: new THREE.Vector3(BREACH_X - 4.6, 0, OFF_Z0 + 3.1), yaw: Math.PI * 1.18 },
+        { pos: new THREE.Vector3(BREACH_X - 2.4, 0, OFF_Z0 + 5.6), yaw: Math.PI * 1.06 },
+        { pos: new THREE.Vector3(BREACH_X + 2.6, 0, OFF_Z0 + 1.5), yaw: Math.PI * 0.86 },
+        { pos: new THREE.Vector3(BREACH_X + 4.4, 0, OFF_Z0 + 4.2), yaw: Math.PI * 0.76 },
+        { pos: new THREE.Vector3(BREACH_X + 1.2, 0, OFF_Z0 + 7.4), yaw: Math.PI * 0.94 },
+        { pos: new THREE.Vector3(BREACH_X + 7.4, 0, OFF_Z0 + 6.4), yaw: Math.PI * 0.66 },
+        { pos: new THREE.Vector3(BREACH_X - 7.8, 0, OFF_Z0 + 6.8), yaw: Math.PI * 1.3 },
+        { pos: new THREE.Vector3(BREACH_X + 5.0, 0, OFF_Z0 + 9.6), yaw: Math.PI * 0.86 }
       ],
       breachBarrier: this.breachBarrier,
       breachColliders: this.breachColliders,
       breachWall: this.breachWall,
       breachColliderIndex: this.breachColliderIndex,
       truckColliders: this.truckColliders,
+      breachZ: OFF_Z0,
+      truckNoseZ: this.truckParts.bounds.z1,
       fires: this.fires
     };
   }

@@ -63,6 +63,37 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     super(ctx);
   }
 
+  /**
+   * Every shift the intruders start somewhere new: the fixed spawn list is
+   * used as a pool together with the patrol waypoints (guaranteed walkable),
+   * shuffled, kept off the player's back and spread apart.
+   */
+  private randomizeSpawns(): void {
+    const count = this.level.enemySpawns.length;
+    const pool: { pos: THREE.Vector3; yaw: number }[] = [
+      ...this.level.enemySpawns.map((s) => ({ pos: s.pos.clone(), yaw: s.yaw })),
+      ...this.level.waypoints.map((w) => ({ pos: w.pos.clone(), yaw: Math.random() * Math.PI * 2 }))
+    ];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const picked: { pos: THREE.Vector3; yaw: number }[] = [];
+    for (const cand of pool) {
+      if (picked.length >= count) break;
+      if (cand.pos.distanceTo(this.level.playerSpawn) < 9) continue; // never in Ravi's lap
+      if (cand.pos.y > 0.1 && cand.pos.y < 3) continue; // no spawning mid-staircase
+      if (picked.some((p) => p.pos.distanceTo(cand.pos) < 4)) continue; // spread out
+      picked.push(cand);
+    }
+    // Pool exhausted before we filled the roster? Top up from the originals.
+    for (const s of this.level.enemySpawns) {
+      if (picked.length >= count) break;
+      if (!picked.some((p) => p.pos.distanceTo(s.pos) < 0.5)) picked.push({ pos: s.pos.clone(), yaw: s.yaw });
+    }
+    this.level.enemySpawns = picked;
+  }
+
   // -------------------------------------------------------------- lifecycle
 
   enter(): void {
@@ -71,6 +102,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.scene.fog = new THREE.Fog(0x0a0c10, 24, 60);
 
     this.level = new OfficeLevelBuilder().build();
+    this.randomizeSpawns();
     this.scene.add(this.level.group);
 
     this.world = this.createPhysicsWorld(this.level.colliders);

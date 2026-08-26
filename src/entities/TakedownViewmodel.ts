@@ -70,17 +70,17 @@ export class TakedownViewmodel {
     const guard = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.085, 0.014), darkSteel);
     guard.position.set(0, 0, -0.06);
     this.knife.add(guard);
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.05, 0.24), steel);
-    blade.position.set(0, 0.005, -0.185);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.055, 0.38), steel);
+    blade.position.set(0, 0.005, -0.255);
     this.knife.add(blade);
     // Clip point: a narrowing tip section angled down to a point
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.032, 0.07), steel);
-    tip.position.set(0, -0.004, -0.335);
-    tip.rotation.x = -0.18;
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.034, 0.09), steel);
+    tip.position.set(0, -0.005, -0.485);
+    tip.rotation.x = -0.16;
     this.knife.add(tip);
     // Fuller groove line along the flat
-    const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.0095, 0.008, 0.2), darkSteel);
-    fuller.position.set(0, 0.018, -0.17);
+    const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.0095, 0.009, 0.33), darkSteel);
+    fuller.position.set(0, 0.02, -0.24);
     this.knife.add(fuller);
     this.knife.position.set(0, 0.045, -0.04);
     this.armR.add(this.knife);
@@ -149,8 +149,8 @@ export class TakedownViewmodel {
     // ---- Right arm: waits at the hip, draws the knife, holds ready during
     // the struggle, then drives up under the jaw
     const rPocket = new THREE.Vector3(0.3, -0.55, -0.2);
-    const rReady = new THREE.Vector3(0.24, -0.28, -0.42);
-    const rStab = new THREE.Vector3(0.05, -0.1, -0.56);
+    const rReady = new THREE.Vector3(0.26, -0.3, -0.38);
+    const rStab = new THREE.Vector3(0.04, -0.09, -0.66); // a real lunge — full extension into the throat
     // The forearm stays low so the cuff never swallows the frame — it's the
     // KNIFE that pitches up for the thrust, in the hand.
     if (t < T.DRAW_T) {

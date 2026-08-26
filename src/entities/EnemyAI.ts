@@ -315,10 +315,17 @@ export class EnemyAI {
       return;
     }
 
-    if (seen) {
-      this.lostSightTimer = 0;
-      enemy.faceToward(player.position, dt, 9);
+    if (seen || this.coverPhase === 'inCover' || this.coverPhase === 'toCover') {
+      if (seen) this.lostSightTimer = 0;
 
+      // Cover fighters cycle: shoot exposed → duck behind something → pop
+      // back out. The rest stand and slug it out like before.
+      if (this.usesCover) {
+        this.updateCoverFight(dt, seen);
+        return;
+      }
+
+      enemy.faceToward(player.position, dt, 9);
       // Micro-strafe so he's not a statue
       this.strafePhase += dt;
       const strafe = Math.sin(this.strafePhase * 1.7);
@@ -350,6 +357,97 @@ export class EnemyAI {
         this.investigateTimer = otherFloor ? 12 : 5;
         this.reactionTimer = REACTION_TIME * 0.6; // faster the second time
       }
+    }
+  }
+
+  // ------------------------------------------------------------ cover fight
+
+  /** Roughly half the squad fights from cover; the rest stand in the open. */
+  private usesCover = Math.random() < 0.55;
+  private coverPhase: 'expose' | 'toCover' | 'inCover' | 'toPeek' = 'expose';
+  private coverTimer = 1.2 + Math.random();
+  private coverPos: THREE.Vector3 | null = null;
+  private peekPos: THREE.Vector3 | null = null;
+
+  /** Would an eye at `pos` have line-of-sight to the player? (both-way ray, no cone) */
+  private visibleFrom(pos: THREE.Vector3): boolean {
+    const { player, occluders } = this.deps;
+    const eye = EnemyAI.tmpA.set(pos.x, pos.y + this.enemy.eyeHeight, pos.z);
+    const target = player.eyePosition(EnemyAI.tmpB);
+    const to = target.clone().sub(eye);
+    const dist = to.length();
+    to.normalize();
+    this.raycaster.set(eye, to);
+    this.raycaster.far = dist - 0.1;
+    if (this.raycaster.intersectObjects(occluders, false).length > 0) return false;
+    this.raycaster.set(target, to.clone().negate());
+    this.raycaster.far = dist - 0.1;
+    return this.raycaster.intersectObjects(occluders, false).length === 0;
+  }
+
+  /** Nearby spot that breaks line-of-sight — behind a wall, pillar or cubicle. */
+  private findCover(): THREE.Vector3 | null {
+    const p = this.enemy.position;
+    for (const d of [1.2, 2, 2.8]) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.random() * 0.4;
+        const cand = new THREE.Vector3(p.x + Math.cos(a) * d, p.y, p.z + Math.sin(a) * d);
+        if (!this.visibleFrom(cand)) return cand;
+      }
+    }
+    return null;
+  }
+
+  private updateCoverFight(dt: number, seen: boolean): void {
+    const enemy = this.enemy;
+    const player = this.deps.player;
+    this.coverTimer -= dt;
+    switch (this.coverPhase) {
+      case 'expose': {
+        // Out in the open: face them, get shots off, then look for cover
+        enemy.faceToward(player.position, dt, 9);
+        enemy.setWalk(0.2);
+        if (this.reactionTimer > 0) {
+          this.reactionTimer -= dt;
+          break;
+        }
+        this.fireTimer -= dt;
+        if (seen && this.fireTimer <= 0) {
+          this.fireTimer = 0.95 + Math.random() * 0.5;
+          this.deps.enemyFire(enemy);
+        }
+        if (this.coverTimer <= 0) {
+          const cover = this.findCover();
+          if (cover) {
+            this.coverPos = cover;
+            this.peekPos = enemy.position.clone();
+            this.coverPhase = 'toCover';
+          } else {
+            this.coverTimer = 1.5 + Math.random(); // nothing to hide behind here
+          }
+        }
+        break;
+      }
+      case 'toCover':
+        if (this.moveToward(this.coverPos!, INVESTIGATE_SPEED * 1.15, dt, 0.3)) {
+          this.coverPhase = 'inCover';
+          this.coverTimer = 0.8 + Math.random() * 1.4;
+        }
+        break;
+      case 'inCover':
+        // Tucked away, weapon up, waiting a beat before the peek
+        enemy.faceToward(this.peekPos ?? player.position, dt, 7);
+        enemy.setWalk(0);
+        if (this.coverTimer <= 0) this.coverPhase = 'toPeek';
+        break;
+      case 'toPeek':
+        if (this.moveToward(this.peekPos!, INVESTIGATE_SPEED * 1.25, dt, 0.3) || seen) {
+          // Out again: a short, aggressive exposure
+          this.coverPhase = 'expose';
+          this.coverTimer = 1.1 + Math.random() * 0.9;
+          this.fireTimer = 0.25 + Math.random() * 0.3; // snap shot right out of the peek
+        }
+        break;
     }
   }
 

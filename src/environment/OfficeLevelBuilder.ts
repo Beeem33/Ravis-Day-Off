@@ -478,9 +478,11 @@ export class OfficeLevelBuilder {
       this.solid(0.26, 2.25, 0.08, EAST_X - 0.1, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
     }
     this.solid(0.26, 0.09, w, EAST_X - 0.1, 2.25, cz, this.darkMetalMat, { surface: 'metal', collide: false });
-    // Leaf — no collider, the scene gates entry on the trigger instead
+    // The leaf stays shut and solid — without it the doorway is a hole in
+    // the east wall and the player can walk straight off the floor slab. The
+    // trigger box in front of it is what actually gates the level change.
     const leaf = this.solid(0.1, 2.2, w - 0.06, (EAST_X - 0.22), 0, cz, this.deskMat, {
-      surface: 'wood', occlude: false, collide: false
+      surface: 'wood', occlude: false
     });
     leaf.userData.surface = 'wood';
     this.solid(0.06, 0.26, 0.06, (EAST_X - 0.3), 1.0, cz - w / 2 + 0.28, this.darkMetalMat, {

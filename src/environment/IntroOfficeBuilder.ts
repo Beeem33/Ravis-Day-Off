@@ -193,22 +193,37 @@ export class IntroOfficeBuilder {
    */
   private pistolProp(): THREE.Group {
     const g = new THREE.Group();
+    // Built upright — butt down, slide on top, the way it would be held —
+    // then tipped onto its flank as one piece and lifted so its lowest
+    // point rests exactly on y = 0. Fudging the butt over by hand used to
+    // leave a corner of it a few millimetres inside the desk.
+    const lying = new THREE.Group();
+    g.add(lying);
     const metal = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5 });
     const grip = new THREE.MeshStandardMaterial({ color: 0x3a3228, roughness: 0.9 });
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.22), metal);
-    frame.position.set(0, 0.032, -0.02);
-    g.add(frame);
+    frame.position.set(0, 0.075, -0.02);
+    lying.add(frame);
     const slide = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.045, 0.24), dark);
-    slide.position.set(0, 0.077, -0.03);
-    g.add(slide);
-    const butt = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.11, 0.05), grip);
-    butt.position.set(0, 0.03, 0.075);
-    butt.rotation.x = -1.35; // laid over on its side, butt against the desk
-    g.add(butt);
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.008, 0.06), metal);
-    guard.position.set(0, 0.012, 0.015);
-    g.add(guard);
+    slide.position.set(0, 0.12, -0.03);
+    lying.add(slide);
+    const butt = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.115, 0.05), grip);
+    butt.position.set(0, 0.005, 0.076);
+    butt.rotation.x = -0.16; // the usual rake off vertical
+    lying.add(butt);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.009, 0.062), metal);
+    guard.position.set(0, 0.036, 0.016);
+    lying.add(guard);
+    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.026, 0.01), metal);
+    trigger.position.set(0, 0.05, 0.03);
+    lying.add(trigger);
+
+    // Onto its right flank, then set down flat on the surface
+    lying.rotation.z = Math.PI / 2;
+    lying.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(lying);
+    lying.position.y -= box.min.y;
     return g;
   }
 
@@ -421,8 +436,10 @@ export class IntroOfficeBuilder {
     // The pistol itself, lying on the desk. Ravi reaches out and takes this
     // one — the viewmodel picks up from exactly where it sits.
     this.deskGun = this.pistolProp();
-    this.deskGun.position.set(-4.38, 0.72, deskZ + 0.1);
-    this.deskGun.rotation.y = -0.5;
+    // Out on the clear right-hand end of the desk, muzzle toward the wall.
+    // It used to sit 3cm from the DEADBULL can and clip through it.
+    this.deskGun.position.set(-4.02, 0.72, deskZ + 0.16);
+    this.deskGun.rotation.y = -0.42;
     this.group.add(this.deskGun);
 
     // Paperwork, a can of DEADBULL, and a bin under the desk
@@ -431,7 +448,7 @@ export class IntroOfficeBuilder {
     pap.rotation.y = 0.35;
     this.group.add(pap);
     const can = sodaCan();
-    can.position.set(-4.35, 0.72, deskZ - 0.06);
+    can.position.set(-4.46, 0.72, deskZ - 0.22);
     this.group.add(can);
     const bin = trashCan();
     bin.position.set(-3.95, 0, deskZ + 0.15);

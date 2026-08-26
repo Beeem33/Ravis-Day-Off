@@ -7,7 +7,7 @@ import {
 import {
   officeChair, trashCan, sodaCan, paperStack, scatteredPaper, fileCabinet, book, spilledCoffee,
   chipsBox, snack, printer, vent, fireAlarm, breakTable, vendingMachine, swatTruck, rubblePile,
-  wallArt, microwave, kitchenSink, wallCupboards
+  wallArt, microwave, kitchenSink, wallCupboards, coffeeTable, flowerPot
 } from './OfficeProps';
 
 export interface Level3Data {
@@ -321,6 +321,57 @@ export class Level3Builder {
       p.position.set(x, 0, (Math.random() - 0.5) * 2);
       this.group.add(p);
     }
+
+    // Two waiting bays down the length of it, so the walk in is not a bare
+    // tube. Both sit tight against a wall — the corridor is only 4.4m across
+    // and the player has to be able to get past without catching on anything.
+    const bay = (x: number, side: number): void => {
+      const wallZ = side < 0 ? HALL_Z0 + T / 2 : HALL_Z1 - T / 2;
+      const tz = wallZ - side * 0.42;
+      this.place(coffeeTable(), x, 0, tz, side < 0 ? 0 : Math.PI);
+      this.colliders.push({
+        box: new THREE.Box3(
+          new THREE.Vector3(x - 0.55, 0, tz - 0.33),
+          new THREE.Vector3(x + 0.55, 0.44, tz + 0.33)
+        )
+      });
+      // Magazines and a mug left on the glass
+      const stack = paperStack(5, 0.04);
+      stack.position.set(x + 0.24, 0.43, tz);
+      stack.rotation.y = Math.random() * Math.PI;
+      this.group.add(stack);
+      // A plant at each end of the table
+      for (const dx of [-0.95, 0.95]) {
+        const pot = flowerPot(Math.random() < 0.35 ? 'dying' : 'tall');
+        pot.position.set(x + dx, 0, wallZ - side * 0.36);
+        pot.rotation.y = Math.random() * Math.PI * 2;
+        this.group.add(pot);
+        this.colliders.push({
+          box: new THREE.Box3(
+            new THREE.Vector3(x + dx - 0.2, 0, wallZ - side * 0.36 - 0.2),
+            new THREE.Vector3(x + dx + 0.2, 1.1, wallZ - side * 0.36 + 0.2)
+          )
+        });
+      }
+      // A chair pulled up to it, back to the wall
+      const chair = officeChair();
+      chair.position.set(x - 0.2, 0, wallZ - side * 1.0);
+      chair.rotation.y = side < 0 ? Math.PI : 0;
+      this.group.add(chair);
+    };
+    bay(HALL_X0 + 5.5, -1);
+    bay(HALL_X0 + 12.5, 1);
+    // A bushy one on the far table, and a bin by the office door
+    const deskPot = flowerPot('bushy');
+    deskPot.position.set(HALL_X0 + 12.2, 0.43, HALL_Z1 - T / 2 - 0.42);
+    this.group.add(deskPot);
+    const bin = trashCan();
+    bin.position.set(HALL_X1 - 1.2, 0, HALL_Z0 + 0.55);
+    this.group.add(bin);
+    // Something to look at on the long blank stretches
+    this.place(wallArt('house'), HALL_X0 + 8.6, 1.95, HALL_Z0 + T / 2 + 0.03, 0);
+    this.place(wallArt('newcar'), HALL_X0 + 15.2, 2.0, HALL_Z0 + T / 2 + 0.03, 0);
+    this.place(wallArt('peaks'), HALL_X0 + 9.4, 1.95, HALL_Z1 - T / 2 - 0.03, Math.PI);
   }
 
   // ------------------------------------------------------------ office shell

@@ -26,6 +26,12 @@ const T_IMPACT = 1.5; // it comes through the wall
 const T_GUNNER = 3.0; // the gunner opens up
 const T_DOORS = 5.6; // the side door swings and the team piles out
 const T_HANDOVER = 6.4; // control returns
+/**
+ * The raid stops executing people once this many are left standing. The
+ * point of the level is that Ravi walks in on it, not that he arrives to an
+ * empty floor — and the survivors are who he is left looking at afterwards.
+ */
+const STAFF_FLOOR = 4;
 
 /**
  * Level3Scene — the sister office. The player walks a long corridor, opens
@@ -79,6 +85,12 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private debrisTimer = 0;
   /** Per-agent cooldown before they take a shot at a member of staff. */
   private staffShotTimers = new Map<Enemy, number>();
+  /**
+   * Floor-wide gap between executions. Without it, eight agents each on
+   * their own timer cleared all ten staff inside fifteen seconds and the
+   * level had nobody left to save.
+   */
+  private nextStaffKill = 2.5;
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -446,7 +458,6 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private standDownStaff(): void {
     for (const e of this.staff) {
       if (!e.alive) continue;
-      e.standDown();
       this.begging.delete(e);
       this.warding.delete(e);
       const ai = this.staffAI.get(e);
@@ -466,6 +477,9 @@ export class Level3Scene extends CombatScene<Level3Data> {
         walk.calmDown();
         this.staffAI.set(e, walk);
       }
+      // Last, after the AI work: a fresh CivilianAI puts their hands up and
+      // pulls the panicked face back on, so the reset has to come after it.
+      e.standDown();
     }
   }
 
@@ -504,6 +518,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     g.root.rotation.y = gunHeading;
 
     // Burst fire at the staff
+    this.nextStaffKill -= dt;
     this.gunnerBurst -= dt;
     if (this.gunnerBurst <= 0) {
       this.gunnerBurst = 0.1;
@@ -515,14 +530,17 @@ export class Level3Scene extends CombatScene<Level3Data> {
       const muzzle = new THREE.Vector3(0, 0, -1.3);
       L.truckGunMount.localToWorld(muzzle);
       this.particles.concreteChips(muzzle, new THREE.Vector3(0, 1, 0), 0xffc46a);
-if (victim && Math.random() < 0.06) {
+      // He only lands one when the floor-wide execution timer says so.
+      // Rolling for it every burst put six people a second on the carpet.
+      if (victim && this.nextStaffKill <= 0 && this.livingStaff() > STAFF_FLOOR) {
         const chest = victim.position.clone().add(new THREE.Vector3(0, 1.15, 0));
         const dir = chest.clone().sub(muzzle).normalize();
         this.particles.tracer(muzzle, chest, 0xffe0b0);
         victim.die(chest, dir, this.world, 'torso');
         this.ctx.audio.fleshHit();
         this.spatter(chest, dir, true);
-        this.staffAI.get(victim)?.dispose();
+        this.staffDown(victim);
+        this.nextStaffKill = 3.5 + Math.random() * 3;
       } else {
         const stray = (victim ? victim.position : this.player.position)
           .clone()
@@ -573,11 +591,13 @@ if (victim && Math.random() < 0.06) {
    * than five men waiting to be shot at.
    */
   private agentsWorkTheRoom(dt: number): void {
+    // Ticked by updateGunner, which runs first and shares the same budget
+    if (this.nextStaffKill > 0 || this.livingStaff() <= STAFF_FLOOR) return;
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
       if (!a.alive) continue;
       const onPlayer = this.agentAI[i]?.state === 'attack';
-      let timer = this.staffShotTimers.get(a) ?? 0.3 + Math.random() * 1.2;
+      let timer = this.staffShotTimers.get(a) ?? 1.2 + Math.random() * 2.5;
       timer -= dt;
       if (onPlayer || timer > 0) {
         this.staffShotTimers.set(a, onPlayer ? Math.max(timer, 1.2) : timer);
@@ -591,7 +611,10 @@ if (victim && Math.random() < 0.06) {
       a.faceToward(victim.position, dt, 12);
       a.setAiming(true);
       this.shootStaff(a, victim);
-      this.staffShotTimers.set(a, 2.4 + Math.random() * 3.4);
+      this.staffShotTimers.set(a, 3 + Math.random() * 5);
+      // One at a time, floor-wide, so the executions read as a drumbeat
+      this.nextStaffKill = 3.5 + Math.random() * 3;
+      return;
     }
   }
 
@@ -630,6 +653,18 @@ if (victim && Math.random() < 0.06) {
     victim.die(chest, dir, this.world, 'torso');
     audio.fleshHit();
     this.spatter(chest, dir, true);
+    this.staffDown(victim);
+  }
+
+  /** How many of the call floor are still on their feet. */
+  private livingStaff(): number {
+    let n = 0;
+    for (const e of this.staff) if (e.alive) n++;
+    return n;
+  }
+
+  /** Take a member of staff out of every pose set and drop their AI. */
+  private staffDown(victim: Enemy): void {
     this.begging.delete(victim);
     this.warding.delete(victim);
     this.staring.delete(victim);
@@ -734,10 +769,13 @@ if (victim && Math.random() < 0.06) {
     if (this.phase === 'talk') this.updateTalk(dt);
     if (this.phase === 'crash') this.updateCrash(dt);
     if (this.deploying.length) this.updateDeploy(dt);
-    if (this.agents.length) this.separateAgents(dt);
-    if (this.agents.length) this.agentsWorkTheRoom(dt);
-    // The gunner keeps working after the handover too
-    if (this.phase === 'play') this.updateGunner(dt);
+    // The gunner keeps working after the handover too
+    if (this.phase === 'play') this.updateGunner(dt);
+    if (this.agents.length) {
+      this.agentsWorkTheRoom(dt);
+      // After the AI has steered, or it walks them straight back together
+      this.separateAgents(dt);
+    }
 
     this.dialogue.update(dt);
 

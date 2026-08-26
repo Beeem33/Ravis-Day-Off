@@ -790,38 +790,87 @@ export function wallArt(
       g.font = `bold ${Math.round(py * 0.14)}px Impact, Arial Black, sans-serif`;
       g.fillText('CALL TOGETHER,', px / 2, py * 0.21);
       g.fillText('FALL TOGETHER', px / 2, py * 0.37);
-      // A row of figures along the bottom, hands joined between them
-      const n = 6;
-      const gapX = px / (n + 1);
-      const footY = py * 0.95;
-      const headY = py * 0.6;
-      const armY = py * 0.75;
-      g.strokeStyle = '#7fa6d8';
-      g.fillStyle = '#7fa6d8';
-      g.lineWidth = Math.max(3, px * 0.008);
-      g.lineCap = 'round';
+
+      // A line of the floor staff in their own uniform — white shirt, blue
+      // chinos, ball cap — hands joined all the way along. The end two get
+      // their outer arm as well, hanging at their side: the chain has to
+      // finish somewhere, but nobody should look like they lost a limb.
+      const n = 5;
+      const footY = py * 0.965;
+      const gapX = px / n;
+      const unit = py * 0.062; // one body-width, everything scales off this
       for (let i = 0; i < n; i++) {
-        const x = gapX * (i + 1);
+        const x = gapX * (i + 0.5);
+        const headR = unit * 0.5;
+        const headY = footY - unit * 6.0;
+        const shoulderY = footY - unit * 5.1;
+        const hipY = footY - unit * 2.9;
+
+        // Legs — blue chinos, with a gap between them
+        g.fillStyle = '#33507d';
+        g.fillRect(x - unit * 0.52, hipY, unit * 0.44, footY - hipY);
+        g.fillRect(x + unit * 0.08, hipY, unit * 0.44, footY - hipY);
+        g.fillStyle = '#15171a';
+        g.fillRect(x - unit * 0.58, footY - unit * 0.16, unit * 0.5, unit * 0.16);
+        g.fillRect(x + unit * 0.08, footY - unit * 0.16, unit * 0.5, unit * 0.16);
+
+        // Shirt
+        g.fillStyle = '#f2f2ee';
+        g.fillRect(x - unit * 0.6, shoulderY, unit * 1.2, hipY - shoulderY);
+        // Collar and placket, so it reads as a shirt not a vest
+        g.strokeStyle = '#c9c9c2';
+        g.lineWidth = Math.max(1, px * 0.0022);
         g.beginPath();
-        g.arc(x, headY, px * 0.02, 0, Math.PI * 2);
-        g.fill();
-        g.beginPath();
-        g.moveTo(x, headY + px * 0.022);
-        g.lineTo(x, py * 0.82);
-        g.moveTo(x, py * 0.82);
-        g.lineTo(x - px * 0.018, footY);
-        g.moveTo(x, py * 0.82);
-        g.lineTo(x + px * 0.018, footY);
-        // Arms reaching to the neighbour on each side, meeting halfway
-        if (i > 0) {
-          g.moveTo(x, headY + px * 0.038);
-          g.lineTo(x - gapX / 2, armY);
-        }
-        if (i < n - 1) {
-          g.moveTo(x, headY + px * 0.038);
-          g.lineTo(x + gapX / 2, armY);
-        }
+        g.moveTo(x, shoulderY);
+        g.lineTo(x, hipY);
         g.stroke();
+        g.fillStyle = '#c9c9c2';
+        g.fillRect(x - unit * 0.6, shoulderY, unit * 1.2, unit * 0.12);
+
+        // Head and cap
+        g.fillStyle = '#c98d63';
+        g.beginPath();
+        g.arc(x, headY, headR, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#1d3f6e';
+        g.beginPath();
+        g.arc(x, headY - headR * 0.15, headR * 1.02, Math.PI, 0);
+        g.fill();
+        g.fillRect(x - headR * 1.02, headY - headR * 0.2, headR * 2.04, headR * 0.22);
+        // Peak, alternating side so the row is not five clones
+        const peak = i % 2 ? 1 : -1;
+        g.fillRect(x + (peak > 0 ? headR * 0.9 : -headR * 2.0), headY - headR * 0.1, headR * 1.1, headR * 0.2);
+        // Neck
+        g.fillStyle = '#b07c56';
+        g.fillRect(x - unit * 0.14, headY + headR * 0.75, unit * 0.28, shoulderY - (headY + headR * 0.75) + 0.5);
+
+        // Arms. Inner ones reach across to meet the neighbour's halfway; the
+        // outer arm on each end figure hangs down at their side.
+        g.strokeStyle = '#c98d63';
+        g.lineWidth = unit * 0.26;
+        g.lineCap = 'round';
+        const armY = shoulderY + unit * 0.35;
+        const joinY = shoulderY + unit * 1.5;
+        for (const side of [-1, 1]) {
+          const linked = side < 0 ? i > 0 : i < n - 1;
+          g.beginPath();
+          g.moveTo(x + side * unit * 0.5, armY);
+          if (linked) {
+            g.lineTo(x + side * gapX * 0.5, joinY);
+          } else {
+            // Hanging arm: out a little, then straight down past the hip
+            g.lineTo(x + side * unit * 0.78, armY + unit * 1.1);
+            g.lineTo(x + side * unit * 0.7, hipY + unit * 0.25);
+          }
+          g.stroke();
+        }
+      }
+      // Joined hands, drawn last so they sit on top of both arms
+      g.fillStyle = '#e0a87e';
+      for (let i = 0; i < n - 1; i++) {
+        g.beginPath();
+        g.arc(gapX * (i + 1), footY - py * 0.062 * 5.1 + py * 0.062 * 1.5, py * 0.062 * 0.2, 0, Math.PI * 2);
+        g.fill();
       }
     } else if (kind === 'dial') {
       g.fillStyle = '#f6f1e2';
@@ -1190,6 +1239,60 @@ export function flowerPot(kind: 'tall' | 'bushy' | 'dying' = 'bushy'): THREE.Gro
         g.add(dead);
       }
     }
+  }
+  return g;
+}
+
+/**
+ * Low waiting-area coffee table: glass top on a wooden frame, with a
+ * magazine shelf underneath. 1.0 x 0.55 footprint, 0.42 tall.
+ */
+export function coffeeTable(): THREE.Group {
+  const g = new THREE.Group();
+  const W = 1.0;
+  const D = 0.55;
+  const H = 0.42;
+  const wood = lam(0x6f5741);
+  // Glass top, sat proud of the frame
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(W, 0.02, D),
+    new THREE.MeshStandardMaterial({
+      color: 0x9fb6c4, roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.42
+    })
+  );
+  top.position.y = H;
+  g.add(top);
+  // Frame rails round the edge of the glass
+  for (const sz of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(W, 0.05, 0.05), wood);
+    rail.position.set(0, H - 0.035, sz * (D / 2 - 0.025));
+    g.add(rail);
+  }
+  for (const sx of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, D - 0.1), wood);
+    rail.position.set(sx * (W / 2 - 0.025), H - 0.035, 0);
+    g.add(rail);
+  }
+  // Legs and a lower shelf
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, H - 0.06, 0.05), wood);
+      leg.position.set(sx * (W / 2 - 0.05), (H - 0.06) / 2, sz * (D / 2 - 0.05));
+      g.add(leg);
+    }
+  }
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(W - 0.16, 0.025, D - 0.16), wood);
+  shelf.position.y = 0.13;
+  g.add(shelf);
+  // A couple of magazines fanned on the shelf
+  for (let i = 0; i < 3; i++) {
+    const mag = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.008, 0.17),
+      lam([0xc4553f, 0x3f6ac4, 0xd8c14a][i])
+    );
+    mag.position.set(-0.18 + i * 0.13, 0.148 + i * 0.009, (i % 2) * 0.05 - 0.02);
+    mag.rotation.y = (Math.random() - 0.5) * 0.5;
+    g.add(mag);
   }
   return g;
 }

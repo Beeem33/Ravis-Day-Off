@@ -45,6 +45,9 @@ export class GameEngine {
   uiRoot: HTMLElement | null = null;
   private loadingCard: HTMLElement | null = null;
   private framesUntilReady = 0;
+  private pendingScene: GameScene | null = null;
+  private pendingFrames = 0;
+  private pendingTimer = 0;
 
   /**
    * Swap scenes behind a loading card.
@@ -56,15 +59,39 @@ export class GameEngine {
    * frame — which is when `CombatScene.warmUp` has finished.
    */
   setScene(scene: GameScene, label = ''): void {
-    const card = this.showLoading(label);
+    this.loadingCard = this.showLoading(label);
+    // The swap is deferred by a frame on purpose. Building a level and then
+    // compiling its shaders is one long synchronous block — around a second
+    // for the call floor, three for the raid — and the browser cannot paint
+    // in the middle of it. Doing the work here would leave the card in the
+    // DOM but never on screen, and the player would just see a freeze. So
+    // the card goes up, the loop paints it, and the build happens next.
+    this.pendingScene = scene;
+    this.pendingFrames = 2;
+    // A backgrounded tab never fires requestAnimationFrame, so the loop
+    // would never pick this up and the card would hang there forever. The
+    // timer still runs when hidden, so it finishes the job off-screen.
+    window.clearTimeout(this.pendingTimer);
+    this.pendingTimer = window.setTimeout(() => this.buildPending(), 150);
+  }
+
+  /** Swap in the scene that setScene queued, and start its warm-up. */
+  private buildPending(): void {
+    if (!this.pendingScene) return;
+    window.clearTimeout(this.pendingTimer);
     this.scene?.exit();
-    this.scene = scene;
-    scene.enter();
+    this.scene = this.pendingScene;
+    this.pendingScene = null;
+    this.scene.enter();
     this.framesUntilReady = 2; // this frame, then the warm-up frame
-    this.loadingCard = card;
+    this.lastTime = performance.now(); // the build is not elapsed game time
   }
 
   private showLoading(label: string): HTMLElement {
+    // Anything still up from a previous swap goes now — a restart mid-fade
+    // used to stack cards on top of each other.
+    this.loadingCard?.remove();
+    for (const old of (this.uiRoot ?? document.body).querySelectorAll('.level-load')) old.remove();
     const el = document.createElement('div');
     el.className = 'level-load';
     el.innerHTML =
@@ -83,6 +110,11 @@ export class GameEngine {
       this.lastTime = now;
       dt = Math.min(dt, 1 / 20); // clamp hitches
       this.elapsed += dt;
+      // A scene waiting to be built: hold off until the card has painted
+      if (this.pendingScene) {
+        if (--this.pendingFrames <= 0) this.buildPending();
+        return; // card only until then
+      }
       if (this.scene) {
         this.scene.update(dt, this.elapsed);
         this.scene.render(this.renderer);

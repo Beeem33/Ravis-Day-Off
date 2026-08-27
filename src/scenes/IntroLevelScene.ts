@@ -359,6 +359,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.phase = 'play';
     this.t = T_END;
     this.weapon.stow = 0;
+    // A skip can land before the cutscene's reach track finished — without
+    // this the pistol stays frozen in the "lying on the desk" pose, invisible.
+    this.weapon.reach = 0;
     this.player.cinematic = false;
     this.letterbox.classList.add('open');
     this.ui.querySelector('.intro-skip')!.classList.add('gone');
@@ -565,9 +568,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.player.yaw += dYaw * k;
     this.player.pitch += (targetPitch - this.player.pitch) * k;
 
-    const s = this.takedownVm.struggle;
-    this.player.yaw += (Math.sin(time * 12.7) * 0.6 + Math.sin(time * 8.3 + 1.9) * 0.4) * 0.006 * s;
-    this.player.pitch += (Math.sin(time * 10.9 + 0.7) * 0.6 + Math.sin(time * 7.1 + 2.6) * 0.4) * 0.005 * s;
+    // (No camera shake — the fight reads through the arms, the view stays steady.)
   }
 
   private stepWorld(dt: number): void {

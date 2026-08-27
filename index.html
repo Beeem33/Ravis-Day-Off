@@ -131,6 +131,25 @@
     }
     .alert-banner.show { opacity: 1; }
 
+    /* ---------- Night vision (level 4) ---------- */
+    .nv-overlay { position: absolute; inset: 0; display: none; pointer-events: none; }
+    .nv-overlay.on {
+      display: block;
+      background: radial-gradient(ellipse at center, rgba(60,255,110,0.06) 0%, rgba(24,130,52,0.2) 55%, rgba(0,26,7,0.78) 100%);
+    }
+    .nv-overlay.on::before {
+      content: ""; position: absolute; inset: 0;
+      background: repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 3px);
+    }
+    .nv-overlay.on::after {
+      content: ""; position: absolute; inset: -4vmin;
+      box-shadow: inset 0 0 22vmin 9vmin rgba(0, 8, 2, 0.95); border-radius: 14vmin;
+    }
+    .nv-hint {
+      position: absolute; right: 24px; bottom: 74px; color: rgba(160,255,180,0.65);
+      font-size: 12px; letter-spacing: 2px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+
     /* ---------- Intro level: letterbox, objective, wipe ---------- */
     #intro-ui { position: absolute; inset: 0; pointer-events: none; }
     .intro-letterbox span {

@@ -600,10 +600,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.player.yaw += dYaw * k;
     this.player.pitch += (targetPitch - this.player.pitch) * k;
 
-    // The struggle rattles the camera
-    const s = this.takedownVm.struggle;
-    this.player.yaw += (Math.sin(time * 12.7) * 0.6 + Math.sin(time * 8.3 + 1.9) * 0.4) * 0.006 * s;
-    this.player.pitch += (Math.sin(time * 10.9 + 0.7) * 0.6 + Math.sin(time * 7.1 + 2.6) * 0.4) * 0.005 * s;
+    // (No camera shake — the fight reads through the arms, the view stays steady.)
   }
 
   private startReload(): void {

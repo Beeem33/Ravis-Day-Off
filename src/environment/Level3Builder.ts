@@ -60,6 +60,10 @@ export interface Level3Data {
   truckNoseZ: number;
   /** Fire licks, animated by the scene. */
   fires: THREE.Mesh[];
+  /** The way on to level four: red until the floor is clear, then green. */
+  exitPanel: THREE.MeshStandardMaterial;
+  exitPanelLight: THREE.PointLight;
+  exitTrigger: THREE.Box3;
 }
 
 const WALL_H = 3.2; // corridor
@@ -79,6 +83,12 @@ const OFF_Z1 = 8;
 // Breakroom in the south-east corner
 const BR_X0 = 6.0;
 const BR_Z0 = 2.6;
+// The service door out of the east wall, the way on to the dark floor. It
+// sits between the filing bank and the breakroom, on the far side of the
+// room from the corridor Ravi walks in by.
+const EXIT_Z0 = -0.4;
+const EXIT_Z1 = 1.4;
+
 // The truck comes through the north wall here
 const BREACH_X = 1.0;
 const BREACH_W = 7.0;
@@ -105,6 +115,8 @@ export class Level3Builder {
   private breachWall!: THREE.Mesh;
   private breachColliderIndex = -1;
   private truckColliders: Collider[] = [];
+  private exitPanel!: THREE.MeshStandardMaterial;
+  private exitPanelLight!: THREE.PointLight;
 
   private carpetMat!: THREE.MeshLambertMaterial;
   private wallMat!: THREE.MeshLambertMaterial;
@@ -184,6 +196,12 @@ export class Level3Builder {
       breachWall: this.breachWall,
       breachColliderIndex: this.breachColliderIndex,
       truckColliders: this.truckColliders,
+      exitPanel: this.exitPanel,
+      exitPanelLight: this.exitPanelLight,
+      exitTrigger: new THREE.Box3(
+        new THREE.Vector3(OFF_X1 - 1.4, 0, EXIT_Z0 + 0.1),
+        new THREE.Vector3(OFF_X1 - 0.15, 2.2, EXIT_Z1 - 0.1)
+      ),
       breachZ: OFF_Z0,
       truckNoseZ: this.truckParts.bounds.z1,
       fires: this.fires
@@ -384,7 +402,13 @@ export class Level3Builder {
     this.breachWall = this.solid(BREACH_W, OFF_H, T, BREACH_X, 0, OFF_Z0, this.wallMat);
     this.breachColliderIndex = this.colliders.length - 1;
     this.wallX(OFF_X0, OFF_X1, OFF_Z1, OFF_H);
-    this.wallZ(OFF_Z0, OFF_Z1, OFF_X1, OFF_H);
+    // East wall, split round the service door on to the next floor
+    this.wallZ(OFF_Z0, EXIT_Z0, OFF_X1, OFF_H);
+    this.wallZ(EXIT_Z1, OFF_Z1, OFF_X1, OFF_H);
+    this.solid(T, OFF_H - 2.25, EXIT_Z1 - EXIT_Z0, OFF_X1, 2.25, (EXIT_Z0 + EXIT_Z1) / 2, this.wallMat, {
+      collide: false
+    });
+    this.buildExitDoor();
     // West wall, split round the doorway in from the corridor. This is the
     // only wall at x = OFF_X0 — the corridor does not build its own, or the
     // two overlap and leave slivers the player can squeeze through.
@@ -439,6 +463,40 @@ export class Level3Builder {
       slab.rotation.set(rnd(-0.4, 0.4), rnd(0, 3.14), rnd(-0.4, 0.4));
       this.breachBarrier.add(slab);
     }
+  }
+
+  /**
+   * The way out. Leaf shut and solid — the scene gates the level change on a
+   * trigger in front of it rather than on walking through — with a status
+   * panel overhead that stays red until the last agent is down.
+   */
+  private buildExitDoor(): void {
+    const cz = (EXIT_Z0 + EXIT_Z1) / 2;
+    const w = EXIT_Z1 - EXIT_Z0;
+    for (const z of [EXIT_Z0, EXIT_Z1]) {
+      this.solid(0.3, 2.25, 0.1, OFF_X1, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.3, 0.1, w, OFF_X1, 2.25, cz, this.darkMetalMat, { surface: 'metal', collide: false });
+    const leaf = this.solid(0.1, 2.2, w - 0.06, OFF_X1 - 0.14, 0, cz, this.deskMat, { surface: 'wood' });
+    leaf.userData.surface = 'wood';
+    this.solid(0.07, 0.26, 0.07, OFF_X1 - 0.24, 1.0, cz - w / 2 + 0.3, this.darkMetalMat, {
+      surface: 'metal', occlude: false, collide: false
+    });
+
+    this.exitPanel = new THREE.MeshStandardMaterial({
+      color: 0x2a0a0a,
+      emissive: 0xff2b1c,
+      emissiveIntensity: 1.6
+    });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.3, w * 0.82), this.exitPanel);
+    panel.position.set(OFF_X1 - 0.26, 2.62, cz);
+    this.group.add(panel);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, w * 0.9), this.darkMetalMat);
+    hood.position.set(OFF_X1 - 0.21, 2.82, cz);
+    this.group.add(hood);
+    this.exitPanelLight = new THREE.PointLight(0xff3b28, 4.5, 5, 1.9);
+    this.exitPanelLight.position.set(OFF_X1 - 0.72, 2.5, cz);
+    this.group.add(this.exitPanelLight);
   }
 
   /** Frame plus a leaf standing open flat against the office wall. */
@@ -723,7 +781,7 @@ export class Level3Builder {
     hang('dunes', -12.5, 1.95, OFF_Z0 + T / 2 + 0.03, 0);
     hang('peaks', 9.0, 1.95, OFF_Z0 + T / 2 + 0.03, 0);
     // East wall
-    hang('dunes', OFF_X1 - T / 2 - 0.03, 1.95, -1.5, -Math.PI / 2);
+    hang('dunes', OFF_X1 - T / 2 - 0.03, 1.95, -4.6, -Math.PI / 2);
     // Beside the corridor door
     hang('peaks', OFF_X0 + T / 2 + 0.03, 1.95, -3.4, Math.PI / 2);
   }

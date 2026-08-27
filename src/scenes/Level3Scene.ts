@@ -92,6 +92,12 @@ export class Level3Scene extends CombatScene<Level3Data> {
    * level had nobody left to save.
    */
   private nextStaffKill = 2.5;
+  /** Floor cleared: the service door on the east wall unlocks. */
+  private cleared = false;
+  private leaving = false;
+  private handedOff = false;
+  private fade = 0;
+  private fadeEl: HTMLElement | null = null;
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -183,6 +189,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     document.removeEventListener('keydown', this.keyHandler);
     this.hud.destroy();
     this.dialogue.destroy();
+    this.fadeEl?.remove();
     this.ui.remove();
     this.ctx.input.exitPointerLock();
     this.scene.traverse((o) => {
@@ -728,6 +735,39 @@ export class Level3Scene extends CombatScene<Level3Data> {
     }
   }
 
+  /**
+   * Standing in the doorway with the floor clear takes Ravi through to the
+   * dark floor. The leaf stays shut and solid; the trigger box in front of
+   * it is what actually gates the change, so there is never a hole in the
+   * east wall to walk off through.
+   */
+  private updateExit(dt: number): void {
+    if (this.leaving) {
+      this.fade = Math.min(1, this.fade + dt * 1.4);
+      if (this.fadeEl) this.fadeEl.style.opacity = String(this.fade);
+      if (this.fade >= 1 && !this.handedOff) {
+        this.handedOff = true;
+        this.ctx.bus.emit(Events.Level3Complete);
+      }
+      return;
+    }
+    if (this.phase !== 'play' || !this.player.alive || this.over) return;
+    const p = this.player.position;
+    if (!this.level.exitTrigger.containsPoint(new THREE.Vector3(p.x, p.y + 0.9, p.z))) return;
+    if (!this.cleared) {
+      this.setObjective('LOCKED — CLEAR THE FLOOR FIRST');
+      return;
+    }
+    this.leaving = true;
+    this.setObjective('');
+    if (!this.fadeEl) {
+      this.fadeEl = document.createElement('div');
+      this.fadeEl.className = 'intro-fade';
+      this.ctx.uiRoot.appendChild(this.fadeEl);
+    }
+    this.ctx.input.exitPointerLock();
+  }
+
   private handOver(): void {
     if (this.phase === 'play') return;
     this.phase = 'play';
@@ -790,6 +830,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     }
 
     this.dialogue.update(dt);
+    this.updateExit(dt);
 
     // Camera shake from the impact
     if (this.shake > 0) {
@@ -943,9 +984,15 @@ export class Level3Scene extends CombatScene<Level3Data> {
       headshot,
       by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
     });
-    if (this.remaining <= 0 && this.phase === 'play') {
-      this.setObjective('FLOOR CLEAR');
+    if (this.remaining <= 0 && this.phase === 'play' && !this.cleared) {
+      this.cleared = true;
       this.standDownStaff();
+      // The service door unlocks: the panel over it goes red to green
+      this.level.exitPanel.emissive.setHex(0x2bff6a);
+      this.level.exitPanel.color.setHex(0x0a2a12);
+      this.level.exitPanelLight.color.setHex(0x2bff6a);
+      this.ctx.audio.uiBeep(true);
+      this.setObjective('FLOOR CLEAR — THE SERVICE DOOR IS OPEN');
     }
   }
 }

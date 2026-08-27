@@ -6,7 +6,7 @@ import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
-import { GunBeamPool, PlayerGlow } from '../fx/GunBeam';
+import { GunBeamPool } from '../fx/GunBeam';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
@@ -32,7 +32,6 @@ const TUBE_SIZE = 6;
 export class Level4Scene extends CombatScene<Level4Data> {
   private weapon!: WeaponViewmodel;
   private shotgun!: ShotgunViewmodel;
-  private glow!: PlayerGlow;
   private beams!: GunBeamPool;
   private agents: Enemy[] = [];
   private agentAI: EnemyAI[] = [];
@@ -92,7 +91,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.shotgun = new ShotgunViewmodel(this.player.camera);
     this.shotgun.stow = 1; // stowed, and not even carried yet
-    this.glow = new PlayerGlow(this.player.camera);
     // The goggles' amplifier: a flat green wash across everything when down
     this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
     this.scene.add(this.nvLight);
@@ -187,7 +185,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.hud.destroy();
     this.dialogue.destroy();
     for (const ai of this.agentAI) ai.dispose();
-    this.glow.dispose();
     this.beams.dispose();
     this.flashPool.dispose();
     this.ui.remove();
@@ -378,7 +375,11 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // And now the goggles are worth knowing about
     const hint = this.ui.querySelector<HTMLElement>('.nv-hint');
     if (hint) hint.style.display = 'block';
-    this.scene.fog = new THREE.Fog(0x020305, 4, 22);
+    // Fog from four metres was quietly eating the level: every weapon light
+    // more than about six metres off faded to nothing, which is why the beams
+    // read as bright up close and absent at any useful range. The dark here
+    // should come from there being no light, not from a grey wash.
+    this.scene.fog = new THREE.Fog(0x020305, 16, 70);
     this.ctx.audio.wallCollapse();
   }
 
@@ -608,7 +609,38 @@ export class Level4Scene extends CombatScene<Level4Data> {
         a.position.z -= nz;
         b.position.x += nx;
         b.position.z += nz;
+        // Separation is a raw position write, so it will happily shove
+        // somebody into a wall — and once inside one the AI has no way back
+        // out and they stand there scraping it. Push them clear again.
+        this.pushOutOfWalls(a);
+        this.pushOutOfWalls(b);
       }
+    }
+  }
+
+  /**
+   * Ease a body out of anything it has ended up inside, along whichever axis
+   * needs the least movement.
+   */
+  private pushOutOfWalls(e: Enemy): void {
+    const R = 0.4;
+    for (const c of this.level.colliders) {
+      if (c.disabled) continue;
+      const b = c.box;
+      if (b.min.y > 1.6 || b.max.y < 0.4) continue;
+      const x = e.position.x;
+      const z = e.position.z;
+      if (x <= b.min.x - R || x >= b.max.x + R || z <= b.min.z - R || z >= b.max.z + R) continue;
+      // Four ways out; take the cheapest
+      const left = x - (b.min.x - R);
+      const right = b.max.x + R - x;
+      const back = z - (b.min.z - R);
+      const front = b.max.z + R - z;
+      const m = Math.min(left, right, back, front);
+      if (m === left) e.position.x = b.min.x - R;
+      else if (m === right) e.position.x = b.max.x + R;
+      else if (m === back) e.position.z = b.min.z - R;
+      else e.position.z = b.max.z + R;
     }
   }
 

@@ -24,6 +24,7 @@ import * as THREE from 'three';
  */
 export class GunBeamPool {
   private spots: THREE.SpotLight[] = [];
+  private lamps: THREE.Sprite[] = [];
   private targets: THREE.Object3D[] = [];
   private live: boolean[] = [];
   private readonly range: number;
@@ -32,23 +33,44 @@ export class GunBeamPool {
   private static tmp = new THREE.Vector3();
   private static DOWN = new THREE.Vector3(0, -1, 0);
 
-  constructor(scene: THREE.Scene, count: number, range = 30, intensity = 55) {
+  constructor(scene: THREE.Scene, count: number, range = 18, intensity = 55) {
     this.range = range;
     this.max = intensity;
-    // Long and narrow — a search beam, not a lantern
-    const half = Math.PI / 40;
+    const lampMat = new THREE.SpriteMaterial({
+      color: 0xfff2d6,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false
+    });
+    // Tuned by looking at it, one variable at a time. The one that mattered
+    // was decay: at 1.6 the pool all but vanished at any useful range and
+    // pushing the intensity up just blew out whatever was close. At 1.0 a
+    // moderate lamp throws a soft-edged patch that reads as a torch.
+    const half = Math.PI / 9;
     for (let i = 0; i < count; i++) {
-      const spot = new THREE.SpotLight(0xffeccd, 0, range, half * 1.5, 0.35, 1.0);
+      const spot = new THREE.SpotLight(0xffeccd, 0, range, half, 0.6, 1.0);
       spot.position.set(0, -90, 0);
       // Small maps: the cone is narrow, so there is little to resolve, and
       // twelve of these have to fit in a frame alongside everything else.
       spot.castShadow = true;
-      spot.shadow.mapSize.set(512, 512);
+      spot.shadow.mapSize.set(1024, 1024);
       spot.shadow.camera.near = 0.4;
       spot.shadow.camera.far = range;
-      spot.shadow.bias = -0.0016;
-      spot.shadow.normalBias = 0.03;
+      spot.shadow.bias = -0.0009;
+      spot.shadow.normalBias = 0.02;
       scene.add(spot);
+      // The lens itself. A spotlight aimed at the player lights nothing the
+      // player can see — the cone lands on surfaces behind them — so without
+      // this the one moment that matters, a torch swinging onto you, has no
+      // picture at all. It is a point at the muzzle, which is already
+      // validated to be on the right side of any wall, so it cannot leak.
+      const lamp = new THREE.Sprite(lampMat);
+      lamp.scale.setScalar(0.22);
+      lamp.position.set(0, -90, 0);
+      lamp.visible = false;
+      scene.add(lamp);
+      this.lamps.push(lamp);
       const target = new THREE.Object3D();
       target.position.set(0, -90, -1);
       scene.add(target);
@@ -77,6 +99,8 @@ export class GunBeamPool {
     const len = Math.max(0.6, Math.min(reach, this.range));
     this.spots[i].position.copy(from);
     this.spots[i].intensity = this.max;
+    this.lamps[i].position.copy(from);
+    this.lamps[i].visible = true;
     this.targets[i].position.copy(from).addScaledVector(d, this.range);
     this.live[i] = true;
   }
@@ -86,12 +110,15 @@ export class GunBeamPool {
     if (i >= this.spots.length) return;
     this.spots[i].intensity = 0;
     this.spots[i].position.set(0, -90, 0);
+    this.lamps[i].visible = false;
     this.live[i] = false;
   }
 
   dispose(): void {
     for (const s of this.spots) s.removeFromParent();
     for (const t of this.targets) t.removeFromParent();
+    for (const l of this.lamps) l.removeFromParent();
+    this.lamps.length = 0;
     this.spots.length = 0;
     this.targets.length = 0;
   }

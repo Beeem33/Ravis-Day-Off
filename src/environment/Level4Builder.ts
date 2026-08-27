@@ -103,6 +103,13 @@ export class Level4Builder {
   private deskMat!: THREE.MeshLambertMaterial;
   private mazeDoor!: THREE.Mesh;
   private mazeDoorCollider!: Collider;
+  /**
+   * The centre of every doorway cut into a wall, with the two points either
+   * side of it. Seeded into the nav graph — a 1.5m opening is narrower than
+   * the sampling grid, so left to chance the grid steps straight over a door
+   * and the rooms behind it come out unreachable.
+   */
+  private doorPoints: [number, number][] = [];
 
   build(): Level4Data {
     this.makeMaterials();
@@ -229,6 +236,10 @@ export class Level4Builder {
       put(cursor, s, 0, H); // solid pier before the opening
       if (o.kind === 'door') {
         put(s, e, DOOR_H, H - DOOR_H); // header over the doorway
+        // Through the opening, and a stride either side of it
+        for (const off of [-0.85, 0, 0.85]) {
+          this.doorPoints.push(axis === 'x' ? [o.at, cross + off] : [cross + off, o.at]);
+        }
       } else {
         put(s, e, 0, WIN_SILL); // sill below
         put(s, e, WIN_HEAD, H - WIN_HEAD); // head above
@@ -395,7 +406,7 @@ export class Level4Builder {
     stub(V_MID + CW - 1.1, -6.5, 2.2, 'z');
     stub(V_MID - CW + 1.1, 6.5, 2.2, 'z');
     stub(V_EAST - CW + 1.1, -6.0, 2.2, 'z');
-    stub(V_EAST + CW - 1.1, 6.0, 2.2, 'z');
+    stub(V_EAST + CW - 1.1, 8.8, 2.2, 'z');
     // A short dead-end alcove off the west corridor — somewhere to be missed
     this.solid(T, H, 2.4, V_WEST - CW + 1.9, 0, -4.4);
     this.solid(1.9, H, T, V_WEST - CW + 0.95, 0, -3.2);
@@ -455,32 +466,113 @@ export class Level4Builder {
   // ------------------------------------------------------------- waypoints
 
   /** Corridor junctions and room centres, for whoever ends up patrolling. */
+  /**
+   * A walkable graph, built from the level rather than written by hand.
+   *
+   * The old version listed corridor junctions and room centres and joined
+   * anything within nine metres of anything else. Nothing checked whether a
+   * wall was in the way, so a room centre linked straight through its own
+   * wall to the corridor beyond, and an agent routed along that link walked
+   * face-first into the plaster and stayed there. That is the wall-hugging.
+   *
+   * Instead: sample the floor on a grid, keep every point a body actually
+   * fits at, and join two points only when the whole width of a body can be
+   * swept between them without touching anything. Corners cannot be cut,
+   * doorways link only through the doorway, and there is no edge that leads
+   * into a wall.
+   */
+  /**
+   * A walkable graph, built from the level rather than written by hand.
+   *
+   * The old version listed corridor junctions and room centres and joined
+   * anything within nine metres of anything else. Nothing checked whether a
+   * wall was in the way, so a room centre linked straight through its own
+   * wall to the corridor beyond, and an agent routed along that link walked
+   * face-first into the plaster and stayed there. That is the wall-hugging.
+   *
+   * Instead: sample the floor, keep every point a body actually fits at, seed
+   * in the doorways (1.5m is narrower than the sampling grid, so left to
+   * chance the grid steps clean over a door and the rooms behind it come out
+   * unreachable), and join two points only when a whole body can be swept
+   * between them. Corners cannot be cut and no edge leads into a wall.
+   */
   private makeWaypoints(): Waypoint[] {
-    const pts: [number, number][] = [
-      // Corridor grid
-      [V_WEST, H_NORTH], [-13, H_NORTH], [V_MID, H_NORTH], [3, H_NORTH], [V_EAST, H_NORTH],
-      [V_WEST, H_MAIN], [-13, H_MAIN], [V_MID, H_MAIN], [3, H_MAIN], [V_EAST, H_MAIN],
-      [V_WEST, H_SOUTH], [-13, H_SOUTH], [V_MID, H_SOUTH], [3, H_SOUTH], [V_EAST, H_SOUTH],
-      [V_WEST, -4], [V_WEST, 3.5], [V_MID, -4], [V_MID, 3.5], [V_EAST, -3.5], [V_EAST, 3.5],
-      // Room centres
-      [-16, -5.5], [-10, -5.5], [-17.4, 5.5], [-11, 5.5],
-      [-0.5, -5.5], [5.5, -5.5], [-1.2, 3.4], [6.0, 4.0], [1.5, 7.2],
-      [13.4, -5.5], [13.4, 5.5],
-      // Approach
-      [HALL_X0 + 2, 0], [-32, 0], [-27, 0]
-    ];
+    const R = 0.42; // body radius, with a little room so they do not scrape
+    const STEP = 1.3;
+    // The maze door is scripted open the moment the player has control, so
+    // it must not divide the graph — leave it in and the approach corridor
+    // comes out as its own island and gets thrown away.
+    const walls = this.colliders
+      .filter((c) => c !== this.mazeDoorCollider)
+      .map((c) => c.box)
+      .filter((b) => b.min.y < 1.6 && b.max.y > 0.4);
+
+    const clear = (x: number, z: number, r = R): boolean => {
+      for (const b of walls) {
+        if (x > b.min.x - r && x < b.max.x + r && z > b.min.z - r && z < b.max.z + r) return false;
+      }
+      return true;
+    };
+    const walkable = (ax: number, az: number, bx: number, bz: number): boolean => {
+      const dx = bx - ax;
+      const dz = bz - az;
+      const steps = Math.ceil(Math.hypot(dx, dz) / 0.18);
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        // A shade wider along the run than at the nodes, so an edge cannot
+        // shave a corner that a body would actually catch on.
+        if (!clear(ax + dx * t, az + dz * t, R + 0.07)) return false;
+      }
+      return true;
+    };
+
+    const pts: [number, number][] = [];
+    for (const d of this.doorPoints) if (clear(d[0], d[1])) pts.push(d);
+    for (let x = X0 + 1.0; x <= X1 - 1.0; x += STEP) {
+      for (let z = Z0 + 1.0; z <= Z1 - 1.0; z += STEP) {
+        if (clear(x, z)) pts.push([x, z]);
+      }
+    }
+    for (let x = HALL_X0 + 1.2; x <= HALL_X1; x += STEP) if (clear(x, 0)) pts.push([x, 0]);
+
     const wps: Waypoint[] = pts.map(([x, z]) => ({ pos: new THREE.Vector3(x, 0, z), links: [] }));
-    // Link anything mutually visible along a corridor: cheap, and good enough
-    // until there is actually somebody walking it.
+    const REACH = STEP * 2.3;
     for (let i = 0; i < wps.length; i++) {
       for (let j = i + 1; j < wps.length; j++) {
         const a = wps[i].pos;
         const b = wps[j].pos;
-        if (a.distanceTo(b) > 9) continue;
+        if (a.distanceTo(b) > REACH) continue;
+        if (!walkable(a.x, a.z, b.x, b.z)) continue;
         wps[i].links.push(j);
         wps[j].links.push(i);
       }
     }
-    return wps;
+
+    // Keep the biggest island. Anything else is a nook a body fits in but
+    // cannot walk to, and routing somebody there would strand them.
+    const seen = new Set<number>();
+    let best: number[] = [];
+    for (let i = 0; i < wps.length; i++) {
+      if (seen.has(i)) continue;
+      const comp: number[] = [];
+      const queue = [i];
+      seen.add(i);
+      while (queue.length) {
+        const cur = queue.pop()!;
+        comp.push(cur);
+        for (const n of wps[cur].links) {
+          if (seen.has(n)) continue;
+          seen.add(n);
+          queue.push(n);
+        }
+      }
+      if (comp.length > best.length) best = comp;
+    }
+    const keep = best.sort((a, b) => a - b);
+    const remap = new Map(keep.map((old, k) => [old, k]));
+    return keep.map((old) => ({
+      pos: wps[old].pos,
+      links: wps[old].links.filter((n) => remap.has(n)).map((n) => remap.get(n)!)
+    }));
   }
 }

@@ -62,6 +62,9 @@ export const Events = {
   /** Office floor cleared and the player walked out — on to level three. */
   OfficeComplete: 'office-complete',
   RestartLevel3: 'restart-level3',
+  /** Level three cleared — on to the dark floor. */
+  Level3Complete: 'level3-complete',
+  RestartLevel4: 'restart-level4',
   /** {lethal: boolean} */
   HitMarker: 'hit-marker',
   Resize: 'resize'

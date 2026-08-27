@@ -73,6 +73,8 @@ export class Enemy {
   private kneelTarget = 0;
   private earsBlend = 0;
   private earsTarget = 0;
+  private slumpBlend = 0;
+  private slumpTarget = 0;
   /** Manning a vehicle turret: no personal weapon, hands on the spades. */
   private turret = false;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
@@ -582,6 +584,17 @@ export class Enemy {
     if (on) this.setScared();
   }
 
+  /**
+   * Sat on the floor with his back to a wall, legs straight out, one hand
+   * clamped over his stomach and the other flat on the carpet beside him.
+   * Wears the shaken face rather than the panicked one — he has had time to
+   * get used to it.
+   */
+  setSlumped(on: boolean): void {
+    this.slumpTarget = on ? 1 : 0;
+    if (on) this.setShaken();
+  }
+
   /** Shaken but back on their feet — the face for after the shooting stops. */
   setShaken(): void {
     if (!this.civilian || !Enemy.faceShaken) return;
@@ -597,6 +610,7 @@ export class Enemy {
     this.kneelTarget = 0;
     this.earsTarget = 0;
     this.handsUpTarget = 0;
+    this.slumpTarget = 0;
     this.setShaken();
   }
 
@@ -606,7 +620,8 @@ export class Enemy {
    * Covering the ears is not: that one is meant to be run in.
    */
   get rooted(): boolean {
-    return this.kneelTarget > 0 || this.kneelBlend > 0.05;
+    return this.kneelTarget > 0 || this.kneelBlend > 0.05
+      || this.slumpTarget > 0 || this.slumpBlend > 0.05;
   }
 
   /**
@@ -1076,6 +1091,18 @@ export class Enemy {
       this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -1.5, sit);
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -1.5, sit);
     }
+    // ---- Slumped against a wall: hips on the carpet, legs straight out
+    this.slumpBlend += (this.slumpTarget - this.slumpBlend) * Math.min(1, dt * 5);
+    const slump = this.slumpBlend;
+    if (slump > 0.001) {
+      this.legL.rotation.x = THREE.MathUtils.lerp(this.legL.rotation.x, 1.5, slump);
+      this.legR.rotation.x = THREE.MathUtils.lerp(this.legR.rotation.x, 1.46, slump);
+      this.legL.rotation.z = THREE.MathUtils.lerp(this.legL.rotation.z, -0.1, slump);
+      this.legR.rotation.z = THREE.MathUtils.lerp(this.legR.rotation.z, 0.13, slump);
+      this.shinL.rotation.x = THREE.MathUtils.lerp(this.shinL.rotation.x, -0.12, slump);
+      this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -0.2, slump);
+    }
+
     // ---- Kneeling: thighs vertical, shins folded back under the seat
     this.kneelBlend += (this.kneelTarget - this.kneelBlend) * Math.min(1, dt * 5);
     const kneel = this.kneelBlend;
@@ -1086,7 +1113,7 @@ export class Enemy {
       this.shinR.rotation.x = THREE.MathUtils.lerp(this.shinR.rotation.x, -2.5, kneel);
     }
     // Hip height: seated on a chair, or down on the knees
-    const drop = bob - 0.355 * sit - 0.38 * kneel;
+    const drop = bob - 0.355 * sit - 0.38 * kneel - 0.66 * slump;
 
     // Hips ride with the pelvis, or the legs detach from it as it sways
     this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
@@ -1245,6 +1272,24 @@ export class Enemy {
       this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -2.35 - flinch, c);
       // Chin down into the shoulders, the way people do it
       this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.26, c);
+    }
+
+    // Slumped: one hand pressed over the wound, the other flat on the floor
+    // taking his weight, chest tipped back against the wall behind him.
+    if (slump > 0.001) {
+      const breathe = Math.sin(at * 2.6) * 0.03 * slump;
+      // Right arm comes across the body; the forearm folds in to the stomach
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.62 + breathe, slump);
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.62, slump);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.15, slump);
+      // Left arm braced straight down and a little out, palm on the carpet
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, -0.22, slump);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.5, slump);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, 0.12, slump);
+      // Tipped back against the wall, head up, watching whoever just walked in
+      this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, -0.2 + breathe, slump);
+      this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.12, slump);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, slump);
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still

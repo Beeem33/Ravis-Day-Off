@@ -41,6 +41,11 @@ export class GameEngine {
     });
   }
 
+  /** The scene currently being driven. Read-only; use setScene to change it. */
+  get currentScene(): GameScene | null {
+    return this.scene;
+  }
+
   /** Where loading cards mount. Set once by main. */
   uiRoot: HTMLElement | null = null;
   private loadingCard: HTMLElement | null = null;

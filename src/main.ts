@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import type * as THREE from 'three';
 import { GameEngine } from './core/GameEngine';
 import { EventBus, Events } from './core/EventBus';
 import { InputManager } from './core/InputManager';
@@ -65,8 +66,77 @@ engine.uiRoot = uiRoot;
 engine.setScene(new MainMenuScene(ctx));
 engine.start();
 
-// Dev-only handle for poking at the running game from the console. Stripped
+// Dev-only handles for poking at the running game from the console. Stripped
 // from production builds by the bundler.
 if (import.meta.env.DEV) {
   (window as unknown as { game: GameContext }).game = ctx;
+
+  /**
+   * Render a frame and drop it in .shots/ — see the shot-sink plugin in
+   * vite.config.ts. Optionally poses the player first, so a view can be
+   * framed on whatever is being checked rather than wherever they happen to
+   * be stood. Restores the renderer size and camera afterwards.
+   */
+  (window as unknown as { shot: unknown }).shot = async (o: {
+    name?: string;
+    /** Put the player at [x, z] first. */
+    at?: [number, number];
+    yaw?: number;
+    pitch?: number;
+    w?: number;
+    h?: number;
+    quality?: number;
+  } = {}) => {
+    const sc = engine.currentScene as unknown as {
+      player?: {
+        camera: THREE.PerspectiveCamera;
+        position: THREE.Vector3;
+        velocity: THREE.Vector3;
+        yaw: number;
+        pitch: number;
+        cinematic: boolean;
+      };
+      camera?: THREE.PerspectiveCamera;
+      update(dt: number, t: number): void;
+      render(r: THREE.WebGLRenderer): void;
+    } | null;
+    if (!sc) return { error: 'no scene' };
+    const cam = sc.player?.camera ?? sc.camera;
+    if (!cam) return { error: 'no camera' };
+
+    if (o.at && sc.player) {
+      sc.player.cinematic = true;
+      sc.player.position.set(o.at[0], 0, o.at[1]);
+      sc.player.velocity.set(0, 0, 0);
+      if (o.yaw !== undefined) sc.player.yaw = o.yaw;
+      if (o.pitch !== undefined) sc.player.pitch = o.pitch;
+      // A few short steps so the camera settles on the new pose
+      for (let i = 0; i < 4; i++) sc.update(1 / 120, 0);
+    }
+
+    const r = engine.renderer;
+    const c = r.domElement;
+    const ow = c.width;
+    const oh = c.height;
+    const oa = cam.aspect;
+    const w = o.w ?? 900;
+    const h = o.h ?? 560;
+    r.setSize(w, h, false);
+    cam.aspect = w / h;
+    cam.updateProjectionMatrix();
+    sc.render(r);
+    // toDataURL is synchronous, so the drawing buffer is still intact here.
+    // toBlob's callback can land after the compositor has cleared it.
+    const b64 = c.toDataURL('image/jpeg', o.quality ?? 0.82).split(',')[1];
+    r.setSize(ow, oh, false);
+    cam.aspect = oa;
+    cam.updateProjectionMatrix();
+
+    const resp = await fetch('/__shot', {
+      method: 'POST',
+      headers: { 'x-shot-name': o.name ?? 'shot' },
+      body: b64
+    });
+    return resp.json();
+  };
 }

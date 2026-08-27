@@ -1223,22 +1223,26 @@ export class Enemy {
     // three shoulder axes, because the arm's own X/Z alone can only swing it
     // in front of the face. These were solved against the actual rig so the
     // palm lands 0.125m out from the head centre and 0.03m below it — where
-    // an ear is — with the elbow 0.1m out, 0.15m forward and 0.23m up. The
-    // left arm is the mirror: X the same, Y and Z negated.
+    // an ear is — with the elbow raised 0.26m above the shoulder and the
+    // forearm running up 0.27m OUTBOARD of the head rather than across the
+    // face. That last term is what matters: an earlier solve put the hand on
+    // the ear but swept the forearm over the nose to get there, which read as
+    // a salute — measurably correct, visibly wrong. The left arm is the
+    // mirror: X the same, Y and Z negated.
     this.earsBlend += (this.earsTarget - this.earsBlend) * Math.min(1, dt * 6);
     if (this.earsBlend > 0.001) {
       const c = this.earsBlend;
       const flinch = Math.sin(at * 14) * 0.045 * c;
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, -1.24, c);
-      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, -1.24, c);
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, -1.58, c);
+      this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, -1.58, c);
       // Nothing else writes the shoulder's Y, so these scale straight off the
       // blend and unwind to zero on their own when the pose lets go.
-      this.armR.rotation.y = -1.05 * c;
-      this.armL.rotation.y = 1.05 * c;
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 2.42, c);
-      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -2.42, c);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -2.37 + flinch, c);
-      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -2.37 - flinch, c);
+      this.armR.rotation.y = -1.1 * c;
+      this.armL.rotation.y = 1.1 * c;
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, 1.56, c);
+      this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -1.56, c);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -2.35 + flinch, c);
+      this.foreL.rotation.x = THREE.MathUtils.lerp(this.foreL.rotation.x, -2.35 - flinch, c);
       // Chin down into the shoulders, the way people do it
       this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.26, c);
     }

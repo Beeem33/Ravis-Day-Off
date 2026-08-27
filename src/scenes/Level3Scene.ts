@@ -246,8 +246,13 @@ export class Level3Scene extends CombatScene<Level3Data> {
         this.greeter.setWalk(0);
         this.dialogue.play(
           [
-            { speaker: 'DEV', text: 'Working hard or hardly working huh Ravi', pitch: 0.95 },
-            { speaker: 'DEV', text: 'A gun? you need that for the boss or something? haha just kidding, anyway whats--', pitch: 0.95 }
+            { speaker: 'DEV', text: 'Working hard or hardly working, huh Ravi?', pitch: 0.95 },
+            { speaker: 'DEV', text: 'A gun? you need that for the boss or something? haha just kidding.', pitch: 0.95 },
+            {
+              speaker: 'DEV',
+              text: 'What brings you here? Is it the boss? He has been acting very secretive lately, at least that is what his assistants have been saying... what was that sound?',
+              pitch: 0.95
+            }
           ],
           () => this.startCrash()
         );

@@ -86,6 +86,8 @@ if (import.meta.env.DEV) {
     w?: number;
     h?: number;
     quality?: number;
+    /** Camera height, default standing eye level. */
+    eye?: number;
   } = {}) => {
     const sc = engine.currentScene as unknown as {
       player?: {
@@ -110,8 +112,15 @@ if (import.meta.env.DEV) {
       sc.player.velocity.set(0, 0, 0);
       if (o.yaw !== undefined) sc.player.yaw = o.yaw;
       if (o.pitch !== undefined) sc.player.pitch = o.pitch;
-      // A few short steps so the camera settles on the new pose
+      // Let the scene settle, THEN drive the camera by hand. A cutscene scene
+      // steers the camera itself, so posing the player and stepping afterwards
+      // just hands the framing straight back to the cutscene.
       for (let i = 0; i < 4; i++) sc.update(1 / 120, 0);
+      const eyeY = o.eye ?? 1.63;
+      cam.position.set(o.at[0], eyeY, o.at[1]);
+      cam.rotation.order = 'YXZ';
+      cam.rotation.set(o.pitch ?? 0, o.yaw ?? 0, 0);
+      cam.updateMatrixWorld(true);
     }
 
     const r = engine.renderer;

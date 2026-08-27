@@ -132,6 +132,10 @@ const EAST_X = 12.4; // east wall — the building used to run out to 18.4
 const EXIT_Z0 = 0.5;
 const EXIT_Z1 = 2.2;
 
+// The way in from the intro floor, in the west wall right behind the spawn.
+const ENTRY_Z0 = -0.9;
+const ENTRY_Z1 = 1.1;
+
 // Carpet and ceiling-tile textures are authored for the full 36.8 x 24.8
 // footprint; slabs of other sizes rescale their UVs against these.
 const SLAB_REPEAT_X = 18;
@@ -453,7 +457,13 @@ export class OfficeLevelBuilder {
 
     this.wallX(-18.3, EAST_X - 0.1, -12.3, 0, WALL_H); // north
     this.wallXDoor(-18.3, EAST_X - 0.1, 12.3, 0, WALL_H, -2, 2); // south + entrance
-    this.wallZ(-12.3, 12.3, -18.3, 0, WALL_H); // west
+    // West wall, split round the door Ravi came in by from the call floor
+    this.wallZ(-12.3, ENTRY_Z0, -18.3, 0, WALL_H);
+    this.wallZ(ENTRY_Z1, 12.3, -18.3, 0, WALL_H);
+    this.solid(0.22, WALL_H - 2.3, ENTRY_Z1 - ENTRY_Z0, -18.3, 2.3, (ENTRY_Z0 + ENTRY_Z1) / 2, this.wallMat, {
+      collide: false
+    });
+    this.buildEntryDoor();
     // East wall, with the service door on to the next level
     this.wallZ(-12.3, EXIT_Z0, EAST_X - 0.1, 0, WALL_H);
     this.wallZ(EXIT_Z1, 12.3, EAST_X - 0.1, 0, WALL_H);
@@ -471,6 +481,29 @@ export class OfficeLevelBuilder {
    * status panel over it. The panel is red — locked — until the last
    * intruder on the floor is down, then it turns green.
    */
+  /**
+   * The door Ravi came through from the intro floor, standing shut behind
+   * the spawn. Solid — there is no going back, and without it the level
+   * opened onto a blank stretch of wall where a door plainly should be.
+   */
+  private buildEntryDoor(): void {
+    const cz = (ENTRY_Z0 + ENTRY_Z1) / 2;
+    const w = ENTRY_Z1 - ENTRY_Z0;
+    for (const z of [ENTRY_Z0, ENTRY_Z1]) {
+      this.solid(0.3, 2.3, 0.1, -18.28, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.3, 0.1, w, -18.28, 2.3, cz, this.darkMetalMat, { surface: 'metal', collide: false });
+    const leaf = this.solid(0.1, 2.25, w - 0.08, -18.13, 0, cz, this.deskMat, { surface: 'wood' });
+    leaf.userData.surface = 'wood';
+    // Lever handle and a kick plate, so it reads as a door rather than a panel
+    this.solid(0.07, 0.26, 0.07, -18.04, 1.02, cz + w / 2 - 0.26, this.darkMetalMat, {
+      surface: 'metal', occlude: false, collide: false
+    });
+    this.solid(0.03, 0.3, w - 0.24, -18.06, 0.06, cz, this.darkMetalMat, {
+      surface: 'metal', occlude: false, collide: false
+    });
+  }
+
   private buildExitDoor(): void {
     const cz = (EXIT_Z0 + EXIT_Z1) / 2;
     const w = EXIT_Z1 - EXIT_Z0;
@@ -859,25 +892,14 @@ export class OfficeLevelBuilder {
         box: new THREE.Box3(new THREE.Vector3(x - r, y, z - r), new THREE.Vector3(x + r, y + 1.1, z + r))
       });
     };
-    // Lobby — the bit visitors would have seen
+    // Reception, where a visitor would see them, and the two lobby corners
     potAt('tall', 3.2, 0, 6.2, true);
     potAt('tall', -3.2, 0, 6.2, true);
     potAt('tall', 10.6, 0, 10.6, true);
-    potAt('tall', -16.9, 0, 10.9, true);
     potAt('bushy', 2.1, 1.1, 7.2); // on the reception counter
-    potAt('bushy', -2.1, 1.1, 7.2);
-    // West strip
+    // One at the far end of the west strip, and one nobody has watered
     potAt('tall', -17.4, 0, 1.2, true);
-    potAt('dying', -17.5, 0, -2.4, true);
-    // Cubicle farm — one at each end of the aisle
-    potAt('dying', -15.6, 0, 0.1, true);
-    potAt('bushy', 0.8, 0, 0.1, true);
-    // Back office and the north-west quarter that opened up
-    potAt('tall', -8.4, 0, -11.6, true);
-    potAt('dying', -13.6, 0, -11.5, true);
-    potAt('tall', 11.4, 0, -11.6, true);
-    potAt('bushy', -5.0, 1.5, -11.3); // on the cabinet bank
-    potAt('tall', -16.2, 0, -7.4, true);
+    potAt('dying', -16.2, 0, -7.4, true);
   }
 
   private buildVendingMachines(): void {
@@ -938,7 +960,7 @@ export class OfficeLevelBuilder {
     chairAt(-9.5, 0, 0.4, 1.2, true);
     chairAt(-5.5, 0, 0.6, 2.6, false);
     chairAt(-13.5, 0, -0.4, 0.4, true);
-    chairAt(2.2, 0, -6.0, 1.9, false);
+    chairAt(1.1, 0, -4.4, 1.9, false); // was overlapping the desk at (2.5,-6.2)
     chairAt(-2.0, 0, -9.8, 0.8, true);
 
 

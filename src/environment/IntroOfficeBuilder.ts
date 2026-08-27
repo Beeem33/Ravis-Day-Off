@@ -462,11 +462,11 @@ export class IntroOfficeBuilder {
 
     // Filing cabinet with real drawer fronts
     const cab = fileCabinet(0.6, 1.4, 1.1, 3);
-    cab.position.set(-8.3, 0, 1.6);
+    cab.position.set(-8.57, 0, 1.6); // back flush to the wall face at -8.89
     cab.rotation.y = Math.PI; // drawers face into the room
     this.group.add(cab);
     // Invisible shell carries the collider and the bullet hits
-    this.solid(0.6, 1.4, 1.1, -8.3, 0, 1.6, this.darkMetalMat, { surface: 'metal' }).visible = false;
+    this.solid(0.6, 1.4, 1.1, -8.57, 0, 1.6, this.darkMetalMat, { surface: 'metal' }).visible = false;
 
     // The reading material of a man who ran a scam call centre. This one
     // sits ON the desk — the desk only reaches x = -6.3, so anything further
@@ -608,9 +608,9 @@ export class IntroOfficeBuilder {
 
     // A filing cabinet in the north-east corner, the only bit of cover
     const cab = fileCabinet(0.6, 1.4, 1.0, 3);
-    cab.position.set(6.2, 0, Z0 + 0.7);
+    cab.position.set(6.57, 0, Z0 + 0.95); // back flush to the wall face at 6.89
     this.group.add(cab);
-    this.solid(0.6, 1.4, 1.0, 6.2, 0, Z0 + 0.7, this.darkMetalMat, { surface: 'metal' }).visible = false;
+    this.solid(0.6, 1.4, 1.0, 6.57, 0, Z0 + 0.95, this.darkMetalMat, { surface: 'metal' }).visible = false;
 
     // Spilled coffee where she was standing when they came through
     const spill = spilledCoffee();

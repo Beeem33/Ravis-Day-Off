@@ -353,11 +353,6 @@ export class Level3Builder {
           )
         });
       }
-      // A chair pulled up to it, back to the wall
-      const chair = officeChair();
-      chair.position.set(x - 0.2, 0, wallZ - side * 1.0);
-      chair.rotation.y = side < 0 ? Math.PI : 0;
-      this.group.add(chair);
     };
     bay(HALL_X0 + 5.5, -1);
     bay(HALL_X0 + 12.5, 1);

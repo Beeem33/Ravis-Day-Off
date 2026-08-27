@@ -55,6 +55,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private unsubs: (() => void)[] = [];
   private over = false;
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
+  private clickHandler = (): void => this.onClick();
 
   constructor(ctx: GameContext) {
     super(ctx);
@@ -97,6 +98,21 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.decals.place('pool', this.level.woundedSpot.clone().add(new THREE.Vector3(0.25, 0.01, 0.34)), floorN, 1.5);
     this.decals.place('pool', this.level.woundedSpot.clone().add(new THREE.Vector3(-0.4, 0.01, 0.2)), floorN, 1.1);
     this.decals.place('blood', this.level.woundedSpot.clone().add(new THREE.Vector3(0.05, 0.01, 0.62)), floorN, 0.8);
+    // The ketchup stain. Parented to his chest so it rides the pose and,
+    // later, the walk out.
+    const stain = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.17, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0x7d1410, roughness: 0.55 })
+    );
+    stain.position.set(-0.03, -0.19, -0.115);
+    this.wounded.addChestPatch(stain);
+    const smear = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.09, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0x64100d, roughness: 0.6 })
+    );
+    smear.position.set(0.08, -0.26, -0.113);
+    this.wounded.addChestPatch(smear);
+
     // The gun, across his lap, until he passes it up
     this.propGun = this.shotgunProp();
     this.propGun.position.copy(this.level.woundedSpot).add(new THREE.Vector3(0.12, 0.28, 0.5));
@@ -120,6 +136,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     );
 
     document.addEventListener('keydown', this.keyHandler);
+    document.addEventListener('click', this.clickHandler);
     input.requestPointerLock();
     this.setObjective('FIND THE BOSS');
   }
@@ -127,6 +144,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
   exit(): void {
     for (const u of this.unsubs) u();
     document.removeEventListener('keydown', this.keyHandler);
+    document.removeEventListener('click', this.clickHandler);
     this.hud.destroy();
     this.dialogue.destroy();
     this.torch.dispose();
@@ -295,6 +313,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
   // ---------------------------------------------------------------- input
 
+  private onClick(): void {
+    if (this.dialogue.isActive) this.dialogue.advance();
+  }
+
   private onKey(e: KeyboardEvent): void {
     if (this.dialogue.isActive && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyE')) {
       e.preventDefault();
@@ -372,6 +394,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
     else this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
 
+    // His body stays anchored against the wall; only his head follows Ravi.
+    // Once he is up and walking he faces where he is going instead.
+    this.wounded.setHeadLook(this.phase === 'leaving' ? null : this.player.eyePosition());
     this.wounded.update(dt);
     this.dialogue.update(dt);
     this.torch.update(dt);
@@ -381,6 +406,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.decals.update(dt);
     this.updateDebris(dt);
     for (const f of this.level.flickering) f.update(dt);
+    // Clears the one-shot key edges. Without this, wasPressed('Space') stays
+    // true after the first press and the player jumps every frame forever.
+    input.endFrame();
   }
 
   private playerShoot(): void {

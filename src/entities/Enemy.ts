@@ -75,6 +75,10 @@ export class Enemy {
   private earsTarget = 0;
   private slumpBlend = 0;
   private slumpTarget = 0;
+  /** World point the head watches, or null to look straight ahead. */
+  private headLook: THREE.Vector3 | null = null;
+  private headYaw = 0;
+  private headPitch = 0;
   /** Manning a vehicle turret: no personal weapon, hands on the spades. */
   private turret = false;
   /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
@@ -585,6 +589,18 @@ export class Enemy {
   }
 
   /**
+   * Watch a point without turning the body.
+   *
+   * A figure pinned in a pose still has to be able to look at whoever walked
+   * in — turning the whole root would slide the pose round with it, so the
+   * neck does the work instead, clamped to what a neck can actually do.
+   * Pass null to let the head settle back to straight ahead.
+   */
+  setHeadLook(p: THREE.Vector3 | null): void {
+    this.headLook = p;
+  }
+
+  /**
    * Sat on the floor with his back to a wall, legs straight out, one hand
    * clamped over his stomach and the other flat on the carpet beside him.
    * Wears the shaken face rather than the panicked one — he has had time to
@@ -593,6 +609,14 @@ export class Enemy {
   setSlumped(on: boolean): void {
     this.slumpTarget = on ? 1 : 0;
     if (on) this.setShaken();
+  }
+
+  /**
+   * Stick something on the shirt — a stain, in practice. Local to the chest,
+   * so it rides every pose and the walk cycle without further thought.
+   */
+  addChestPatch(mesh: THREE.Object3D): void {
+    this.torso.add(mesh);
   }
 
   /** Shaken but back on their feet — the face for after the shooting stops. */
@@ -1278,10 +1302,15 @@ export class Enemy {
     // taking his weight, chest tipped back against the wall behind him.
     if (slump > 0.001) {
       const breathe = Math.sin(at * 2.6) * 0.03 * slump;
-      // Right arm comes across the body; the forearm folds in to the stomach
-      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.62 + breathe, slump);
-      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.62, slump);
-      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, -1.15, slump);
+      // Right arm: upper arm hanging down at his side, elbow bent in toward
+      // the ribs, forearm across the FRONT of the lower belly. Solved against
+      // the rig — the previous angles swung the elbow 0.17m inboard and ran
+      // the whole forearm through the torso to reach the wound.
+      this.armR.rotation.x = THREE.MathUtils.lerp(this.armR.rotation.x, 0.57 + breathe, slump);
+      this.armR.rotation.y = 1.17 * slump;
+      this.armR.rotation.z = THREE.MathUtils.lerp(this.armR.rotation.z, -0.44, slump);
+      this.foreR.rotation.x = THREE.MathUtils.lerp(this.foreR.rotation.x, 0.93, slump);
+      this.foreR.rotation.y = -1.77 * slump;
       // Left arm braced straight down and a little out, palm on the carpet
       this.armL.rotation.x = THREE.MathUtils.lerp(this.armL.rotation.x, -0.22, slump);
       this.armL.rotation.z = THREE.MathUtils.lerp(this.armL.rotation.z, -0.5, slump);
@@ -1290,6 +1319,35 @@ export class Enemy {
       this.torso.rotation.x = THREE.MathUtils.lerp(this.torso.rotation.x, -0.2 + breathe, slump);
       this.head.rotation.x = THREE.MathUtils.lerp(this.head.rotation.x, 0.12, slump);
       this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, slump);
+    }
+
+    // ---- Head tracking. Runs after every pose, because the poses each set
+    // their own head rotation and this has to win. Clamped to a neck's range
+    // so nobody ends up looking over their own shoulder.
+    if (this.headLook) {
+      const dx = this.headLook.x - this.root.position.x;
+      const dz = this.headLook.z - this.root.position.z;
+      // Body forward is (-sin yaw, 0, -cos yaw), so the same form gives the
+      // heading to the target and the difference is the neck's share.
+      let rel = Math.atan2(-dx, -dz) - this.yaw;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      const wantYaw = THREE.MathUtils.clamp(rel, -1.15, 1.15);
+      const eyeY = this.root.position.y + 1.585 + drop;
+      const wantPitch = THREE.MathUtils.clamp(
+        -Math.atan2(this.headLook.y - eyeY, Math.hypot(dx, dz)),
+        -0.5,
+        0.6
+      );
+      this.headYaw += (wantYaw - this.headYaw) * Math.min(1, dt * 5);
+      this.headPitch += (wantPitch - this.headPitch) * Math.min(1, dt * 5);
+      this.head.rotation.y += this.headYaw;
+      this.head.rotation.x += this.headPitch;
+    } else if (Math.abs(this.headYaw) > 0.001 || Math.abs(this.headPitch) > 0.001) {
+      this.headYaw += (0 - this.headYaw) * Math.min(1, dt * 5);
+      this.headPitch += (0 - this.headPitch) * Math.min(1, dt * 5);
+      this.head.rotation.y += this.headYaw;
+      this.head.rotation.x += this.headPitch;
     }
 
     // Chest: rides the bob, leans into the walk, breathes when still

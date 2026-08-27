@@ -397,10 +397,21 @@ export class Level4Scene extends CombatScene<Level4Data> {
   // ---------------------------------------------------------------- input
 
   private onClick(): void {
-    if (this.dialogue.isActive) this.dialogue.advance();
+    if (this.dialogue.isActive) {
+      this.dialogue.advance();
+      return;
+    }
+    if (this.phase === 'dead') this.ctx.bus.emit(Events.RestartLevel4);
   }
 
   private onKey(e: KeyboardEvent): void {
+    if (this.phase === 'dead') {
+      if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
+      else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') {
+        this.ctx.bus.emit(Events.RestartLevel4);
+      }
+      return;
+    }
     if (this.dialogue.isActive && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyE')) {
       e.preventDefault();
       this.dialogue.advance();

@@ -325,7 +325,7 @@ export class EnemyAI {
         return;
       }
 
-      enemy.faceToward(player.position, dt, 9);
+      enemy.faceToward(seen ? player.position : this.lastKnownPlayerPos, dt, 9);
       // Micro-strafe so he's not a statue
       this.strafePhase += dt;
       const strafe = Math.sin(this.strafePhase * 1.7);
@@ -404,8 +404,11 @@ export class EnemyAI {
     this.coverTimer -= dt;
     switch (this.coverPhase) {
       case 'expose': {
-        // Out in the open: face them, get shots off, then look for cover
-        enemy.faceToward(player.position, dt, 9);
+        // Out in the open: face them, get shots off, then look for cover.
+        // Only the LIVE position when they can actually be seen — turning to
+        // follow someone through a wall is how an agent ends up sweeping his
+        // arms through it, tracking a player he has no business knowing about.
+        enemy.faceToward(seen ? player.position : this.lastKnownPlayerPos, dt, 9);
         enemy.setWalk(0.2);
         if (this.reactionTimer > 0) {
           this.reactionTimer -= dt;
@@ -436,7 +439,7 @@ export class EnemyAI {
         break;
       case 'inCover':
         // Tucked away, weapon up, waiting a beat before the peek
-        enemy.faceToward(this.peekPos ?? player.position, dt, 7);
+        enemy.faceToward(this.peekPos ?? this.lastKnownPlayerPos, dt, 7);
         enemy.setWalk(0);
         if (this.coverTimer <= 0) this.coverPhase = 'toPeek';
         break;

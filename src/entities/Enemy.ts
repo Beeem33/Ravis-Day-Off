@@ -1341,14 +1341,17 @@ export class Enemy {
       );
       this.headYaw += (wantYaw - this.headYaw) * Math.min(1, dt * 5);
       this.headPitch += (wantPitch - this.headPitch) * Math.min(1, dt * 5);
-      this.head.rotation.y += this.headYaw;
-      this.head.rotation.x += this.headPitch;
-    } else if (Math.abs(this.headYaw) > 0.001 || Math.abs(this.headPitch) > 0.001) {
+    } else {
       this.headYaw += (0 - this.headYaw) * Math.min(1, dt * 5);
       this.headPitch += (0 - this.headPitch) * Math.min(1, dt * 5);
-      this.head.rotation.y += this.headYaw;
-      this.head.rotation.x += this.headPitch;
     }
+    // Assigned, not added. Nothing in the walk cycle writes head.rotation.y,
+    // so adding the offset compounded it frame on frame: after a minute of
+    // watching Ravi across the corridor the neck was screwed a full 58 round
+    // and stayed there once the tracking let go. X does have a base from the
+    // lean above, so that one is still an offset.
+    this.head.rotation.y = this.headYaw;
+    this.head.rotation.x += this.headPitch;
 
     // Chest: rides the bob, leans into the walk, breathes when still
     this.torso.position.set(sway * 0.85, 1.27 + drop + Math.sin(at * 2.2) * 0.008 * (1 - stride), 0);

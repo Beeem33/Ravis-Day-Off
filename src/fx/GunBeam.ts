@@ -5,8 +5,11 @@ import * as THREE from 'three';
  *
  * On a floor with no power these are the only thing that gives them away: a
  * long thin beam swinging round a corner arrives well before its owner does.
- * Each beam is a narrow spotlight plus a faint additive cone so the shaft
- * itself reads in the air, not just the disc it throws on the wall.
+ * Each beam is a narrow spotlight and nothing else. There was a faint cone
+ * drawn along it so the shaft read in the air, but a mesh obeys none of the
+ * rules the shadow map does — scaled off a single centre ray, it punched
+ * straight through any near wall that ray happened to miss. The lit patch a
+ * beam throws is the tell; the shaft was a liability.
  *
  * Each beam casts a shadow, which is the only way a wall actually stops it:
  * an unshadowed spotlight lights straight through geometry, so every beam in
@@ -22,7 +25,6 @@ import * as THREE from 'three';
 export class GunBeamPool {
   private spots: THREE.SpotLight[] = [];
   private targets: THREE.Object3D[] = [];
-  private shafts: THREE.Mesh[] = [];
   private live: boolean[] = [];
   private readonly range: number;
   private readonly max: number;
@@ -33,14 +35,6 @@ export class GunBeamPool {
   constructor(scene: THREE.Scene, count: number, range = 30, intensity = 55) {
     this.range = range;
     this.max = intensity;
-    const shaftMat = new THREE.MeshBasicMaterial({
-      color: 0xffeccd,
-      transparent: true,
-      opacity: 0.085,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
     // Long and narrow — a search beam, not a lantern
     const half = Math.PI / 40;
     for (let i = 0; i < count; i++) {
@@ -64,13 +58,6 @@ export class GunBeamPool {
 
       // Cone runs from the muzzle out to the far end of the beam. Built along
       // +Y and tipped, because that is the axis ConeGeometry is happiest on.
-      // Unit cone: a metre long, scaled per frame to wherever the beam
-      // actually stops, so the visible shaft ends at the wall rather than
-      // carrying on through it.
-      const shaft = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(half), 1, 12, 1, true), shaftMat);
-      shaft.visible = false;
-      scene.add(shaft);
-      this.shafts.push(shaft);
       this.live.push(false);
     }
   }
@@ -91,12 +78,6 @@ export class GunBeamPool {
     this.spots[i].position.copy(from);
     this.spots[i].intensity = this.max;
     this.targets[i].position.copy(from).addScaledVector(d, this.range);
-    const shaft = this.shafts[i];
-    shaft.visible = true;
-    // Apex at the muzzle, so the body is centred half its length along
-    shaft.position.copy(from).addScaledVector(d, len / 2);
-    shaft.quaternion.setFromUnitVectors(GunBeamPool.DOWN, d);
-    shaft.scale.set(len, len, len);
     this.live[i] = true;
   }
 
@@ -105,20 +86,14 @@ export class GunBeamPool {
     if (i >= this.spots.length) return;
     this.spots[i].intensity = 0;
     this.spots[i].position.set(0, -90, 0);
-    this.shafts[i].visible = false;
     this.live[i] = false;
   }
 
   dispose(): void {
     for (const s of this.spots) s.removeFromParent();
     for (const t of this.targets) t.removeFromParent();
-    for (const m of this.shafts) {
-      m.removeFromParent();
-      m.geometry.dispose();
-    }
     this.spots.length = 0;
     this.targets.length = 0;
-    this.shafts.length = 0;
   }
 }
 
@@ -130,7 +105,7 @@ export class GunBeamPool {
 export class PlayerGlow {
   private light: THREE.PointLight;
 
-  constructor(camera: THREE.Camera, intensity = 2.6, distance = 4.2) {
+  constructor(camera: THREE.Camera, intensity = 1.15, distance = 2.6) {
     this.light = new THREE.PointLight(0xffb066, intensity, distance, 1.7);
     this.light.position.set(0, -0.35, -0.25);
     camera.add(this.light);

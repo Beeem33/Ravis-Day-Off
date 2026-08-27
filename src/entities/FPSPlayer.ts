@@ -373,10 +373,16 @@ export class FPSPlayer {
 
   // ------------------------------------------------------------------ death
 
+  /**
+   * What one round costs. Levels set their own — the dark floor puts it at
+   * full health, so being seen at all is fatal.
+   */
+  damagePerHit = 1;
+
   /** Take a hit from `killerName`; dies once health runs out. */
   hit(killerName: string): void {
     if (!this.alive) return;
-    this.health = Math.max(0, this.health - 1);
+    this.health = Math.max(0, this.health - this.damagePerHit);
     this.bus.emit(Events.PlayerDamaged, { health: this.health, maxHealth: this.maxHealth });
     if (this.health <= 0) this.kill(killerName);
   }

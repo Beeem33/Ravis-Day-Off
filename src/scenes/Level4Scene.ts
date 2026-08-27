@@ -64,6 +64,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private unsubs: (() => void)[] = [];
   private over = false;
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
+  private static tmpA = new THREE.Vector3();
+  private static tmpB = new THREE.Vector3();
   private clickHandler = (): void => this.onClick();
 
   constructor(ctx: GameContext) {
@@ -82,6 +84,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
+    // One round is the whole bar here. In the dark, against twelve of them,
+    // being seen at all should be the mistake — not the start of a trade.
+    this.player.damagePerHit = this.player.maxHealth;
     this.scene.add(this.player.camera);
 
     this.weapon = new WeaponViewmodel(this.player.camera);
@@ -474,9 +479,12 @@ export class Level4Scene extends CombatScene<Level4Data> {
     if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
     else this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
 
-    // His body stays anchored against the wall; only his head follows Ravi.
-    // Once he is up and walking he faces where he is going instead.
-    this.wounded.setHeadLook(this.phase === 'leaving' ? null : this.player.eyePosition());
+    // His body stays anchored against the wall and only his head follows
+    // Ravi — until he starts getting up, at which point he looks where he is
+    // going. Keyed off the walk-out rather than the phase: control comes back
+    // as he stands, so by phase he was still tracking Ravi on the way past
+    // and his head span round to keep him in view.
+    this.wounded.setHeadLook(this.leaveWalk >= 0 ? null : this.player.eyePosition());
     // ---- The team. Their AI walks the waypoint graph, so they turn corners
     // rather than grinding along walls, and each one drags its beam with it.
     for (let i = 0; i < this.agents.length; i++) {
@@ -488,11 +496,25 @@ export class Level4Scene extends CombatScene<Level4Data> {
         continue;
       }
       if (this.phase === 'play') this.agentAI[i].update(dt);
-      // Beam out of the muzzle, along the way the weapon is actually pointing
-      const from = e.muzzleWorld();
       const dir = e.forwardDir(new THREE.Vector3());
       dir.y = -0.06; // carried a touch low, the way a weapon light is held
       dir.normalize();
+      // The muzzle sits over half a metre in front of the body, so an agent
+      // stood against a wall has his weapon hand poking out the far side of
+      // it — and a beam that starts out there has nothing left to stop it.
+      // Walk from the body, which collision keeps honest, out towards the
+      // muzzle, and give up at the first thing in the way.
+      const from = e.muzzleWorld();
+      const body = Level4Scene.tmpA.set(e.position.x, from.y, e.position.z);
+      const out = Level4Scene.tmpB.copy(from).sub(body);
+      const reachMuzzle = out.length();
+      if (reachMuzzle > 0.01) {
+        out.divideScalar(reachMuzzle);
+        this.raycaster.set(body, out);
+        this.raycaster.far = reachMuzzle;
+        const wall = this.raycaster.intersectObjects(this.level.occluders, false);
+        if (wall.length) from.copy(body).addScaledVector(out, Math.max(0, wall[0].distance - 0.08));
+      }
       // The spotlight's own shadow map stops the LIGHT at a wall; this stops
       // the visible shaft at the same place, so the two agree.
       this.raycaster.set(from, dir);

@@ -408,8 +408,11 @@ export class ShotgunViewmodel {
       this.flashLight.intensity *= 0.6;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;
-        // Stays in the scene for good: switching a light off changes the
-    // scene's visible light count, which recompiles every material in it.
+        // The light stays in the scene for good — switching one off moves
+        // the visible light count and recompiles every material. Zeroing
+        // the intensity is what actually puts it out; without this line it
+        // decayed for three frames and then sat at 0.76 forever.
+        this.flashLight.intensity = 0;
       }
     }
   }

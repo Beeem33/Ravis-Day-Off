@@ -6,11 +6,12 @@ import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
-import { Flashlight } from '../fx/Flashlight';
+import { GunBeamPool, PlayerGlow } from '../fx/GunBeam';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
 import { Enemy } from '../entities/Enemy';
+import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
 
@@ -31,7 +32,11 @@ const TUBE_SIZE = 6;
 export class Level4Scene extends CombatScene<Level4Data> {
   private weapon!: WeaponViewmodel;
   private shotgun!: ShotgunViewmodel;
-  private torch!: Flashlight;
+  private glow!: PlayerGlow;
+  private beams!: GunBeamPool;
+  private agents: Enemy[] = [];
+  private agentAI: EnemyAI[] = [];
+  private remaining = 0;
   private hud!: FPSHUD;
   private dialogue!: DialogueBox;
 
@@ -82,7 +87,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.shotgun = new ShotgunViewmodel(this.player.camera);
     this.shotgun.stow = 1; // stowed, and not even carried yet
-    this.torch = new Flashlight(this.player.camera);
+    this.glow = new PlayerGlow(this.player.camera);
     // The goggles' amplifier: a flat green wash across everything when down
     this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
     this.scene.add(this.nvLight);
@@ -126,7 +131,29 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.propGun.rotation.set(0, Math.PI / 2 + 0.25, 0.12);
     this.scene.add(this.propGun);
 
-    this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
+    // ---- The sweep team. Weapons already up: they came in expecting this.
+    this.beams = new GunBeamPool(this.scene, this.level.enemySpawns.length);
+    this.level.enemySpawns.forEach((sp, i) => {
+      const e = new Enemy(sp.pos, sp.yaw, i + 11, { name: `FBI AGENT ${i + 1}` });
+      e.setAiming(true);
+      this.scene.add(e.root);
+      this.agents.push(e);
+      for (const p of e.parts) this.level.shootables.push(p);
+      this.agentAI.push(
+        new EnemyAI(e, {
+          player: this.player,
+          waypoints: this.level.waypoints,
+          occluders: this.level.occluders,
+          colliders: this.level.colliders,
+          bus,
+          audio,
+          enemyFire: (x) => this.enemyFire(x)
+        })
+      );
+    });
+    this.remaining = this.agents.length;
+
+    this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
     this.hud.show();
     this.buildUI();
     this.dialogue = new DialogueBox(this.ctx.uiRoot, audio);
@@ -154,7 +181,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     document.removeEventListener('click', this.clickHandler);
     this.hud.destroy();
     this.dialogue.destroy();
-    this.torch.dispose();
+    for (const ai of this.agentAI) ai.dispose();
+    this.glow.dispose();
+    this.beams.dispose();
     this.flashPool.dispose();
     this.ui.remove();
     Enemy.flashPool = null;
@@ -300,18 +329,28 @@ export class Level4Scene extends CombatScene<Level4Data> {
   }
 
   private updateLeaving(dt: number): void {
-    // A beat on his feet before he sets off, so standing up reads as its own
-    // movement rather than a slide that starts the instant he is upright
-    this.leaveWalk += dt * 0.5;
-    const u = Math.min(1, Math.max(0, (this.leaveWalk - 0.55) / 0.45));
-    if (u > 0) {
-      this.wounded.setWalk(0.8);
-      this.wounded.position.lerpVectors(this.leaveFrom, this.level.backDoorway, u * u * (3 - 2 * u));
-      this.wounded.faceToward(this.level.backDoorway, dt, 5);
+    // Seconds since he decided to get up. Timed rather than normalised: the
+    // old version crossed the ten metres to the door inside a second, which
+    // is about eleven metres per second — he teleported out.
+    this.leaveWalk += dt;
+    const STAND = 1.1; // getting to his feet, no ground covered
+    if (this.leaveWalk < STAND) {
+      this.wounded.setWalk(0);
+      return;
     }
-    // The lights go while he is still walking away
-    if (this.leaveWalk > 0.9 && !this.blackout) this.cutPower();
-    if (this.leaveWalk >= 1.35) {
+    const door = this.level.backDoorway;
+    const to = door.clone().sub(this.wounded.position).setY(0);
+    const left = to.length();
+    if (left > 0.5) {
+      // A walk, not a jog. He is in no hurry; as far as he is concerned
+      // nothing much has happened.
+      this.wounded.position.addScaledVector(to.normalize(), Math.min(left, 1.45 * dt));
+      this.wounded.setWalk(0.75);
+      this.wounded.faceToward(door, dt, 3.2);
+    }
+    // The lights go once he is well past Ravi and still walking
+    if (this.leaveWalk > STAND + 2.4 && !this.blackout) this.cutPower();
+    if (left <= 0.5 && this.blackout) {
       this.wounded.root.visible = false;
       this.handOver();
     }
@@ -336,7 +375,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     if (hint) hint.style.display = 'block';
     this.scene.fog = new THREE.Fog(0x020305, 4, 22);
     this.ctx.audio.wallCollapse();
-    this.torch.set(true);
   }
 
   private handOver(): void {
@@ -347,7 +385,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // The way on opens once he is gone
     this.level.mazeDoorCollider.disabled = true;
     this.level.mazeDoor.visible = false;
-    this.setObjective('FIND THE BOSS  ·  F FOR TORCH');
+    this.setObjective('FIND THE BOSS');
     this.ctx.input.requestPointerLock();
   }
 
@@ -363,7 +401,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.dialogue.advance();
       return;
     }
-    if (e.code === 'KeyF' && this.phase === 'play') this.torch.toggle();
   }
 
   // --------------------------------------------------------------- update
@@ -440,9 +477,28 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // His body stays anchored against the wall; only his head follows Ravi.
     // Once he is up and walking he faces where he is going instead.
     this.wounded.setHeadLook(this.phase === 'leaving' ? null : this.player.eyePosition());
+    // ---- The team. Their AI walks the waypoint graph, so they turn corners
+    // rather than grinding along walls, and each one drags its beam with it.
+    for (let i = 0; i < this.agents.length; i++) {
+      const e = this.agents[i];
+      e.update(dt);
+      if (!e.alive) {
+        this.beams.kill(i);
+        this.poolCorpse(e);
+        continue;
+      }
+      if (this.phase === 'play') this.agentAI[i].update(dt);
+      // Beam out of the muzzle, along the way the weapon is actually pointing
+      const from = e.muzzleWorld();
+      const dir = e.forwardDir(new THREE.Vector3());
+      dir.y = -0.06; // carried a touch low, the way a weapon light is held
+      this.beams.aim(i, from, dir.normalize());
+    }
+
+    if (this.agents.length) this.separateAgents(dt);
+
     this.wounded.update(dt);
     this.dialogue.update(dt);
-    this.torch.update(dt);
     this.world.step(1 / 60, dt, 3);
     this.particles.update(dt);
     this.flashPool.update(dt);
@@ -486,9 +542,72 @@ export class Level4Scene extends CombatScene<Level4Data> {
     }
   }
 
-  /** Nothing to kill on this floor yet. */
-  protected killEnemy(): void {
-    /* no enemies in the layout pass */
+  /**
+   * Hold an interval. Waypoint following alone routes several of them
+   * through the same junction and they end up standing in each other.
+   * Runs after the AI has steered, or the AI just walks them back together
+   * on the same frame.
+   */
+  private separateAgents(dt: number): void {
+    const MIN = 1.5;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive) continue;
+      for (let j = i + 1; j < this.agents.length; j++) {
+        const b = this.agents[j];
+        if (!b.alive) continue;
+        const dx = b.position.x - a.position.x;
+        const dz = b.position.z - a.position.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > MIN * MIN) continue;
+        // Exactly co-located: nudge them apart along a fixed axis first
+        const d = Math.sqrt(d2) || 0.001;
+        const push = ((MIN - d) / MIN) * dt * 3.2;
+        const nx = (d2 < 1e-6 ? 1 : dx / d) * push;
+        const nz = (d2 < 1e-6 ? 0 : dz / d) * push;
+        a.position.x -= nx;
+        a.position.z -= nz;
+        b.position.x += nx;
+        b.position.z += nz;
+      }
+    }
+  }
+
+  private pooled = new Set<Enemy>();
+
+  /** Bodies stop being simulated once they have settled. */
+  private poolCorpse(e: Enemy): void {
+    if (this.pooled.has(e)) return;
+    this.pooled.add(e);
+    for (const p of e.parts) {
+      const i = this.level.shootables.indexOf(p);
+      if (i >= 0) this.level.shootables.splice(i, 1);
+    }
+  }
+
+  protected killEnemy(
+    enemy: Enemy,
+    point: THREE.Vector3,
+    dir: THREE.Vector3,
+    byPlayer: boolean,
+    headshot: boolean,
+    hitPart?: string
+  ): void {
+    if (!enemy.alive) return;
+    enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso');
+    const i = this.agents.indexOf(enemy);
+    if (i >= 0) {
+      this.agentAI[i]?.dispose();
+      this.beams.kill(i);
+    }
+    this.remaining = Math.max(0, this.remaining - 1);
+    this.ctx.bus.emit(Events.EnemyKilled, {
+      name: enemy.name,
+      remaining: this.remaining,
+      headshot,
+      by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
+    });
+    if (this.remaining <= 0) this.setObjective('FLOOR CLEAR');
   }
 
   render(renderer: THREE.WebGLRenderer): void {

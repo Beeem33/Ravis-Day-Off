@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FlickeringLight } from './FlickeringLight';
 import type { BreakableGlass } from './BreakableGlass';
-import { Collider, Waypoint, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevelBuilder';
+import { Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevelBuilder';
 
 export interface Level4Data {
   group: THREE.Group;
@@ -24,6 +24,8 @@ export interface Level4Data {
   /** The door into the maze. Shut until the cutscene is done. */
   mazeDoor: THREE.Mesh;
   mazeDoorCollider: Collider;
+  /** Where the sweep teams start. Spread so no two share a room. */
+  enemySpawns: EnemySpawn[];
   /** Every ceiling fixture, so the scene can kill them all at the blackout. */
   lights: THREE.PointLight[];
   lampMats: THREE.MeshStandardMaterial[];
@@ -126,6 +128,22 @@ export class Level4Builder {
       backDoorway: new THREE.Vector3(HALL_X0 + 0.4, 0, 0),
       mazeDoor: this.mazeDoor,
       mazeDoorCollider: this.mazeDoorCollider,
+      // One to a room or junction, facing along the run they are covering,
+      // so the first thing the player meets is a beam and not a body.
+      enemySpawns: [
+        { pos: new THREE.Vector3(-16, 0, -5.5), yaw: Math.PI / 2 },
+        { pos: new THREE.Vector3(-10, 0, -5.5), yaw: -Math.PI / 2 },
+        { pos: new THREE.Vector3(-17.4, 0, 5.5), yaw: 0 },
+        { pos: new THREE.Vector3(-11, 0, 5.5), yaw: Math.PI },
+        { pos: new THREE.Vector3(-0.5, 0, -5.5), yaw: Math.PI / 2 },
+        { pos: new THREE.Vector3(6.0, 0, -4.0), yaw: -Math.PI / 2 },
+        { pos: new THREE.Vector3(-1.2, 0, 3.4), yaw: 0 },
+        { pos: new THREE.Vector3(6.0, 0, 4.0), yaw: Math.PI },
+        { pos: new THREE.Vector3(V_EAST, 0, -3.5), yaw: 0 },
+        { pos: new THREE.Vector3(-13, 0, H_NORTH), yaw: -Math.PI / 2 },
+        { pos: new THREE.Vector3(3, 0, H_SOUTH), yaw: Math.PI / 2 },
+        { pos: new THREE.Vector3(V_WEST, 0, 3.5), yaw: Math.PI }
+      ],
       lights: this.lights,
       lampMats: this.lampMats
     };

@@ -175,6 +175,8 @@ export class Level4Builder {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     mesh.position.set(x, y + h / 2, z);
     mesh.userData.surface = opts.surface ?? 'concrete';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     this.group.add(mesh);
     this.shootables.push(mesh);
     if (opts.occlude !== false) this.occluders.push(mesh);
@@ -192,6 +194,7 @@ export class Level4Builder {
   private slab(x0: number, x1: number, z0: number, z1: number, y: number, mat: THREE.Material): void {
     const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, 0.3, z1 - z0), mat);
     m.position.set((x0 + x1) / 2, y + 0.15, (z0 + z1) / 2);
+    m.receiveShadow = true;
     this.group.add(m);
     this.shootables.push(m);
     this.colliders.push({

@@ -112,18 +112,18 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.decals.place('blood', this.level.woundedSpot.clone().add(new THREE.Vector3(0.05, 0.01, 0.62)), floorN, 0.8);
     // The ketchup stain. Parented to his chest so it rides the pose and,
     // later, the walk out.
-    const stain = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.17, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0x7d1410, roughness: 0.55 })
-    );
-    stain.position.set(-0.03, -0.19, -0.115);
+    // Sat squarely on the white shirt rather than half over the waistband,
+    // and bright enough to read from across the corridor.
+    const stainMat = new THREE.MeshStandardMaterial({ color: 0xb01a12, roughness: 0.45 });
+    const stain = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.22, 0.012), stainMat);
+    stain.position.set(-0.02, -0.06, -0.141);
     this.wounded.addChestPatch(stain);
-    const smear = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.09, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0x64100d, roughness: 0.6 })
-    );
-    smear.position.set(0.08, -0.26, -0.113);
-    this.wounded.addChestPatch(smear);
+    // A couple of runs down from it, so it reads as soaked through
+    for (const [sx, sy, sw, sh] of [[-0.09, -0.19, 0.07, 0.13], [0.07, -0.17, 0.06, 0.1]] as const) {
+      const run = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, 0.012), stainMat);
+      run.position.set(sx, sy, -0.14);
+      this.wounded.addChestPatch(run);
+    }
 
     // The gun, across his lap, until he passes it up
     this.propGun = this.shotgunProp();
@@ -338,6 +338,11 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.wounded.setWalk(0);
       return;
     }
+    // On his feet: lights out and control back. He walks the rest of the way
+    // on his own while the player is free to go — waiting out ten metres of
+    // someone else's stroll is not a cutscene, it is a queue.
+    if (!this.blackout) this.cutPower();
+    this.handOver();
     const door = this.level.backDoorway;
     const to = door.clone().sub(this.wounded.position).setY(0);
     const left = to.length();
@@ -348,12 +353,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.wounded.setWalk(0.75);
       this.wounded.faceToward(door, dt, 3.2);
     }
-    // The lights go once he is well past Ravi and still walking
-    if (this.leaveWalk > STAND + 2.4 && !this.blackout) this.cutPower();
-    if (left <= 0.5 && this.blackout) {
-      this.wounded.root.visible = false;
-      this.handOver();
-    }
+    if (left <= 0.5) this.wounded.root.visible = false;
   }
 
   /**
@@ -418,7 +418,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     // Walking up on him starts the scene
     if (this.phase === 'walk' && this.player.position.x > this.level.talkX) this.beginTalk();
-    if (this.phase === 'leaving') this.updateLeaving(dt);
+    if (this.leaveWalk >= 0 && this.wounded.root.visible) this.updateLeaving(dt);
 
     // ---- Weapon slots. The shotgun is not carried until it is handed over.
     if (playable && this.hasShotgun && !this.dialogue.isActive) {
@@ -492,7 +492,13 @@ export class Level4Scene extends CombatScene<Level4Data> {
       const from = e.muzzleWorld();
       const dir = e.forwardDir(new THREE.Vector3());
       dir.y = -0.06; // carried a touch low, the way a weapon light is held
-      this.beams.aim(i, from, dir.normalize());
+      dir.normalize();
+      // The spotlight's own shadow map stops the LIGHT at a wall; this stops
+      // the visible shaft at the same place, so the two agree.
+      this.raycaster.set(from, dir);
+      this.raycaster.far = 30;
+      const hit = this.raycaster.intersectObjects(this.level.occluders, false);
+      this.beams.aim(i, from, dir, hit.length ? hit[0].distance : 30);
     }
 
     if (this.agents.length) this.separateAgents(dt);

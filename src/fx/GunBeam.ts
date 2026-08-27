@@ -8,6 +8,12 @@ import * as THREE from 'three';
  * Each beam is a narrow spotlight plus a faint additive cone so the shaft
  * itself reads in the air, not just the disc it throws on the wall.
  *
+ * Each beam casts a shadow, which is the only way a wall actually stops it:
+ * an unshadowed spotlight lights straight through geometry, so every beam in
+ * the building was visible from everywhere at once. Shadow maps also give the
+ * half-blocked case for free — a doorway edge cuts the cone where it stands
+ * and the rest of the beam carries on past it.
+ *
  * The pool is sized once at build time and never grows. Every light stays in
  * the scene for good and is driven by intensity alone — the number of visible
  * lights is baked into every material's shader, so adding or hiding one
@@ -22,23 +28,32 @@ export class GunBeamPool {
   private readonly max: number;
 
   private static tmp = new THREE.Vector3();
+  private static DOWN = new THREE.Vector3(0, -1, 0);
 
-  constructor(scene: THREE.Scene, count: number, range = 30, intensity = 30) {
+  constructor(scene: THREE.Scene, count: number, range = 30, intensity = 55) {
     this.range = range;
     this.max = intensity;
     const shaftMat = new THREE.MeshBasicMaterial({
       color: 0xffeccd,
       transparent: true,
-      opacity: 0.055,
+      opacity: 0.085,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide
     });
     // Long and narrow — a search beam, not a lantern
-    const half = Math.PI / 26;
+    const half = Math.PI / 40;
     for (let i = 0; i < count; i++) {
-      const spot = new THREE.SpotLight(0xffeccd, 0, range, half * 1.6, 0.55, 1.0);
+      const spot = new THREE.SpotLight(0xffeccd, 0, range, half * 1.5, 0.35, 1.0);
       spot.position.set(0, -90, 0);
+      // Small maps: the cone is narrow, so there is little to resolve, and
+      // twelve of these have to fit in a frame alongside everything else.
+      spot.castShadow = true;
+      spot.shadow.mapSize.set(512, 512);
+      spot.shadow.camera.near = 0.4;
+      spot.shadow.camera.far = range;
+      spot.shadow.bias = -0.0016;
+      spot.shadow.normalBias = 0.03;
       scene.add(spot);
       const target = new THREE.Object3D();
       target.position.set(0, -90, -1);
@@ -49,10 +64,10 @@ export class GunBeamPool {
 
       // Cone runs from the muzzle out to the far end of the beam. Built along
       // +Y and tipped, because that is the axis ConeGeometry is happiest on.
-      const shaft = new THREE.Mesh(
-        new THREE.ConeGeometry(Math.tan(half) * range, range, 14, 1, true),
-        shaftMat
-      );
+      // Unit cone: a metre long, scaled per frame to wherever the beam
+      // actually stops, so the visible shaft ends at the wall rather than
+      // carrying on through it.
+      const shaft = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(half), 1, 12, 1, true), shaftMat);
       shaft.visible = false;
       scene.add(shaft);
       this.shafts.push(shaft);
@@ -64,18 +79,24 @@ export class GunBeamPool {
     return this.spots.length;
   }
 
-  /** Point beam `i` from `from` along `dir`. */
-  aim(i: number, from: THREE.Vector3, dir: THREE.Vector3): void {
+  /**
+   * Point beam `i` from `from` along `dir`. `reach` is how far the beam gets
+   * before something stops it — the shaft is scaled to it so the visible
+   * shaft ends where the light does.
+   */
+  aim(i: number, from: THREE.Vector3, dir: THREE.Vector3, reach = this.range): void {
     if (i >= this.spots.length) return;
     const d = GunBeamPool.tmp.copy(dir).normalize();
+    const len = Math.max(0.6, Math.min(reach, this.range));
     this.spots[i].position.copy(from);
     this.spots[i].intensity = this.max;
     this.targets[i].position.copy(from).addScaledVector(d, this.range);
     const shaft = this.shafts[i];
     shaft.visible = true;
-    // Cone apex sits at the muzzle, so the body is centred half a range out
-    shaft.position.copy(from).addScaledVector(d, this.range / 2);
-    shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), d);
+    // Apex at the muzzle, so the body is centred half its length along
+    shaft.position.copy(from).addScaledVector(d, len / 2);
+    shaft.quaternion.setFromUnitVectors(GunBeamPool.DOWN, d);
+    shaft.scale.set(len, len, len);
     this.live[i] = true;
   }
 

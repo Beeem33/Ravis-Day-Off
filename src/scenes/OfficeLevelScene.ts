@@ -152,7 +152,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
         // Blade in. He's dying on it — but Ravi is HOLDING him up, so no
         // ragdoll yet. Just the sound and the blood.
         if (victim && victim.alive) {
-          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.0, 0)); // the stomach
           const spray = this.player
             .forwardDir()
             .clone()
@@ -165,7 +165,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       } else if (e === 'release') {
         // The knife comes out, the hand lets go — NOW they drop.
         if (victim && victim.alive) {
-          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.0, 0)); // the stomach
           const slump = this.player.forwardDir().clone();
           slump.y = -0.3;
           // Gentle impulse: they crumple off the blade, not fly off it

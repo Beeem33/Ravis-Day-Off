@@ -128,7 +128,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       } else if (e === 'stab') {
         // Blade in — held up on the knife, not dropped yet
         if (victim && victim.alive) {
-          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.0, 0)); // the stomach
           const spray = this.player
             .forwardDir()
             .clone()
@@ -141,7 +141,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       } else if (e === 'release') {
         // The knife comes out, the hand lets go — NOW they drop.
         if (victim && victim.alive) {
-          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+          const chest = victim.position.clone().add(new THREE.Vector3(0, 1.0, 0)); // the stomach
           const slump = this.player.forwardDir().clone();
           slump.y = -0.3;
           this.killEnemy(victim, chest, slump.normalize(), true, false, 'torso', 0.2);

@@ -135,7 +135,17 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.scene.add(this.propGun);
 
     // ---- The sweep team. Weapons already up: they came in expecting this.
-    this.beams = new GunBeamPool(this.scene, this.level.enemySpawns.length);
+    // The pool casts through this to work out where each beam stops.
+    this.beams = new GunBeamPool(this.scene, this.level.enemySpawns.length, (o, dir, far) => {
+      this.raycaster.set(o, dir);
+      this.raycaster.far = far;
+      const h = this.raycaster.intersectObjects(this.level.occluders, false);
+      if (!h.length) return null;
+      const n = h[0].normal
+        ? h[0].normal.clone().transformDirection(h[0].object.matrixWorld)
+        : new THREE.Vector3(0, 1, 0);
+      return { dist: h[0].distance, normal: n };
+    });
     this.level.enemySpawns.forEach((sp, i) => {
       const e = new Enemy(sp.pos, sp.yaw, i + 11, { name: `FBI AGENT ${i + 1}` });
       e.setAiming(true);
@@ -512,10 +522,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
       dir.y = -0.06; // carried a touch low, the way a weapon light is held
       dir.normalize();
       // The muzzle sits over half a metre in front of the body, so an agent
-      // stood against a wall has his weapon hand poking out the far side of
-      // it — and a beam that starts out there has nothing left to stop it.
-      // Walk from the body, which collision keeps honest, out towards the
-      // muzzle, and give up at the first thing in the way.
+      // stood against a wall has his weapon hand through it, and a beam
+      // starting out there has nothing left to stop it. Walk from the body,
+      // which collision keeps honest, out towards the muzzle, and give up at
+      // the first thing in the way.
       const from = e.muzzleWorld();
       const body = Level4Scene.tmpA.set(e.position.x, from.y, e.position.z);
       const out = Level4Scene.tmpB.copy(from).sub(body);
@@ -527,12 +537,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
         const wall = this.raycaster.intersectObjects(this.level.occluders, false);
         if (wall.length) from.copy(body).addScaledVector(out, Math.max(0, wall[0].distance - 0.08));
       }
-      // The spotlight's own shadow map stops the LIGHT at a wall; this stops
-      // the visible shaft at the same place, so the two agree.
-      this.raycaster.set(from, dir);
-      this.raycaster.far = 30;
-      const hit = this.raycaster.intersectObjects(this.level.occluders, false);
-      this.beams.aim(i, from, dir, hit.length ? hit[0].distance : 30);
+      this.beams.aim(i, from, dir);
     }
 
     if (this.agents.length) this.separateAgents(dt);

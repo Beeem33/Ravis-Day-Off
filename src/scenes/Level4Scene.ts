@@ -659,7 +659,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
    * needs the least movement.
    */
   private pushOutOfWalls(e: Enemy): void {
-    const R = 0.4;
+    // A standoff, not just "outside the wall". Parking them at the exact
+    // collision radius leaves them scraping it, which is the look we are
+    // trying to be rid of.
+    const R = 0.52;
     for (const c of this.level.colliders) {
       if (c.disabled) continue;
       const b = c.box;

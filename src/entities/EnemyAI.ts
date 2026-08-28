@@ -53,10 +53,18 @@ export class EnemyAI {
   /** Which way they committed to going round the last obstacle, and for how long. */
   private avoidSide = 0;
   private avoidHold = 0;
+  /** The heading actually being walked, turned towards the one we want. */
+  private steerDir = new THREE.Vector3();
+  /** Shuffling-on-the-spot detector, and the random way out of it. */
+  private stuckAnchor = new THREE.Vector3();
+  private stuckTimer = 0;
+  private escapeTimer = 0;
+  private escapeAngle = 0;
 
   private static tmpA = new THREE.Vector3();
   private static tmpB = new THREE.Vector3();
   private static tmpC = new THREE.Vector3();
+  private static tmpD = new THREE.Vector3();
 
   constructor(
     private enemy: Enemy,
@@ -334,7 +342,14 @@ export class EnemyAI {
       this.strafePhase += dt;
       const strafe = Math.sin(this.strafePhase * 1.7);
       const side = EnemyAI.tmpA.set(Math.cos(enemy.yaw), 0, -Math.sin(enemy.yaw));
-      enemy.position.addScaledVector(side, strafe * dt * 0.6);
+      side.multiplyScalar(strafe);
+      // Never micro-strafe INTO a wall. On its own this sidestep just pressed
+      // into whatever was beside them and let collision resolve undo it, once
+      // a second, forever — which is scraping, and it is most of the wall
+      // contact left during a firefight. Lean off the wall instead.
+      const shove = this.wallPush(EnemyAI.tmpD);
+      if (shove.lengthSq() > 1e-6) side.addScaledVector(shove, 1.4);
+      enemy.position.addScaledVector(side, dt * 0.6);
       this.resolveCollisions();
       enemy.setWalk(0.3);
 
@@ -488,42 +503,124 @@ export class EnemyAI {
   }
 
   /**
+   * A shove away from anything they are too close to, strongest when nearly
+   * touching and nothing at all past MARGIN.
+   *
+   * The deflection search gets them AROUND a corner; this is what keeps them
+   * off the wall while they do it. Being continuous, it cannot oscillate the
+   * way a left/right decision can — and in a corridor or a doorway the two
+   * sides cancel, so it quietly centres them instead of steering them at all.
+   */
+  private wallPush(out: THREE.Vector3): THREE.Vector3 {
+    const p = this.enemy.position;
+    const MARGIN = 0.85;
+    out.set(0, 0, 0);
+    for (const c of this.deps.colliders) {
+      if (c.disabled) continue;
+      const b = c.box;
+      if (b.max.y <= p.y + 0.5 || b.min.y >= p.y + 1.6) continue;
+      const cx = Math.min(Math.max(p.x, b.min.x), b.max.x);
+      const cz = Math.min(Math.max(p.z, b.min.z), b.max.z);
+      let dx = p.x - cx;
+      let dz = p.z - cz;
+      let d = Math.hypot(dx, dz);
+      if (d >= MARGIN) continue;
+      if (d < 1e-4) {
+        dx = 1;
+        dz = 0;
+        d = 1e-4;
+      }
+      const w = (MARGIN - d) / MARGIN;
+      out.x += (dx / d) * w;
+      out.z += (dz / d) * w;
+    }
+    return out;
+  }
+
+  /** Rotate `dir` about Y, in place. */
+  private static turn(dir: THREE.Vector3, a: number): THREE.Vector3 {
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    return dir.set(dir.x * c - dir.z * s, 0, dir.x * s + dir.z * c).normalize();
+  }
+
+  /** The best heading on one given side, widening until something is clear. */
+  private deflect(desired: THREE.Vector3, side: number, look: number): THREE.Vector3 {
+    const cand = EnemyAI.tmpB;
+    let widest = 0;
+    for (const ang of [0.55, 1.0, 1.5, 2.1, 2.7]) {
+      cand.copy(desired);
+      EnemyAI.turn(cand, ang * side);
+      widest = ang;
+      if (this.pathClear(cand, look)) return desired.copy(cand);
+    }
+    // Nothing on this side is clear. Take the widest anyway rather than
+    // switching sides — switching is what starts the buzzing.
+    return EnemyAI.turn(desired, widest * side);
+  }
+
+  /**
    * Turn the direction they WANT to go into one they can actually walk.
    *
    * Without this they walked dead at the target and left resolveCollisions to
    * shove them out of whatever they hit — which, frame after frame, is an
    * agent grinding along a wall going nowhere. It only showed up once there
    * were targets off the waypoint graph to chase: an investigate point or a
-   * last-known player position can be straight through a wall, and nothing
-   * was routing round it.
+   * last-known player position can be straight through a wall.
    *
-   * Deflections are tried in widening steps, and the side chosen is held for
-   * a beat so they commit to going round a corner instead of jittering on it.
+   * The commitment is the delicate part. A first attempt re-picked a side
+   * every frame and just SEARCHED the old side first, so the moment that side
+   * closed up it switched — and the agent buzzed on the spot at 1080 deg/sec,
+   * flipping every second frame. So: once a side is chosen it is held outright
+   * for avoidHold, the hold is not refreshed while it runs, and the direct
+   * line has to be clear well past the probe distance before the avoidance is
+   * given up at all. Releasing on the short probe put them straight back into
+   * the same corner.
    */
   private steerAround(desired: THREE.Vector3, dt: number): THREE.Vector3 {
     const LOOK = 1.6;
     this.avoidHold = Math.max(0, this.avoidHold - dt);
+    this.escapeTimer = Math.max(0, this.escapeTimer - dt);
+
+    // Shoved out of a corner at a random angle: ignore everything else and go
+    if (this.escapeTimer > 0) return EnemyAI.turn(desired, this.escapeAngle);
+
+    // Mid-avoidance: stay on the committed side until there is real daylight
+    if (this.avoidHold > 0 && this.avoidSide !== 0) {
+      if (this.pathClear(desired, LOOK * 1.8)) {
+        this.avoidSide = 0;
+        this.avoidHold = 0;
+        return desired;
+      }
+      return this.deflect(desired, this.avoidSide, LOOK);
+    }
+
     if (this.pathClear(desired, LOOK)) {
-      if (this.avoidHold <= 0) this.avoidSide = 0;
+      this.avoidSide = 0;
       return desired;
     }
-    const order = this.avoidSide !== 0 ? [this.avoidSide, -this.avoidSide] : [1, -1];
+
+    // Free to choose: take the side that opens up at the shallowest angle,
+    // then commit to it and stop thinking about it for a beat.
+    let bestSide = 1;
+    let bestAng = Infinity;
     const cand = EnemyAI.tmpB;
-    for (const ang of [0.55, 1.0, 1.5, 2.1, 2.7]) {
-      for (const side of order) {
-        const a = ang * side;
-        const cos = Math.cos(a);
-        const sin = Math.sin(a);
-        cand.set(desired.x * cos - desired.z * sin, 0, desired.x * sin + desired.z * cos).normalize();
+    for (const side of [1, -1]) {
+      for (const ang of [0.55, 1.0, 1.5, 2.1, 2.7]) {
+        cand.copy(desired);
+        EnemyAI.turn(cand, ang * side);
         if (this.pathClear(cand, LOOK)) {
-          this.avoidSide = side;
-          this.avoidHold = 1.1;
-          return desired.copy(cand);
+          if (ang < bestAng) {
+            bestAng = ang;
+            bestSide = side;
+          }
+          break;
         }
       }
     }
-    // Boxed in on every heading: stand rather than push into it
-    return desired.set(0, 0, 0);
+    this.avoidSide = bestSide;
+    this.avoidHold = 1.2;
+    return this.deflect(desired, bestSide, LOOK);
   }
 
   private resolveCollisions(): void {
@@ -616,10 +713,45 @@ export class EnemyAI {
       enemy.setWalk(0);
       return false;
     }
+    // Hold a standoff from the walls on the way. Deflection alone still let
+    // them graze along whatever they were rounding.
+    const push = this.wallPush(EnemyAI.tmpD);
+    if (push.lengthSq() > 1e-6) to.addScaledVector(push, 0.9).normalize();
+    // Ease onto the chosen heading instead of snapping to it. Steering is a
+    // per-frame decision and the geometry it reads changes as they move, so
+    // without a rate limit a corner can spin them on the spot — which is what
+    // sent the weapon lights swinging.
+    if (this.steerDir.lengthSq() < 0.01) {
+      // Seed from where they are already facing, not from the first heading
+      // we want — otherwise every agent snaps round the instant play starts.
+      this.enemy.forwardDir(this.steerDir);
+    } else {
+      const cur = Math.atan2(this.steerDir.x, this.steerDir.z);
+      let d = Math.atan2(to.x, to.z) - cur;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      const a = cur + THREE.MathUtils.clamp(d, -4.5 * dt, 4.5 * dt);
+      this.steerDir.set(Math.sin(a), 0, Math.cos(a));
+    }
+    to.copy(this.steerDir);
     EnemyAI.tmpC.copy(enemy.position).addScaledVector(to, 2);
     enemy.faceToward(EnemyAI.tmpC, dt, 6);
     const step = Math.min(speed * dt, dist);
     enemy.position.addScaledVector(to, step);
+
+    // Still shuffling on the spot after all that? Stop being clever, turn a
+    // random way and walk that for a moment to break the deadlock.
+    this.stuckTimer += dt;
+    if (this.stuckTimer > 1.3) {
+      if (enemy.position.distanceTo(this.stuckAnchor) < 0.4) {
+        this.avoidSide = Math.random() < 0.5 ? 1 : -1;
+        this.avoidHold = 1.8;
+        this.escapeTimer = 0.9;
+        this.escapeAngle = (0.9 + Math.random() * 0.9) * this.avoidSide;
+      }
+      this.stuckAnchor.copy(enemy.position);
+      this.stuckTimer = 0;
+    }
     // Climb/descend ONLY along waypoint links (the stairs). Chasing a target
     // on another floor never changes height — that's what routeTo is for.
     if (followY) enemy.position.y += (target.y - enemy.position.y) * Math.min(1, step / Math.max(0.001, dist));

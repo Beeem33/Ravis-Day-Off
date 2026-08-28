@@ -143,7 +143,7 @@ export class GunBeamPool {
       scene.add(lens);
       this.lenses.push(lens);
 
-      const patch = new THREE.Mesh(disc, patchMat);
+      const patch = new THREE.Mesh(disc, patchMat.clone());
       patch.visible = false;
       patch.frustumCulled = false;
       scene.add(patch);
@@ -191,21 +191,24 @@ export class GunBeamPool {
 
     const spread = Math.tan(this.halfAngle);
     let len = this.range;
+    // The patch belongs to the CENTRE ray alone. Taking it from whichever of
+    // the five was shortest put it on the centre axis but at a side wall's
+    // angle — a lit slab hanging in mid-air at the end of the beam, tilted
+    // away from anything it could be lying on.
     let normal: THREE.Vector3 | null = null;
+    let landed = 0;
     const centre = this.probe(from, d, this.range);
     if (centre) {
       len = centre.dist;
       normal = centre.normal;
+      landed = centre.dist;
     }
     // Rim rays: same origin, tilted out to the edge of the cone
     const rim = new THREE.Vector3();
     for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       rim.copy(d).addScaledVector(sideA, spread * a).addScaledVector(sideB, spread * b).normalize();
       const h = this.probe(from, rim, len);
-      if (h && h.dist < len) {
-        len = h.dist;
-        normal = h.normal;
-      }
+      if (h && h.dist < len) len = h.dist;
     }
     len = Math.max(0.35, len);
 
@@ -223,9 +226,17 @@ export class GunBeamPool {
 
     // The patch where it lands, laid on the surface it hit
     const patch = this.patches[i];
-    if (normal) {
+    const patchMatI = patch.material as THREE.MeshBasicMaterial;
+    // How squarely it lands. A beam skimming along the floor spreads its light
+    // over metres, so a round pool there is wrong twice over — wrong shape and
+    // far too bright. Fade it out instead of drawing a slab down the floor.
+    const square = normal ? Math.abs(d.dot(normal)) : 0;
+    // ...and drop it entirely when a rim ray cut the shaft well short of where
+    // the centre landed, because then the centre never reached a surface.
+    if (normal && square > 0.18 && landed <= len + 0.3) {
       patch.visible = true;
-      patch.position.copy(from).addScaledVector(d, len).addScaledVector(normal, 0.02);
+      patchMatI.opacity = 0.8 * Math.min(1, (square - 0.18) / 0.45);
+      patch.position.copy(from).addScaledVector(d, landed).addScaledVector(normal, 0.02);
       patch.quaternion.setFromUnitVectors(GunBeamPool.FWD, normal);
       // Sized off the cone rather than picked by eye. The old version was a
       // flat 3.5m at range, which is where the big lit circles with no visible

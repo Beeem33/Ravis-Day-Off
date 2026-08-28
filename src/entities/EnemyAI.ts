@@ -53,6 +53,10 @@ export class EnemyAI {
   /** Which way they committed to going round the last obstacle, and for how long. */
   private avoidSide = 0;
   private avoidHold = 0;
+  /** The patch of floor this one is responsible for, if it has been given one. */
+  private home: THREE.Vector3 | null = null;
+  private homeRadius = 0;
+  private zone: number[] | null = null;
   /** The heading actually being walked, turned towards the one we want. */
   private steerDir = new THREE.Vector3();
   /** Shuffling-on-the-spot detector, and the random way out of it. */
@@ -248,13 +252,43 @@ export class EnemyAI {
     }
   }
 
+  /**
+   * Put this one in charge of a sector. Without it every agent picks its next
+   * destination uniformly at random from the whole graph, which is a random
+   * walk — and a random walk settles in proportion to how well connected a
+   * node is, so over a couple of minutes the entire team drifts out of the
+   * rooms and pools in the open middle corridors. A sector keeps them where
+   * they were posted, and they still return to it after a chase.
+   */
+  setPatrolZone(centre: THREE.Vector3, radius: number): void {
+    this.home = centre.clone();
+    this.homeRadius = radius;
+    this.zone = null;
+  }
+
+  /** The waypoints this one patrols: its sector, or everywhere if unassigned. */
+  private patrolPool(): number[] {
+    const wps = this.deps.waypoints;
+    if (!this.home) return wps.map((_, i) => i);
+    if (!this.zone) {
+      const z: number[] = [];
+      for (let i = 0; i < wps.length; i++) {
+        if (wps[i].pos.distanceTo(this.home) <= this.homeRadius) z.push(i);
+      }
+      // Too small a sector would have them pacing the same two metres
+      this.zone = z.length >= 6 ? z : wps.map((_, i) => i);
+    }
+    return this.zone;
+  }
+
   /** Breadth-first route across the waypoint graph to a random far-off node. */
   private planRoute(): void {
     const wps = this.deps.waypoints;
     const start = this.targetWp;
-    let dest = Math.floor(Math.random() * wps.length);
-    for (let tries = 0; tries < 6 && wps[dest].pos.distanceTo(wps[start].pos) < 8; tries++) {
-      dest = Math.floor(Math.random() * wps.length);
+    const pool = this.patrolPool();
+    let dest = pool[Math.floor(Math.random() * pool.length)];
+    for (let tries = 0; tries < 8 && wps[dest].pos.distanceTo(wps[start].pos) < 6; tries++) {
+      dest = pool[Math.floor(Math.random() * pool.length)];
     }
     const prev = new Map<number, number>([[start, -1]]);
     const queue = [start];

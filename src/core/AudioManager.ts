@@ -558,6 +558,117 @@ export class AudioManager {
     return (this.menuTrack !== null && !this.menuTrack.paused) || this.musicTimer !== null;
   }
 
+  /**
+   * A fluorescent tube striking, or failing to. Mains hum with its odd
+   * harmonics — that is what makes it read as electrical rather than musical —
+   * plus a band of ballast rattle over the top.
+   */
+  fluorescentBuzz(duration = 0.32, gain = 0.42): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+    bus.gain.setValueAtTime(gain, t + duration * 0.75);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    bus.connect(this.sfxBus);
+
+    for (const [f, g] of [[120, 1], [240, 0.42], [360, 0.3], [600, 0.15]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f * (0.99 + Math.random() * 0.02);
+      const og = ctx.createGain();
+      og.gain.value = g * 0.22;
+      o.connect(og).connect(bus);
+      o.start(t);
+      o.stop(t + duration + 0.05);
+    }
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'bandpass';
+    nf.frequency.value = 3100;
+    nf.Q.value = 7;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.14;
+    n.connect(nf).connect(ng).connect(bus);
+    n.start(t);
+    n.stop(t + duration + 0.05);
+  }
+
+  /**
+   * A floor's worth of electrics letting go: the hum slides down an octave and
+   * a half while the top end is filtered off it, and a couple of contactors
+   * drop out on the way.
+   */
+  powerDown(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.5, t);
+    bus.gain.setValueAtTime(0.44, t + 1.5);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + 2.7);
+    bus.connect(this.sfxBus);
+
+    for (const base of [110, 163]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(base, t);
+      o.frequency.exponentialRampToValueAtTime(base * 0.2, t + 2.5);
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.setValueAtTime(2400, t);
+      f.frequency.exponentialRampToValueAtTime(160, t + 2.5);
+      const g = ctx.createGain();
+      g.gain.value = 0.2;
+      o.connect(f).connect(g).connect(bus);
+      o.start(t);
+      o.stop(t + 2.8);
+    }
+    // Contactors dropping out, a beat apart
+    for (const at of [0.06, 0.9]) {
+      const n = ctx.createBufferSource();
+      n.buffer = this.noiseBuffer;
+      const nf = ctx.createBiquadFilter();
+      nf.type = 'bandpass';
+      nf.frequency.value = 220;
+      nf.Q.value = 2.2;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.5, t + at);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.16);
+      n.connect(nf).connect(ng).connect(this.sfxBus);
+      n.start(t + at);
+      n.stop(t + at + 0.2);
+    }
+  }
+
+  /** Latch, swing, and the handle settling back. */
+  doorOpen(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    // Latch
+    this.noise(0.04, 'bandpass', 2600, 0.34);
+    this.tone('square', 1400, 700, 0.05, 0.09);
+    // The leaf swinging — filtered noise sweeping down as it opens
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(900, t + 0.06);
+    f.frequency.exponentialRampToValueAtTime(260, t + 0.75);
+    f.Q.value = 3.5;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.2, t + 0.16);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
+    n.connect(f).connect(g).connect(this.sfxBus);
+    n.start(t + 0.06);
+    n.stop(t + 0.85);
+  }
+
   startMenuMusic(): void {
     if (!this.ctx) return;
     if (this.ctx.state === 'suspended') void this.ctx.resume();

@@ -50,6 +50,15 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private shells = TUBE_SIZE;
   private fireCooldown = 0;
   private blackout = false;
+  /** Full brightness of every fixture, kept so the flicker can put them back. */
+  private lightBase: number[] = [];
+  /** How far through the lights-out sequence, in seconds since he stood up. */
+  private powerT = -1;
+  private flickerStep = 0;
+  private monologueDone = false;
+  private doorState: 'shut' | 'opening' | 'open' = 'shut';
+  private doorAngle = 0;
+  private doorAt = new THREE.Vector3();
   // ---- Night vision goggles (N): green amplified view of the dark floor
   private nv = false;
   private nvLight!: THREE.AmbientLight;
@@ -176,8 +185,15 @@ export class Level4Scene extends CombatScene<Level4Data> {
           enemyFire: (x) => this.enemyFire(x)
         })
       );
+      // Hold the room they were posted to. Left to themselves they pick every
+      // destination at random from the whole floor, and that drifts the lot of
+      // them out of the rooms and into the middle corridors within a minute.
+      this.agentAI[i].setPatrolZone(sp.pos, 6.5);
     });
     this.remaining = this.agents.length;
+    this.lightBase = this.level.lights.map((l) => l.intensity);
+    this.level.mazeDoorCollider.box.getCenter(this.doorAt);
+    this.doorAt.y = 0;
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
     this.hud.show();
@@ -366,8 +382,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // On his feet: lights out and control back. He walks the rest of the way
     // on his own while the player is free to go — waiting out ten metres of
     // someone else's stroll is not a cutscene, it is a queue.
-    if (!this.blackout) this.cutPower();
-    this.handOver();
+    if (this.powerT < 0) this.powerT = 0;
     const door = this.level.backDoorway;
     const to = door.clone().sub(this.wounded.position).setY(0);
     const left = to.length();
@@ -379,6 +394,93 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.wounded.faceToward(door, dt, 3.2);
     }
     if (left <= 0.5) this.wounded.root.visible = false;
+  }
+
+  /**
+   * The tubes going out is not one event. They stutter first — a few strikes
+   * and drop-outs with the buzz that goes with them — and only then does the
+   * board let go. Timed from the moment he gets to his feet.
+   */
+  private static FLICKER: { at: number; on: boolean }[] = [
+    { at: 0.2, on: false },
+    { at: 0.34, on: true },
+    { at: 0.66, on: false },
+    { at: 0.78, on: true },
+    { at: 1.12, on: false },
+    { at: 1.2, on: true },
+    { at: 1.44, on: false },
+    { at: 1.58, on: true },
+    { at: 1.72, on: false },
+    { at: 1.8, on: true }
+  ];
+
+  /**
+   * The way through stays shut until he walks up to it, and then swings.
+   *
+   * It used to be deleted outright the moment the cutscene ended, which meant
+   * the level you were about to be told to be careful in was already standing
+   * open behind the man telling you.
+   */
+  private updateMazeDoor(dt: number): void {
+    if (this.doorState === 'shut') {
+      if (this.phase !== 'play') return;
+      if (this.player.position.distanceTo(this.doorAt) > 2.1) return;
+      this.doorState = 'opening';
+      this.level.mazeDoorCollider.disabled = true;
+      this.ctx.audio.doorOpen();
+      return;
+    }
+    if (this.doorState !== 'opening') return;
+    this.doorAngle = Math.min(1.95, this.doorAngle + dt * 2.6);
+    this.level.mazeDoorPivot.rotation.y = -this.doorAngle;
+    if (this.doorAngle >= 1.95) this.doorState = 'open';
+  }
+
+  /** Put every ceiling fixture back to full, or take it to nothing. */
+  private setLights(on: boolean): void {
+    this.level.lights.forEach((l, i) => {
+      l.intensity = on ? this.lightBase[i] : 0;
+    });
+    for (const m of this.level.lampMats) m.emissiveIntensity = on ? 1.4 : 0;
+  }
+
+  /**
+   * Runs the lights-out beat: stutter, then the board drops, then Ravi says
+   * the quiet part out loud and control comes back.
+   */
+  private updatePower(dt: number): void {
+    if (this.powerT < 0) return;
+    const was = this.powerT;
+    this.powerT += dt;
+
+    while (
+      this.flickerStep < Level4Scene.FLICKER.length &&
+      this.powerT >= Level4Scene.FLICKER[this.flickerStep].at
+    ) {
+      const step = Level4Scene.FLICKER[this.flickerStep++];
+      this.setLights(step.on);
+      this.ctx.audio.fluorescentBuzz(step.on ? 0.26 : 0.14, step.on ? 0.42 : 0.24);
+    }
+
+    const OUT = 2.05;
+    if (was < OUT && this.powerT >= OUT) this.cutPower();
+
+    const SPEAK = OUT + 1.5;
+    if (was < SPEAK && this.powerT >= SPEAK) {
+      this.dialogue.play(
+        [
+          {
+            speaker: 'RAVI',
+            text: 'The ones back here have probably got shotguns too. One shot and I am done. Cannot let that happen.',
+            pitch: 1.0
+          }
+        ],
+        () => {
+          this.monologueDone = true;
+          this.handOver();
+        }
+      );
+    }
   }
 
   /**
@@ -403,7 +505,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // read as bright up close and absent at any useful range. The dark here
     // should come from there being no light, not from a grey wash.
     this.scene.fog = new THREE.Fog(0x020305, 16, 70);
-    this.ctx.audio.wallCollapse();
+    this.ctx.audio.powerDown();
   }
 
   private handOver(): void {
@@ -411,9 +513,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.phase = 'play';
     this.player.cinematic = false;
     this.letterbox.classList.add('open');
-    // The way on opens once he is gone
-    this.level.mazeDoorCollider.disabled = true;
-    this.level.mazeDoor.visible = false;
     this.setObjective('FIND THE BOSS');
     this.ctx.input.requestPointerLock();
   }
@@ -459,6 +558,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // Walking up on him starts the scene
     if (this.phase === 'walk' && this.player.position.x > this.level.talkX) this.beginTalk();
     if (this.leaveWalk >= 0 && this.wounded.root.visible) this.updateLeaving(dt);
+    else if (this.leaveWalk >= 0 && this.powerT >= 0) this.powerT += dt;
+    this.updatePower(dt);
+    this.updateMazeDoor(dt);
 
     // ---- Weapon slots. The shotgun is not carried until it is handed over.
     if (playable && this.hasShotgun && !this.dialogue.isActive) {

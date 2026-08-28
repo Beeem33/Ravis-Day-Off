@@ -272,7 +272,7 @@ export function book(kind: 'persuade' | 'scamming' | 'comic'): THREE.Group {
     scamming: { t: 'THE ART OF SCAMMING', bg: '#6e1d1d', ink: '#f0dfc0', k: 'a practical guide' },
     comic: { t: 'CAPTAIN VOIP', bg: '#d8a13a', ink: '#2a1a52', k: 'issue #12 · hold music!' }
   }[kind];
-  const cover = bookCover(spec.t, spec.bg, spec.ink, spec.k);
+  const cover = kind === 'comic' ? comicCover() : bookCover(spec.t, spec.bg, spec.ink, spec.k);
   const pages = MAT.paper;
   const W = kind === 'comic' ? 0.17 : 0.14;
   const D = kind === 'comic' ? 0.26 : 0.21;
@@ -768,10 +768,10 @@ const artMats = new Map<string, THREE.MeshLambertMaterial>();
  * landscapes — the sort of thing bought by the metre for an office.
  */
 export function wallArt(
-  kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks' | 'house' | 'newcar'
+  kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks' | 'house' | 'newcar' | 'thumbsup' | 'ourhome'
 ): THREE.Group {
-  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : kind === 'newcar' ? 1.3 : 1.15;
-  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : kind === 'newcar' ? 0.92 : 0.8;
+  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : kind === 'newcar' ? 1.3 : kind === 'thumbsup' ? 1.0 : kind === 'ourhome' ? 1.2 : 1.15;
+  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : kind === 'newcar' ? 0.92 : kind === 'thumbsup' ? 1.15 : kind === 'ourhome' ? 0.86 : 0.8;
 
   let mat = artMats.get(kind);
   if (!mat) {
@@ -1118,6 +1118,98 @@ export function wallArt(
       g.textAlign = 'center';
       g.font = 'bold ' + Math.round(py * 0.075) + 'px Georgia, serif';
       g.fillText('TOP CLOSER — Q3', px / 2, py * 0.92);
+    } else if (kind === 'thumbsup') {
+      // A staff photo of somebody delighted with very little
+      g.fillStyle = '#cfd6dd';
+      g.fillRect(0, 0, px, py);
+      g.fillStyle = '#b9c2cb';
+      g.fillRect(0, py * 0.62, px, py * 0.38);
+      const cx = px / 2;
+      const headR = px * 0.115;
+      const headY = py * 0.3;
+      // Torso in a polo shirt
+      g.fillStyle = '#2f5f9e';
+      g.beginPath();
+      g.moveTo(cx - px * 0.2, py * 0.78);
+      g.lineTo(cx - px * 0.16, py * 0.45);
+      g.lineTo(cx + px * 0.16, py * 0.45);
+      g.lineTo(cx + px * 0.2, py * 0.78);
+      g.closePath();
+      g.fill();
+      // The arm, bent up, and the thumb itself
+      g.strokeStyle = '#c98f68';
+      g.lineWidth = px * 0.055;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(cx + px * 0.14, py * 0.52);
+      g.lineTo(cx + px * 0.21, py * 0.46);
+      g.lineTo(cx + px * 0.19, py * 0.37);
+      g.stroke();
+      g.fillStyle = '#d59b73';
+      g.beginPath();
+      g.arc(cx + px * 0.19, py * 0.34, px * 0.042, 0, Math.PI * 2);
+      g.fill();
+      g.fillRect(cx + px * 0.172, py * 0.27, px * 0.036, py * 0.06);
+      // Head, hair, and a face that means it
+      g.fillStyle = '#d59b73';
+      g.beginPath();
+      g.arc(cx, headY, headR, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#2a1f18';
+      g.beginPath();
+      g.arc(cx, headY - headR * 0.28, headR * 0.98, Math.PI * 1.04, Math.PI * 1.96);
+      g.fill();
+      g.fillStyle = '#241a14';
+      g.beginPath();
+      g.arc(cx - headR * 0.36, headY - headR * 0.05, headR * 0.1, 0, Math.PI * 2);
+      g.arc(cx + headR * 0.36, headY - headR * 0.05, headR * 0.1, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#241a14';
+      g.lineWidth = px * 0.012;
+      g.beginPath();
+      g.arc(cx, headY + headR * 0.18, headR * 0.45, 0.22 * Math.PI, 0.78 * Math.PI);
+      g.stroke();
+      // Caption
+      g.fillStyle = '#1d232a';
+      g.fillRect(0, py * 0.83, px, py * 0.17);
+      g.fillStyle = '#f2efe6';
+      g.textAlign = 'center';
+      g.font = 'bold ' + Math.round(py * 0.085) + 'px Impact, Arial Black, sans-serif';
+      g.fillText("ALL IN A DAY'S WORK", px / 2, py * 0.945);
+    } else if (kind === 'ourhome') {
+      // The building, drawn with all the affection of a stock clipart licence
+      g.fillStyle = '#9fb6cc';
+      g.fillRect(0, 0, px, py);
+      g.fillStyle = '#7f9a5c';
+      g.fillRect(0, py * 0.7, px, py * 0.3);
+      const bw = px * 0.44;
+      const bh = py * 0.46;
+      const bx = px / 2 - bw / 2;
+      const by = py * 0.7 - bh;
+      g.fillStyle = '#8c8f93';
+      g.fillRect(bx, by, bw, bh);
+      g.fillStyle = '#75787c';
+      g.fillRect(bx + bw, by + py * 0.03, px * 0.05, bh - py * 0.03);
+      // Windows, in a dull grid
+      g.fillStyle = '#5d7285';
+      const cols = 4;
+      const rows = 5;
+      for (let r = 0; r < rows; r++) {
+        for (let cc = 0; cc < cols; cc++) {
+          g.fillRect(bx + bw * (0.12 + cc * 0.22), by + bh * (0.1 + r * 0.16), bw * 0.13, bh * 0.09);
+        }
+      }
+      // Door
+      g.fillStyle = '#3f4c58';
+      g.fillRect(px / 2 - bw * 0.07, py * 0.7 - bh * 0.12, bw * 0.14, bh * 0.12);
+      g.fillStyle = '#f0f2f4';
+      g.fillRect(bx, by, bw, py * 0.012);
+      g.fillStyle = '#1d232a';
+      g.textAlign = 'center';
+      g.font = 'bold ' + Math.round(py * 0.095) + 'px Georgia, serif';
+      g.fillText('OUR BELOVED HOME', px / 2, py * 0.88);
+      g.font = 'italic ' + Math.round(py * 0.055) + 'px Georgia, serif';
+      g.fillText('RAVI-CALL SYSTEMS — EST. LAST YEAR', px / 2, py * 0.955);
     } else {
       // Landscapes: banded sky, a sun, a horizon silhouette
       const palettes = {
@@ -1888,5 +1980,385 @@ export function wallCupboards(width = 1.8): THREE.Group {
     handle.position.set(door.position.x + dw / 2 - 0.06, -0.18, -0.2);
     g.add(handle);
   }
+  return g;
+}
+
+// ---------------------------------------------------------------- washrooms
+
+const ceramic = new THREE.MeshStandardMaterial({ color: 0xf1f0ec, roughness: 0.22, metalness: 0.04 });
+
+/**
+ * Toilet, tank at the back. Built so local -Z is the wall side: place it with
+ * the yaw of the wall it stands against and the pan faces out into the room.
+ */
+export function toilet(): THREE.Group {
+  const g = new THREE.Group();
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.58, 0.18), ceramic);
+  tank.position.set(0, 0.72, -0.1);
+  g.add(tank);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(0.49, 0.04, 0.21), ceramic);
+  lid.position.set(0, 1.03, -0.1);
+  g.add(lid);
+  // Pedestal, narrowing towards the floor the way a real one does
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.17, 0.42, 12), ceramic);
+  foot.position.set(0, 0.21, 0.06);
+  g.add(foot);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.15, 0.2, 16), ceramic);
+  bowl.position.set(0, 0.52, 0.08);
+  g.add(bowl);
+  // Seat ring, with the lid standing up behind it
+  const seat = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.028, 8, 20), lam(0xe6e4de));
+  seat.rotation.x = Math.PI / 2;
+  seat.position.set(0, 0.63, 0.08);
+  g.add(seat);
+  const seatLid = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.035, 0.42), lam(0xe6e4de));
+  seatLid.position.set(0, 0.85, -0.16);
+  seatLid.rotation.x = -0.28;
+  g.add(seatLid);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.02), MAT.chrome);
+  handle.position.set(-0.17, 0.95, 0);
+  g.add(handle);
+  return g;
+}
+
+/** Roll on a wall bracket, mounted at its own origin. */
+export function toiletPaper(spare = false): THREE.Group {
+  const g = new THREE.Group();
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 6), MAT.chrome);
+  bar.rotation.z = Math.PI / 2;
+  g.add(bar);
+  const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.11, 14), MAT.paper);
+  roll.rotation.z = Math.PI / 2;
+  g.add(roll);
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.118, 8), lam(0xa78b63));
+  core.rotation.z = Math.PI / 2;
+  g.add(core);
+  // The loose sheet hanging off it, which is most of what sells the shape
+  const tail = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.1, 0.14),
+    new THREE.MeshLambertMaterial({ color: 0xe9e7dd, side: THREE.DoubleSide })
+  );
+  tail.position.set(0, -0.11, 0.05);
+  g.add(tail);
+  if (spare) {
+    const s = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.11, 14), MAT.paper);
+    s.rotation.z = Math.PI / 2;
+    s.position.set(0, -0.21, 0);
+    g.add(s);
+  }
+  return g;
+}
+
+/**
+ * A run of washroom vanity: counter, recessed basins, taps. Local -Z is the
+ * wall side.
+ */
+export function bathroomVanity(width = 1.6, basins = 2): THREE.Group {
+  const g = new THREE.Group();
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(width, 0.06, 0.52), lam(0x3b3f45));
+  counter.position.set(0, 0.85, 0);
+  g.add(counter);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(width - 0.06, 0.79, 0.46), lam(0x6d5f4c));
+  cab.position.set(0, 0.43, -0.02);
+  g.add(cab);
+  const steel = new THREE.MeshStandardMaterial({ color: 0xb8bdc2, roughness: 0.3, metalness: 0.8 });
+  for (let i = 0; i < basins; i++) {
+    const x = basins === 1 ? 0 : -width / 2 + width * ((i + 0.5) / basins);
+    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.11, 0.13, 16, 1, true), ceramic);
+    bowl.position.set(x, 0.82, 0.02);
+    g.add(bowl);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.02, 16), ceramic);
+    base.position.set(x, 0.762, 0.02);
+    g.add(base);
+    // Tap: a riser and a spout reaching out over the basin
+    const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.15, 8), steel);
+    riser.position.set(x, 0.95, -0.17);
+    g.add(riser);
+    const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.15, 8), steel);
+    spout.rotation.x = Math.PI / 2;
+    spout.position.set(x, 1.02, -0.11);
+    g.add(spout);
+  }
+  return g;
+}
+
+/**
+ * Wall mirror. There is no reflection — a real one needs a second render —
+ * but a dark, near-smooth metal panel catches the agents' torches the way
+ * glass does, and in an unlit washroom that is the whole effect.
+ */
+export function mirrorPanel(w = 1.5, h = 0.9): THREE.Group {
+  const g = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, h + 0.06, 0.03), lam(0x9aa1a8));
+  g.add(frame);
+  const glass = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, h),
+    new THREE.MeshStandardMaterial({ color: 0x7c858d, roughness: 0.06, metalness: 0.95 })
+  );
+  glass.position.z = 0.019;
+  g.add(glass);
+  return g;
+}
+
+// ------------------------------------------------------------- break rooms
+
+/** Bottled water cooler: jug, body, two taps and a drip tray. */
+export function waterCooler(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.92, 0.34), lam(0xd8dade));
+  body.position.y = 0.46;
+  g.add(body);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.1, 14), lam(0xc9ccd1));
+  neck.position.y = 0.96;
+  g.add(neck);
+  // The jug, upended into the top
+  const jug = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.13, 0.42, 16),
+    new THREE.MeshLambertMaterial({ color: 0x6fa8c8, transparent: true, opacity: 0.65 })
+  );
+  jug.position.y = 1.21;
+  g.add(jug);
+  const jugNeck = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.09, 12), lam(0x8fc2dd));
+  jugNeck.position.y = 0.98;
+  g.add(jugNeck);
+  const taps: [number, number][] = [
+    [-0.07, 0x3f6ea8],
+    [0.07, 0xa8443f]
+  ];
+  for (const [x, c] of taps) {
+    const tap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.09, 0.06), lam(c));
+    tap.position.set(x, 0.7, 0.19);
+    g.add(tap);
+  }
+  const tray = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.1), MAT.steel);
+  tray.position.set(0, 0.56, 0.2);
+  g.add(tray);
+  return g;
+}
+
+/** Kitchen fridge, door on +Z. */
+export function fridge(): THREE.Group {
+  const g = new THREE.Group();
+  const shell = new THREE.MeshStandardMaterial({ color: 0xc6cace, roughness: 0.42, metalness: 0.45 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.68, 1.72, 0.66), shell);
+  body.position.y = 0.86;
+  g.add(body);
+  // The seam between freezer and fridge, with a handle on each
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(0.69, 0.015, 0.02), lam(0x8c9196));
+  seam.position.set(0, 1.24, 0.335);
+  g.add(seam);
+  for (const y of [1.36, 0.86]) {
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.26, 8), MAT.chrome);
+    handle.position.set(0.26, y, 0.35);
+    g.add(handle);
+  }
+  return g;
+}
+
+// ------------------------------------------------------------------ office
+
+/** Plain office desk: top, modesty panel and a pedestal of drawers. */
+export function officeDesk(w = 1.5): THREE.Group {
+  const g = new THREE.Group();
+  const wood = lam(0x7d6a52);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, 0.75), wood);
+  top.position.y = 0.72;
+  g.add(top);
+  const modesty = new THREE.Mesh(new THREE.BoxGeometry(w - 0.12, 0.4, 0.03), lam(0x6b5a45));
+  modesty.position.set(0, 0.5, -0.33);
+  g.add(modesty);
+  const ped = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.68, 0.6), wood);
+  ped.position.set(w / 2 - 0.26, 0.34, 0);
+  g.add(ped);
+  for (let i = 0; i < 3; i++) {
+    const pull = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, 0.02), MAT.steel);
+    pull.position.set(w / 2 - 0.26, 0.15 + i * 0.2, 0.31);
+    g.add(pull);
+  }
+  const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.7, 0.06), MAT.midPlastic);
+  leg.position.set(-w / 2 + 0.08, 0.35, 0.3);
+  g.add(leg);
+  const leg2 = leg.clone();
+  leg2.position.z = -0.3;
+  g.add(leg2);
+  return g;
+}
+
+const signMats = new Map<string, THREE.MeshLambertMaterial>();
+
+/**
+ * The engraved plaque beside a door. Cached per label, because a floor has a
+ * lot of doors and most of them say the same few things.
+ */
+export function roomSign(label: string, sub = ''): THREE.Group {
+  const key = label + '|' + sub;
+  let mat = signMats.get(key);
+  if (!mat) {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 96;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#2c3138';
+    g.fillRect(0, 0, 256, 96);
+    g.strokeStyle = '#6f7780';
+    g.lineWidth = 3;
+    g.strokeRect(5, 5, 246, 86);
+    g.fillStyle = '#e8e4d8';
+    g.textAlign = 'center';
+    g.font = 'bold 40px Arial, Helvetica, sans-serif';
+    g.fillText(label, 128, sub ? 47 : 60);
+    if (sub) {
+      g.font = '24px Arial, Helvetica, sans-serif';
+      g.fillStyle = '#a9b0b8';
+      g.fillText(sub, 128, 78);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshLambertMaterial({ map: tex });
+    signMats.set(key, mat);
+  }
+  const g2 = new THREE.Group();
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.12, 0.012), lam(0x22262b));
+  g2.add(plate);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.11), mat);
+  face.position.z = 0.008;
+  g2.add(face);
+  return g2;
+}
+
+let comicMat: THREE.MeshLambertMaterial | null = null;
+
+/**
+ * The comic's cover, drawn rather than typeset: a speed-line burst, a caped
+ * figure mid-punch, and the title over the top. A block of colour with a
+ * title on it reads as a textbook; the figure is what makes it a comic at a
+ * glance, which is all you ever get of a prop on a break-room table.
+ */
+function comicCover(): THREE.MeshLambertMaterial {
+  if (comicMat) return comicMat;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 176;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#f0b429';
+  g.fillRect(0, 0, 128, 176);
+
+  // Speed lines radiating from behind him
+  g.strokeStyle = 'rgba(255,255,255,0.55)';
+  g.lineWidth = 3;
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2 + 0.2;
+    g.beginPath();
+    g.moveTo(64 + Math.cos(a) * 26, 96 + Math.sin(a) * 26);
+    g.lineTo(64 + Math.cos(a) * 90, 96 + Math.sin(a) * 90);
+    g.stroke();
+  }
+
+  // Cape, thrown out behind him
+  g.fillStyle = '#8f1d2f';
+  g.beginPath();
+  g.moveTo(58, 74);
+  g.lineTo(20, 104);
+  g.lineTo(38, 112);
+  g.lineTo(30, 138);
+  g.lineTo(64, 116);
+  g.closePath();
+  g.fill();
+
+  // Torso, legs, and the fist coming at you
+  g.fillStyle = '#1f4fa0';
+  g.beginPath();
+  g.moveTo(52, 72);
+  g.lineTo(78, 72);
+  g.lineTo(84, 116);
+  g.lineTo(48, 116);
+  g.closePath();
+  g.fill();
+  g.fillStyle = '#16326a';
+  g.fillRect(52, 114, 12, 34);
+  g.fillRect(68, 114, 12, 30);
+  g.fillStyle = '#d9a066';
+  g.beginPath();
+  g.arc(66, 60, 13, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#2a1a12';
+  g.beginPath();
+  g.arc(66, 54, 13, Math.PI * 1.05, Math.PI * 1.95);
+  g.fill();
+  // Mask band
+  g.fillStyle = '#1f4fa0';
+  g.fillRect(54, 56, 24, 7);
+  // The punching arm, foreshortened, with an oversized fist
+  g.strokeStyle = '#d9a066';
+  g.lineWidth = 11;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(76, 82);
+  g.lineTo(94, 92);
+  g.stroke();
+  g.fillStyle = '#e0aa73';
+  g.beginPath();
+  g.arc(99, 94, 13, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = '#8a5a34';
+  g.lineWidth = 1.6;
+  g.beginPath();
+  g.moveTo(90, 90);
+  g.lineTo(108, 90);
+  g.moveTo(90, 96);
+  g.lineTo(108, 96);
+  g.stroke();
+  // A little chest emblem: a handset
+  g.fillStyle = '#f0b429';
+  g.beginPath();
+  g.arc(65, 86, 8, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#16326a';
+  g.fillRect(61, 82, 8, 3);
+  g.fillRect(61, 89, 8, 3);
+  g.fillRect(60, 82, 3, 10);
+
+  // Title, and the strapline in a banner along the bottom
+  g.fillStyle = '#d3172c';
+  g.fillRect(0, 4, 128, 30);
+  g.fillStyle = '#ffe9a8';
+  g.textAlign = 'center';
+  g.font = 'bold 21px Impact, Arial Black, sans-serif';
+  g.fillText('CAPTAIN', 64, 20);
+  g.font = 'bold 15px Impact, Arial Black, sans-serif';
+  g.fillText('V O I P', 64, 32);
+  g.fillStyle = '#16326a';
+  g.fillRect(0, 152, 128, 24);
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 11px Arial, sans-serif';
+  g.fillText('ISSUE #12 - HOLD MUSIC!', 64, 168);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  comicMat = new THREE.MeshLambertMaterial({ map: tex });
+  return comicMat;
+}
+
+/** Desk monitor on a stand — dark, because nothing on this floor has power. */
+export function deskMonitor(): THREE.Group {
+  const g = new THREE.Group();
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.015, 0.14), MAT.darkPlastic);
+  foot.position.y = 0.008;
+  g.add(foot);
+  const stem = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.04), MAT.darkPlastic);
+  stem.position.y = 0.09;
+  g.add(stem);
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.33, 0.035), MAT.darkPlastic);
+  shell.position.y = 0.33;
+  g.add(shell);
+  const face = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.48, 0.29),
+    new THREE.MeshStandardMaterial({ color: 0x14181d, roughness: 0.18, metalness: 0.5 })
+  );
+  face.position.set(0, 0.33, 0.019);
+  g.add(face);
+  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.02, 0.15), MAT.darkPlastic);
+  kb.position.set(0, 0.01, 0.28);
+  g.add(kb);
   return g;
 }

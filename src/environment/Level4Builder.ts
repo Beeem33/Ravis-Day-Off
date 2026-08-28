@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { FlickeringLight } from './FlickeringLight';
-import type { BreakableGlass } from './BreakableGlass';
+import { BreakableGlass } from './BreakableGlass';
+import {
+  officeChair, trashCan, sodaCan, book, spilledCoffee, chipsBox, rubblePile, wallArt,
+  flowerPot, coffeeTable, printer, vent, fireAlarm, breakTable, fileCabinet, paperStack,
+  scatteredPaper, vendingMachine, microwave, kitchenSink, wallCupboards, toilet, toiletPaper,
+  bathroomVanity, mirrorPanel, waterCooler, fridge, officeDesk, roomSign, deskMonitor
+} from './OfficeProps';
 import { Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevelBuilder';
 
 export interface Level4Data {
@@ -23,6 +29,8 @@ export interface Level4Data {
   backDoorway: THREE.Vector3;
   /** The door into the maze. Shut until the cutscene is done. */
   mazeDoor: THREE.Mesh;
+  /** Hinge the leaf hangs on, so it can be swung rather than vanished. */
+  mazeDoorPivot: THREE.Group;
   mazeDoorCollider: Collider;
   /** Where the sweep teams start. Spread so no two share a room. */
   enemySpawns: EnemySpawn[];
@@ -78,6 +86,29 @@ const WIN_HEAD = 2.1;
 const DOOR_H = 2.2;
 
 /**
+ * Washroom tile. Small squares with a darker grout line between them; the
+ * floor version is greyer and a shade smaller, the way it usually is.
+ */
+function tileCanvas(floor: boolean): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  const n = floor ? 8 : 6;
+  const step = 128 / n;
+  g.fillStyle = floor ? '#8d9298' : '#b9c3c6';
+  g.fillRect(0, 0, 128, 128);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const v = 1 + (Math.random() - 0.5) * (floor ? 0.1 : 0.06);
+      const base = floor ? [141, 146, 152] : [185, 195, 198];
+      g.fillStyle = `rgb(${base[0] * v | 0},${base[1] * v | 0},${base[2] * v | 0})`;
+      g.fillRect(x * step + 1.2, y * step + 1.2, step - 2.4, step - 2.4);
+    }
+  }
+  return c;
+}
+
+/**
  * Level4Builder — the dark floor.
  *
  * Laid out as a loop of corridors around and through a block of rooms, so
@@ -96,13 +127,20 @@ export class Level4Builder {
   private flickering: FlickeringLight[] = [];
   private lights: THREE.PointLight[] = [];
   private lampMats: THREE.MeshStandardMaterial[] = [];
+  private glassPanes: BreakableGlass[] = [];
 
   private carpetMat!: THREE.MeshLambertMaterial;
   private wallMat!: THREE.MeshLambertMaterial;
   private ceilMat!: THREE.MeshLambertMaterial;
   private darkMetalMat!: THREE.MeshLambertMaterial;
   private deskMat!: THREE.MeshLambertMaterial;
+  private tileMat!: THREE.MeshLambertMaterial;
+  private tileFloorMat!: THREE.MeshLambertMaterial;
+  private stallMat!: THREE.MeshLambertMaterial;
+  private counterMat!: THREE.MeshLambertMaterial;
+  private worktopMat!: THREE.MeshLambertMaterial;
   private mazeDoor!: THREE.Mesh;
+  private mazeDoorPivot!: THREE.Group;
   private mazeDoorCollider!: Collider;
   /**
    * The centre of every doorway cut into a wall, with the two points either
@@ -118,6 +156,7 @@ export class Level4Builder {
     this.buildShell();
     this.buildRooms();
     this.buildLighting();
+    this.buildDressing();
 
     return {
       group: this.group,
@@ -126,7 +165,7 @@ export class Level4Builder {
       occluders: this.occluders,
       waypoints: this.makeWaypoints(),
       flickering: this.flickering,
-      glassPanes: [],
+      glassPanes: this.glassPanes,
       playerSpawn: new THREE.Vector3(HALL_X0 + 1.6, 0, 0),
       playerSpawnYaw: -Math.PI / 2, // facing east, down the corridor
       // Propped against the north wall of the approach, most of the way along
@@ -135,22 +174,26 @@ export class Level4Builder {
       talkX: -32.5,
       backDoorway: new THREE.Vector3(HALL_X0 + 0.4, 0, 0),
       mazeDoor: this.mazeDoor,
+      mazeDoorPivot: this.mazeDoorPivot,
       mazeDoorCollider: this.mazeDoorCollider,
       // One to a room or junction, facing along the run they are covering,
       // so the first thing the player meets is a beam and not a body.
       enemySpawns: [
-        { pos: new THREE.Vector3(-16, 0, -5.5), yaw: Math.PI / 2 },
-        { pos: new THREE.Vector3(-10, 0, -5.5), yaw: -Math.PI / 2 },
-        { pos: new THREE.Vector3(-17.4, 0, 5.5), yaw: 0 },
-        { pos: new THREE.Vector3(-11, 0, 5.5), yaw: Math.PI },
-        { pos: new THREE.Vector3(-0.5, 0, -5.5), yaw: Math.PI / 2 },
-        { pos: new THREE.Vector3(6.0, 0, -4.0), yaw: -Math.PI / 2 },
-        { pos: new THREE.Vector3(-1.2, 0, 3.4), yaw: 0 },
-        { pos: new THREE.Vector3(6.0, 0, 4.0), yaw: Math.PI },
-        { pos: new THREE.Vector3(V_EAST, 0, -3.5), yaw: 0 },
-        { pos: new THREE.Vector3(-13, 0, H_NORTH), yaw: -Math.PI / 2 },
-        { pos: new THREE.Vector3(3, 0, H_SOUTH), yaw: Math.PI / 2 },
-        { pos: new THREE.Vector3(V_WEST, 0, 3.5), yaw: Math.PI }
+        // One to a room, working back to front, so the far half of the floor
+        // is held as well as the near half. Yaw faces the way each is
+        // covering, which is what puts a beam in the doorway before a body.
+        { pos: new THREE.Vector3(-16.2, 0, -5.6), yaw: Math.PI / 2 }, // NW-A
+        { pos: new THREE.Vector3(-8.4, 0, -6.6), yaw: 0 }, // NW-B
+        { pos: new THREE.Vector3(-17.4, 0, 5.8), yaw: Math.PI }, // SW washroom
+        { pos: new THREE.Vector3(-11.4, 0, 6.0), yaw: -Math.PI / 2 }, // SW-B
+        { pos: new THREE.Vector3(-0.8, 0, -6.2), yaw: Math.PI / 2 }, // NE west bay
+        { pos: new THREE.Vector3(5.6, 0, -6.4), yaw: -Math.PI / 2 }, // NE east bay
+        { pos: new THREE.Vector3(-0.8, 0, 3.4), yaw: 0 }, // SE, near side
+        { pos: new THREE.Vector3(5.8, 0, 7.6), yaw: Math.PI }, // SE blind corner
+        { pos: new THREE.Vector3(13.9, 0, -5.5), yaw: Math.PI / 2 }, // east store, north
+        { pos: new THREE.Vector3(13.9, 0, 5.5), yaw: -Math.PI / 2 }, // east store, south
+        { pos: new THREE.Vector3(V_EAST, 0, -8.6), yaw: Math.PI }, // east corridor
+        { pos: new THREE.Vector3(3.0, 0, H_SOUTH), yaw: Math.PI / 2 } // south corridor
       ],
       lights: this.lights,
       lampMats: this.lampMats
@@ -165,6 +208,11 @@ export class Level4Builder {
     this.ceilMat = new THREE.MeshLambertMaterial({ map: makeTex(ceilingTileCanvas(), 20, 14) });
     this.darkMetalMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
     this.deskMat = new THREE.MeshLambertMaterial({ color: 0x7d6a52 });
+    this.tileMat = new THREE.MeshLambertMaterial({ map: makeTex(tileCanvas(false), 3, 2) });
+    this.tileFloorMat = new THREE.MeshLambertMaterial({ map: makeTex(tileCanvas(true), 5, 9) });
+    this.stallMat = new THREE.MeshLambertMaterial({ color: 0x6b7a83 });
+    this.counterMat = new THREE.MeshLambertMaterial({ color: 0x8a7457 });
+    this.worktopMat = new THREE.MeshLambertMaterial({ color: 0x2f333a });
   }
 
   // --------------------------------------------------------------- helpers
@@ -244,6 +292,7 @@ export class Level4Builder {
       } else {
         put(s, e, 0, WIN_SILL); // sill below
         put(s, e, WIN_HEAD, H - WIN_HEAD); // head above
+        this.glass(axis, s, e, cross, WIN_SILL, WIN_HEAD - WIN_SILL);
       }
       cursor = e;
     }
@@ -294,6 +343,15 @@ export class Level4Builder {
       surface: 'wood',
       collide: false
     });
+    // Re-hang the leaf on a hinge at its north edge. solid() centres a mesh on
+    // its own origin, which is no use for a door: swinging that just spins it
+    // about its middle.
+    this.mazeDoorPivot = new THREE.Group();
+    this.mazeDoorPivot.position.set(X0 + 0.12, 0, -0.96);
+    this.group.remove(this.mazeDoor);
+    this.mazeDoor.position.set(0, this.mazeDoor.position.y, 0.96);
+    this.mazeDoorPivot.add(this.mazeDoor);
+    this.group.add(this.mazeDoorPivot);
     this.mazeDoorCollider = {
       box: new THREE.Box3(new THREE.Vector3(X0 + 0.02, 0, -1.0), new THREE.Vector3(X0 + 0.22, 2.15, 1.0))
     };
@@ -576,4 +634,373 @@ export class Level4Builder {
       links: wps[old].links.filter((n) => remap.has(n)).map((n) => remap.get(n)!)
     }));
   }
+  /** Glazed pane in a window opening: stops movement, not vision. */
+  private glass(axis: 'x' | 'z', a0: number, a1: number, cross: number, yBase: number, h: number): void {
+    const width = a1 - a0;
+    const pane = new BreakableGlass(width, h, axis);
+    if (axis === 'x') pane.group.position.set((a0 + a1) / 2, yBase + h / 2, cross);
+    else pane.group.position.set(cross, yBase + h / 2, (a0 + a1) / 2);
+    this.group.add(pane.group);
+    this.shootables.push(pane.mesh);
+    this.glassPanes.push(pane);
+    const box =
+      axis === 'x'
+        ? new THREE.Box3(new THREE.Vector3(a0, yBase, cross - 0.06), new THREE.Vector3(a1, yBase + h, cross + 0.06))
+        : new THREE.Box3(new THREE.Vector3(cross - 0.06, yBase, a0), new THREE.Vector3(cross + 0.06, yBase + h, a1));
+    pane.colliderIndex = this.colliders.length;
+    this.colliders.push({ box, glass: pane });
+  }
+
+  // ------------------------------------------------------------- dressing
+
+  /**
+   * Drop a prop into the level. Props are shootable so a beam or a stray
+   * round finds them, but deliberately NOT occluders: the beam probe casts
+   * five rays per agent per frame against that list, and putting a few
+   * hundred chair legs on it to buy slightly better shadows is not a trade
+   * worth making.
+   */
+  private prop(o: THREE.Object3D, x: number, z: number, yaw = 0, y = 0): THREE.Object3D {
+    o.position.set(x, y, z);
+    o.rotation.y = yaw;
+    this.group.add(o);
+    o.traverse((n) => {
+      if ((n as THREE.Mesh).isMesh) this.shootables.push(n);
+    });
+    return o;
+  }
+
+  /**
+   * A movement blocker with no mesh of its own, for furniture you should not
+   * be able to walk through. Kept a good stride clear of every doorway — the
+   * nav graph is rebuilt from these, and a desk parked in a door would strand
+   * a whole room.
+   */
+  private block(x: number, z: number, w: number, d: number, h = 1.0): void {
+    this.colliders.push({
+      box: new THREE.Box3(new THREE.Vector3(x - w / 2, 0, z - d / 2), new THREE.Vector3(x + w / 2, h, z + d / 2))
+    });
+  }
+
+  /** Hang something flat on a wall, facing `yaw`. */
+  private onWall(o: THREE.Object3D, x: number, y: number, z: number, yaw: number): void {
+    o.position.set(x, y, z);
+    o.rotation.y = yaw;
+    this.group.add(o);
+    o.traverse((n) => {
+      if ((n as THREE.Mesh).isMesh) this.shootables.push(n);
+    });
+  }
+
+  /** The plaque beside a door, on the corridor side of it. */
+  private sign(label: string, sub: string, x: number, z: number, yaw: number): void {
+    this.onWall(roomSign(label, sub), x, 2.02, z, yaw);
+  }
+
+  /** Tile a washroom: floor, and a wainscot of wall tile all the way round. */
+  private tileRoom(x0: number, x1: number, z0: number, z1: number): void {
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), this.tileFloorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set((x0 + x1) / 2, 0.012, (z0 + z1) / 2);
+    this.group.add(floor);
+    // Tile up to 2m, which is where a real one stops and paint takes over
+    const HT = 2.0;
+    const panel = (w: number, px: number, pz: number, yaw: number): void => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, HT), this.tileMat);
+      m.position.set(px, HT / 2, pz);
+      m.rotation.y = yaw;
+      this.group.add(m);
+      this.shootables.push(m);
+    };
+    panel(x1 - x0, (x0 + x1) / 2, z0 + 0.01, 0);
+    panel(x1 - x0, (x0 + x1) / 2, z1 - 0.01, Math.PI);
+    panel(z1 - z0, x0 + 0.01, (z0 + z1) / 2, Math.PI / 2);
+    panel(z1 - z0, x1 - 0.01, (z0 + z1) / 2, -Math.PI / 2);
+  }
+
+  /**
+   * A washroom: a row of pans against one long wall with dividers between
+   * them, and a vanity of basins and mirror facing them.
+   *
+   * `wallX` is the wall the pans back onto and `dir` which way they face
+   * (+1 for east, -1 for west), so the same routine does both washrooms on
+   * the floor whichever side of the room the plumbing is on.
+   */
+  private washroom(x0: number, x1: number, z0: number, z1: number, dir: 1 | -1): void {
+    this.tileRoom(x0, x1, z0, z1);
+    // Every fixture goes on the SAME wall. These rooms are only 3.4m across,
+    // and pans down one side facing a vanity down the other left a walkway too
+    // narrow for a body — the nav sampler found nothing it could stand on and
+    // the whole room dropped off the graph.
+    const panX = dir > 0 ? x0 + 0.42 : x1 - 0.42;
+    const vanX = dir > 0 ? x0 + 0.34 : x1 - 0.34;
+    const yaw = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+
+    const zs = [z0 + 1.5, z0 + 2.9, z0 + 4.3];
+    for (const z of zs) {
+      this.prop(toilet(), panX, z, yaw);
+      this.block(panX, z, 0.7, 0.6, 0.9);
+      // Divider between this pan and the next
+      const dz = z + 0.7;
+      if (dz < z1 - 0.6) {
+        const div = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.8, 0.05), this.stallMat);
+        div.position.set(panX + dir * 0.06, 1.05, dz);
+        this.group.add(div);
+        this.shootables.push(div);
+        this.block(panX + dir * 0.06, dz, 0.9, 0.12, 1.8);
+      }
+      this.onWall(toiletPaper(Math.random() < 0.5), panX + dir * 0.02, 0.78, z + 0.52, yaw);
+    }
+    // Vanity and mirror further along the same wall
+    const vz = z0 + 6.0;
+    this.prop(bathroomVanity(1.6, 2), vanX, vz, yaw);
+    this.block(vanX, vz, 0.56, 1.7, 0.95);
+    this.onWall(mirrorPanel(1.5, 0.85), vanX + dir * 0.08, 1.5, vz, yaw);
+    // A bin, and a roll somebody dropped
+    this.prop(trashCan(), panX + dir * 0.1, z1 - 0.6);
+    this.prop(toiletPaper(), panX + dir * 0.7, z1 - 1.2, 0, 0.05);
+    this.prop(scatteredPaper(3, 0.5), (x0 + x1) / 2, z0 + 0.9);
+  }
+
+  /** A desk, its chair, and the clutter of somebody who left in a hurry. */
+  private workstation(x: number, z: number, yaw: number, extras = true): void {
+    this.prop(officeDesk(1.5), x, z, yaw);
+    this.block(x, z, 1.6, 0.85, 0.78);
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    // Chair on the near side, pushed back and turned a little
+    this.prop(officeChair(), x - fwd.x * 0.95, z - fwd.z * 0.95, yaw + Math.PI + (Math.random() - 0.5) * 0.7);
+    if (!extras) return;
+    const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    this.prop(deskMonitor(), x + side.x * 0.3, z + side.z * 0.3, yaw, 0.745);
+    this.prop(paperStack(6), x - side.x * 0.45, z - side.z * 0.45, Math.random() * 3, 0.745);
+    if (Math.random() < 0.6) this.prop(sodaCan(), x - side.x * 0.62, z - side.z * 0.62 + 0.18, 0, 0.745);
+  }
+
+  /** Counter run: cupboards over, worktop under, and something on it. */
+  private kitchenRun(x: number, z: number, yaw: number): void {
+    const base = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.86, 0.6), this.counterMat);
+    base.position.set(0, 0.43, 0);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.05, 0.64), this.worktopMat);
+    top.position.set(0, 0.885, 0);
+    const run = new THREE.Group();
+    run.add(base, top);
+    this.prop(run, x, z, yaw);
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    this.block(x, z, Math.abs(fwd.z) > 0.5 ? 2.66 : 0.64, Math.abs(fwd.z) > 0.5 ? 0.64 : 2.66, 0.92);
+    const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    this.prop(kitchenSink(), x - side.x * 0.7, z - side.z * 0.7, yaw, 0.91);
+    this.prop(microwave(), x + side.x * 0.85, z + side.z * 0.85, yaw, 0.91);
+    this.prop(wallCupboards(2.2), x - fwd.x * 0.12, z - fwd.z * 0.12, yaw, 1.55);
+  }
+
+  private buildDressing(): void {
+    this.dressOffices();
+    this.dressBreakRooms();
+    this.dressWashrooms();
+    this.dressSupply();
+    this.dressCorridors();
+  }
+
+  private dressOffices(): void {
+    // ---- OFFICE 401, north-west corner. Door west at z=-6.4, door south at
+    // x=-14.6, so everything lives along the north and east walls.
+    this.workstation(-16.4, -8.3, 0);
+    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), -13.5, -8.2, -Math.PI / 2);
+    this.block(-13.5, -8.2, 0.7, 1.3, 1.5);
+    this.prop(printer(), -13.45, -6.6, -Math.PI / 2, 0);
+    this.block(-13.45, -6.6, 0.6, 0.7, 0.6);
+    this.onWall(wallArt('thumbsup'), -13.2, 1.75, -4.2, -Math.PI / 2);
+    this.prop(flowerPot('tall'), -13.6, -2.4);
+    this.prop(trashCan(), -18.6, -8.6);
+    this.prop(scatteredPaper(5, 0.9), -17.2, -4.4);
+    this.prop(book('comic'), -16.0, -8.35, 0.6, 0.775);
+    this.sign('OFFICE 401', '', -19.34, -5.3, -Math.PI / 2);
+
+    // ---- OFFICE 402, the big south-west room. One desk, and the filing the
+    // rest of the floor evidently sends here.
+    this.workstation(-14.2, 3.1, Math.PI);
+    for (let i = 0; i < 3; i++) {
+      this.prop(fileCabinet(0.6, 1.5, 1.0, 4), -15.0, 5.6 + i * 1.1, Math.PI / 2);
+      this.block(-15.0, 5.6 + i * 1.1, 0.7, 1.1, 1.5);
+    }
+    this.prop(printer(), -12.6, 8.4, Math.PI, 0);
+    this.block(-12.6, 8.4, 0.6, 0.7, 0.6);
+    this.prop(coffeeTable(), -9.6, 6.4);
+    this.block(-9.6, 6.4, 0.9, 0.6, 0.45);
+    this.prop(officeChair(), -9.6, 5.4, Math.PI);
+    this.prop(officeChair(), -9.6, 7.4, 0);
+    this.prop(book('comic'), -9.5, 6.4, 1.1, 0.44);
+    this.prop(sodaCan(), -9.9, 6.6, 0, 0.44);
+    this.onWall(wallArt('ourhome'), -11.5, 1.72, 8.96, Math.PI);
+    this.prop(flowerPot('bushy'), -7.4, 8.6);
+    this.prop(scatteredPaper(6, 1.1), -12.4, 4.6);
+    this.sign('OFFICE 402', '', -7.3, 1.66, Math.PI);
+
+    // ---- OFFICE 403 / 404, the long north-east room split by its partition
+    this.workstation(-1.6, -8.2, 0);
+    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), 1.9, -8.2, -Math.PI / 2);
+    this.block(1.9, -8.2, 0.7, 1.5, 1.5);
+    this.prop(printer(), 1.85, -6.2, -Math.PI / 2, 0);
+    this.block(1.85, -6.2, 0.6, 0.7, 0.6);
+    this.onWall(wallArt('coast'), -2.9, 1.72, -5.4, Math.PI / 2);
+    this.prop(trashCan(), -2.5, -2.6);
+    this.prop(scatteredPaper(4, 0.8), -0.4, -4.0);
+
+    this.workstation(5.6, -8.2, 0);
+    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 7.7, -7.4, -Math.PI / 2);
+    this.block(7.7, -7.4, 0.7, 1.3, 1.5);
+    this.onWall(wallArt('peaks'), 7.95, 1.72, -3.0, -Math.PI / 2);
+    this.prop(flowerPot('dying'), 7.6, -2.5);
+    this.prop(spilledCoffee(), 4.2, -3.4);
+    this.sign('OFFICE 403', '', -3.34, -8.6, -Math.PI / 2);
+    this.sign('OFFICE 404', '', 6.9, -9.34, Math.PI);
+  }
+
+  private dressBreakRooms(): void {
+    // ---- BREAK ROOM, north-west. Kitchen along the south wall, table in the
+    // middle, machines against the west one.
+    this.kitchenRun(-10.4, -2.35, 0);
+    this.prop(fridge(), -12.3, -2.4, Math.PI);
+    this.block(-12.3, -2.4, 0.72, 0.7, 1.75);
+    this.prop(breakTable(), -9.9, -5.6);
+    this.block(-9.9, -5.6, 1.5, 1.0, 0.75);
+    this.prop(officeChair(0.44), -9.9, -4.6, Math.PI);
+    this.prop(officeChair(0.44), -9.9, -6.6, 0);
+    this.prop(officeChair(0.44), -11.1, -5.6, -Math.PI / 2);
+    this.prop(book('comic'), -10.2, -5.4, 0.3, 0.76);
+    this.prop(chipsBox(), -9.5, -5.8, 1.2, 0.76);
+    this.prop(sodaCan(), -9.6, -5.3, 0, 0.76);
+    this.prop(sodaCan(), -10.4, -5.9, 0, 0.76);
+    for (let i = 0; i < 2; i++) {
+      this.prop(vendingMachine(), -12.35, -8.4 + i * 1.4, -Math.PI / 2);
+      this.block(-12.35, -8.4 + i * 1.4, 0.85, 1.3, 2.0);
+    }
+    this.prop(trashCan(), -7.4, -2.5);
+    this.prop(waterCooler(), -7.4, -8.6);
+    this.block(-7.4, -8.6, 0.4, 0.4, 1.0);
+    this.onWall(wallArt('dunes'), -9.6, 1.72, -9.0, 0);
+    this.prop(scatteredPaper(4, 0.7), -8.4, -6.2);
+    this.sign('BREAK ROOM', '', -11.7, -9.34, Math.PI);
+
+    // ---- BREAK ROOM 2, south-east, in front of its blind corner
+    this.prop(breakTable(), 0.4, 3.4);
+    this.block(0.4, 3.4, 1.5, 1.0, 0.75);
+    this.prop(officeChair(0.44), 0.4, 4.4, 0);
+    this.prop(officeChair(0.44), 0.4, 2.4, Math.PI);
+    this.prop(officeChair(0.44), 1.6, 3.4, Math.PI / 2);
+    this.prop(chipsBox(), 0.1, 3.2, 0.5, 0.76);
+    this.prop(book('comic'), 0.7, 3.6, 2.2, 0.76);
+    this.prop(sodaCan(), 0.9, 3.1, 0, 0.76);
+    this.kitchenRun(3.0, 2.25, Math.PI);
+    this.prop(fridge(), 7.4, 2.4, 0);
+    this.block(7.4, 2.4, 0.72, 0.7, 1.75);
+    for (let i = 0; i < 2; i++) {
+      this.prop(vendingMachine(), -2.6, 6.2 + i * 1.4, -Math.PI / 2);
+      this.block(-2.6, 6.2 + i * 1.4, 0.85, 1.3, 2.0);
+    }
+    this.prop(waterCooler(), 7.6, 4.6);
+    this.block(7.6, 4.6, 0.4, 0.4, 1.0);
+    this.onWall(wallArt('thumbsup'), 5.0, 1.75, 5.46, Math.PI);
+    // The blind corner behind the stub: crates and the overflow filing
+    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), -2.6, 7.6, -Math.PI / 2);
+    this.block(-2.6, 7.6, 0.7, 1.5, 1.5);
+    this.prop(rubblePile(0.7), 1.4, 8.2);
+    this.prop(scatteredPaper(7, 1.2), 0.6, 7.2);
+    this.prop(trashCan(), 7.6, 8.5);
+    this.prop(spilledCoffee(), 5.0, 7.0);
+    this.sign('BREAK ROOM', '', -3.34, 3.9, -Math.PI / 2);
+  }
+
+  private dressWashrooms(): void {
+    // South-west: pans back onto the west wall
+    this.washroom(-19.08, -15.72, 1.92, 9.08, 1);
+    this.sign('RESTROOM', '', -16.4, 1.66, Math.PI);
+    // East store, south: pans back onto the east wall
+    this.washroom(11.92, 15.88, 1.92, 9.08, -1);
+    this.sign('RESTROOM', '', 11.66, 5.6, -Math.PI / 2);
+  }
+
+  private dressSupply(): void {
+    // The north store: where the printers and the paper live
+    for (let i = 0; i < 3; i++) {
+      this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 15.5, -8.2 + i * 1.35, -Math.PI / 2);
+      this.block(15.5, -8.2 + i * 1.35, 0.7, 1.3, 1.5);
+    }
+    this.prop(printer(), 15.45, -8.2, -Math.PI / 2, 1.5);
+    this.prop(printer(), 15.45, -5.5, -Math.PI / 2, 1.5);
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, 3.2), this.counterMat);
+    // Clear of the door at z=-6.0: a bench across it seals the room off.
+    bench.position.set(12.3, 0.45, -8.1);
+    this.group.add(bench);
+    this.shootables.push(bench);
+    this.block(12.3, -8.1, 0.6, 1.8, 0.9);
+    this.prop(printer(), 12.3, -8.4, Math.PI / 2, 0.9);
+    this.prop(paperStack(9, 0.05), 12.3, -7.6, 0.4, 0.9);
+    this.prop(paperStack(7, 0.07), 12.35, -8.9, 1.9, 0.9);
+    this.prop(rubblePile(0.6), 13.8, -2.6);
+    this.prop(scatteredPaper(8, 1.3), 13.6, -7.2);
+    this.prop(trashCan(), 12.4, -2.5);
+    this.sign('SUPPLY', '405', 11.66, -5.0, -Math.PI / 2);
+  }
+
+  /**
+   * The corridors. Coolers and alarms at the junctions, a few pictures on the
+   * long runs, and litter where people cut corners.
+   */
+  private dressCorridors(): void {
+    const coolers: [number, number, number][] = [
+      [V_WEST - CW + 0.42, -1.2, -Math.PI / 2],
+      [V_MID + CW - 0.42, -3.0, Math.PI / 2],
+      [V_EAST - CW + 0.42, 2.4, -Math.PI / 2],
+      [-13.6, H_NORTH - CW + 0.42, 0],
+      [2.2, H_SOUTH + CW - 0.42, Math.PI]
+    ];
+    for (const [x, z, yaw] of coolers) {
+      this.prop(waterCooler(), x, z, yaw);
+      this.block(x, z, 0.42, 0.42, 1.0);
+    }
+
+    const alarms: [number, number, number][] = [
+      [V_WEST - CW + 0.08, -8.4, -Math.PI / 2],
+      [V_MID - CW + 0.08, 4.2, -Math.PI / 2],
+      [V_EAST + CW - 0.08, -2.4, Math.PI / 2],
+      [-6.4, H_NORTH - CW + 0.08, 0],
+      [4.6, H_SOUTH + CW - 0.08, Math.PI],
+      [HALL_X0 + 5.5, HALL_Z0 + 0.08, 0]
+    ];
+    for (const [x, z, yaw] of alarms) this.onWall(fireAlarm(), x, 1.45, z, yaw);
+
+    const vents: [number, number, number][] = [
+      [-21, H_NORTH - CW + 0.08, 0],
+      [3.4, H_MAIN + CW - 0.08, Math.PI],
+      [V_EAST + CW - 0.08, 7.2, Math.PI / 2]
+    ];
+    for (const [x, z, yaw] of vents) this.onWall(vent(), x, 2.5, z, yaw);
+
+    const art: [Parameters<typeof wallArt>[0], number, number, number][] = [
+      ['dunes', -18.2, H_NORTH - CW + 0.1, 0],
+      ['coast', -2.0, H_SOUTH + CW - 0.1, Math.PI],
+      ['peaks', V_WEST + CW - 0.1, 1.6, Math.PI / 2],
+      ['ourhome', V_MID - CW + 0.1, -9.4, -Math.PI / 2],
+      ['newcar', 8.4, H_MAIN - CW + 0.1, 0],
+      ['house', HALL_X0 + 9.0, HALL_Z1 - 0.1, Math.PI]
+    ];
+    for (const [k, x, z, yaw] of art) this.onWall(wallArt(k), x, 1.72, z, yaw);
+
+    for (const [x, z] of [
+      [-21, -4.2], [-13.2, H_NORTH], [-5, 8.4], [4.2, H_MAIN], [V_EAST, -9.6],
+      [-17.6, H_SOUTH], [0.8, H_NORTH], [HALL_X0 + 11, 1.2]
+    ] as const) {
+      this.prop(scatteredPaper(3 + Math.floor(Math.random() * 4), 0.9), x, z);
+    }
+    for (const [x, z] of [[-21, 6.6], [-5, -4.4], [V_EAST, 4.8], [-9.4, H_NORTH]] as const) {
+      this.prop(sodaCan(), x + (Math.random() - 0.5) * 0.6, z + (Math.random() - 0.5) * 0.6, Math.random() * 3);
+    }
+    this.prop(chipsBox(), -16.4, H_MAIN + 1.2, 0.8);
+    this.prop(spilledCoffee(), -3.4, H_NORTH + 0.6);
+    this.prop(flowerPot('tall'), V_WEST - CW + 0.5, -1.9);
+    this.prop(flowerPot('dying'), V_EAST + CW - 0.5, 11.6);
+    this.prop(trashCan(), V_MID + CW - 0.42, 11.4);
+  }
+
 }

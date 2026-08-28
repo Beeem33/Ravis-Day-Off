@@ -2502,3 +2502,127 @@ export function pcTower(): THREE.Group {
   g.add(led);
   return g;
 }
+
+/** Interior width of one cubicle, and how far it projects from the wall. */
+export const STALL_W = 1.02;
+export const STALL_D = 1.34;
+
+/**
+ * A complete toilet cubicle, built in its own local space: back open to -Z
+ * (that side goes against the wall), opening on +Z, pan inside.
+ *
+ * Built as one prop on purpose. The first version placed each partition, the
+ * front return and the door by arithmetic in world space, and the door ended
+ * up hinged so it swung into the neighbouring cubicle — the kind of mistake
+ * that is invisible in the numbers and obvious the moment you stand in front
+ * of it. Here the whole thing is assembled facing one way and rotated once.
+ *
+ * `ajar` is how far the door stands open, in radians.
+ */
+export function toiletStall(ajar = 0.5): THREE.Group {
+  const g = new THREE.Group();
+  const PANEL = new THREE.MeshLambertMaterial({ color: 0x9fadb4 });
+  const DOOR = new THREE.MeshLambertMaterial({ color: 0xb0bcc1 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.4, metalness: 0.7 });
+  const H = 1.95; // panel height
+  const GAP = 0.2; // and how far off the floor they sit
+  const T = 0.045;
+  const halfW = STALL_W / 2;
+
+  // Side partitions, running back to front
+  for (const sx of [-1, 1]) {
+    const side = new THREE.Mesh(new THREE.BoxGeometry(T, H, STALL_D), PANEL);
+    side.position.set(sx * (halfW + T / 2), GAP + H / 2, 0);
+    g.add(side);
+    // Foot at the bottom of each partition, like the real ones have
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, GAP, 6), trim);
+    foot.position.set(sx * (halfW + T / 2), GAP / 2, -STALL_D / 2 + 0.12);
+    g.add(foot);
+    const foot2 = foot.clone();
+    foot2.position.z = STALL_D / 2 - 0.12;
+    g.add(foot2);
+  }
+
+  // Front: a short fixed return on the -X side, then the door across the rest
+  const RETURN_W = 0.24;
+  const ret = new THREE.Mesh(new THREE.BoxGeometry(RETURN_W, H, T), PANEL);
+  ret.position.set(-halfW + RETURN_W / 2, GAP + H / 2, STALL_D / 2);
+  g.add(ret);
+
+  // Door, hinged at the inboard edge of that return so it swings clear of the
+  // opening rather than across the cubicle beside it.
+  const leafW = STALL_W - RETURN_W;
+  const hinge = new THREE.Group();
+  hinge.position.set(-halfW + RETURN_W, 0, STALL_D / 2);
+  hinge.rotation.y = -ajar;
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, H - 0.1, 0.035), DOOR);
+  leaf.position.set(leafW / 2, GAP + (H - 0.1) / 2, 0);
+  hinge.add(leaf);
+  const knob = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.03), trim);
+  knob.position.set(leafW - 0.08, 1.05, 0.03);
+  hinge.add(knob);
+  g.add(hinge);
+
+  // The pan, back against the wall end
+  const pan = toilet();
+  pan.position.set(0, 0, -STALL_D / 2 + 0.44);
+  g.add(pan);
+
+  // Roll on the -X partition, within reach of the pan
+  const tp = toiletPaper(false);
+  tp.position.set(-halfW + 0.03, 0.76, -STALL_D / 2 + 0.72);
+  tp.rotation.y = Math.PI / 2;
+  g.add(tp);
+
+  return g;
+}
+
+/**
+ * A proper office desk: a main run with a return along one side, which is
+ * what an office desk actually looks like and fills a room the way a lone
+ * 1.5m slab does not. `side` is which way the return goes, +1 for right.
+ */
+export function deskWithReturn(w = 1.85, retLen = 1.15, side: 1 | -1 = 1): THREE.Group {
+  const g = new THREE.Group();
+  const wood = lam(0x7d6a52);
+  const dark = lam(0x6b5a45);
+  const D = 0.85;
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, D), wood);
+  top.position.y = 0.735;
+  g.add(top);
+  const modesty = new THREE.Mesh(new THREE.BoxGeometry(w - 0.14, 0.44, 0.03), dark);
+  modesty.position.set(0, 0.5, -D / 2 + 0.05);
+  g.add(modesty);
+
+  // The return, running forward from one end
+  const rx = side * (w / 2 - D / 2);
+  const ret = new THREE.Mesh(new THREE.BoxGeometry(D, 0.05, retLen), wood);
+  ret.position.set(rx, 0.735, D / 2 + retLen / 2 - 0.02);
+  g.add(ret);
+  const retPanel = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.44, retLen - 0.1), dark);
+  retPanel.position.set(rx + side * (D / 2 - 0.05), 0.5, D / 2 + retLen / 2 - 0.02);
+  g.add(retPanel);
+
+  // Pedestal of drawers under the main run, at the far end from the return
+  const px = -side * (w / 2 - 0.24);
+  const ped = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.68, D - 0.12), wood);
+  ped.position.set(px, 0.34, 0);
+  g.add(ped);
+  for (let i = 0; i < 3; i++) {
+    const pull = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.02, 0.02), MAT.steel);
+    pull.position.set(px, 0.16 + i * 0.2, D / 2 - 0.07);
+    g.add(pull);
+  }
+  // Legs where there is no pedestal
+  for (const [lx, lz] of [
+    [side * (w / 2 - 0.07), D / 2 - 0.08],
+    [side * (w / 2 - 0.07), -D / 2 + 0.08],
+    [rx + side * (D / 2 - 0.07), D / 2 + retLen - 0.12]
+  ] as const) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.71, 0.06), MAT.midPlastic);
+    leg.position.set(lx, 0.355, lz);
+    g.add(leg);
+  }
+  return g;
+}

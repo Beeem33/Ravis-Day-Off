@@ -57,19 +57,62 @@ export class GunBeamPool {
     // One shared texture for the lens and the patch: a soft round falloff, so
     // neither reads as a hard-edged disc.
     const glow = GunBeamPool.radialTexture();
-    const shaftMat = new THREE.MeshBasicMaterial({
-      color: 0xffeccd,
+    // A flat-alpha shell is what made these unreadable. A cone is a thin
+    // skin, so head-on you look along the whole surface at once and it stacks
+    // into a hard white wedge across the screen — which is what a beam aimed
+    // anywhere near the camera looked like.
+    //
+    // Shading it by dot(normal, view) inverts that. Side-on the near face
+    // points at you and the shaft reads solid, while its silhouette falls off
+    // to nothing instead of ending on a line. Look down the axis and the whole
+    // skin is edge-on, so it fades out and leaves just the lens — which is
+    // what you actually see when a torch is pointed at you.
+    const shaftMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(0xffeccd) },
+        uStrength: { value: 0.5 }
+      },
       transparent: true,
-      opacity: 0.28,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      vertexShader: `
+        varying vec3 vN;
+        varying vec3 vV;
+        varying float vAlong;
+        void main() {
+          // Cone v runs 0 at the base to 1 at the apex, and the apex is the
+          // muzzle end, so flip it: 0 at the muzzle, 1 where it lands.
+          vAlong = 1.0 - uv.y;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vN = normalize(mat3(modelMatrix) * normal);
+          vV = cameraPosition - wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uColor;
+        uniform float uStrength;
+        varying vec3 vN;
+        varying vec3 vV;
+        varying float vAlong;
+        void main() {
+          float facing = abs(dot(normalize(vN), normalize(vV)));
+          // Soft silhouette, and near-invisible seen end-on
+          float edge = pow(facing, 1.7);
+          // The cone widens as it goes, so the same light spreads thinner
+          float spread = mix(1.0, 0.28, vAlong);
+          // Never end on a hard rim, even when it stops in open air
+          float tip = smoothstep(1.0, 0.82, vAlong);
+          gl_FragColor = vec4(uColor, uStrength * edge * spread * tip);
+        }
+      `
     });
     const lensMat = new THREE.SpriteMaterial({
       map: glow,
       color: 0xfff6e2,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.8,
       blending: THREE.AdditiveBlending,
       depthWrite: false
     });
@@ -95,7 +138,7 @@ export class GunBeamPool {
       this.shafts.push(shaft);
 
       const lens = new THREE.Sprite(lensMat);
-      lens.scale.setScalar(0.5);
+      lens.scale.setScalar(0.26);
       lens.visible = false;
       scene.add(lens);
       this.lenses.push(lens);
@@ -184,12 +227,11 @@ export class GunBeamPool {
       patch.visible = true;
       patch.position.copy(from).addScaledVector(d, len).addScaledVector(normal, 0.02);
       patch.quaternion.setFromUnitVectors(GunBeamPool.FWD, normal);
-      // Generous on purpose. The geometric footprint of the cone is only a
-      // few tens of centimetres at the ranges these are actually used at —
-      // an agent stood a couple of metres off a wall — and at that size the
-      // pool is a handful of pixels from down the corridor and might as well
-      // not be there. This is the tell; it has to read.
-      patch.scale.setScalar(Math.min(3.5, 0.9 + len * 0.6));
+      // Sized off the cone rather than picked by eye. The old version was a
+      // flat 3.5m at range, which is where the big lit circles with no visible
+      // owner came from — a pool far wider than the beam that made it, on a
+      // wall two rooms away.
+      patch.scale.setScalar(Math.min(2.4, 2.2 * Math.tan(this.halfAngle) * len + 0.3));
     } else {
       patch.visible = false;
     }

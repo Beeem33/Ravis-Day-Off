@@ -35,7 +35,8 @@ export interface Level4Data {
 // A tight grid of corridors with rooms in the blocks between them. Everything
 // keys off these so a corridor and the rooms either side of it stay flush.
 const T = 0.24; // wall thickness
-const H = 3.0; // ceiling — lower than the raid floor; nothing drives through it
+export const CEILING_H = 3.0; // ceiling — lower than the raid floor; nothing drives through it
+const H = CEILING_H;
 
 // The approach corridor, carried over from level 3's door
 const HALL_X0 = -40;

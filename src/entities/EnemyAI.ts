@@ -50,9 +50,13 @@ export class EnemyAI {
   private unsub: () => void;
   private raycaster = new THREE.Raycaster();
   private hasShouted = false;
+  /** Which way they committed to going round the last obstacle, and for how long. */
+  private avoidSide = 0;
+  private avoidHold = 0;
 
   private static tmpA = new THREE.Vector3();
   private static tmpB = new THREE.Vector3();
+  private static tmpC = new THREE.Vector3();
 
   constructor(
     private enemy: Enemy,
@@ -459,6 +463,69 @@ export class EnemyAI {
    * desks, unbroken glass) along the axis of least penetration, so they
    * slide along surfaces instead of walking into them.
    */
+  /**
+   * Is a body-sized probe clear along `dir` for `dist` metres?
+   *
+   * Uses a wider radius than the collision resolve, so a path counted as
+   * clear leaves room to walk it rather than scraping down it.
+   */
+  private pathClear(dir: THREE.Vector3, dist: number): boolean {
+    const p = this.enemy.position;
+    const R = 0.55;
+    const steps = Math.max(2, Math.ceil(dist / 0.3));
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * dist;
+      const x = p.x + dir.x * t;
+      const z = p.z + dir.z * t;
+      for (const c of this.deps.colliders) {
+        if (c.disabled) continue;
+        const b = c.box;
+        if (b.max.y <= p.y + 0.5 || b.min.y >= p.y + 1.6) continue;
+        if (x > b.min.x - R && x < b.max.x + R && z > b.min.z - R && z < b.max.z + R) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Turn the direction they WANT to go into one they can actually walk.
+   *
+   * Without this they walked dead at the target and left resolveCollisions to
+   * shove them out of whatever they hit — which, frame after frame, is an
+   * agent grinding along a wall going nowhere. It only showed up once there
+   * were targets off the waypoint graph to chase: an investigate point or a
+   * last-known player position can be straight through a wall, and nothing
+   * was routing round it.
+   *
+   * Deflections are tried in widening steps, and the side chosen is held for
+   * a beat so they commit to going round a corner instead of jittering on it.
+   */
+  private steerAround(desired: THREE.Vector3, dt: number): THREE.Vector3 {
+    const LOOK = 1.6;
+    this.avoidHold = Math.max(0, this.avoidHold - dt);
+    if (this.pathClear(desired, LOOK)) {
+      if (this.avoidHold <= 0) this.avoidSide = 0;
+      return desired;
+    }
+    const order = this.avoidSide !== 0 ? [this.avoidSide, -this.avoidSide] : [1, -1];
+    const cand = EnemyAI.tmpB;
+    for (const ang of [0.55, 1.0, 1.5, 2.1, 2.7]) {
+      for (const side of order) {
+        const a = ang * side;
+        const cos = Math.cos(a);
+        const sin = Math.sin(a);
+        cand.set(desired.x * cos - desired.z * sin, 0, desired.x * sin + desired.z * cos).normalize();
+        if (this.pathClear(cand, LOOK)) {
+          this.avoidSide = side;
+          this.avoidHold = 1.1;
+          return desired.copy(cand);
+        }
+      }
+    }
+    // Boxed in on every heading: stand rather than push into it
+    return desired.set(0, 0, 0);
+  }
+
   private resolveCollisions(): void {
     const p = this.enemy.position;
     const R = 0.42; // wide enough that the ragdoll arms never spawn inside a wall
@@ -541,7 +608,16 @@ export class EnemyAI {
       return true;
     }
     to.normalize();
-    enemy.faceToward(target, dt, 6);
+    // Walk the way that is actually walkable, and face that way too — an
+    // agent staring at a target through a wall while sliding along it is
+    // exactly what reads as hugging.
+    this.steerAround(to, dt);
+    if (to.lengthSq() < 0.01) {
+      enemy.setWalk(0);
+      return false;
+    }
+    EnemyAI.tmpC.copy(enemy.position).addScaledVector(to, 2);
+    enemy.faceToward(EnemyAI.tmpC, dt, 6);
     const step = Math.min(speed * dt, dist);
     enemy.position.addScaledVector(to, step);
     // Climb/descend ONLY along waypoint links (the stairs). Chasing a target

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level4Builder, Level4Data } from '../environment/Level4Builder';
+import { Level4Builder, Level4Data, CEILING_H } from '../environment/Level4Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -140,11 +140,24 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.raycaster.set(o, dir);
       this.raycaster.far = far;
       const h = this.raycaster.intersectObjects(this.level.occluders, false);
-      if (!h.length) return null;
-      const n = h[0].normal
+      let dist = h.length ? h[0].distance : Infinity;
+      let n = h.length && h[0].normal
         ? h[0].normal.clone().transformDirection(h[0].object.matrixWorld)
-        : new THREE.Vector3(0, 1, 0);
-      return { dist: h[0].distance, normal: n };
+        : null;
+      // The floor and ceiling slabs are not occluder meshes, so clamp to them
+      // by hand. The beams are carried a touch low, which means one aimed down
+      // a long corridor reaches the floor before it reaches anything solid —
+      // and without this it kept going and slid out underneath it.
+      const plane = dir.y < -1e-4 ? 0 : dir.y > 1e-4 ? CEILING_H : null;
+      if (plane !== null) {
+        const t = (plane - o.y) / dir.y;
+        if (t > 0 && t < dist) {
+          dist = t;
+          n = new THREE.Vector3(0, dir.y < 0 ? 1 : -1, 0);
+        }
+      }
+      if (dist > far) return null;
+      return { dist, normal: n ?? new THREE.Vector3(0, 1, 0) };
     });
     this.level.enemySpawns.forEach((sp, i) => {
       const e = new Enemy(sp.pos, sp.yaw, i + 11, { name: `FBI AGENT ${i + 1}` });
@@ -537,7 +550,12 @@ export class Level4Scene extends CombatScene<Level4Data> {
         const wall = this.raycaster.intersectObjects(this.level.occluders, false);
         if (wall.length) from.copy(body).addScaledVector(out, Math.max(0, wall[0].distance - 0.08));
       }
-      this.beams.aim(i, from, dir);
+      // Last guard: if the muzzle has still ended up inside a wall — which
+      // happens when the body itself is pressed into one — put the beam out
+      // for the frame rather than let it shine from inside the plaster. A
+      // beam that blinks is far less wrong than one coming through a wall.
+      if (this.insideWall(from)) this.beams.kill(i);
+      else this.beams.aim(i, from, dir);
     }
 
     if (this.agents.length) this.separateAgents(dt);
@@ -621,6 +639,19 @@ export class Level4Scene extends CombatScene<Level4Data> {
         this.pushOutOfWalls(b);
       }
     }
+  }
+
+  /** Is this point inside a wall a body could not stand in? */
+  private insideWall(p: THREE.Vector3): boolean {
+    for (const c of this.level.colliders) {
+      if (c.disabled) continue;
+      const b = c.box;
+      if (b.min.y > p.y || b.max.y < p.y) continue;
+      if (p.x > b.min.x - 0.06 && p.x < b.max.x + 0.06 && p.z > b.min.z - 0.06 && p.z < b.max.z + 0.06) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

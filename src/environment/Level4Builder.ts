@@ -5,7 +5,8 @@ import {
   officeChair, trashCan, sodaCan, book, spilledCoffee, chipsBox, rubblePile, wallArt,
   flowerPot, coffeeTable, printer, vent, fireAlarm, breakTable, fileCabinet, paperStack,
   scatteredPaper, vendingMachine, microwave, kitchenSink, wallCupboards, toilet, toiletPaper,
-  bathroomVanity, mirrorPanel, waterCooler, fridge, officeDesk, roomSign, deskMonitor
+  bathroomVanity, mirrorPanel, waterCooler, fridge, officeDesk, roomSign, deskMonitor,
+  namePlate, deskPhone, pcTower
 } from './OfficeProps';
 import { Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevelBuilder';
 
@@ -137,6 +138,7 @@ export class Level4Builder {
   private tileMat!: THREE.MeshLambertMaterial;
   private tileFloorMat!: THREE.MeshLambertMaterial;
   private stallMat!: THREE.MeshLambertMaterial;
+  private stallDoorMat!: THREE.MeshLambertMaterial;
   private counterMat!: THREE.MeshLambertMaterial;
   private worktopMat!: THREE.MeshLambertMaterial;
   private mazeDoor!: THREE.Mesh;
@@ -210,7 +212,8 @@ export class Level4Builder {
     this.deskMat = new THREE.MeshLambertMaterial({ color: 0x7d6a52 });
     this.tileMat = new THREE.MeshLambertMaterial({ map: makeTex(tileCanvas(false), 3, 2) });
     this.tileFloorMat = new THREE.MeshLambertMaterial({ map: makeTex(tileCanvas(true), 5, 9) });
-    this.stallMat = new THREE.MeshLambertMaterial({ color: 0x6b7a83 });
+    this.stallMat = new THREE.MeshLambertMaterial({ color: 0x9aa7ad });
+    this.stallDoorMat = new THREE.MeshLambertMaterial({ color: 0xa8b4b9 });
     this.counterMat = new THREE.MeshLambertMaterial({ color: 0x8a7457 });
     this.worktopMat = new THREE.MeshLambertMaterial({ color: 0x2f333a });
   }
@@ -682,10 +685,17 @@ export class Level4Builder {
     });
   }
 
-  /** Hang something flat on a wall, facing `yaw`. */
+  /**
+   * Hang something flat on a wall, facing `yaw`.
+   *
+   * Tagged so the build check can cast a ray back along the facing and prove
+   * there is actually a wall behind it — a picture placed a metre off in the
+   * middle of a corridor is invisible in code review and obvious in play.
+   */
   private onWall(o: THREE.Object3D, x: number, y: number, z: number, yaw: number): void {
     o.position.set(x, y, z);
     o.rotation.y = yaw;
+    o.userData.mounted = true;
     this.group.add(o);
     o.traverse((n) => {
       if ((n as THREE.Mesh).isMesh) this.shootables.push(n);
@@ -726,54 +736,96 @@ export class Level4Builder {
    * (+1 for east, -1 for west), so the same routine does both washrooms on
    * the floor whichever side of the room the plumbing is on.
    */
+  /**
+   * A washroom: a row of enclosed cubicles down one wall, with a vanity and
+   * mirror further along the same wall.
+   *
+   * Every fixture goes on the SAME side. These rooms are only 3.4m across,
+   * and pans down one side facing a vanity down the other left a walkway too
+   * narrow for a body — the nav sampler found nothing it could stand on and
+   * the whole room dropped off the graph.
+   */
   private washroom(x0: number, x1: number, z0: number, z1: number, dir: 1 | -1): void {
     this.tileRoom(x0, x1, z0, z1);
-    // Every fixture goes on the SAME wall. These rooms are only 3.4m across,
-    // and pans down one side facing a vanity down the other left a walkway too
-    // narrow for a body — the nav sampler found nothing it could stand on and
-    // the whole room dropped off the graph.
-    const panX = dir > 0 ? x0 + 0.42 : x1 - 0.42;
-    const vanX = dir > 0 ? x0 + 0.34 : x1 - 0.34;
+    const wallX = dir > 0 ? x0 : x1;
     const yaw = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    // Depth matters more than it looks: at 1.45 the cubicles left a strip of
+    // floor too narrow for the nav sampler to place anything in, and the whole
+    // washroom dropped off the graph.
+    const D = 1.2; // how far a cubicle projects from the wall
+    const W = 1.1; // and how wide it is
+    const PH = 2.05; // partition height
+    const panel = (cx: number, cz: number, sx: number, sz: number): void => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, PH - 0.18, sz), this.stallMat);
+      m.position.set(cx, 0.18 + (PH - 0.18) / 2, cz);
+      this.group.add(m);
+      this.shootables.push(m);
+      this.block(cx, cz, sx, sz, PH);
+    };
 
-    const zs = [z0 + 1.5, z0 + 2.9, z0 + 4.3];
-    for (const z of zs) {
-      this.prop(toilet(), panX, z, yaw);
-      this.block(panX, z, 0.7, 0.6, 0.9);
-      // Divider between this pan and the next
-      const dz = z + 0.7;
-      if (dz < z1 - 0.6) {
-        const div = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.8, 0.05), this.stallMat);
-        div.position.set(panX + dir * 0.06, 1.05, dz);
-        this.group.add(div);
-        this.shootables.push(div);
-        this.block(panX + dir * 0.06, dz, 0.9, 0.12, 1.8);
-      }
-      this.onWall(toiletPaper(Math.random() < 0.5), panX + dir * 0.02, 0.78, z + 0.52, yaw);
+    // Three cubicles in a row along the wall
+    // Started well down the room so the doorway approach stays walkable
+    const zs = [z0 + 2.3, z0 + 3.45, z0 + 4.6];
+    for (let i = 0; i < zs.length; i++) {
+      const cz = zs[i];
+      const midX = wallX + dir * (D / 2);
+      this.prop(toilet(), wallX + dir * 0.42, cz, yaw);
+      this.onWall(toiletPaper(i === 1), wallX + dir * 0.06, 0.78, cz + 0.52, yaw);
+      // Side partitions. The last cubicle gets both; the rest share.
+      panel(midX, cz - W / 2, D, 0.05);
+      if (i === zs.length - 1) panel(midX, cz + W / 2, D, 0.05);
+      // Front, with the doorway left open at the outboard end
+      const frontX = wallX + dir * D;
+      panel(frontX, cz, 0.05, W * 0.32);
+      // The door itself, hung ajar off the front edge
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.72, PH - 0.34, 0.04), this.stallDoorMat);
+      leaf.position.set(0, 0.28 + (PH - 0.34) / 2, 0);
+      const hinge = new THREE.Group();
+      hinge.position.set(frontX, 0, cz - W / 2 + 0.06);
+      hinge.rotation.y = yaw + (i === 1 ? -0.95 : -0.35) * dir;
+      hinge.add(leaf);
+      leaf.position.x = 0.36;
+      this.group.add(hinge);
+      this.shootables.push(leaf);
     }
+
     // Vanity and mirror further along the same wall
-    const vz = z0 + 6.0;
-    this.prop(bathroomVanity(1.6, 2), vanX, vz, yaw);
-    this.block(vanX, vz, 0.56, 1.7, 0.95);
-    this.onWall(mirrorPanel(1.5, 0.85), vanX + dir * 0.08, 1.5, vz, yaw);
-    // A bin, and a roll somebody dropped
-    this.prop(trashCan(), panX + dir * 0.1, z1 - 0.6);
-    this.prop(toiletPaper(), panX + dir * 0.7, z1 - 1.2, 0, 0.05);
-    this.prop(scatteredPaper(3, 0.5), (x0 + x1) / 2, z0 + 0.9);
+    const vz = z0 + 6.3;
+    this.prop(bathroomVanity(1.7, 2), wallX + dir * 0.3, vz, yaw);
+    this.block(wallX + dir * 0.3, vz, 0.62, 1.8, 0.95);
+    this.onWall(mirrorPanel(1.6, 0.9), wallX + dir * 0.07, 1.52, vz, yaw);
+    this.prop(trashCan(), wallX + dir * 0.42, z1 - 0.6);
+    this.prop(scatteredPaper(3, 0.5), wallX + dir * 1.9, z0 + 0.9);
   }
 
-  /** A desk, its chair, and the clutter of somebody who left in a hurry. */
-  private workstation(x: number, z: number, yaw: number, extras = true): void {
+  /** A desk, its chair, and the clutter of whoever was sitting at it. */
+  private workstation(x: number, z: number, yaw: number, who = '', role = ''): void {
     this.prop(officeDesk(1.5), x, z, yaw);
     this.block(x, z, 1.6, 0.85, 0.78);
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     // Chair on the near side, pushed back and turned a little
     this.prop(officeChair(), x - fwd.x * 0.95, z - fwd.z * 0.95, yaw + Math.PI + (Math.random() - 0.5) * 0.7);
-    if (!extras) return;
     const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    this.prop(deskMonitor(), x + side.x * 0.3, z + side.z * 0.3, yaw, 0.745);
-    this.prop(paperStack(6), x - side.x * 0.45, z - side.z * 0.45, Math.random() * 3, 0.745);
-    if (Math.random() < 0.6) this.prop(sodaCan(), x - side.x * 0.62, z - side.z * 0.62 + 0.18, 0, 0.745);
+    const at = (a: number, b: number): [number, number] => [
+      x + side.x * a - fwd.x * b,
+      z + side.z * a - fwd.z * b
+    ];
+    let q = at(0.3, 0);
+    this.prop(deskMonitor(), q[0], q[1], yaw, 0.745);
+    q = at(-0.5, -0.06);
+    this.prop(deskPhone(), q[0], q[1], yaw + 0.3, 0.745);
+    q = at(0.62, 0.24);
+    this.prop(pcTower(), q[0], q[1], yaw);
+    if (who) {
+      q = at(-0.08, 0.28);
+      this.prop(namePlate(who, role), q[0], q[1], yaw, 0.745);
+    }
+    q = at(-0.62, 0.1);
+    this.prop(paperStack(6), q[0], q[1], Math.random() * 3, 0.745);
+    if (Math.random() < 0.6) {
+      q = at(0.66, -0.18);
+      this.prop(sodaCan(), q[0], q[1], 0, 0.745);
+    }
   }
 
   /** Counter run: cupboards over, worktop under, and something on it. */
@@ -804,9 +856,11 @@ export class Level4Builder {
   private dressOffices(): void {
     // ---- OFFICE 401, north-west corner. Door west at z=-6.4, door south at
     // x=-14.6, so everything lives along the north and east walls.
-    this.workstation(-16.4, -8.3, 0);
-    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), -13.5, -8.2, -Math.PI / 2);
-    this.block(-13.5, -8.2, 0.7, 1.3, 1.5);
+    this.workstation(-16.4, -8.3, 0, 'D. MEHRA', 'RETENTIONS');
+    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), -13.45, -7.8, 0);
+    this.block(-13.45, -7.8, 0.6, 1.2, 1.5);
+    this.prop(fileCabinet(0.6, 1.5, 1.0, 4), -13.45, -6.4, 0);
+    this.block(-13.45, -6.4, 0.6, 1.0, 1.5);
     this.prop(printer(), -13.45, -6.6, -Math.PI / 2, 0);
     this.block(-13.45, -6.6, 0.6, 0.7, 0.6);
     this.onWall(wallArt('thumbsup'), -13.2, 1.75, -4.2, -Math.PI / 2);
@@ -818,10 +872,10 @@ export class Level4Builder {
 
     // ---- OFFICE 402, the big south-west room. One desk, and the filing the
     // rest of the floor evidently sends here.
-    this.workstation(-14.2, 3.1, Math.PI);
+    this.workstation(-14.2, 3.1, Math.PI, 'P. OKONKWO', 'FLOOR MANAGER');
     for (let i = 0; i < 3; i++) {
-      this.prop(fileCabinet(0.6, 1.5, 1.0, 4), -15.0, 5.6 + i * 1.1, Math.PI / 2);
-      this.block(-15.0, 5.6 + i * 1.1, 0.7, 1.1, 1.5);
+      this.prop(fileCabinet(0.6, 1.5, 1.0, 4), -15.18, 5.6 + i * 1.1, Math.PI);
+      this.block(-15.18, 5.6 + i * 1.1, 0.6, 1.0, 1.5);
     }
     this.prop(printer(), -12.6, 8.4, Math.PI, 0);
     this.block(-12.6, 8.4, 0.6, 0.7, 0.6);
@@ -831,25 +885,27 @@ export class Level4Builder {
     this.prop(officeChair(), -9.6, 7.4, 0);
     this.prop(book('comic'), -9.5, 6.4, 1.1, 0.44);
     this.prop(sodaCan(), -9.9, 6.6, 0, 0.44);
-    this.onWall(wallArt('ourhome'), -11.5, 1.72, 8.96, Math.PI);
+    this.onWall(wallArt('ourhome'), -9.0, 1.72, 8.96, Math.PI);
     this.prop(flowerPot('bushy'), -7.4, 8.6);
     this.prop(scatteredPaper(6, 1.1), -12.4, 4.6);
     this.sign('OFFICE 402', '', -7.3, 1.66, Math.PI);
 
     // ---- OFFICE 403 / 404, the long north-east room split by its partition
-    this.workstation(-1.6, -8.2, 0);
-    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), 1.9, -8.2, -Math.PI / 2);
-    this.block(1.9, -8.2, 0.7, 1.5, 1.5);
+    this.workstation(-1.6, -8.2, 0, 'S. AHMED', 'COMPLIANCE');
+    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), 1.5, -8.78, Math.PI / 2);
+    this.block(1.5, -8.78, 1.4, 0.6, 1.5);
     this.prop(printer(), 1.85, -6.2, -Math.PI / 2, 0);
     this.block(1.85, -6.2, 0.6, 0.7, 0.6);
     this.onWall(wallArt('coast'), -2.9, 1.72, -5.4, Math.PI / 2);
     this.prop(trashCan(), -2.5, -2.6);
     this.prop(scatteredPaper(4, 0.8), -0.4, -4.0);
 
-    this.workstation(5.6, -8.2, 0);
-    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 7.7, -7.4, -Math.PI / 2);
-    this.block(7.7, -7.4, 0.7, 1.3, 1.5);
-    this.onWall(wallArt('peaks'), 7.95, 1.72, -3.0, -Math.PI / 2);
+    this.workstation(5.6, -8.2, 0, 'T. LARSSON', 'ACCOUNTS');
+    this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 7.78, -7.4, 0);
+    this.block(7.78, -7.4, 0.6, 1.2, 1.5);
+    this.prop(fileCabinet(0.6, 1.5, 1.0, 4), 7.78, -5.9, 0);
+    this.block(7.78, -5.9, 0.6, 1.0, 1.5);
+    this.onWall(wallArt('peaks'), 7.95, 1.72, -5.5, -Math.PI / 2);
     this.prop(flowerPot('dying'), 7.6, -2.5);
     this.prop(spilledCoffee(), 4.2, -3.4);
     this.sign('OFFICE 403', '', -3.34, -8.6, -Math.PI / 2);
@@ -878,7 +934,7 @@ export class Level4Builder {
     this.prop(trashCan(), -7.4, -2.5);
     this.prop(waterCooler(), -7.4, -8.6);
     this.block(-7.4, -8.6, 0.4, 0.4, 1.0);
-    this.onWall(wallArt('dunes'), -9.6, 1.72, -9.0, 0);
+    this.onWall(wallArt('dunes'), -8.2, 1.72, -9.0, 0);
     this.prop(scatteredPaper(4, 0.7), -8.4, -6.2);
     this.sign('BREAK ROOM', '', -11.7, -9.34, Math.PI);
 
@@ -900,11 +956,10 @@ export class Level4Builder {
     }
     this.prop(waterCooler(), 7.6, 4.6);
     this.block(7.6, 4.6, 0.4, 0.4, 1.0);
-    this.onWall(wallArt('thumbsup'), 5.0, 1.75, 5.46, Math.PI);
+    this.onWall(wallArt('thumbsup'), 7.95, 1.75, 3.4, -Math.PI / 2);
     // The blind corner behind the stub: crates and the overflow filing
-    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), -2.6, 7.6, -Math.PI / 2);
-    this.block(-2.6, 7.6, 0.7, 1.5, 1.5);
-    this.prop(rubblePile(0.7), 1.4, 8.2);
+    this.prop(fileCabinet(0.6, 1.5, 1.4, 4), -2.78, 7.6, Math.PI);
+    this.block(-2.78, 7.6, 0.6, 1.4, 1.5);
     this.prop(scatteredPaper(7, 1.2), 0.6, 7.2);
     this.prop(trashCan(), 7.6, 8.5);
     this.prop(spilledCoffee(), 5.0, 7.0);
@@ -923,11 +978,11 @@ export class Level4Builder {
   private dressSupply(): void {
     // The north store: where the printers and the paper live
     for (let i = 0; i < 3; i++) {
-      this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 15.5, -8.2 + i * 1.35, -Math.PI / 2);
-      this.block(15.5, -8.2 + i * 1.35, 0.7, 1.3, 1.5);
+      this.prop(fileCabinet(0.6, 1.5, 1.2, 4), 15.58, -8.2 + i * 1.35, 0);
+      this.block(15.58, -8.2 + i * 1.35, 0.6, 1.2, 1.5);
     }
-    this.prop(printer(), 15.45, -8.2, -Math.PI / 2, 1.5);
-    this.prop(printer(), 15.45, -5.5, -Math.PI / 2, 1.5);
+    this.prop(printer(), 15.5, -8.2, 0, 1.5);
+    this.prop(printer(), 15.5, -5.5, 0, 1.5);
     const bench = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, 3.2), this.counterMat);
     // Clear of the door at z=-6.0: a bench across it seals the room off.
     bench.position.set(12.3, 0.45, -8.1);
@@ -937,7 +992,6 @@ export class Level4Builder {
     this.prop(printer(), 12.3, -8.4, Math.PI / 2, 0.9);
     this.prop(paperStack(9, 0.05), 12.3, -7.6, 0.4, 0.9);
     this.prop(paperStack(7, 0.07), 12.35, -8.9, 1.9, 0.9);
-    this.prop(rubblePile(0.6), 13.8, -2.6);
     this.prop(scatteredPaper(8, 1.3), 13.6, -7.2);
     this.prop(trashCan(), 12.4, -2.5);
     this.sign('SUPPLY', '405', 11.66, -5.0, -Math.PI / 2);
@@ -953,37 +1007,46 @@ export class Level4Builder {
       [V_MID + CW - 0.42, -3.0, Math.PI / 2],
       [V_EAST - CW + 0.42, 2.4, -Math.PI / 2],
       [-13.6, H_NORTH - CW + 0.42, 0],
-      [2.2, H_SOUTH + CW - 0.42, Math.PI]
+      [2.2, H_SOUTH + CW - 0.42, Math.PI],
+      [-19.6, H_MAIN - CW + 0.42, 0],
+      [V_MID - CW + 0.42, 8.4, -Math.PI / 2],
+      [HALL_X0 + 13.2, HALL_Z0 + 0.42, 0]
     ];
     for (const [x, z, yaw] of coolers) {
       this.prop(waterCooler(), x, z, yaw);
       this.block(x, z, 0.42, 0.42, 1.0);
     }
 
+    // Measured off the corridor FACE of a wall that reaches this far, and
+    // turned to face the corridor. Four of these were previously buried in
+    // the plaster and two were stuck to a wall that stops short of them.
     const alarms: [number, number, number][] = [
-      [V_WEST - CW + 0.08, -8.4, -Math.PI / 2],
-      [V_MID - CW + 0.08, 4.2, -Math.PI / 2],
-      [V_EAST + CW - 0.08, -2.4, Math.PI / 2],
-      [-6.4, H_NORTH - CW + 0.08, 0],
-      [4.6, H_SOUTH + CW - 0.08, Math.PI],
-      [HALL_X0 + 5.5, HALL_Z0 + 0.08, 0]
+      [X0 + T / 2 + 0.02, -8.4, Math.PI / 2],
+      [R_W1 + T / 2 + 0.02, 7.2, Math.PI / 2],
+      [V_EAST + CW - T / 2 - 0.02, -2.4, -Math.PI / 2],
+      [-6.4, Z0 + T / 2 + 0.02, 0],
+      [4.6, Z1 - T / 2 - 0.02, Math.PI],
+      [HALL_X0 + 5.5, HALL_Z0 + T / 2 + 0.02, 0]
     ];
     for (const [x, z, yaw] of alarms) this.onWall(fireAlarm(), x, 1.45, z, yaw);
 
     const vents: [number, number, number][] = [
-      [-21, H_NORTH - CW + 0.08, 0],
-      [3.4, H_MAIN + CW - 0.08, Math.PI],
-      [V_EAST + CW - 0.08, 7.2, Math.PI / 2]
+      [-21, Z0 + T / 2 + 0.02, 0],
+      [3.4, R_MAIN_S - T / 2 - 0.02, Math.PI],
+      [V_EAST + CW - T / 2 - 0.02, 7.2, -Math.PI / 2]
     ];
     for (const [x, z, yaw] of vents) this.onWall(vent(), x, 2.5, z, yaw);
 
+    // Every one of these is measured off the face of a wall that is actually
+    // there. The first pass put four of them either inside the plaster or
+    // floating in the middle of a corridor with nothing behind them.
     const art: [Parameters<typeof wallArt>[0], number, number, number][] = [
-      ['dunes', -18.2, H_NORTH - CW + 0.1, 0],
-      ['coast', -2.0, H_SOUTH + CW - 0.1, Math.PI],
-      ['peaks', V_WEST + CW - 0.1, 1.6, Math.PI / 2],
-      ['ourhome', V_MID - CW + 0.1, -9.4, -Math.PI / 2],
-      ['newcar', 8.4, H_MAIN - CW + 0.1, 0],
-      ['house', HALL_X0 + 9.0, HALL_Z1 - 0.1, Math.PI]
+      ['dunes', -18.2, Z0 + T / 2 + 0.02, 0], // north corridor, outer wall
+      ['coast', -2.0, Z1 - T / 2 - 0.02, Math.PI], // south corridor, outer wall
+      ['peaks', R_W0 - T / 2 - 0.02, 4.4, -Math.PI / 2], // west corridor, room wall
+      ['ourhome', -4.0, Z0 + T / 2 + 0.02, 0], // north corridor, outer wall
+      ['newcar', 6.5, R_MAIN_N + T / 2 + 0.02, 0], // main spine, room wall
+      ['house', HALL_X0 + 9.0, HALL_Z1 - T / 2 - 0.02, Math.PI]
     ];
     for (const [k, x, z, yaw] of art) this.onWall(wallArt(k), x, 1.72, z, yaw);
 
@@ -998,8 +1061,8 @@ export class Level4Builder {
     }
     this.prop(chipsBox(), -16.4, H_MAIN + 1.2, 0.8);
     this.prop(spilledCoffee(), -3.4, H_NORTH + 0.6);
-    this.prop(flowerPot('tall'), V_WEST - CW + 0.5, -1.9);
-    this.prop(flowerPot('dying'), V_EAST + CW - 0.5, 11.6);
+    this.prop(flowerPot('tall'), V_WEST - CW + 0.42, -1.9);
+    this.prop(flowerPot('bushy'), V_EAST + CW - 0.42, 10.0);
     this.prop(trashCan(), V_MID + CW - 0.42, 11.4);
   }
 

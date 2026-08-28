@@ -59,6 +59,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private doorState: 'shut' | 'opening' | 'open' = 'shut';
   private doorAngle = 0;
   private doorAt = new THREE.Vector3();
+  /** Ravi's own torch. Off at the start; F works it. */
+  private torch!: THREE.SpotLight;
+  private torchOn = false;
   // ---- Night vision goggles (N): green amplified view of the dark floor
   private nv = false;
   private nvLight!: THREE.AmbientLight;
@@ -103,6 +106,18 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // The goggles' amplifier: a flat green wash across everything when down
     this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
     this.scene.add(this.nvLight);
+
+    // Ravi's torch. Deliberately modest: enough to pick a doorway out of the
+    // black a few metres ahead, not enough to light the room and undo the
+    // point of the floor. Created switched on-but-zero and driven by
+    // intensity, never visibility — the count of visible lights is baked into
+    // every material's shader, and toggling it would recompile the level on
+    // the exact frame you wanted to see something.
+    this.torch = new THREE.SpotLight(0xffe6c0, 0, 13, Math.PI / 7, 0.55, 1.3);
+    this.torch.position.set(0.08, -0.12, 0);
+    this.torch.target.position.set(0.08, -0.12, -1);
+    this.player.camera.add(this.torch);
+    this.player.camera.add(this.torch.target);
 
     this.particles = new ParticleManager(this.scene);
     this.decals = new BloodDecalSystem(this.scene);
@@ -263,6 +278,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       <div class="intro-objective"></div>
       <div class="nv-overlay"></div>
       <div class="nv-hint" style="display:none">[ N ] NIGHT VISION</div>
+      <div class="torch-hint" style="display:none">[ F ] FLASHLIGHT</div>
     `;
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
@@ -500,6 +516,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // And now the goggles are worth knowing about
     const hint = this.ui.querySelector<HTMLElement>('.nv-hint');
     if (hint) hint.style.display = 'block';
+    const th = this.ui.querySelector<HTMLElement>('.torch-hint');
+    if (th) th.style.display = 'block';
     // Fog from four metres was quietly eating the level: every weapon light
     // more than about six metres off faded to nothing, which is why the beams
     // read as bright up close and absent at any useful range. The dark here
@@ -604,6 +622,13 @@ export class Level4Scene extends CombatScene<Level4Data> {
     }
     // Night vision: flip the goggles down/up
     if (input.wasPressed('KeyN') && this.player.alive) this.toggleNightVision();
+    if (input.wasPressed('KeyF') && this.player.alive) {
+      this.torchOn = !this.torchOn;
+      this.torch.intensity = this.torchOn ? 2.1 : 0;
+      this.ctx.audio.uiBeep(this.torchOn);
+      const h = this.ui.querySelector<HTMLElement>('.torch-hint');
+      if (h) h.classList.toggle('on', this.torchOn);
+    }
 
     if (input.wasPressed('KeyR') && this.player.alive) {
       if (this.active === 'pistol' && this.ammo < MAG_SIZE) {

@@ -1119,37 +1119,86 @@ export function wallArt(
       g.font = 'bold ' + Math.round(py * 0.075) + 'px Georgia, serif';
       g.fillText('TOP CLOSER — Q3', px / 2, py * 0.92);
     } else if (kind === 'thumbsup') {
-      // A staff photo of somebody delighted with very little
+      // A staff photo of somebody delighted with very little. Dressed like the
+      // rest of the floor: white shirt, sleeves to the wrist, dark tie.
       g.fillStyle = '#cfd6dd';
       g.fillRect(0, 0, px, py);
       g.fillStyle = '#b9c2cb';
-      g.fillRect(0, py * 0.62, px, py * 0.38);
+      g.fillRect(0, py * 0.6, px, py * 0.4);
       const cx = px / 2;
       const headR = px * 0.115;
-      const headY = py * 0.3;
-      // Torso in a polo shirt
-      g.fillStyle = '#2f5f9e';
+      const headY = py * 0.29;
+
+      // Shirt
+      g.fillStyle = '#f2f2ee';
       g.beginPath();
-      g.moveTo(cx - px * 0.2, py * 0.78);
-      g.lineTo(cx - px * 0.16, py * 0.45);
-      g.lineTo(cx + px * 0.16, py * 0.45);
-      g.lineTo(cx + px * 0.2, py * 0.78);
+      g.moveTo(cx - px * 0.19, py * 0.8);
+      g.lineTo(cx - px * 0.155, py * 0.44);
+      g.lineTo(cx + px * 0.155, py * 0.44);
+      g.lineTo(cx + px * 0.19, py * 0.8);
       g.closePath();
       g.fill();
-      // The arm, bent up, and the thumb itself
-      g.strokeStyle = '#c98f68';
-      g.lineWidth = px * 0.055;
+      // Collar and tie
+      g.fillStyle = '#e2e2dc';
+      g.beginPath();
+      g.moveTo(cx - px * 0.07, py * 0.435);
+      g.lineTo(cx, py * 0.51);
+      g.lineTo(cx + px * 0.07, py * 0.435);
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#7d2733';
+      g.beginPath();
+      g.moveTo(cx, py * 0.5);
+      g.lineTo(cx - px * 0.028, py * 0.55);
+      g.lineTo(cx, py * 0.75);
+      g.lineTo(cx + px * 0.028, py * 0.55);
+      g.closePath();
+      g.fill();
+
+      // The raised arm, in a SLEEVE — upper arm out, forearm up
+      g.strokeStyle = '#f2f2ee';
+      g.lineWidth = px * 0.072;
       g.lineCap = 'round';
       g.beginPath();
-      g.moveTo(cx + px * 0.14, py * 0.52);
-      g.lineTo(cx + px * 0.21, py * 0.46);
-      g.lineTo(cx + px * 0.19, py * 0.37);
+      g.moveTo(cx + px * 0.13, py * 0.5);
+      g.lineTo(cx + px * 0.215, py * 0.45);
+      g.lineTo(cx + px * 0.2, py * 0.35);
       g.stroke();
+      // Cuff, then the bare wrist below the hand
+      g.strokeStyle = '#e2e2dc';
+      g.lineWidth = px * 0.076;
+      g.beginPath();
+      g.moveTo(cx + px * 0.202, py * 0.365);
+      g.lineTo(cx + px * 0.199, py * 0.335);
+      g.stroke();
+
+      // The hand: a closed fist, with the thumb laid up its SIDE at an angle.
+      // Short, thick and offset — a long straight digit on top of a fist is
+      // the other gesture entirely.
+      const fx = cx + px * 0.198;
+      const fy = py * 0.285;
       g.fillStyle = '#d59b73';
       g.beginPath();
-      g.arc(cx + px * 0.19, py * 0.34, px * 0.042, 0, Math.PI * 2);
+      g.ellipse(fx, fy, px * 0.052, py * 0.042, 0, 0, Math.PI * 2);
       g.fill();
-      g.fillRect(cx + px * 0.172, py * 0.27, px * 0.036, py * 0.06);
+      // Curled fingers, drawn as two soft ridges across the fist
+      g.strokeStyle = '#bd865f';
+      g.lineWidth = px * 0.008;
+      g.beginPath();
+      g.moveTo(fx - px * 0.03, fy - py * 0.006);
+      g.lineTo(fx + px * 0.03, fy - py * 0.004);
+      g.moveTo(fx - px * 0.028, fy + py * 0.014);
+      g.lineTo(fx + px * 0.028, fy + py * 0.016);
+      g.stroke();
+      // Thumb: up and outboard, thick, stopping well short of finger length
+      g.strokeStyle = '#d59b73';
+      g.lineWidth = px * 0.036;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(fx - px * 0.03, fy - py * 0.018);
+      g.lineTo(fx - px * 0.052, fy - py * 0.06);
+      g.stroke();
+
       // Head, hair, and a face that means it
       g.fillStyle = '#d59b73';
       g.beginPath();
@@ -1157,19 +1206,19 @@ export function wallArt(
       g.fill();
       g.fillStyle = '#2a1f18';
       g.beginPath();
-      g.arc(cx, headY - headR * 0.28, headR * 0.98, Math.PI * 1.04, Math.PI * 1.96);
+      g.arc(cx, headY - headR * 0.26, headR * 0.99, Math.PI * 1.03, Math.PI * 1.97);
       g.fill();
       g.fillStyle = '#241a14';
       g.beginPath();
-      g.arc(cx - headR * 0.36, headY - headR * 0.05, headR * 0.1, 0, Math.PI * 2);
-      g.arc(cx + headR * 0.36, headY - headR * 0.05, headR * 0.1, 0, Math.PI * 2);
+      g.arc(cx - headR * 0.36, headY - headR * 0.03, headR * 0.1, 0, Math.PI * 2);
+      g.arc(cx + headR * 0.36, headY - headR * 0.03, headR * 0.1, 0, Math.PI * 2);
       g.fill();
       g.strokeStyle = '#241a14';
       g.lineWidth = px * 0.012;
       g.beginPath();
-      g.arc(cx, headY + headR * 0.18, headR * 0.45, 0.22 * Math.PI, 0.78 * Math.PI);
+      g.arc(cx, headY + headR * 0.2, headR * 0.45, 0.22 * Math.PI, 0.78 * Math.PI);
       g.stroke();
-      // Caption
+
       g.fillStyle = '#1d232a';
       g.fillRect(0, py * 0.83, px, py * 0.17);
       g.fillStyle = '#f2efe6';
@@ -1208,8 +1257,6 @@ export function wallArt(
       g.textAlign = 'center';
       g.font = 'bold ' + Math.round(py * 0.095) + 'px Georgia, serif';
       g.fillText('OUR BELOVED HOME', px / 2, py * 0.88);
-      g.font = 'italic ' + Math.round(py * 0.055) + 'px Georgia, serif';
-      g.fillText('RAVI-CALL SYSTEMS — EST. LAST YEAR', px / 2, py * 0.955);
     } else {
       // Landscapes: banded sky, a sun, a horizon silhouette
       const palettes = {
@@ -2091,9 +2138,22 @@ export function mirrorPanel(w = 1.5, h = 0.9): THREE.Group {
   const g = new THREE.Group();
   const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, h + 0.06, 0.03), lam(0x9aa1a8));
   g.add(frame);
+  // Metalness 0.95 with nothing in the scene to reflect gives a black slab —
+  // a mirror-metal reflecting an empty environment reflects nothing. A pale,
+  // mostly dielectric surface with a tight clearcoat highlight reads as glass
+  // instead, and still catches the torches.
   const glass = new THREE.Mesh(
     new THREE.PlaneGeometry(w, h),
-    new THREE.MeshStandardMaterial({ color: 0x7c858d, roughness: 0.06, metalness: 0.95 })
+    new THREE.MeshPhysicalMaterial({
+      color: 0xc3d0d7,
+      roughness: 0.05,
+      metalness: 0.08,
+      reflectivity: 1,
+      clearcoat: 1,
+      clearcoatRoughness: 0.02,
+      emissive: 0x2b3a44,
+      emissiveIntensity: 0.55
+    })
   );
   glass.position.z = 0.019;
   g.add(glass);
@@ -2360,5 +2420,85 @@ export function deskMonitor(): THREE.Group {
   const kb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.02, 0.15), MAT.darkPlastic);
   kb.position.set(0, 0.01, 0.28);
   g.add(kb);
+  return g;
+}
+
+const plateMats = new Map<string, THREE.MeshLambertMaterial>();
+
+/** The little angled wedge with somebody's name on it, for a desk. */
+export function namePlate(name: string, role = ''): THREE.Group {
+  let mat = plateMats.get(name);
+  if (!mat) {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#1f242a';
+    g.fillRect(0, 0, 256, 64);
+    g.fillStyle = '#e8e2d2';
+    g.textAlign = 'center';
+    g.font = 'bold 30px Georgia, serif';
+    g.fillText(name, 128, role ? 30 : 42);
+    if (role) {
+      g.fillStyle = '#9aa2ab';
+      g.font = '18px Georgia, serif';
+      g.fillText(role, 128, 52);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshLambertMaterial({ map: tex });
+    plateMats.set(name, mat);
+  }
+  const g2 = new THREE.Group();
+  const wedge = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.075, 0.05), lam(0x2a2f35));
+  wedge.position.set(0, 0.038, 0);
+  wedge.rotation.x = -0.32;
+  g2.add(wedge);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.06), mat);
+  face.position.set(0, 0.04, 0.028);
+  face.rotation.x = -0.32;
+  g2.add(face);
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.012, 0.07), lam(0x22262b));
+  foot.position.y = 0.006;
+  g2.add(foot);
+  return g2;
+}
+
+/** Desk phone with a handset across the cradle. */
+export function deskPhone(): THREE.Group {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.22), MAT.darkPlastic);
+  base.position.y = 0.025;
+  base.rotation.x = -0.12;
+  g.add(base);
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.008, 0.09), lam(0x4a5058));
+  pad.position.set(0.04, 0.055, 0.05);
+  g.add(pad);
+  const handset = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.045, 0.21), MAT.midPlastic);
+  handset.position.set(-0.065, 0.07, 0);
+  g.add(handset);
+  for (const z of [-0.085, 0.085]) {
+    const ear = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.035, 0.05), MAT.midPlastic);
+    ear.position.set(-0.065, 0.055, z);
+    g.add(ear);
+  }
+  return g;
+}
+
+/** Tower unit, for under a desk. */
+export function pcTower(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.44, 0.46), lam(0x2f343a));
+  body.position.y = 0.22;
+  g.add(body);
+  const face = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.4, 0.42), lam(0x3d434a));
+  face.position.set(0.105, 0.22, 0);
+  g.add(face);
+  const bay = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.03, 0.3), lam(0x22262b));
+  bay.position.set(0.113, 0.36, 0);
+  g.add(bay);
+  const led = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.012, 0.012), lam(0x1b3a1f));
+  led.position.set(0.113, 0.29, 0.12);
+  g.add(led);
   return g;
 }

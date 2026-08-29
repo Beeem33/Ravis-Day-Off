@@ -737,7 +737,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     if (this.remaining <= 0 && !this.cleared) {
       this.cleared = true;
       // Anyone still alive out there can stop running now
-      for (const ai of this.civAIs) ai.calmDown();
+      // Worried rather than happy: they have just watched a raid go through
+      for (const ai of this.civAIs) ai.calmDown('concerned');
       // The service door unlocks: panel goes from red to green
       this.level.exitPanel.emissive.setHex(0x2bff6a);
       this.level.exitPanel.color.setHex(0x0a2a12);

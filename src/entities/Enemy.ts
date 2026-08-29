@@ -131,6 +131,7 @@ export class Enemy {
   private static faceWorried: THREE.MeshStandardMaterial | null = null;
   private static faceCalm: THREE.MeshStandardMaterial | null = null;
   private static faceShaken: THREE.MeshStandardMaterial | null = null;
+  private static faceConcerned: THREE.MeshStandardMaterial | null = null;
 
   /** The civilian at rest: level brows, normal eyes, a slight smile. */
   private static drawCalmFace(): THREE.MeshStandardMaterial {
@@ -222,6 +223,46 @@ export class Enemy {
   }
 
   /** The civilian's face: brows up, wide eyes, open mouth. */
+  /**
+   * Between calm and frightened: brows tipped IN rather than up, eyes their
+   * normal size, mouth a flat line. The worried face has raised, out-tilted
+   * brows and a wide mouth, which reads as startled — right for somebody who
+   * has just been shouted at, wrong for somebody walking to the printer while
+   * something is going on two floors down.
+   */
+  private static drawConcernedFace(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#8a5c3b';
+    g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = '#1c120b';
+    g.lineCap = 'round';
+    // Brows level but pulled down at the inner ends
+    g.lineWidth = 3.5;
+    g.beginPath();
+    g.moveTo(13, 21);
+    g.lineTo(27, 23);
+    g.moveTo(51, 21);
+    g.lineTo(37, 23);
+    g.stroke();
+    // Ordinary eyes
+    g.fillStyle = '#1c120b';
+    g.beginPath();
+    g.arc(20, 31, 3.4, 0, Math.PI * 2);
+    g.arc(44, 31, 3.4, 0, Math.PI * 2);
+    g.fill();
+    // A flat, slightly turned-down mouth
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(24, 46);
+    g.quadraticCurveTo(32, 44, 40, 46);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 });
+  }
+
   private static drawWorriedFace(): THREE.MeshStandardMaterial {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
@@ -429,6 +470,7 @@ export class Enemy {
     if (!Enemy.faceWorried) Enemy.faceWorried = Enemy.drawWorriedFace();
     if (!Enemy.faceCalm) Enemy.faceCalm = Enemy.drawCalmFace();
     if (!Enemy.faceShaken) Enemy.faceShaken = Enemy.drawShakenFace();
+    if (!Enemy.faceConcerned) Enemy.faceConcerned = Enemy.drawConcernedFace();
     // Staff start calm; the scared face is switched in when they panic
     const faceMat = this.civilian ? Enemy.faceCalm : Enemy.faceAngry;
     this.head = this.addPart(
@@ -553,6 +595,28 @@ export class Enemy {
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
     if (on) this.setScared();
+    else this.setCalm();
+  }
+
+  /**
+   * Back to the resting face.
+   *
+   * Putting the hands up swapped the face and nothing ever swapped it back,
+   * so every civilian who calmed down went on wearing the frightened one for
+   * the rest of the level — which is why staff strolling to the printer
+   * looked permanently startled.
+   */
+  setCalm(): void {
+    if (!this.civilian || !Enemy.faceCalm) return;
+    const mats = this.head.material;
+    if (Array.isArray(mats)) mats[5] = Enemy.faceCalm;
+  }
+
+  /** Not frightened, but aware something is going on. */
+  setConcerned(): void {
+    if (!this.civilian || !Enemy.faceConcerned) return;
+    const mats = this.head.material;
+    if (Array.isArray(mats)) mats[5] = Enemy.faceConcerned;
   }
 
   /** Swap the calm face for the frightened one. */

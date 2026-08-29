@@ -46,11 +46,17 @@ export class CivilianAI {
     this.unsub();
   }
 
-  /** The floor is clear — stop panicking. */
-  calmDown(): void {
+  /**
+   * The floor is clear — stop panicking.
+   *
+   * `mood` picks the face they settle into: 'calm' for somewhere nothing has
+   * happened yet, 'concerned' for somewhere it has.
+   */
+  calmDown(mood: 'calm' | 'concerned' = 'calm'): void {
     if (this.state === 'calm') return;
     this.state = 'calm';
     this.civ.setHandsUp(false);
+    if (mood === 'concerned') this.civ.setConcerned();
     this.pickDestination();
   }
 

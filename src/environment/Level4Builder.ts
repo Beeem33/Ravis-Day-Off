@@ -34,6 +34,10 @@ export interface Level4Data {
   mazeDoorPivot: THREE.Group;
   /** Index into `colliders`: everything below this is structure, not furniture. */
   wallColliders: number;
+  /** Centre of every doorway, for the build check. */
+  doorways: [number, number][];
+  /** Staff who did not get out. */
+  corpseSpawns: { pos: THREE.Vector3; yaw: number }[];
   mazeDoorCollider: Collider;
   /** Where the sweep teams start. Spread so no two share a room. */
   enemySpawns: EnemySpawn[];
@@ -182,6 +186,17 @@ export class Level4Builder {
       mazeDoor: this.mazeDoor,
       mazeDoorPivot: this.mazeDoorPivot,
       wallColliders: this.wallColliders,
+      doorways: this.doorPoints.filter((_, i) => i % 3 === 1),
+      // Staff caught on the floor when the team came through. Kept out on open
+      // carpet so the ragdoll has somewhere to settle.
+      corpseSpawns: [
+        { pos: new THREE.Vector3(-17.6, 0, -4.6), yaw: 1.1 },
+        { pos: new THREE.Vector3(-9.2, 0, -3.1), yaw: -2.2 },
+        { pos: new THREE.Vector3(2.6, 0, -4.2), yaw: 0.4 },
+        { pos: new THREE.Vector3(-4.6, 0, 3.6), yaw: 2.7 },
+        { pos: new THREE.Vector3(13.2, 0, -3.4), yaw: -0.6 },
+        { pos: new THREE.Vector3(-21.4, 0, -10.4), yaw: 1.9 }
+      ],
       mazeDoorCollider: this.mazeDoorCollider,
       // One to a room or junction, facing along the run they are covering,
       // so the first thing the player meets is a beam and not a body.
@@ -715,7 +730,14 @@ export class Level4Builder {
     this.onWall(roomSign(label, sub), x, 2.02, z, yaw);
   }
 
-  /** Tile a washroom: floor, and a wainscot of wall tile all the way round. */
+  /**
+   * Tile a washroom: floor, and a wainscot of wall tile all the way round.
+   *
+   * The panels have to be broken where a doorway is. Drawn as four solid
+   * walls, the tile papers straight over the opening — from the corridor the
+   * door reads as a hole you can walk through, and from inside the room it is
+   * a tiled wall.
+   */
   private tileRoom(x0: number, x1: number, z0: number, z1: number): void {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), this.tileFloorMat);
     floor.rotation.x = -Math.PI / 2;
@@ -724,16 +746,44 @@ export class Level4Builder {
     // Tile up to 2m, which is where a real one stops and paint takes over
     const HT = 2.0;
     const panel = (w: number, px: number, pz: number, yaw: number): void => {
+      if (w < 0.06) return;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(w, HT), this.tileMat);
       m.position.set(px, HT / 2, pz);
       m.rotation.y = yaw;
       this.group.add(m);
       this.shootables.push(m);
     };
-    panel(x1 - x0, (x0 + x1) / 2, z0 + 0.01, 0);
-    panel(x1 - x0, (x0 + x1) / 2, z1 - 0.01, Math.PI);
-    panel(z1 - z0, x0 + 0.01, (z0 + z1) / 2, Math.PI / 2);
-    panel(z1 - z0, x1 - 0.01, (z0 + z1) / 2, -Math.PI / 2);
+    /**
+     * One face, split around any doorway that lands on it. `along` is the
+     * axis the wall runs on; the doorways are matched by their other
+     * coordinate sitting on this face.
+     */
+    const face = (axis: 'x' | 'z', a0: number, a1: number, cross: number, yaw: number): void => {
+      const gaps = this.doorPoints
+        .filter((_, i) => i % 3 === 1)
+        .filter((d) => Math.abs((axis === 'x' ? d[1] : d[0]) - cross) < 0.35)
+        .map((d) => (axis === 'x' ? d[0] : d[1]))
+        .filter((c) => c > a0 - 0.9 && c < a1 + 0.9)
+        .sort((m, n) => m - n);
+      let cursor = a0;
+      for (const c of gaps) {
+        const s0 = Math.max(a0, c - 0.95);
+        const e0 = Math.min(a1, c + 0.95);
+        if (s0 > cursor) {
+          if (axis === 'x') panel(s0 - cursor, (cursor + s0) / 2, cross, yaw);
+          else panel(s0 - cursor, cross, (cursor + s0) / 2, yaw);
+        }
+        cursor = Math.max(cursor, e0);
+      }
+      if (a1 > cursor) {
+        if (axis === 'x') panel(a1 - cursor, (cursor + a1) / 2, cross, yaw);
+        else panel(a1 - cursor, cross, (cursor + a1) / 2, yaw);
+      }
+    };
+    face('x', x0, x1, z0 + 0.01, 0);
+    face('x', x0, x1, z1 - 0.01, Math.PI);
+    face('z', z0, z1, x0 + 0.01, Math.PI / 2);
+    face('z', z0, z1, x1 - 0.01, -Math.PI / 2);
   }
 
   /**
@@ -774,7 +824,7 @@ export class Level4Builder {
     this.prop(bathroomVanity(1.7, 2), wallX + dir * 0.3, vz, yaw);
     this.block(wallX + dir * 0.3, vz, 0.62, 1.8, 0.95);
     this.onWall(mirrorPanel(1.6, 0.9), wallX + dir * 0.07, 1.52, vz, yaw);
-    this.prop(trashCan(), wallX + dir * 0.42, z1 - 0.6);
+    this.prop(trashCan(), wallX + dir * 1.75, z1 - 0.55);
     this.prop(scatteredPaper(3, 0.5), wallX + dir * 1.9, z0 + 0.9);
   }
 
@@ -810,8 +860,10 @@ export class Level4Builder {
     q = at(ret * 0.55, -0.16);
     this.prop(pcTower(), q[0], q[1], yaw);
     if (who) {
+      // Turned outward. At `yaw` it faced the chair, which is the one person
+      // in the building who already knows whose desk it is.
       q = at(-0.12, 0.3);
-      this.prop(namePlate(who, role), q[0], q[1], yaw, 0.76);
+      this.prop(namePlate(who, role), q[0], q[1], yaw + Math.PI, 0.76);
     }
     q = at(-0.78, 0.14);
     this.prop(paperStack(6), q[0], q[1], Math.random() * 3, 0.76);
@@ -934,10 +986,12 @@ export class Level4Builder {
     this.kitchenRun(3.0, 2.25, Math.PI);
     this.prop(fridge(), 7.4, 2.4, 0);
     this.block(7.4, 2.4, 0.72, 0.7, 1.75);
-    for (let i = 0; i < 2; i++) {
-      this.prop(vendingMachine(), -2.6, 6.2 + i * 1.4, -Math.PI / 2);
-      this.block(-2.6, 6.2 + i * 1.4, 0.85, 1.3, 2.0);
-    }
+    // Off the west wall entirely: the gap beside the stub is the only way
+    // round into the blind corner, and a machine parked in it sealed the lot.
+    this.prop(vendingMachine(), 7.7, 5.9, -Math.PI / 2);
+    this.block(7.7, 5.9, 0.85, 1.3, 2.0);
+    this.prop(vendingMachine(), 6.5, 8.45, Math.PI);
+    this.block(6.5, 8.45, 1.3, 0.85, 2.0);
     this.prop(waterCooler(), 7.6, 4.6);
     this.block(7.6, 4.6, 0.4, 0.4, 1.0);
     this.onWall(wallArt('thumbsup'), 7.95, 1.75, 3.4, -Math.PI / 2);
@@ -986,15 +1040,18 @@ export class Level4Builder {
    * long runs, and litter where people cut corners.
    */
   private dressCorridors(): void {
+    // The taps are on the +Z face, so yaw is the way the jug looks. Half of
+    // these were turned into the wall behind them, and three were measured off
+    // a wall that stops short, leaving them stood in the middle of the floor.
     const coolers: [number, number, number][] = [
-      [V_WEST - CW + 0.42, -1.2, -Math.PI / 2],
-      [V_MID + CW - 0.42, -3.0, Math.PI / 2],
-      [V_EAST - CW + 0.42, 2.4, -Math.PI / 2],
-      [-13.6, H_NORTH - CW + 0.42, 0],
-      [2.2, H_SOUTH + CW - 0.42, Math.PI],
-      [-19.6, H_MAIN - CW + 0.42, 0],
-      [V_MID - CW + 0.42, 8.4, -Math.PI / 2],
-      [HALL_X0 + 13.2, HALL_Z0 + 0.42, 0]
+      [X0 + T / 2 + 0.26, -1.2, Math.PI / 2], // west corridor, outer wall
+      [R_E0 - T / 2 - 0.26, -3.0, -Math.PI / 2], // mid corridor, room wall
+      [R_E1 + T / 2 + 0.26, 2.4, Math.PI / 2], // east corridor, room wall
+      [-13.6, Z0 + T / 2 + 0.26, 0], // north corridor, outer wall
+      [2.2, Z1 - T / 2 - 0.26, Math.PI], // south corridor, outer wall
+      [-18.4, R_MAIN_N - T / 2 - 0.26, 0], // main spine, room wall
+      [R_W1 + T / 2 + 0.26, 8.4, Math.PI / 2], // mid corridor, room wall
+      [HALL_X0 + 13.2, HALL_Z0 + T / 2 + 0.26, 0]
     ];
     for (const [x, z, yaw] of coolers) {
       this.prop(waterCooler(), x, z, yaw);

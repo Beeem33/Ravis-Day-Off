@@ -34,6 +34,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private shotgun!: ShotgunViewmodel;
   private beams!: GunBeamPool;
   private agents: Enemy[] = [];
+  private corpses: Enemy[] = [];
   private agentAI: EnemyAI[] = [];
   private remaining = 0;
   private hud!: FPSHUD;
@@ -205,6 +206,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       // them out of the rooms and into the middle corridors within a minute.
       this.agentAI[i].setPatrolZone(sp.pos, 6.5);
     });
+    this.spawnCorpses();
     this.remaining = this.agents.length;
     this.lightBase = this.level.lights.map((l) => l.intensity);
     this.level.mazeDoorCollider.box.getCenter(this.doorAt);
@@ -687,9 +689,11 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     if (this.agents.length) this.separateAgents(dt);
 
+    for (const c of this.corpses) c.update(dt);
     this.wounded.update(dt);
     this.dialogue.update(dt);
     this.world.step(1 / 60, dt, 3);
+    for (const pane of this.level.glassPanes) pane.update(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
     this.decals.update(dt);
@@ -765,6 +769,36 @@ export class Level4Scene extends CombatScene<Level4Data> {
         this.pushOutOfWalls(a);
         this.pushOutOfWalls(b);
       }
+    }
+  }
+
+  /**
+   * Staff who were on this floor when the team came through.
+   *
+   * Ragdolled and then stepped to rest before the level is ever drawn, so
+   * they are lying the way a body lies rather than standing in a T-pose for
+   * the first second of play.
+   */
+  private spawnCorpses(): void {
+    for (const [i, s] of this.level.corpseSpawns.entries()) {
+      const body = new Enemy(s.pos, s.yaw, i + 31, { name: 'STAFF', civilian: true });
+      this.scene.add(body.root);
+      this.corpses.push(body);
+      for (const part of body.parts) this.level.shootables.push(part);
+      const dir = new THREE.Vector3(Math.cos(s.yaw), -0.25, Math.sin(s.yaw)).normalize();
+      const hit = s.pos.clone().add(new THREE.Vector3(0, 1.1 + Math.random() * 0.3, 0));
+      body.die(hit, dir, this.world, Math.random() < 0.3 ? 'head' : 'torso');
+    }
+    // Run the ragdolls to rest before the level is ever drawn
+    for (let f = 0; f < 110; f++) {
+      this.world.step(1 / 60);
+      for (const c of this.corpses) c.update(1 / 60);
+    }
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const c of this.corpses) {
+      const base = c.corpseBase();
+      this.decals.place('pool', base.clone().setY(0.012), up, 1.1 + Math.random() * 0.5);
+      this.decals.place('blood', base.clone().add(new THREE.Vector3(0.3, 0, 0.2)).setY(0.012), up, 0.7);
     }
   }
 

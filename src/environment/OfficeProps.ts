@@ -768,10 +768,20 @@ const artMats = new Map<string, THREE.MeshLambertMaterial>();
  * landscapes — the sort of thing bought by the metre for an office.
  */
 export function wallArt(
-  kind: 'together' | 'dial' | 'dunes' | 'coast' | 'peaks' | 'house' | 'newcar' | 'thumbsup' | 'ourhome'
+  kind:
+    | 'together'
+    | 'dial'
+    | 'dunes'
+    | 'coast'
+    | 'peaks'
+    | 'house'
+    | 'newcar'
+    | 'thumbsup'
+    | 'ourhome'
+    | 'upperfloor'
 ): THREE.Group {
-  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : kind === 'newcar' ? 1.3 : kind === 'thumbsup' ? 1.0 : kind === 'ourhome' ? 1.2 : 1.15;
-  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : kind === 'newcar' ? 0.92 : kind === 'thumbsup' ? 1.15 : kind === 'ourhome' ? 0.86 : 0.8;
+  const W = kind === 'together' ? 1.7 : kind === 'dial' ? 1.0 : kind === 'newcar' ? 1.3 : kind === 'thumbsup' ? 1.0 : kind === 'ourhome' ? 1.2 : kind === 'upperfloor' ? 0.95 : 1.15;
+  const H = kind === 'together' ? 1.05 : kind === 'dial' ? 1.3 : kind === 'newcar' ? 0.92 : kind === 'thumbsup' ? 1.15 : kind === 'ourhome' ? 0.86 : kind === 'upperfloor' ? 1.2 : 0.8;
 
   let mat = artMats.get(kind);
   if (!mat) {
@@ -1225,6 +1235,122 @@ export function wallArt(
       g.textAlign = 'center';
       g.font = 'bold ' + Math.round(py * 0.085) + 'px Impact, Arial Black, sans-serif';
       g.fillText("ALL IN A DAY'S WORK", px / 2, py * 0.945);
+    } else if (kind === 'upperfloor') {
+      // Painted to match the figure that actually walks the floor: white
+      // shirt with full sleeves, blue trousers, that skin tone, dark hair —
+      // with a red cap instead of the blue one, and a gold watch. Straight
+      // face, no expression.
+      const SKIN = '#8a5c3b';
+      const SHIRT = '#f4f2ec';
+      const TROUSER = '#2f4a7a';
+      g.fillStyle = '#b8c2cc';
+      g.fillRect(0, 0, px, py);
+      g.fillStyle = '#a3aeba';
+      g.fillRect(0, py * 0.66, px, py * 0.34);
+      const cx = px / 2;
+      const headR = px * 0.125;
+      const headY = py * 0.235;
+
+      // Trousers
+      g.fillStyle = TROUSER;
+      g.fillRect(cx - px * 0.15, py * 0.6, px * 0.13, py * 0.4);
+      g.fillRect(cx + px * 0.02, py * 0.6, px * 0.13, py * 0.4);
+      // Shoes
+      g.fillStyle = '#22252a';
+      g.fillRect(cx - px * 0.16, py * 0.965, px * 0.15, py * 0.035);
+      g.fillRect(cx + px * 0.01, py * 0.965, px * 0.15, py * 0.035);
+
+      // Shirt, with sleeves all the way to the wrist
+      g.fillStyle = SHIRT;
+      g.beginPath();
+      g.moveTo(cx - px * 0.17, py * 0.62);
+      g.lineTo(cx - px * 0.15, py * 0.36);
+      g.lineTo(cx + px * 0.15, py * 0.36);
+      g.lineTo(cx + px * 0.17, py * 0.62);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = SHIRT;
+      g.lineWidth = px * 0.072;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(cx - px * 0.14, py * 0.4);
+      g.lineTo(cx - px * 0.2, py * 0.58);
+      g.moveTo(cx + px * 0.14, py * 0.4);
+      g.lineTo(cx + px * 0.2, py * 0.58);
+      g.stroke();
+      // Collar
+      g.fillStyle = '#e3e3dd';
+      g.beginPath();
+      g.moveTo(cx - px * 0.06, py * 0.358);
+      g.lineTo(cx, py * 0.42);
+      g.lineTo(cx + px * 0.06, py * 0.358);
+      g.closePath();
+      g.fill();
+
+      // Hands, and the gold watch on the left wrist
+      g.fillStyle = SKIN;
+      g.beginPath();
+      g.arc(cx - px * 0.208, py * 0.615, px * 0.032, 0, Math.PI * 2);
+      g.arc(cx + px * 0.208, py * 0.615, px * 0.032, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#c9a227';
+      g.lineWidth = px * 0.022;
+      g.beginPath();
+      g.moveTo(cx + px * 0.182, py * 0.578);
+      g.lineTo(cx + px * 0.214, py * 0.585);
+      g.stroke();
+      g.fillStyle = '#e8c84a';
+      g.beginPath();
+      g.arc(cx + px * 0.2, py * 0.582, px * 0.019, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#8a6f18';
+      g.lineWidth = px * 0.005;
+      g.beginPath();
+      g.arc(cx + px * 0.2, py * 0.582, px * 0.019, 0, Math.PI * 2);
+      g.stroke();
+
+      // Head
+      g.fillStyle = SKIN;
+      g.beginPath();
+      g.arc(cx, headY, headR, 0, Math.PI * 2);
+      g.fill();
+      // Hair showing under the cap
+      g.fillStyle = '#120d0a';
+      g.beginPath();
+      g.arc(cx, headY - headR * 0.1, headR * 0.99, Math.PI * 1.02, Math.PI * 1.98);
+      g.fill();
+      // Red cap: crown and peak
+      g.fillStyle = '#b4231f';
+      g.beginPath();
+      g.arc(cx, headY - headR * 0.2, headR * 1.02, Math.PI, Math.PI * 2);
+      g.fill();
+      g.fillRect(cx - headR * 1.02, headY - headR * 0.28, headR * 2.04, headR * 0.24);
+      g.fillStyle = '#8e1a17';
+      g.beginPath();
+      g.ellipse(cx + headR * 0.55, headY - headR * 0.02, headR * 0.85, headR * 0.2, 0, 0, Math.PI * 2);
+      g.fill();
+
+      // Straight face: two eyes and a level mouth, nothing else
+      g.fillStyle = '#241a14';
+      g.beginPath();
+      g.arc(cx - headR * 0.36, headY + headR * 0.16, headR * 0.11, 0, Math.PI * 2);
+      g.arc(cx + headR * 0.36, headY + headR * 0.16, headR * 0.11, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#241a14';
+      g.lineWidth = px * 0.013;
+      g.lineCap = 'butt';
+      g.beginPath();
+      g.moveTo(cx - headR * 0.3, headY + headR * 0.58);
+      g.lineTo(cx + headR * 0.3, headY + headR * 0.58);
+      g.stroke();
+
+      // The only text on it
+      g.fillStyle = '#1b2027';
+      g.fillRect(0, py * 0.865, px, py * 0.135);
+      g.fillStyle = '#f2efe6';
+      g.textAlign = 'center';
+      g.font = 'bold ' + Math.round(py * 0.062) + 'px Impact, Arial Black, sans-serif';
+      g.fillText('UPPER FLOOR EMPLOYEE', px / 2, py * 0.955);
     } else if (kind === 'ourhome') {
       // The building, drawn with all the affection of a stock clipart licence
       g.fillStyle = '#9fb6cc';
@@ -1986,6 +2112,9 @@ export function kitchenSink(): THREE.Group {
     g.add(groove);
   }
   // Mixer tap
+  // NOTE: the tap is on -Z, so this whole prop faces +Z. Callers lining it up
+  // with a counter have to turn it through 180 relative to the counter's own
+  // facing, or the taps end up against the wall.
   const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.26, 10), steel);
   spout.position.set(-0.16, 0.14, -0.21);
   g.add(spout);
@@ -2144,15 +2273,12 @@ export function mirrorPanel(w = 1.5, h = 0.9): THREE.Group {
   // instead, and still catches the torches.
   const glass = new THREE.Mesh(
     new THREE.PlaneGeometry(w, h),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xc3d0d7,
-      roughness: 0.05,
-      metalness: 0.08,
-      reflectivity: 1,
-      clearcoat: 1,
-      clearcoatRoughness: 0.02,
+    new THREE.MeshStandardMaterial({
+      color: 0xb9c7cf,
+      roughness: 0.08,
+      metalness: 0.25,
       emissive: 0x2b3a44,
-      emissiveIntensity: 0.55
+      emissiveIntensity: 0.5
     })
   );
   glass.position.z = 0.019;

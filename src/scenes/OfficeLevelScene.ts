@@ -10,6 +10,7 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
+import { RifleViewmodel } from '../entities/RifleViewmodel';
 import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { Enemy } from '../entities/Enemy';
@@ -23,6 +24,11 @@ const MAG_SIZE = 10;
 const SHOTGUN_COOLDOWN = 0.85;
 const TUBE_SIZE = 6;
 const PELLETS = 8;
+// AK-47: full auto at ~600 rpm, 30-round magazine
+const RIFLE_COOLDOWN = 0.1;
+const RIFLE_MAG = 30;
+
+type Slot = 'pistol' | 'shotgun' | 'rifle';
 
 /**
  * OfficeLevelScene — the playable shift. Owns the level, the player, all
@@ -32,10 +38,12 @@ const PELLETS = 8;
 export class OfficeLevelScene extends CombatScene<LevelData> {
   private weapon!: WeaponViewmodel;
   private shotgun!: ShotgunViewmodel;
-  /** Which weapon is in hand, and which slot 1/2 asked for. */
-  private active: 'pistol' | 'shotgun' = 'pistol';
-  private wanted: 'pistol' | 'shotgun' = 'pistol';
+  private rifle!: RifleViewmodel;
+  /** Which weapon is in hand, and which slot 1/2/3 asked for. */
+  private active: Slot = 'pistol';
+  private wanted: Slot = 'pistol';
   private shells = TUBE_SIZE;
+  private rifleAmmo = RIFLE_MAG;
   private takedownVm!: TakedownViewmodel;
   /** Middle-finger emote on T; the left hand goes back to work on reload. */
   private emote!: EmoteViewmodel;
@@ -142,6 +150,17 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
         audio.shellIn();
         this.shells = Math.min(TUBE_SIZE, this.shells + 1);
       }
+    };
+    // The AK rides along stowed until 3 brings it up
+    this.rifle = new RifleViewmodel(this.player.camera);
+    this.rifle.onReloadEvent = (e) => {
+      if (e === 'strike') audio.magStrike();
+      else if (e === 'magOut') audio.magOut();
+      else if (e === 'magDrop') this.dropRifleMagazine();
+      else if (e === 'magIn') audio.magIn();
+      else if (e === 'rackBack') audio.boltBack();
+      else if (e === 'rack') audio.boltForward();
+      else if (e === 'done') this.rifleAmmo = RIFLE_MAG;
     };
     // Knife takedown arms (F next to an enemy)
     this.takedownVm = new TakedownViewmodel(this.player.camera);
@@ -394,7 +413,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       input.wasPressed('KeyF') &&
       input.pointerLocked &&
       !this.weapon.reloading &&
-      !this.shotgun.reloading
+      !this.shotgun.reloading &&
+      !this.rifle.reloading
     ) {
       this.takedown = tdTarget;
       this.player.cinematic = true; // the scene owns the camera until it's over
@@ -415,26 +435,27 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.takedownVm.update(dt);
     const inTakedown = this.takedown !== null;
 
-    // Weapon slots: 1 = pistol, 2 = shotgun. The current gun swings down out
-    // of frame, then the other comes up — no switching mid-reload.
-    const heldVm = this.active === 'pistol' ? this.weapon : this.shotgun;
+    // Weapon slots: 1 = pistol, 2 = shotgun, 3 = rifle. The current gun
+    // swings down out of frame, then the other comes up — no switching mid-reload.
+    const vmOf = (slot: Slot) => (slot === 'pistol' ? this.weapon : slot === 'shotgun' ? this.shotgun : this.rifle);
+    const allVms = [this.weapon, this.shotgun, this.rifle];
+    const heldVm = vmOf(this.active);
     if (this.player.alive && !this.over && !heldVm.reloading && !inTakedown) {
       if (input.wasPressed('Digit1')) this.wanted = 'pistol';
       if (input.wasPressed('Digit2')) this.wanted = 'shotgun';
+      if (input.wasPressed('Digit3')) this.wanted = 'rifle';
     }
     if (inTakedown) {
       // Both hands are busy with the knife — whatever was held drops from frame
-      this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
-      this.shotgun.stow = Math.min(1, this.shotgun.stow + dt * 6);
+      for (const v of allVms) v.stow = Math.min(1, v.stow + dt * 6);
     } else if (this.wanted !== this.active) {
       heldVm.stow = Math.min(1, heldVm.stow + dt * 5);
       if (heldVm.stow >= 1) this.active = this.wanted;
     } else {
       heldVm.stow = Math.max(0, heldVm.stow - dt * 5);
     }
-    const vm = this.active === 'pistol' ? this.weapon : this.shotgun;
-    const stowedVm = this.active === 'pistol' ? this.shotgun : this.weapon;
-    if (this.wanted === this.active && !inTakedown) stowedVm.stow = 1;
+    const vm = vmOf(this.active);
+    if (this.wanted === this.active && !inTakedown) for (const v of allVms) if (v !== vm) v.stow = 1;
     const switching = this.wanted !== this.active || vm.stow > 0.1;
 
     // ---- Middle-finger emote: T raises it and it stays up; T again, a
@@ -452,6 +473,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     if (vm.reloading || inTakedown || !this.player.alive) this.emote.cancel();
     this.weapon.hideSupportHand = this.emote.engaged;
     this.shotgun.hideSupportHand = this.emote.engaged;
+    this.rifle.hideSupportHand = this.emote.engaged;
 
     // Aim down sights on right mouse (sprinting drops the aim)
     const aiming =
@@ -466,16 +488,17 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
     this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
+    this.rifle.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'rifle');
     this.emote.update(dt, this.player);
     // FOV zoom while aiming (the shotgun's bead zooms less than the irons)
-    const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend;
+    const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend - 20 * this.rifle.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
     }
-    this.hud.setAiming(Math.max(this.weapon.aimBlend, this.shotgun.aimBlend) > 0.5);
+    this.hud.setAiming(Math.max(this.weapon.aimBlend, this.shotgun.aimBlend, this.rifle.aimBlend) > 0.5);
 
-    // Player shooting (semi-auto pistol; pump-paced shotgun)
+    // Player shooting (semi-auto pistol; pump-paced shotgun; full-auto rifle)
     this.fireCooldown -= dt;
     // (no firing at a sprint — the gun is down by your hip; let go of Shift first)
     const canFire =
@@ -485,11 +508,23 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       !this.player.sprinting &&
       !vm.reloading &&
       !switching &&
-      (this.active === 'pistol' || !this.shotgun.pumping);
+      (this.active !== 'shotgun' || !this.shotgun.pumping);
     const clicked = input.consumeClick();
     if (clicked && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {
       // Interrupt the shell loop to get back in the fight
       this.shotgun.cancelReload();
+    } else if (this.active === 'rifle') {
+      // Hold the trigger: it keeps cycling until the mag runs dry
+      if (input.mouseHeld && canFire) {
+        if (this.rifleAmmo > 0) {
+          this.fireCooldown = RIFLE_COOLDOWN;
+          this.rifleAmmo--;
+          this.playerShootRifle();
+        } else if (clicked) {
+          this.ctx.audio.dryFire();
+          if (!this.player.sprinting) this.startRifleReload();
+        }
+      }
     } else if (clicked && canFire) {
       if (this.active === 'pistol') {
         if (this.ammo > 0) {
@@ -515,9 +550,11 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     if (input.wasPressed('KeyR') && this.player.alive && !this.player.sprinting && !switching) {
       if (this.active === 'pistol' && this.ammo < MAG_SIZE) this.startReload();
       else if (this.active === 'shotgun' && this.shells < TUBE_SIZE && !this.shotgun.pumping) this.startShotgunReload();
+      else if (this.active === 'rifle' && this.rifleAmmo < RIFLE_MAG) this.startRifleReload();
     }
     if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
-    else this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
+    else if (this.active === 'shotgun') this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
+    else this.hud.setAmmo(this.rifleAmmo, RIFLE_MAG, this.rifle.reloading);
 
     // Enemies + AI
     let anyAttacking = false;
@@ -635,6 +672,59 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     if (this.shotgun.startReload(TUBE_SIZE - this.shells)) {
       this.player.aiming = false;
     }
+  }
+
+  private startRifleReload(): void {
+    if (this.rifle.startReload()) {
+      this.player.aiming = false;
+    }
+  }
+
+  /** The AK's empty mag, flicked out forward by the fresh one, lands in the level. */
+  private dropRifleMagazine(): void {
+    const mesh = this.rifle.makeDroppedMag();
+    if (!mesh) return;
+    const { position, quaternion, direction } = this.rifle.ejectedMagPose();
+    mesh.position.copy(position);
+    mesh.quaternion.copy(quaternion);
+    const body = new CANNON.Body({
+      mass: 0.4,
+      shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.075, 0.014)),
+      position: new CANNON.Vec3(position.x, position.y, position.z),
+      linearDamping: 0.05,
+      angularDamping: 0.25
+    });
+    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+    const v = direction.clone().multiplyScalar(2.6 + Math.random() * 0.8).add(this.player.velocity);
+    body.velocity.set(v.x, v.y, v.z);
+    body.angularVelocity.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, 4 + Math.random() * 4);
+    this.addDebris(mesh, body);
+  }
+
+  private playerShootRifle(): void {
+    const { audio, bus } = this.ctx;
+    audio.rifleShot();
+    this.rifle.fire();
+    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 36, kind: 'gunshot' });
+
+    // Hip fire walks all over the place; on the irons it groups, and every
+    // shot kicks the muzzle up a touch so a long burst climbs
+    const speedFactor = this.player.currentSpeed / 6.6;
+    let spread = 0.012 + speedFactor * 0.03 + (this.player.crouching ? -0.003 : 0);
+    spread *= 1 - 0.7 * this.rifle.aimBlend;
+    this.player.pitch += 0.006 + Math.random() * 0.004;
+    this.player.yaw += (Math.random() - 0.5) * 0.006;
+
+    const eye = this.player.eyePosition();
+    const dir = new THREE.Vector3();
+    this.player.camera.getWorldDirection(dir);
+    dir.x += (Math.random() - 0.5) * spread * 2;
+    dir.y += (Math.random() - 0.5) * spread * 2;
+    dir.z += (Math.random() - 0.5) * spread * 2;
+    dir.normalize();
+
+    const end = this.castBullet(eye, dir, null);
+    this.particles.tracer(this.rifle.muzzleWorld(), end);
   }
 
   /** The pump flicks the spent hull out the port; it becomes a real object. */

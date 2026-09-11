@@ -327,6 +327,34 @@ export class AudioManager {
     this.noise(0.5, 'bandpass', 500, 0.14, true, 0.7);
   }
 
+  /** 7.62 rifle: harder crack than the pistol, more body, longer tail. */
+  rifleShot(): void {
+    if (!this.ctx) return;
+    this.noise(0.05, 'highpass', 2600, 0.6);
+    this.noise(0.2, 'lowpass', 700, 0.85);
+    this.tone('square', 130, 34, 0.15, 0.45);
+    this.noise(0.6, 'bandpass', 420, 0.16, true, 0.7);
+  }
+
+  /** The fresh mag's spine hitting the release paddle. */
+  magStrike(): void {
+    this.tone('square', 1300, 500, 0.03, 0.14);
+    this.noise(0.04, 'highpass', 2000, 0.16);
+  }
+
+  /** Charging handle hauled back against the recoil spring. */
+  boltBack(): void {
+    this.noise(0.05, 'bandpass', 1500, 0.22, true, 2);
+    this.tone('square', 700, 260, 0.05, 0.14);
+  }
+
+  /** Bolt carrier slamming home. */
+  boltForward(): void {
+    this.noise(0.05, 'lowpass', 900, 0.42);
+    this.tone('square', 520, 180, 0.06, 0.22);
+    this.noise(0.03, 'highpass', 2800, 0.14);
+  }
+
   shotgunBlast(): void {
     if (!this.ctx) return;
     // Wider, deeper than the pistol: big low-end body, broadband crack,

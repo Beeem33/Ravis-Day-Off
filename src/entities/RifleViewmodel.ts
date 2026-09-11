@@ -1,0 +1,485 @@
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type { FPSPlayer } from './FPSPlayer';
+
+/**
+ * RifleViewmodel — the AK-47, loaded from models/ak47.glb and parented to
+ * the camera like the pistol and shotgun. Same sway / bob / recoil
+ * treatment, full-auto with a cycling bolt, and a speed reload driven off
+ * the model's own pivots:
+ *
+ *   1. the left hand drops off-frame and comes back up holding a fresh mag
+ *   2. the fresh mag's spine knocks the release and flicks the empty mag
+ *      out FORWARD (it becomes a real object in the level)
+ *   3. the fresh mag hooks its front lug and rocks back into the well
+ *   4. the left hand comes over the top and racks the charging handle
+ *
+ * The butt-cheek keychain on the receiver is a real pendulum: it is driven
+ * by the world-space acceleration of its hinge, so it swings with head bob,
+ * mouse flicks, recoil, jumps and reloads and settles when Ravi stands still.
+ */
+export type RifleReloadEvent = 'grab' | 'strike' | 'magOut' | 'magDrop' | 'magIn' | 'rackBack' | 'rack' | 'done';
+
+const SCALE = 0.72;
+/** glb metres → gun-local metres. The glb points its muzzle down +X; the viewmodel convention is −Z. */
+const gl = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(z * SCALE, y * SCALE, -x * SCALE);
+
+export class RifleViewmodel {
+  readonly root = new THREE.Group();
+  private gun = new THREE.Group();
+  /** The glTF scene, rotated so its +X muzzle points down gun-local −Z. */
+  private model = new THREE.Group();
+  private muzzle = new THREE.Object3D();
+  private magCentre = new THREE.Object3D();
+  private flashSprite: THREE.Sprite;
+  private flashLight: THREE.PointLight;
+  private magPivot: THREE.Object3D | null = null;
+  private boltPivot: THREE.Object3D | null = null;
+  private charmPivot: THREE.Object3D | null = null;
+  /** A second magazine, carried by the left hand during the reload. */
+  private handMag: THREE.Group | null = null;
+  private magTemplate: THREE.Group | null = null;
+  loaded = false;
+
+  private swayX = 0;
+  private swayY = 0;
+  private recoil = 0;
+  private boltKick = 0;
+  private flashTimer = 0;
+
+  private basePos = new THREE.Vector3(0.2, -0.235, -0.47);
+  private baseRot = new THREE.Euler(0.02, -0.07, 0);
+  /** Aim pose: rear sight notch under the crosshair. */
+  private aimPos = new THREE.Vector3(0, -0.056, -0.3);
+  private sprintPos = new THREE.Vector3(0.08, -0.3, -0.45);
+  private sprintRot = new THREE.Euler(-0.4, 0.7, 0.5);
+
+  aimBlend = 0;
+  /** 1 = stowed out of frame, 0 = in hand (drives weapon switching). */
+  stow = 1;
+  private sprintBlend = 0;
+
+  // ---- Hands
+  private supportHand!: THREE.Mesh;
+  private handHome = gl(0.255, -0.035, 0); // under the lower handguard
+  /** True while the emote borrows the left hand — hides the support hand. */
+  hideSupportHand = false;
+
+  // ---- Reload
+  reloading = false;
+  private reloadT = 0;
+  private reloadFired = new Set<string>();
+  static readonly RELOAD_TIME = 2.1;
+  onReloadEvent: ((e: RifleReloadEvent) => void) | null = null;
+
+  // ---- Keychain pendulum (angles in the glb frame: X forward, Y up, Z right)
+  private charm = { swing: 0, side: 0, vSwing: 0, vSide: 0, ready: false };
+  private charmPrevPos = new THREE.Vector3();
+  private charmPrevVel = new THREE.Vector3();
+  private static readonly CHARM_LENGTH = 0.045;
+
+  constructor(camera: THREE.PerspectiveCamera) {
+    camera.add(this.root);
+    this.root.position.copy(this.basePos);
+    this.root.add(this.gun);
+    this.model.rotation.y = Math.PI / 2;
+    this.model.scale.setScalar(SCALE);
+    this.gun.add(this.model);
+    this.muzzle.position.copy(gl(0.58, 0.022, 0));
+    this.gun.add(this.muzzle);
+    this.magCentre.position.copy(gl(0.1, -0.08, 0));
+    this.gun.add(this.magCentre);
+
+    // Hands + forearms, same treatment as the other guns so the arms read on screen
+    const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
+    const sleeve = new THREE.MeshStandardMaterial({ color: 0x4d6f9c, roughness: 0.9 });
+    const mkForearm = (parent: THREE.Object3D, toward: THREE.Vector3) => {
+      const len = toward.length();
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, len), skin);
+      arm.position.copy(toward).multiplyScalar(0.5);
+      arm.lookAt(toward.clone().multiplyScalar(2));
+      parent.add(arm);
+      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), sleeve);
+      cuff.position.copy(toward).multiplyScalar(0.72);
+      cuff.lookAt(toward.clone().multiplyScalar(2));
+      parent.add(cuff);
+    };
+    // Right hand around the wooden grip
+    const gripHand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.075, 0.06), skin);
+    gripHand.position.copy(gl(-0.08, -0.05, 0));
+    gripHand.rotation.x = 0.4;
+    this.gun.add(gripHand);
+    mkForearm(gripHand, new THREE.Vector3(0.15, -0.2, 0.3));
+    // Left hand cupping the handguard
+    this.supportHand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.06, 0.075), skin);
+    this.supportHand.position.copy(this.handHome);
+    this.gun.add(this.supportHand);
+    mkForearm(this.supportHand, new THREE.Vector3(-0.18, -0.22, 0.3));
+
+    // Muzzle flash sprite + light
+    const flashTex = RifleViewmodel.makeFlashTexture();
+    this.flashSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })
+    );
+    this.flashSprite.scale.setScalar(0.2);
+    this.flashSprite.visible = false;
+    this.muzzle.add(this.flashSprite);
+    this.flashLight = new THREE.PointLight(0xffb45e, 0, 5, 1.9);
+    this.flashLight.visible = false;
+    this.muzzle.add(this.flashLight);
+
+    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/ak47.glb`, (gltf) => {
+      const scene = gltf.scene;
+      scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = false;
+          m.receiveShadow = false;
+          m.frustumCulled = false; // it lives inside the near plane's neighbourhood
+        }
+      });
+      this.model.add(scene);
+      this.magPivot = scene.getObjectByName('MagPivot') ?? null;
+      this.boltPivot = scene.getObjectByName('BoltPivot') ?? null;
+      this.charmPivot = scene.getObjectByName('CharmPivot') ?? null;
+      if (this.magPivot) {
+        // A copy of the magazine for the left hand to carry in, and one to
+        // stamp out physical dropped mags from
+        this.magTemplate = new THREE.Group();
+        for (const child of this.magPivot.children) this.magTemplate.add(child.clone(true));
+        this.handMag = this.magTemplate.clone(true);
+        this.handMag.rotation.y = Math.PI / 2;
+        this.handMag.scale.setScalar(SCALE);
+        this.handMag.visible = false;
+        this.supportHand.add(this.handMag);
+      }
+      this.loaded = true;
+    });
+  }
+
+  private static makeFlashTexture(): THREE.Texture {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(32, 32, 1, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(255,250,220,1)');
+    grad.addColorStop(0.3, 'rgba(255,190,90,0.85)');
+    grad.addColorStop(1, 'rgba(255,120,20,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = 'rgba(255,230,160,0.9)';
+    g.lineWidth = 3;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI + Math.random() * 0.3;
+      g.beginPath();
+      g.moveTo(32 - Math.cos(a) * 30, 32 - Math.sin(a) * 30);
+      g.lineTo(32 + Math.cos(a) * 30, 32 + Math.sin(a) * 30);
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /** World-space muzzle position (for tracers). */
+  muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    return this.muzzle.getWorldPosition(out);
+  }
+
+  /**
+   * World pose of the magazine as it leaves the well, plus the direction it
+   * was flicked (forward and down), so the scene can hand it to physics.
+   */
+  ejectedMagPose(): { position: THREE.Vector3; quaternion: THREE.Quaternion; direction: THREE.Vector3 } {
+    this.magCentre.updateWorldMatrix(true, false);
+    const position = this.magCentre.getWorldPosition(new THREE.Vector3());
+    const quaternion = this.magPivot
+      ? this.magPivot.getWorldQuaternion(new THREE.Quaternion())
+      : this.gun.getWorldQuaternion(new THREE.Quaternion());
+    const gunQ = this.gun.getWorldQuaternion(new THREE.Quaternion());
+    const direction = new THREE.Vector3(0.05, -0.45, -1).applyQuaternion(gunQ).normalize();
+    return { position, quaternion, direction };
+  }
+
+  /** A fresh copy of the magazine mesh at world scale, for the dropped-mag prop. */
+  makeDroppedMag(): THREE.Group | null {
+    if (!this.magTemplate) return null;
+    const g = new THREE.Group();
+    const copy = this.magTemplate.clone(true);
+    copy.scale.setScalar(SCALE);
+    // The template's origin is the mag's front lug; centre it on the body
+    copy.position.set(0, 0.08 * SCALE, 0);
+    g.add(copy);
+    return g;
+  }
+
+  /** Begin the reload animation. Returns false if one is already running. */
+  startReload(): boolean {
+    if (this.reloading) return false;
+    this.reloading = true;
+    this.reloadT = 0;
+    this.reloadFired.clear();
+    return true;
+  }
+
+  private reloadEvent(name: RifleReloadEvent): void {
+    if (this.reloadFired.has(name)) return;
+    this.reloadFired.add(name);
+    this.onReloadEvent?.(name);
+  }
+
+  fire(): void {
+    this.recoil = 1;
+    this.boltKick = 1;
+    this.flashTimer = 0.04;
+    this.flashSprite.visible = true;
+    this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
+    this.flashLight.visible = true;
+    this.flashLight.intensity = 4;
+    // The keychain gets a jolt off every shot
+    this.charm.vSwing += 6 + Math.random() * 3;
+    this.charm.vSide += (Math.random() - 0.5) * 5;
+  }
+
+  /**
+   * Drives the reload. Returns [rotX, rotY, rotZ, posX, posY, posZ] offsets
+   * for the gun root; mutates the model's pivots and the left hand directly.
+   */
+  private updateReload(dt: number): [number, number, number, number, number, number] {
+    const mag = this.magPivot;
+    const bolt = this.boltPivot;
+    if (!this.reloading) {
+      this.supportHand.position.copy(this.handHome);
+      this.supportHand.rotation.set(0, 0, 0);
+      if (this.handMag) this.handMag.visible = false;
+      if (mag) {
+        mag.visible = true;
+        mag.rotation.set(0, 0, 0);
+        mag.position.set(0.109, 0, 0);
+      }
+      return [0, 0, 0, 0, 0, 0];
+    }
+    this.reloadT += dt;
+    const t = this.reloadT;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    const T = RifleViewmodel.RELOAD_TIME;
+
+    // Bring the rifle in and cant it so the mag well faces the camera, hold
+    // that for the mag swap, then roll the other way to expose the charging
+    // handle for the rack, then back to the ready.
+    const inBlend = ease(c01(t / 0.25)) * (1 - ease(c01((t - (T - 0.3)) / 0.3)));
+    const rackBlend = ease(c01((t - 1.25) / 0.22)) * (1 - ease(c01((t - 1.82) / 0.25)));
+    // Camera sits off the rifle's left flank, so: lift the gun into frame,
+    // pull it toward the centre, muzzle up a touch, and roll the top AWAY so
+    // the underside / mag well (and later the charging handle) face the eye.
+    const posX = -0.12 * inBlend;
+    const posY = 0.11 * inBlend;
+    const posZ = 0.04 * inBlend;
+    let rotX = 0.3 * inBlend - 0.08 * rackBlend;
+    const rotY = 0.2 * inBlend + 0.1 * rackBlend;
+    const rotZ = -0.6 * inBlend + 0.25 * rackBlend;
+
+    const offscreen = new THREE.Vector3(-0.28, -0.46, 0.06);
+    const strikeFrom = gl(0.26, -0.24, -0.02); // below and ahead of the well, mag in hand
+    const strikeAt = gl(0.145, -0.185, -0.015); // mag spine on the release paddle
+    const seatFrom = gl(0.17, -0.19, -0.01); // lug hooked, mag still tilted forward
+    const seatAt = gl(0.11, -0.17, 0); // rocked back and latched
+    const overTop = gl(0.03, 0.09, -0.06); // hand travelling over the receiver
+    const onHandle = gl(0.03, 0.055, -0.045); // fingers on the charging handle
+    const handMagLocal = (rot: number) => {
+      // The lug rides 7 cm above the palm; tilt is about the mag's own lug
+      if (!this.handMag) return;
+      this.handMag.position.set(0, 0.07, 0);
+      this.handMag.rotation.set(0, Math.PI / 2, 0);
+      this.handMag.rotateZ(rot);
+    };
+
+    if (t < 0.3) {
+      // Hand lets go of the handguard and drops out of frame for a mag
+      const k = ease(c01(t / 0.3));
+      this.supportHand.position.lerpVectors(this.handHome, offscreen, k);
+      this.supportHand.rotation.set(0.3 * k, 0, 0);
+      if (this.handMag) this.handMag.visible = false;
+      if (k > 0.5) this.reloadEvent('grab');
+    } else if (t < 0.62) {
+      // Up it comes with a fresh mag, driven at the release paddle
+      const k = ease(c01((t - 0.3) / 0.32));
+      if (this.handMag) this.handMag.visible = true;
+      this.supportHand.position.lerpVectors(k < 0.6 ? offscreen : strikeFrom, k < 0.6 ? strikeFrom : strikeAt, k < 0.6 ? k / 0.6 : (k - 0.6) / 0.4);
+      this.supportHand.rotation.set(0.15, 0, 0.1);
+      handMagLocal(0.55 - 0.15 * k);
+      if (k > 0.95) this.reloadEvent('strike');
+    } else if (t < 0.86) {
+      // The fresh mag's spine knocks the old one loose: it rocks forward off
+      // its lug and flies out ahead of the gun
+      const k = c01((t - 0.62) / 0.24);
+      this.reloadEvent('magOut');
+      if (mag) {
+        mag.rotation.set(0, 0, 0.9 * ease(Math.min(1, k * 1.6)));
+        mag.position.set(0.109 + 0.18 * k * k, -0.12 * k * k, 0);
+        if (k > 0.72) {
+          if (mag.visible) this.reloadEvent('magDrop');
+          mag.visible = false;
+        }
+      }
+      // The hand follows through a touch, then draws back to hook the lug
+      const follow = Math.sin(Math.min(1, k * 1.4) * Math.PI) * 0.03;
+      this.supportHand.position.copy(strikeAt).add(new THREE.Vector3(0, -0.01 * k, -follow));
+      handMagLocal(0.4);
+    } else if (t < 1.25) {
+      // Hook the front lug and rock the mag back into the well
+      const k = ease(c01((t - 0.86) / 0.39));
+      this.supportHand.position.lerpVectors(seatFrom, seatAt, k);
+      this.supportHand.rotation.set(0.15 * (1 - k), 0, 0.1 * (1 - k));
+      handMagLocal(0.45 * (1 - k));
+      if (k > 0.985) {
+        if (this.handMag) this.handMag.visible = false;
+        if (mag) {
+          mag.visible = true;
+          mag.rotation.set(0, 0, 0);
+          mag.position.set(0.109, 0, 0);
+        }
+        this.reloadEvent('magIn');
+      }
+      // Latching jolt
+      rotX += -0.1 * Math.sin(c01((k - 0.9) / 0.1) * Math.PI);
+    } else if (t < 1.5) {
+      // Left hand comes up and over the receiver to the charging handle
+      const k = ease(c01((t - 1.25) / 0.25));
+      const p = k < 0.5 ? new THREE.Vector3().lerpVectors(seatAt, overTop, ease(k / 0.5)) : new THREE.Vector3().lerpVectors(overTop, onHandle, ease((k - 0.5) / 0.5));
+      this.supportHand.position.copy(p);
+      this.supportHand.rotation.set(-0.5 * k, 0, 0.9 * k);
+    } else if (t < 1.82) {
+      // Rack: haul the bolt back (slow), let it fly forward (fast)
+      const k = c01((t - 1.5) / 0.32);
+      const pull = k < 0.62 ? ease(k / 0.62) : 1 - ease(((k - 0.62) / 0.38) ** 0.4);
+      if (bolt) bolt.position.set(0.03 - 0.105 * pull, bolt.position.y, bolt.position.z);
+      this.supportHand.position.copy(onHandle).add(new THREE.Vector3(0, 0, 0.105 * SCALE * pull));
+      this.supportHand.rotation.set(-0.5, 0, 0.9);
+      if (k > 0.58) this.reloadEvent('rackBack');
+      if (k > 0.75) this.reloadEvent('rack');
+      rotX += 0.06 * Math.sin(k * Math.PI);
+    } else {
+      // Hand back to the handguard, done
+      const k = ease(c01((t - 1.82) / 0.28));
+      if (bolt) bolt.position.set(0.03, bolt.position.y, bolt.position.z);
+      this.supportHand.position.lerpVectors(onHandle, this.handHome, k);
+      this.supportHand.rotation.set(-0.5 * (1 - k), 0, 0.9 * (1 - k));
+      if (t >= T) {
+        this.reloading = false;
+        this.reloadEvent('done');
+      }
+    }
+    return [rotX, rotY, rotZ, posX, posY, posZ];
+  }
+
+  /**
+   * Keychain pendulum. Uses the hinge's world-space motion between frames as
+   * the drive, so anything that moves the gun — walking, sprinting, jumping,
+   * turning, recoil, the reload itself — swings it, and gravity always pulls
+   * it toward the world's "down" however the rifle is tilted.
+   */
+  private updateCharm(dt: number): void {
+    const pivot = this.charmPivot;
+    if (!pivot || dt <= 0) return;
+    const c = this.charm;
+    const L = RifleViewmodel.CHARM_LENGTH;
+    this.root.updateWorldMatrix(true, true);
+    const pos = pivot.getWorldPosition(new THREE.Vector3());
+    if (!c.ready || !this.root.visible) {
+      this.charmPrevPos.copy(pos);
+      this.charmPrevVel.set(0, 0, 0);
+      c.ready = true;
+      pivot.rotation.set(0, 0, 0);
+      return;
+    }
+    const vel = pos.clone().sub(this.charmPrevPos).divideScalar(dt);
+    const acc = vel.clone().sub(this.charmPrevVel).divideScalar(dt);
+    this.charmPrevPos.copy(pos);
+    this.charmPrevVel.copy(vel);
+
+    // Into the glb frame (X forward, Y up, Z right) of the rifle
+    const invQ = this.model.getWorldQuaternion(new THREE.Quaternion()).invert();
+    acc.applyQuaternion(invQ);
+    const down = new THREE.Vector3(0, -1, 0).applyQuaternion(invQ);
+    const clamp = (v: number, m: number) => Math.max(-m, Math.min(m, v));
+    const ax = clamp(acc.x, 40);
+    const az = clamp(acc.z, 40);
+    const restSwing = Math.atan2(down.x, -down.y); // where it hangs with the gun tilted fore/aft
+    const restSide = Math.atan2(-down.z, -down.y);
+    const g = 9.81 / L;
+    const damp = 2.4;
+    c.vSwing += (-g * Math.sin(c.swing - restSwing) - damp * c.vSwing - ax / L) * dt;
+    c.vSide += (-g * Math.sin(c.side - restSide) - damp * c.vSide + az / L) * dt;
+    c.swing = clamp(c.swing + c.vSwing * dt, 1.35);
+    c.side = clamp(c.side + c.vSide * dt, 1.35);
+    pivot.rotation.set(c.side, 0, c.swing);
+  }
+
+  update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
+    this.supportHand.visible = !this.hideSupportHand;
+    const sprinting = player.sprinting && player.currentSpeed > 4.5;
+    const [rlX, rlY, rlZ, rlPosX, rlPosY, rlPosZ] = this.updateReload(dt);
+    this.aimBlend += ((aiming && !sprinting && !this.reloading ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
+    this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
+    const a = this.aimBlend;
+    const sp = this.sprintBlend;
+
+    const swayScale = 1 - 0.75 * a;
+    this.swayX += (-mouseDX * 0.00009 * swayScale - this.swayX) * Math.min(1, dt * 10);
+    this.swayY += (mouseDY * 0.00009 * swayScale - this.swayY) * Math.min(1, dt * 10);
+
+    const { phase, amount } = player.bob;
+    const bobScale = (1 - 0.7 * a) * (1 + 1.6 * sp);
+    const bobX = Math.sin(phase) * 0.012 * amount * bobScale;
+    const bobY = -Math.abs(Math.sin(phase)) * 0.012 * amount * bobScale - (player.crouching ? 0.02 : 0) * (1 - a);
+    const sprintSwayX = Math.sin(phase) * 0.035 * sp;
+    const sprintSwayY = Math.sin(phase * 2) * 0.018 * sp;
+    const sprintRoll = -Math.sin(phase) * 0.08 * sp;
+
+    // Rifle recoil: sharp, and the bolt carrier cycles with every shot
+    this.recoil = Math.max(0, this.recoil - dt * 9);
+    this.boltKick = Math.max(0, this.boltKick - dt * 16);
+    const r = this.recoil * this.recoil * (1 - 0.35 * a);
+    if (this.boltPivot && !this.reloading) {
+      const cycle = Math.sin(Math.min(1, this.boltKick) * Math.PI);
+      this.boltPivot.position.x = 0.03 - 0.105 * cycle;
+    }
+
+    const px = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.x, this.aimPos.x, a), this.sprintPos.x, sp);
+    const py = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.y, this.aimPos.y, a), this.sprintPos.y, sp);
+    const pz = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.z, this.aimPos.z, a), this.sprintPos.z, sp);
+
+    this.root.position.set(
+      px + this.swayX + bobX + sprintSwayX + rlPosX,
+      py + this.swayY + bobY + sprintSwayY + r * 0.012 + rlPosY,
+      pz + r * 0.07 + rlPosZ
+    );
+    this.root.rotation.set(
+      -r * 0.22 + this.swayY * 3 + this.sprintRot.x * sp + rlX + this.baseRot.x * (1 - a),
+      this.swayX * 3 + this.sprintRot.y * sp + rlY + this.baseRot.y * (1 - a),
+      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ + (Math.random() - 0.5) * r * 0.04
+    );
+
+    // Draw / stow: swing down out of frame
+    if (this.stow > 0.0001) {
+      const s = this.stow;
+      this.root.position.y -= s * 0.55;
+      this.root.position.z += s * 0.14;
+      this.root.rotation.x -= s * 1.1;
+    }
+    this.root.visible = this.stow < 0.995;
+
+    this.updateCharm(dt);
+
+    if (this.flashTimer > 0) {
+      this.flashTimer -= dt;
+      this.flashLight.intensity *= 0.55;
+      if (this.flashTimer <= 0) {
+        this.flashSprite.visible = false;
+        this.flashLight.visible = false;
+      }
+    }
+  }
+}

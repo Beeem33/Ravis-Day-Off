@@ -923,8 +923,16 @@ export class Level4Builder {
   private mergeDressing(): void {
     this.group.updateMatrixWorld(true);
     const roots = this.group.children.filter((o) => o.userData.placed || o.userData.mounted);
-    const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
-    const spent: THREE.Mesh[] = [];
+    const buckets = new Map<THREE.Material, { geo: THREE.BufferGeometry; src: THREE.Mesh }[]>();
+    /**
+     * Anything the merge cannot swallow. It has to be put back by hand, because
+     * the roots are deleted wholesale at the end — skipping something here and
+     * deleting it anyway is how the pictures vanished the first time and the
+     * vending machine shells the second. A shell is a multi-material box: its
+     * sides and its front are different materials, so it never went into a
+     * bucket, and with the body gone you could see straight through the sides.
+     */
+    const salvage: { obj: THREE.Object3D; world: THREE.Matrix4 }[] = [];
 
     for (const root of roots) {
       this.dressingBoxes.push(new THREE.Box3().setFromObject(root));
@@ -933,43 +941,61 @@ export class Level4Builder {
       }
       root.traverse((o) => {
         const m = o as THREE.Mesh;
-        // Multi-material meshes (the book covers) and sprites stay as they are
-        if (!m.isMesh || Array.isArray(m.material) || !m.geometry) return;
-        const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+        if (!m.isMesh || !m.geometry || Array.isArray(m.material)) {
+          // Groups carry nothing of their own; everything else has to survive
+          if (!(o as THREE.Group).isGroup) salvage.push({ obj: o, world: o.matrixWorld.clone() });
+          return;
+        }
+        const geo = m.geometry.clone().applyMatrix4(m.matrixWorld);
         const mat = m.material as THREE.Material;
         const list = buckets.get(mat);
-        if (list) list.push(g);
-        else buckets.set(mat, [g]);
-        spent.push(m);
+        if (list) list.push({ geo, src: m });
+        else buckets.set(mat, [{ geo, src: m }]);
       });
     }
 
-    let merged = 0;
-    for (const [mat, geos] of buckets) {
-      // Every bucket gets rebuilt, including the ones holding a single mesh.
-      // Skipping those and then deleting the originals anyway is how the
-      // pictures disappeared: each artwork has a material of its own, so its
-      // bucket has one entry, so it was never rebuilt and never came back.
-      // Everything has to agree on its attributes before it can be merged
-      const flat = geos.map((g) => (g.index ? g.toNonIndexed() : g));
+    const folded = new Set<THREE.Object3D>();
+    for (const [mat, entries] of buckets) {
+      const flat = entries.map((e) => (e.geo.index ? e.geo.toNonIndexed() : e.geo));
       const keys = Object.keys(flat[0].attributes).sort().join(',');
-      if (!flat.every((g) => Object.keys(g.attributes).sort().join(',') === keys)) continue;
-      const one = mergeGeometries(flat, false);
-      if (!one) continue;
+      const ok = flat.every((g) => Object.keys(g.attributes).sort().join(',') === keys);
+      const one = ok ? mergeGeometries(flat, false) : null;
+      if (!one) {
+        // Could not be combined — hand every one of them back intact
+        for (const e of entries) {
+          salvage.push({ obj: e.src, world: e.src.matrixWorld.clone() });
+          e.geo.dispose();
+        }
+        continue;
+      }
       const mesh = new THREE.Mesh(one, mat);
       mesh.userData.surface = 'wood';
       mesh.frustumCulled = false;
       this.group.add(mesh);
       this.shootables.push(mesh);
-      merged++;
-      for (const g of geos) g.dispose();
+      for (const e of entries) {
+        folded.add(e.src);
+        e.geo.dispose();
+      }
     }
-    if (merged === 0) return;
 
-    // Drop what was folded in, from the scene and from the bullet targets
-    const gone = new Set<THREE.Object3D>(spent);
+    // Detach the originals, then put the salvaged ones back with their world
+    // transform baked into the geometry so they stand where they always did.
     for (const root of roots) root.removeFromParent();
-    this.shootables = this.shootables.filter((o) => !gone.has(o));
+    for (const { obj, world } of salvage) {
+      obj.removeFromParent();
+      const m = obj as THREE.Mesh;
+      if (m.isMesh && m.geometry) {
+        m.geometry = m.geometry.clone().applyMatrix4(world);
+        obj.position.set(0, 0, 0);
+        obj.rotation.set(0, 0, 0);
+        obj.scale.set(1, 1, 1);
+      } else {
+        world.decompose(obj.position, obj.quaternion, obj.scale);
+      }
+      this.group.add(obj);
+    }
+    this.shootables = this.shootables.filter((o) => !folded.has(o));
   }
 
   private buildDressing(): void {

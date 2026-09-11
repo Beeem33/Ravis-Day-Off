@@ -7,11 +7,11 @@ import { CRTPass } from '../fx/CRTShader';
 import { MenuUI } from '../ui/MenuUI';
 
 /**
- * MainMenuScene — the poster shot. Ravi sits behind a bare wooden table,
- * head bowed under the brim of a fedora, hands clasped in front of his
- * face, elbows planted. One hard light overhead; everything else falls
- * into black. His pistol and a few loose rounds sit at the far edge of
- * the table, just inside the light. The frame goes through the CRT shader.
+ * MainMenuScene — the poster shot. Ravi sits square to the camera in an
+ * office chair, hunched forward, forearms on his thighs, his pistol held
+ * loose in the right hand and resting on the thigh, muzzle tipped past
+ * the knee. One hard light overhead; everything else falls into black.
+ * The frame goes through the CRT shader.
  */
 export class MainMenuScene implements GameScene {
   private scene = new THREE.Scene();
@@ -78,97 +78,25 @@ export class MainMenuScene implements GameScene {
     floor.position.set(0, -0.1, 0);
     s.add(floor);
 
-    // The table: a broad wooden top filling the bottom of the frame
-    const wood = new THREE.MeshStandardMaterial({ color: 0x5c4026, roughness: 0.75 });
-    const tableTop = new THREE.Mesh(new RoundedBoxGeometry(3.4, 0.09, 1.7, 3, 0.04), wood);
-    tableTop.position.set(0, 0.78, 0.55);
-    s.add(tableTop);
-    const skirt = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.1, 1.5), this.lam(0x3a2917));
-    skirt.position.set(0, 0.7, 0.55);
-    s.add(skirt);
-
-    // His pistol and a few rounds at the table's edge, half in shadow
-    const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
-    const pistol = new THREE.Group();
-    const slide = new THREE.Mesh(new RoundedBoxGeometry(0.035, 0.045, 0.2, 2, 0.01), steel);
-    pistol.add(slide);
-    const grip = new THREE.Mesh(new RoundedBoxGeometry(0.03, 0.1, 0.045, 2, 0.01), this.lam(0x3a3228));
-    grip.position.set(0, -0.045, 0.075);
-    grip.rotation.x = 0.25;
-    pistol.add(grip);
-    pistol.position.set(0.85, 0.845, 0.75);
-    pistol.rotation.set(Math.PI / 2 - 0.02, 0, 2.3);
-    s.add(pistol);
-    const brass = new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.8, roughness: 0.35 });
+    // The office chair he sits on — dark, mostly swallowed by the black
+    const chairMat = this.lam(0x181a1e);
+    const seat = new THREE.Mesh(new RoundedBoxGeometry(0.72, 0.09, 0.62, 3, 0.03), chairMat);
+    seat.position.set(0, 0.52, -0.18);
+    s.add(seat);
+    const backrest = new THREE.Mesh(new RoundedBoxGeometry(0.68, 0.85, 0.1, 3, 0.04), chairMat);
+    backrest.position.set(0, 1.0, -0.52);
+    backrest.rotation.x = -0.1;
+    s.add(backrest);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.46, 10), this.lam(0x0e0f11));
+    post.position.set(0, 0.26, -0.18);
+    s.add(post);
     for (let i = 0; i < 5; i++) {
-      const round = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.024, 8), brass);
-      const a = Math.random() * Math.PI * 2;
-      const d = Math.random() * 0.04;
-      round.position.set(1.05 + Math.cos(a) * d, 0.832 + (i < 1 ? 0.011 : 0), 0.62 + Math.sin(a) * d);
-      round.rotation.set(Math.PI / 2, 0, Math.random() * Math.PI * 2);
-      s.add(round);
+      const a = (i / 5) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.32), this.lam(0x0e0f11));
+      spoke.position.set(Math.sin(a) * 0.16, 0.04, -0.18 + Math.cos(a) * 0.16);
+      spoke.rotation.y = a;
+      s.add(spoke);
     }
-
-    // The pump shotgun, lying FLAT ON ITS SIDE across the middle of the
-    // table — the way a gun actually rests when you set it down.
-    const walnut = new THREE.MeshStandardMaterial({ color: 0x4d3a26, roughness: 0.8 });
-    const shotgun = new THREE.Group();
-    // Built along X with Y up; the group is then rolled 90° onto its side
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.6, 12), steel);
-    barrel.rotation.z = Math.PI / 2;
-    barrel.position.set(-0.3, 0.035, 0);
-    shotgun.add(barrel);
-    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.006, 6, 6), brass);
-    bead.position.set(-0.59, 0.052, 0);
-    shotgun.add(bead);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.44, 10), steel);
-    tube.rotation.z = Math.PI / 2;
-    tube.position.set(-0.26, -0.002, 0);
-    shotgun.add(tube);
-    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.085, 0.05, 3, 0.012), steel);
-    receiver.position.set(0.0, 0.012, 0);
-    shotgun.add(receiver);
-    const port = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.03, 0.004), this.lam(0x111));
-    port.position.set(0.01, 0.012, 0.026);
-    shotgun.add(port);
-    // The PUMP: ribbed walnut forend riding the mag tube
-    const forend = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.17, 10), walnut);
-    forend.rotation.z = Math.PI / 2;
-    forend.position.set(-0.24, -0.002, 0);
-    shotgun.add(forend);
-    for (let i = 0; i < 5; i++) {
-      const rib = new THREE.Mesh(new THREE.CylinderGeometry(0.0305, 0.0305, 0.008, 10), this.lam(0x3a2c1c));
-      rib.rotation.z = Math.PI / 2;
-      rib.position.set(-0.3 + i * 0.03, -0.002, 0);
-      shotgun.add(rib);
-    }
-    const actionBar = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.012, 0.01), steel);
-    actionBar.position.set(-0.14, 0.005, 0.02);
-    shotgun.add(actionBar);
-    // Trigger guard + grip swell into the stock
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.012), steel);
-    guard.position.set(0.1, -0.04, 0);
-    shotgun.add(guard);
-    const gripSwell = new THREE.Mesh(new RoundedBoxGeometry(0.09, 0.075, 0.045, 3, 0.018), walnut);
-    gripSwell.position.set(0.15, -0.005, 0);
-    gripSwell.rotation.z = -0.25;
-    shotgun.add(gripSwell);
-    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.26, 0.1, 0.048, 3, 0.02), walnut);
-    stock.position.set(0.31, -0.025, 0);
-    stock.rotation.z = -0.12;
-    shotgun.add(stock);
-    const buttPad = new THREE.Mesh(new RoundedBoxGeometry(0.025, 0.11, 0.05, 2, 0.01), this.lam(0x161616));
-    buttPad.position.set(0.44, -0.035, 0);
-    buttPad.rotation.z = -0.12;
-    shotgun.add(buttPad);
-    // Onto its side: a pure 90° roll so it lies DEAD FLAT on the wood; the
-    // slight yaw comes from a parent group so it can't tip the barrel up.
-    shotgun.rotation.set(-Math.PI / 2, 0, 0);
-    const gunRest = new THREE.Group();
-    gunRest.add(shotgun);
-    gunRest.rotation.y = 0.12;
-    gunRest.position.set(0, 0.851, 0.5);
-    s.add(gunRest);
 
     // ONE hard light overhead, slightly in front — everything the shot has
     this.spot = new THREE.SpotLight(0xdfe8f0, 55, 9, 0.62, 0.55, 1.4);
@@ -178,8 +106,13 @@ export class MainMenuScene implements GameScene {
     s.add(this.spot.target);
     // A breath of ambient so the blacks aren't pure void — darker than the reference
     s.add(new THREE.AmbientLight(0x0a0d12, 0.9));
+    // Low cold fill from the camera side so the lap — hands, pistol, knees —
+    // reads instead of drowning under the overhead cone
+    const lapFill = new THREE.PointLight(0x92a4c0, 4, 4.5, 1.7);
+    lapFill.position.set(0.5, 0.65, 1.7);
+    s.add(lapFill);
 
-    // Dead-centre framing, table edge along the bottom of the frame
+    // Dead-centre framing, cropped at the shins like the reference poster
     this.camera.position.set(0, 1.15, 2.75);
     this.camera.lookAt(0, 1.08, 0);
   }
@@ -198,10 +131,33 @@ export class MainMenuScene implements GameScene {
     const skin = this.lam(0x8a5c3b);
     const hair = new THREE.MeshStandardMaterial({ color: 0x120d09, roughness: 0.95 });
 
-    // Torso leaning slightly forward over the table
+    const trousers = new THREE.MeshStandardMaterial({ color: 0x3a445a, roughness: 0.9 });
+    const shoe = this.lam(0x15171a);
+
+    // Legs first: knees wide, feet planted, thighs running out of the dark
+    // toward the camera — the lap the pistol rests on
+    const limb = (a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
+      const len = a.distanceTo(b);
+      const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.05, len - r), 3, 10), mat);
+      m.position.copy(a).lerp(b, 0.5);
+      m.lookAt(b);
+      m.rotateX(Math.PI / 2);
+      this.ravi.add(m);
+      return m;
+    };
+    for (const side of [-1, 1]) {
+      limb(new THREE.Vector3(side * 0.14, 0.58, -0.2), new THREE.Vector3(side * 0.27, 0.66, 0.28), 0.088, trousers);
+      limb(new THREE.Vector3(side * 0.28, 0.62, 0.32), new THREE.Vector3(side * 0.3, 0.1, 0.36), 0.066, trousers);
+      const foot = new THREE.Mesh(new RoundedBoxGeometry(0.16, 0.11, 0.32, 3, 0.03), shoe);
+      foot.position.set(side * 0.31, 0.055, 0.44);
+      foot.rotation.y = side * 0.15;
+      this.ravi.add(foot);
+    }
+
+    // Torso hunched toward the camera, lap open
     const torso = new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.58, 0.26, 4, 0.09), shirt);
-    torso.position.set(0, 1.02, -0.28);
-    torso.rotation.x = -0.14; // leaning IN, not back
+    torso.position.set(0, 0.92, -0.1);
+    torso.rotation.x = 0.24; // leaning forward, over the gun
     this.ravi.add(torso);
     const tie = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.28), this.lam(0x1f3a6e));
     tie.position.set(0.02, 0.08, 0.134);
@@ -213,16 +169,16 @@ export class MainMenuScene implements GameScene {
     // Shoulders (shirt, not padded)
     for (const side of [-1, 1]) {
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.095, 10, 8), shirt);
-      cap.position.set(side * 0.24, 1.25, -0.28);
+      cap.position.set(side * 0.24, 1.14, -0.02);
       cap.scale.set(1.05, 0.8, 1);
       this.ravi.add(cap);
     }
 
-    // Head BOWED, chin to chest — from this angle it's mostly the dark crown
-    // of his hair over the clasped hands
+    // Head bowed a touch — the eyes stay in the shadow under the brow,
+    // but he is looking straight down the lens
     this.head = new THREE.Group();
-    this.head.position.set(0, 1.42, -0.22);
-    this.head.rotation.x = 0.58;
+    this.head.position.set(0, 1.28, 0.08);
+    this.head.rotation.x = 0.32;
     const skull = new THREE.Mesh(new RoundedBoxGeometry(0.23, 0.26, 0.23, 4, 0.07), skin);
     this.head.add(skull);
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.1, 10), skin);
@@ -237,58 +193,46 @@ export class MainMenuScene implements GameScene {
     this.head.add(backHair);
     this.ravi.add(this.head);
 
-    // Arms: elbows planted wide on the table, forearms rising to the
-    // clasped hands in front of his face
-    const elbowL = new THREE.Vector3(-0.42, 0.86, 0.28);
-    const elbowR = new THREE.Vector3(0.42, 0.86, 0.28);
-    const clasp = new THREE.Vector3(0, 1.18, 0.12);
-    const seg = (a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material) => {
-      const len = a.distanceTo(b);
-      const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.05, len - r), 3, 10), mat);
-      m.position.copy(a).lerp(b, 0.5);
-      m.lookAt(b);
-      m.rotateX(Math.PI / 2);
-      this.ravi.add(m);
-    };
-    // Upper arms from the shoulders down-forward to the elbows (shirt sleeves)
-    seg(new THREE.Vector3(-0.26, 1.24, -0.26), elbowL, 0.06, shirt);
-    seg(new THREE.Vector3(0.26, 1.24, -0.26), elbowR, 0.06, shirt);
-    // Sleeves rolled at the elbow — bare forearms up to the clasped hands
-    seg(elbowL, clasp.clone().add(new THREE.Vector3(-0.05, -0.04, 0)), 0.048, skin);
-    seg(elbowR, clasp.clone().add(new THREE.Vector3(0.05, -0.04, 0)), 0.048, skin);
+    // Arms: shoulders down-forward, forearms dropping onto the thighs
+    // (sleeves rolled at the elbow — bare forearms)
+    limb(new THREE.Vector3(-0.25, 1.12, -0.04), new THREE.Vector3(-0.35, 0.8, 0.14), 0.06, shirt);
+    limb(new THREE.Vector3(0.25, 1.12, -0.04), new THREE.Vector3(0.35, 0.8, 0.14), 0.06, shirt);
+    limb(new THREE.Vector3(-0.35, 0.8, 0.16), new THREE.Vector3(-0.26, 0.72, 0.4), 0.048, skin);
+    limb(new THREE.Vector3(0.35, 0.8, 0.16), new THREE.Vector3(0.26, 0.74, 0.4), 0.048, skin);
 
-    // The clasped hands read as one closed double fist: two mitts pressed
-    // tight, a neat row of knuckles across the top, thumbs crossed in front.
+    // Right hand: a fist around the pistol grip, the gun resting on the
+    // thigh with the muzzle tipped down past the knee
     this.hands = new THREE.Group();
-    this.hands.position.copy(clasp);
-    const handL = new THREE.Mesh(new RoundedBoxGeometry(0.08, 0.095, 0.095, 3, 0.032), skin);
-    handL.position.set(-0.036, 0, 0);
-    this.hands.add(handL);
-    const handR = new THREE.Mesh(new RoundedBoxGeometry(0.08, 0.095, 0.095, 3, 0.032), skin);
-    handR.position.set(0.036, 0, 0.006);
-    this.hands.add(handR);
-    // Knuckles: four small bumps in a straight row along the top of each fist
-    for (const [sx, dz] of [
-      [-1, 0],
-      [1, 0.006]
-    ] as const) {
-      for (let i = 0; i < 4; i++) {
-        const k = new THREE.Mesh(new THREE.SphereGeometry(0.0135, 8, 6), skin);
-        k.position.set(sx * 0.036 - 0.027 + i * 0.018, 0.05, dz - 0.02);
-        this.hands.add(k);
-      }
+    this.hands.position.set(0.26, 0.74, 0.42);
+    const fist = new THREE.Mesh(new RoundedBoxGeometry(0.09, 0.1, 0.11, 3, 0.032), skin);
+    this.hands.add(fist);
+    for (let i = 0; i < 4; i++) {
+      const k = new THREE.Mesh(new THREE.SphereGeometry(0.0135, 8, 6), skin);
+      k.position.set(-0.027 + i * 0.018, 0.052, 0.01);
+      this.hands.add(k);
     }
-    // Thumbs folded across the front, one over the other
-    for (const [sx, y] of [
-      [-1, 0.012],
-      [1, -0.012]
-    ] as const) {
-      const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.045, 2, 8), skin);
-      thumb.position.set(sx * 0.012, y, -0.052);
-      thumb.rotation.z = Math.PI / 2 - sx * 0.25;
-      this.hands.add(thumb);
-    }
+    const steel = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.4, metalness: 0.7 });
+    const pistol = new THREE.Group();
+    const slide = new THREE.Mesh(new RoundedBoxGeometry(0.042, 0.055, 0.26, 2, 0.01), steel);
+    pistol.add(slide);
+    const muzzleTip = new THREE.Mesh(new RoundedBoxGeometry(0.03, 0.036, 0.036, 2, 0.008), this.lam(0x0b0d10));
+    muzzleTip.position.set(0, -0.004, -0.14);
+    pistol.add(muzzleTip);
+    const grip = new THREE.Mesh(new RoundedBoxGeometry(0.032, 0.11, 0.05, 2, 0.01), this.lam(0x3a3228));
+    grip.position.set(0, -0.05, 0.075);
+    grip.rotation.x = 0.25;
+    pistol.add(grip);
+    // Muzzle down-forward, like the reference
+    pistol.position.set(0.005, 0.015, 0.02);
+    pistol.rotation.set(-0.85, -0.12, 0);
+    this.hands.add(pistol);
     this.ravi.add(this.hands);
+
+    // Left hand hangs loose over the other knee
+    const lHand = new THREE.Mesh(new RoundedBoxGeometry(0.085, 0.12, 0.095, 3, 0.03), skin);
+    lHand.position.set(-0.26, 0.7, 0.44);
+    lHand.rotation.x = 0.35;
+    this.ravi.add(lHand);
   }
 
   // -------------------------------------------------------------- lifecycle
@@ -326,13 +270,13 @@ export class MainMenuScene implements GameScene {
     }
 
     // Stillness. Breathing, the head hanging a fraction lower and rising
-    // again, thumbs shifting against each other. Nothing more.
+    // again, the gun hand shifting on the thigh. Nothing more.
     const breath = Math.sin(time * 0.55);
     this.ravi.position.y = breath * 0.008;
-    this.head.rotation.x = 0.58 + breath * 0.015;
+    this.head.rotation.x = 0.32 + breath * 0.015;
     this.head.rotation.z = Math.sin(time * 0.13) * 0.015;
     this.hands.rotation.z = Math.sin(time * 0.4) * 0.02;
-    this.hands.position.y = 1.18 + breath * 0.006;
+    this.hands.position.y = 0.74 + breath * 0.006;
 
     // The lamp above swings by a hair, the way hanging lights do
     this.spot.position.x = Math.sin(time * 0.31) * 0.05;

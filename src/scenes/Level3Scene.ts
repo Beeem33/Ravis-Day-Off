@@ -9,6 +9,7 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
+import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
@@ -45,6 +46,8 @@ const STAFF_FLOOR = 4;
  */
 export class Level3Scene extends CombatScene<Level3Data> {
   private weapon!: WeaponViewmodel;
+  /** Middle-finger emote on T; the left hand goes back to work on reload. */
+  private emote!: EmoteViewmodel;
   private hud!: FPSHUD;
   private dialogue!: DialogueBox;
 
@@ -118,6 +121,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.scene.add(this.player.camera);
     this.player.onVaultGlass = (c) => this.vaultGlass(c);
     this.weapon = new WeaponViewmodel(this.player.camera);
+    // Middle-finger emote (T toggles it; reloading puts the hand back to work)
+    this.emote = new EmoteViewmodel(this.player.camera);
     this.weapon.onReloadEvent = (e) => {
       if (e === 'magOut') audio.magOut();
       else if (e === 'magDrop') this.dropMagazine(this.weapon.ejectedMagPose());
@@ -610,7 +615,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
    * than five men waiting to be shot at.
    */
   private agentsWorkTheRoom(dt: number): void {
-    // Ticked by updateGunner, which runs first and shares the same budget
+    // Ticked by updateGunner, which runs first and shares the same budget
     if (this.nextStaffKill > 0 || this.livingStaff() <= STAFF_FLOOR) return;
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
@@ -632,7 +637,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
       this.shootStaff(a, victim);
       this.staffShotTimers.set(a, 3 + Math.random() * 5);
       // One at a time, floor-wide, so the executions read as a drumbeat
-      this.nextStaffKill = 3.5 + Math.random() * 3;
+      this.nextStaffKill = 3.5 + Math.random() * 3;
       return;
     }
   }
@@ -805,10 +810,19 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
+    // ---- Middle-finger emote: T raises it and it stays up; T again, a
+    // reload, or dying puts the hand back on the gun
+    if (playable && input.wasPressed('KeyT') && this.player.alive && input.pointerLocked && !this.weapon.reloading) {
+      this.emote.toggle();
+    }
+    if (this.weapon.reloading || !this.player.alive) this.emote.cancel();
+    this.weapon.hideSupportHand = this.emote.engaged;
+
     const aiming = playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
+    this.emote.update(dt, this.player);
     const targetFov = 74 - 22 * this.weapon.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
@@ -821,8 +835,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
     if (this.phase === 'talk') this.updateTalk(dt);
     if (this.phase === 'crash') this.updateCrash(dt);
     if (this.deploying.length) this.updateDeploy(dt);
-    // The gunner keeps working after the handover too
-    if (this.phase === 'play') this.updateGunner(dt);
+    // The gunner keeps working after the handover too
+    if (this.phase === 'play') this.updateGunner(dt);
     if (this.agents.length) {
       this.agentsWorkTheRoom(dt);
       // After the AI has steered, or it walks them straight back together

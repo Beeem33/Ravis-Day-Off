@@ -79,6 +79,7 @@ export class MenuUI {
             <tr><td>SPRINT</td><td>SHIFT</td></tr>
             <tr><td>CROUCH</td><td>C (or CTRL — but CTRL+W closes the tab)</td></tr>
             <tr><td>JUMP</td><td>SPACE</td></tr>
+            <tr><td>FLIP THEM OFF</td><td>T (STAYS UP UNTIL T OR A RELOAD)</td></tr>
             <tr><td>MENU</td><td>ESC</td></tr>
           </table>
           <div class="divider"></div>

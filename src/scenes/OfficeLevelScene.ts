@@ -11,6 +11,7 @@ import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
 import { TakedownViewmodel } from '../entities/TakedownViewmodel';
+import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
@@ -36,6 +37,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   private wanted: 'pistol' | 'shotgun' = 'pistol';
   private shells = TUBE_SIZE;
   private takedownVm!: TakedownViewmodel;
+  /** Middle-finger emote on T; the left hand goes back to work on reload. */
+  private emote!: EmoteViewmodel;
   /** The enemy currently held for a knife execution, if any. */
   private takedown: Enemy | null = null;
   private enemies: Enemy[] = [];
@@ -142,6 +145,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     };
     // Knife takedown arms (F next to an enemy)
     this.takedownVm = new TakedownViewmodel(this.player.camera);
+    // Middle-finger emote (T toggles it; reloading puts the hand back to work)
+    this.emote = new EmoteViewmodel(this.player.camera);
     this.takedownVm.onEvent = (e) => {
       const victim = this.takedown;
       if (e === 'grab') {
@@ -432,6 +437,22 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     if (this.wanted === this.active && !inTakedown) stowedVm.stow = 1;
     const switching = this.wanted !== this.active || vm.stow > 0.1;
 
+    // ---- Middle-finger emote: T raises it and it stays up; T again, a
+    // reload, the knife, or dying puts the hand back on the gun
+    if (
+      input.wasPressed('KeyT') &&
+      this.player.alive &&
+      input.pointerLocked &&
+      !vm.reloading &&
+      !inTakedown &&
+      !this.over
+    ) {
+      this.emote.toggle();
+    }
+    if (vm.reloading || inTakedown || !this.player.alive) this.emote.cancel();
+    this.weapon.hideSupportHand = this.emote.engaged;
+    this.shotgun.hideSupportHand = this.emote.engaged;
+
     // Aim down sights on right mouse (sprinting drops the aim)
     const aiming =
       input.rightHeld &&
@@ -445,6 +466,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
     this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
+    this.emote.update(dt, this.player);
     // FOV zoom while aiming (the shotgun's bead zooms less than the irons)
     const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {

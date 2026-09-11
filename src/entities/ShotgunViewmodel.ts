@@ -39,6 +39,8 @@ export class ShotgunViewmodel {
   /** Hooks for the scene: pump audio + the ejected hull. */
   onPumpEvent: ((e: 'back' | 'eject' | 'forward') => void) | null = null;
   private pumpFired = new Set<string>();
+  /** True while the emote borrows the left hand — hides the support hand. */
+  hideSupportHand = false;
 
   // ---- Shell-by-shell reload
   private supportHand!: THREE.Mesh;
@@ -354,6 +356,7 @@ export class ShotgunViewmodel {
   }
 
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
+    this.supportHand.visible = !this.hideSupportHand;
     const sprinting = player.sprinting && player.currentSpeed > 4.5;
     const [rlX, rlY, rlZ, rlPosX, rlPosY, rlPosZ] = this.updateReload(dt);
     const [pumpSlide, pumpPitch] = this.updatePump(dt);

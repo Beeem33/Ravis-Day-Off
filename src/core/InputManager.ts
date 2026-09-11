@@ -17,6 +17,9 @@ export class InputManager {
   onPointerLockLost: (() => void) | null = null;
 
   constructor(private element: HTMLElement) {
+    // Dev convenience (?nolock): pretend the pointer is locked so gameplay
+    // input can be tested where the browser refuses pointer capture.
+    if (new URLSearchParams(location.search).has('nolock')) this.pointerLocked = true;
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       this.keysDown.add(e.code);

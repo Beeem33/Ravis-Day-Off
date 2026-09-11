@@ -9,6 +9,7 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { GunBeamPool } from '../fx/GunBeam';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
+import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
@@ -31,6 +32,8 @@ const TUBE_SIZE = 6;
  */
 export class Level4Scene extends CombatScene<Level4Data> {
   private weapon!: WeaponViewmodel;
+  /** Middle-finger emote on T; the left hand goes back to work on reload. */
+  private emote!: EmoteViewmodel;
   private shotgun!: ShotgunViewmodel;
   private beams!: GunBeamPool;
   private agents: Enemy[] = [];
@@ -103,6 +106,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.shotgun = new ShotgunViewmodel(this.player.camera);
+    // Middle-finger emote (T toggles it; reloading puts the hand back to work)
+    this.emote = new EmoteViewmodel(this.player.camera);
     this.shotgun.stow = 1; // stowed, and not even carried yet
     // The goggles' amplifier: a flat green wash across everything when down
     this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
@@ -595,8 +600,25 @@ export class Level4Scene extends CombatScene<Level4Data> {
       held.stow = Math.max(0, held.stow - dt * 6);
     }
 
+    // ---- Middle-finger emote: T raises it and it stays up; T again, a
+    // reload, or dying puts the hand back on the gun
+    if (
+      playable &&
+      input.wasPressed('KeyT') &&
+      this.player.alive &&
+      input.pointerLocked &&
+      !held.reloading &&
+      !this.dialogue.isActive
+    ) {
+      this.emote.toggle();
+    }
+    if (held.reloading || !this.player.alive) this.emote.cancel();
+    this.weapon.hideSupportHand = this.emote.engaged;
+    this.shotgun.hideSupportHand = this.emote.engaged;
+
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
     this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
+    this.emote.update(dt, this.player);
     const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;

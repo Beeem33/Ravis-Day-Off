@@ -10,6 +10,7 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { TakedownViewmodel } from '../entities/TakedownViewmodel';
+import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -58,6 +59,8 @@ function track(keys: readonly (readonly [number, number])[], t: number): number 
 export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private weapon!: WeaponViewmodel;
   private takedownVm!: TakedownViewmodel;
+  /** Middle-finger emote on T; the left hand goes back to work on reload. */
+  private emote!: EmoteViewmodel;
   /** The agent, if he's currently held for a knife execution. */
   private takedown: Enemy | null = null;
   private agent!: Enemy;
@@ -117,6 +120,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
     };
+    // Middle-finger emote (T toggles it; reloading puts the hand back to work)
+    this.emote = new EmoteViewmodel(this.player.camera);
     // Knife takedown arms (F next to the agent)
     this.takedownVm = new TakedownViewmodel(this.player.camera);
     this.takedownVm.onEvent = (e) => {
@@ -484,11 +489,27 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       else this.weapon.stow = Math.max(0, this.weapon.stow - dt * 5);
     }
 
+    // ---- Middle-finger emote: T raises it and it stays up; T again, a
+    // reload, the knife, or dying puts the hand back on the gun
+    if (
+      playable &&
+      input.wasPressed('KeyT') &&
+      this.player.alive &&
+      input.pointerLocked &&
+      !this.weapon.reloading &&
+      !inTakedown
+    ) {
+      this.emote.toggle();
+    }
+    if (this.weapon.reloading || inTakedown || !this.player.alive) this.emote.cancel();
+    this.weapon.hideSupportHand = this.emote.engaged;
+
     const aiming =
       playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !inTakedown;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
+    this.emote.update(dt, this.player);
     const targetFov = 74 - 22 * this.weapon.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;

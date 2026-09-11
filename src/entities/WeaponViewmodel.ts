@@ -52,6 +52,8 @@ export class WeaponViewmodel {
   private slidePull = 0; // 0..1 while the left hand racks the slide
   /** Hook for the scene: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done'. */
   onReloadEvent: ((e: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done') => void) | null = null;
+  /** True while the emote borrows the left hand — hides the support hand. */
+  hideSupportHand = false;
 
   /**
    * World-space pose of the magazine right now plus the direction it's
@@ -391,6 +393,9 @@ export class WeaponViewmodel {
   }
 
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
+    // Left hand off the gun while the emote has it (forearm rides along as a child)
+    this.supportHand.visible = !this.hideSupportHand;
+
     // ---- Pose blends: ADS snaps in fast, sprint pose is a touch lazier
     const sprinting = player.sprinting && player.currentSpeed > 4.5;
     const [rlX, rlY, rlZ, rlPosX, rlPosY, rlPosZ] = this.updateReload(dt);

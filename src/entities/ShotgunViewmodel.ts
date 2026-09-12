@@ -1,20 +1,41 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
 
 /**
- * ShotgunViewmodel — Ravi's pump-action shotgun, built from primitives and
- * parented to the camera like the pistol. Same procedural sway/bob/recoil
- * treatment, plus a cycling pump (the support hand rides the forend) and a
+ * ShotgunViewmodel — Ravi's pump-action shotgun. The gun is a modelled
+ * 12-gauge loaded from models/shotgun.glb (walnut furniture with baked grain
+ * and checkering, blued barrel, parkerised receiver); the hands, forearms and
+ * the shell held during a reload are still built from primitives here.
+ *
+ * Everything else is as it was: the same procedural sway/bob/recoil treatment
+ * as the pistol, a cycling pump (the support hand rides the forend) and a
  * shell-by-shell reload through the loading port.
  */
 export class ShotgunViewmodel {
   readonly root = new THREE.Group();
   private gun = new THREE.Group();
+  /** The glTF scene, turned so its +X muzzle points down gun-local −Z. */
+  private model = new THREE.Group();
+  /** Carries the support hand, and slides with the pump stroke. */
   private pump = new THREE.Group();
+  /** The wooden forend and action bars, which ride the same stroke. */
+  private forend = new THREE.Group();
   private muzzle = new THREE.Object3D();
   private port = new THREE.Object3D();
   private flashSprite: THREE.Sprite;
   private flashLight: THREE.PointLight;
+
+  /**
+   * glb metres → gun-local metres. Picked so the modelled gun lands on the
+   * landmarks the primitive one used — bead at (0, 0.057, −0.49), butt plate
+   * at z ≈ 0.455 — which keeps every pose, hand and reload offset valid.
+   */
+  private static readonly SCALE = 0.9455;
+  private static readonly MODEL_Y = 0.0038;
+  private static readonly MODEL_Z = 0.09;
+  /** The 95 mm pump stroke, expressed in the model's own pre-scale units. */
+  private static readonly PUMP_TRAVEL = 0.095 / 0.9455;
 
   private swayX = 0;
   private swayY = 0;
@@ -75,72 +96,22 @@ export class ShotgunViewmodel {
     this.root.position.copy(this.basePos);
     this.root.add(this.gun);
 
-    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
-    const darkMetal = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0x6c7077, roughness: 0.35, metalness: 0.9 });
-    const wood = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.8 });
-    const woodDark = new THREE.MeshStandardMaterial({ color: 0x462c18, roughness: 0.85 });
+    // The modelled gun: +X muzzle, +Y up, +Z the shooter's right, in metres.
+    // Turning it 90° about Y puts the muzzle down gun-local −Z and the
+    // ejection port on +X, which is where the primitive version had them.
+    this.model.rotation.y = Math.PI / 2;
+    this.model.scale.setScalar(ShotgunViewmodel.SCALE);
+    this.model.position.set(0, ShotgunViewmodel.MODEL_Y, ShotgunViewmodel.MODEL_Z);
+    this.gun.add(this.model);
+    this.model.add(this.forend);
 
-    // Receiver
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.062, 0.24), metal);
-    receiver.position.set(0, 0.01, 0.06);
-    this.gun.add(receiver);
-    // Ejection port on the right of the receiver
-    const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.024, 0.06), darkMetal);
-    portPlate.position.set(0.025, 0.018, 0.045);
-    this.gun.add(portPlate);
-    this.port.position.set(0.03, 0.02, 0.045);
+    // Ejection port anchor, on the real port in the receiver's right flank
+    this.port.position.set(0.021, 0.026, 0.026);
     this.gun.add(this.port);
-    // Barrel running forward over the magazine tube
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.44, 12), darkMetal);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.038, -0.28);
-    this.gun.add(barrel);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.0105, 0.0105, 0.36, 12), metal);
-    tube.rotation.x = Math.PI / 2;
-    tube.position.set(0, -0.004, -0.24);
-    this.gun.add(tube);
-    // Barrel band tying the two together at the front
-    const band = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.062, 0.02), steel);
-    band.position.set(0, 0.018, -0.41);
-    this.gun.add(band);
-    // Bead sight
-    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.005, 8, 6), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x9a9a9a, roughness: 0.6 }));
-    bead.position.set(0, 0.057, -0.49);
-    this.gun.add(bead);
 
-    // Pump forend — wooden, ribbed, slides back along the tube when cycled
+    // Pump group: the support hand rides it, and the wood moves in step
     this.pump.position.set(0, -0.004, -0.2);
     this.gun.add(this.pump);
-    const forend = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.05, 0.15), wood);
-    this.pump.add(forend);
-    for (let i = 0; i < 5; i++) {
-      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.044, 0.006), woodDark);
-      rib.position.set(0, 0, -0.06 + i * 0.03);
-      this.pump.add(rib);
-    }
-
-    // Stock: wrist behind the receiver rising back toward the shoulder
-    const wrist = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.052, 0.1), wood);
-    wrist.position.set(0, -0.005, 0.22);
-    wrist.rotation.x = -0.12;
-    this.gun.add(wrist);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.095, 0.2), wood);
-    stock.position.set(0, -0.035, 0.35);
-    stock.rotation.x = -0.18;
-    this.gun.add(stock);
-    const buttpad = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.1, 0.02), darkMetal);
-    buttpad.position.set(0, -0.05, 0.445);
-    buttpad.rotation.x = -0.18;
-    this.gun.add(buttpad);
-    // Trigger guard + trigger
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.008, 0.07), metal);
-    guard.position.set(0, -0.055, 0.12);
-    this.gun.add(guard);
-    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.024, 0.006), steel);
-    trigger.position.set(0, -0.04, 0.125);
-    trigger.rotation.x = 0.35;
-    this.gun.add(trigger);
 
     // Hands + forearms — same treatment as the pistol so the arms read on screen
     const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
@@ -158,7 +129,7 @@ export class ShotgunViewmodel {
     };
     // Right hand on the wrist of the stock
     const gripHand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.075, 0.08), skin);
-    gripHand.position.set(0, -0.035, 0.19);
+    gripHand.position.set(0, -0.038, 0.228);
     gripHand.rotation.x = 0.15;
     this.gun.add(gripHand);
     mkForearm(gripHand, new THREE.Vector3(0.15, -0.2, 0.3));
@@ -181,8 +152,8 @@ export class ShotgunViewmodel {
     this.loadingShell.visible = false;
     this.supportHand.add(this.loadingShell);
 
-    // Muzzle anchor + flash
-    this.muzzle.position.set(0, 0.038, -0.51);
+    // Muzzle anchor + flash, on the modelled barrel's bore
+    this.muzzle.position.set(0, 0.042, -0.509);
     this.gun.add(this.muzzle);
     const flashTex = ShotgunViewmodel.makeFlashTexture();
     this.flashSprite = new THREE.Sprite(
@@ -195,6 +166,25 @@ export class ShotgunViewmodel {
     // Stays in the scene for good: switching a light off changes the
     // scene's visible light count, which recompiles every material in it.
     this.muzzle.add(this.flashLight);
+
+    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/shotgun.glb`, (gltf) => {
+      const scene = gltf.scene;
+      scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = false;
+          m.receiveShadow = false;
+          m.frustumCulled = false; // it sits inside the near plane's neighbourhood
+        }
+      });
+      this.model.add(scene);
+      // Split out the parts that cycle: forend, its cap, and the action bars
+      this.model.updateWorldMatrix(true, true);
+      for (const name of ['Forend', 'ForendCap', 'ActionBarL', 'ActionBarR']) {
+        const part = scene.getObjectByName(name);
+        if (part) this.forend.attach(part);
+      }
+    });
   }
 
   private static makeFlashTexture(): THREE.Texture {
@@ -396,6 +386,8 @@ export class ShotgunViewmodel {
       this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
     );
     this.pump.position.z = -0.2 + pumpSlide * 0.095;
+    // The wood rides the same stroke; inside the model group, back is −X
+    this.forend.position.x = -ShotgunViewmodel.PUMP_TRAVEL * pumpSlide;
 
     // Draw / stow: swing down out of frame
     if (this.stow > 0.0001) {

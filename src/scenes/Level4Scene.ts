@@ -105,7 +105,24 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.scene.add(this.player.camera);
 
     this.weapon = new WeaponViewmodel(this.player.camera);
+    this.weapon.onReloadEvent = (e) => {
+      if (e === 'magOut') audio.magOut();
+      else if (e === 'magDrop') this.dropMagazine(this.weapon.ejectedMagPose());
+      else if (e === 'magIn') audio.magIn();
+      else if (e === 'rack') audio.slideRack();
+      else if (e === 'done') this.ammo = MAG_SIZE;
+    };
     this.shotgun = new ShotgunViewmodel(this.player.camera);
+    this.shotgun.onPumpEvent = (e) => {
+      if (e === 'back') audio.pumpBack();
+      else if (e === 'forward') audio.pumpForward();
+    };
+    this.shotgun.onReloadEvent = (e) => {
+      if (e === 'shellIn') {
+        audio.shellIn();
+        this.shells = Math.min(TUBE_SIZE, this.shells + 1);
+      }
+    };
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)
     this.emote = new EmoteViewmodel(this.player.camera);
     this.shotgun.stow = 1; // stowed, and not even carried yet
@@ -630,7 +647,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // walls take hits and the pass can be checked with a gun in hand.
     this.fireCooldown -= dt;
     const clicked = input.consumeClick();
-    if (
+    if (clicked && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {
+      // Interrupt the shell loop to get back in the fight
+      this.shotgun.cancelReload();
+    } else if (
       this.phase === 'play' && this.player.alive && input.pointerLocked &&
       clicked && this.fireCooldown <= 0 && !held.reloading
     ) {
@@ -656,10 +676,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     if (input.wasPressed('KeyR') && this.player.alive) {
       if (this.active === 'pistol' && this.ammo < MAG_SIZE) {
-        this.weapon.startReload();
-        this.ammo = MAG_SIZE;
-      } else if (this.active === 'shotgun' && this.shells < TUBE_SIZE) {
-        this.shells = TUBE_SIZE;
+        if (this.weapon.startReload()) this.player.aiming = false;
+      } else if (this.active === 'shotgun' && this.shells < TUBE_SIZE && !this.shotgun.pumping) {
+        if (this.shotgun.startReload(TUBE_SIZE - this.shells)) this.player.aiming = false;
       }
     }
     if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);

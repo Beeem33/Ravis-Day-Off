@@ -64,7 +64,9 @@ bus.on(Events.RestartLevel5, () => {
   engine.setScene(new Level5Scene(ctx), 'THE SERVICE LIFT');
 });
 bus.on(Events.RestartLevel4, () => {
-  engine.setScene(new Level4Scene(ctx), 'LEVEL 4 — LIGHTS OUT');
+  // A retry picks up in the corridor with the shotgun already in hand —
+  // nobody wants to sit through Sanjay's send-off on every death.
+  engine.setScene(new Level4Scene(ctx, true), 'LEVEL 4 — LIGHTS OUT');
 });
 bus.on(Events.RestartLevel3, () => {
   engine.setScene(new Level3Scene(ctx), 'LEVEL 3 — THE OTHER FLOOR');

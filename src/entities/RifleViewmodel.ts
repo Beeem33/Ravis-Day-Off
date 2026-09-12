@@ -82,6 +82,11 @@ export class RifleViewmodel {
   private rP1 = 0;
   private rP2 = 0;
   private rP3 = 0;
+  /** The animated mag's measured world velocity, for a seamless physics handoff. */
+  private magVel = new THREE.Vector3();
+  private magSpin = 0;
+  private magPrevWorld = new THREE.Vector3();
+  private magTracked = false;
 
   // ---- Keychain pendulum (angles in the glb frame: X forward, Y up, Z right)
   private charm = { swing: 0, side: 0, vSwing: 0, vSide: 0, ready: false };
@@ -198,18 +203,29 @@ export class RifleViewmodel {
   }
 
   /**
-   * World pose of the magazine as it leaves the well, plus the direction it
-   * was flicked (forward and down), so the scene can hand it to physics.
+   * Where the magazine actually is, and how fast it is actually travelling,
+   * at the instant the animation hands it to the level. Both are read off
+   * the animated mag itself — spawning the physics copy anywhere else (the
+   * well, say) teleports it backwards on the handoff frame.
    */
-  ejectedMagPose(): { position: THREE.Vector3; quaternion: THREE.Quaternion; direction: THREE.Vector3 } {
-    this.magCentre.updateWorldMatrix(true, false);
-    const position = this.magCentre.getWorldPosition(new THREE.Vector3());
+  ejectedMagPose(): {
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    velocity: THREE.Vector3;
+    angularVelocity: THREE.Vector3;
+  } {
+    this.root.updateWorldMatrix(true, true);
     const quaternion = this.magPivot
       ? this.magPivot.getWorldQuaternion(new THREE.Quaternion())
       : this.gun.getWorldQuaternion(new THREE.Quaternion());
-    const gunQ = this.gun.getWorldQuaternion(new THREE.Quaternion());
-    const direction = new THREE.Vector3(0.05, -0.45, -1).applyQuaternion(gunQ).normalize();
-    return { position, quaternion, direction };
+    // The dropped prop's origin is its own centre of mass, so hand over the
+    // centre of the animated mag rather than its lug
+    const position = this.magPivot
+      ? new THREE.Box3().setFromObject(this.magPivot).getCenter(new THREE.Vector3())
+      : this.magCentre.getWorldPosition(new THREE.Vector3());
+    // Carry the tumble over too, about the axis the animation was spinning it
+    const angularVelocity = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion).multiplyScalar(-this.magSpin);
+    return { position, quaternion, velocity: this.magVel.clone(), angularVelocity };
   }
 
   /** A fresh copy of the magazine mesh at world scale, for the dropped-mag prop. */
@@ -218,9 +234,12 @@ export class RifleViewmodel {
     const g = new THREE.Group();
     const copy = this.magTemplate.clone(true);
     copy.scale.setScalar(SCALE);
-    // The template's origin is the mag's front lug; centre it on the body
-    copy.position.set(0, 0.08 * SCALE, 0);
     g.add(copy);
+    // The template's origin is the mag's front lug. Shift it so the group's
+    // origin sits on the body's centre — that is where the physics body and
+    // its collision box are, and where the handoff pose is measured.
+    const centre = new THREE.Box3().setFromObject(copy).getCenter(new THREE.Vector3());
+    copy.position.sub(centre);
     return g;
   }
 
@@ -238,6 +257,9 @@ export class RifleViewmodel {
     this.rP1 = Math.random() * Math.PI * 2;
     this.rP2 = Math.random() * Math.PI * 2;
     this.rP3 = Math.random() * Math.PI * 2;
+    this.magVel.set(0, 0, 0);
+    this.magSpin = 0;
+    this.magTracked = false;
     return true;
   }
 
@@ -421,10 +443,13 @@ export class RifleViewmodel {
     // physics copy takes it from there
     if (mag && this.reloadFired.has('magOut') && !this.reloadFired.has('magIn')) {
       const dI = t - tImp;
-      if (dI < 0.2) {
+      if (dI < 0.12) {
         // Shoved off the paddle over a few frames rather than teleporting off
-        // it, then away under its own momentum
+        // it, then away under its own momentum. It is handed to the level's
+        // physics as soon as it is clear of the well, so the fall to the
+        // floor is real rather than animated.
         const travel = dI * ease(c01(dI / 0.05));
+        this.magSpin = 6.5 * this.rSpeed;
         mag.rotation.set(0, 0, Math.min(1.3, 6.5 * travel));
         mag.position.set(0.109 + 1.3 * travel, -3.2 * travel * travel, 0);
       } else if (mag.visible) {
@@ -451,6 +476,25 @@ export class RifleViewmodel {
     rotZ += 0.016 * this.rWob * inBlend * Math.sin(t * 6.7 + this.rP1);
 
     return [rotX, rotY, rotZ, posX, posY, posZ];
+  }
+
+  /**
+   * The animated mag's world velocity, measured frame to frame. Measuring it
+   * (rather than deriving it from the local animation) means the gun's own
+   * motion — walking, turning, the reload swinging the rifle about — is
+   * already in the number the physics copy launches with.
+   */
+  private trackMagVelocity(dt: number): void {
+    const mag = this.magPivot;
+    if (!mag || !this.reloading || dt <= 0) {
+      this.magTracked = false;
+      return;
+    }
+    this.root.updateWorldMatrix(true, true);
+    const p = mag.getWorldPosition(new THREE.Vector3());
+    if (this.magTracked) this.magVel.subVectors(p, this.magPrevWorld).divideScalar(dt);
+    this.magPrevWorld.copy(p);
+    this.magTracked = true;
   }
 
   /**
@@ -500,6 +544,7 @@ export class RifleViewmodel {
     this.supportHand.visible = !this.hideSupportHand;
     const sprinting = player.sprinting && player.currentSpeed > 4.5;
     const [rlX, rlY, rlZ, rlPosX, rlPosY, rlPosZ] = this.updateReload(dt);
+    this.trackMagVelocity(dt);
     this.aimBlend += ((aiming && !sprinting && !this.reloading ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
     this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
     const a = this.aimBlend;

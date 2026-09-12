@@ -684,7 +684,9 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   private dropRifleMagazine(): void {
     const mesh = this.rifle.makeDroppedMag();
     if (!mesh) return;
-    const { position, quaternion, direction } = this.rifle.ejectedMagPose();
+    // Pose AND velocity come from the animated mag, so the physics copy picks
+    // up exactly where the animation left off and falls from there
+    const { position, quaternion, velocity, angularVelocity } = this.rifle.ejectedMagPose();
     mesh.position.copy(position);
     mesh.quaternion.copy(quaternion);
     const body = new CANNON.Body({
@@ -695,9 +697,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       angularDamping: 0.25
     });
     body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
-    const v = direction.clone().multiplyScalar(2.6 + Math.random() * 0.8).add(this.player.velocity);
-    body.velocity.set(v.x, v.y, v.z);
-    body.angularVelocity.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, 4 + Math.random() * 4);
+    body.velocity.set(velocity.x, velocity.y, velocity.z);
+    body.angularVelocity.set(angularVelocity.x, angularVelocity.y, angularVelocity.z);
     this.addDebris(mesh, body);
   }
 

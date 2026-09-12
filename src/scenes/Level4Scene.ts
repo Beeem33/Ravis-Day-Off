@@ -91,9 +91,18 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private static tmpB = new THREE.Vector3();
   private clickHandler = (): void => this.onClick();
 
-  constructor(ctx: GameContext) {
+  /**
+   * Retrying after a death skips the approach: Sanjay has already handed the
+   * shotgun over and gone, the power is already out, and Ravi starts in the
+   * corridor a few metres short of the door. Dying should cost you the floor,
+   * not the cutscene.
+   */
+  constructor(ctx: GameContext, private skipIntro = false) {
     super(ctx);
   }
+
+  /** Where a retry drops him: in the approach corridor, facing the door. */
+  private static readonly RETRY_SPAWN = new THREE.Vector3(-28, 0, 0);
 
   // -------------------------------------------------------------- lifecycle
 
@@ -262,6 +271,43 @@ export class Level4Scene extends CombatScene<Level4Data> {
     document.addEventListener('click', this.clickHandler);
     input.requestPointerLock();
     this.setObjective('FIND THE BOSS');
+    if (this.skipIntro) this.beginRetry();
+  }
+
+  /**
+   * Fast-forward past the approach for a retry: Sanjay is gone, the shotgun
+   * is already in hand, the lights are already out, and Ravi is stood in the
+   * corridor short of the door with control.
+   */
+  private beginRetry(): void {
+    // Sanjay left after the handover, and took his part of the scene with him
+    this.wounded.root.visible = false;
+    const gone = new Set<THREE.Object3D>(this.wounded.parts);
+    this.level.shootables = this.level.shootables.filter((p) => !gone.has(p));
+    this.propGun.visible = false;
+    this.leaveWalk = -1;
+
+    // The shotgun is his now
+    this.hasShotgun = true;
+    this.wanted = 'shotgun';
+    this.active = 'shotgun';
+    this.weapon.stow = 1;
+    this.shotgun.stow = 0;
+    this.hud.setAmmo(this.shells, TUBE_SIZE, false);
+
+    // The board already dropped: skip the flicker beat straight to the dark
+    this.flickerStep = Level4Scene.FLICKER.length;
+    this.setLights(false);
+    this.cutPower();
+    this.powerT = -1; // the lights-out beat is done; don't run it again
+    this.monologueDone = true;
+
+    // Back in the corridor, facing the door, with control
+    this.player.position.copy(Level4Scene.RETRY_SPAWN);
+    this.player.velocity.set(0, 0, 0);
+    this.player.yaw = this.level.playerSpawnYaw;
+    this.player.pitch = 0;
+    this.handOver();
   }
 
   exit(): void {

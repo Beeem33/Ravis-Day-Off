@@ -9,6 +9,7 @@ import { IntroLevelScene } from './scenes/IntroLevelScene';
 import { OfficeLevelScene } from './scenes/OfficeLevelScene';
 import { Level3Scene } from './scenes/Level3Scene';
 import { Level4Scene } from './scenes/Level4Scene';
+import { Level5Scene } from './scenes/Level5Scene';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -55,6 +56,12 @@ bus.on(Events.OfficeComplete, () => {
 });
 bus.on(Events.Level3Complete, () => {
   engine.setScene(new Level4Scene(ctx), 'LEVEL 4 — LIGHTS OUT');
+});
+bus.on(Events.Level4Complete, () => {
+  engine.setScene(new Level5Scene(ctx), 'THE SERVICE LIFT');
+});
+bus.on(Events.RestartLevel5, () => {
+  engine.setScene(new Level5Scene(ctx), 'THE SERVICE LIFT');
 });
 bus.on(Events.RestartLevel4, () => {
   engine.setScene(new Level4Scene(ctx), 'LEVEL 4 — LIGHTS OUT');

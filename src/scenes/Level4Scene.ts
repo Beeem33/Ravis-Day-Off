@@ -19,6 +19,12 @@ import { DialogueBox } from '../ui/DialogueBox';
 const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
 const TUBE_SIZE = 6;
+/**
+ * Torch strength when on. Physical units: at the old 2.1 the beam reaching a
+ * floor six metres off in a big room delivered next to nothing, which Level
+ * 4's small rooms had been hiding. Measured by screenshot, not guessed.
+ */
+const TORCH_ON = 16;
 
 /**
  * Level4Scene — the dark floor.
@@ -74,6 +80,12 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private letterbox!: HTMLElement;
   private unsubs: (() => void)[] = [];
   private over = false;
+  /** Every agent down: the back door's panel has gone green. */
+  private cleared = false;
+  private leaving = false;
+  private handedOff = false;
+  private fade = 0;
+  private fadeEl: HTMLElement | null = null;
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private static tmpA = new THREE.Vector3();
   private static tmpB = new THREE.Vector3();
@@ -129,9 +141,12 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // intensity, never visibility — the count of visible lights is baked into
     // every material's shader, and toggling it would recompile the level on
     // the exact frame you wanted to see something.
-    this.torch = new THREE.SpotLight(0xffe6c0, 0, 13, Math.PI / 7, 0.55, 1.3);
-    this.torch.position.set(0.08, -0.12, 0);
-    this.torch.target.position.set(0.08, -0.12, -1);
+    this.torch = new THREE.SpotLight(0xffe6c0, 0, 18, Math.PI / 8, 0.5, 1.6);
+    // The beam starts out past the muzzle. Sat at the eye, the gun was the
+    // nearest thing in the cone by a long way and took nearly all of it —
+    // turning the torch up enough to reach the floor just blew the gun out.
+    this.torch.position.set(0.06, -0.1, -0.7);
+    this.torch.target.position.set(0.06, -0.2, -1.7);
     this.player.camera.add(this.torch);
     this.player.camera.add(this.torch.target);
 
@@ -259,6 +274,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.beams.dispose();
     this.flashPool.dispose();
     this.ui.remove();
+    this.fadeEl?.remove();
     Enemy.flashPool = null;
   }
 
@@ -565,6 +581,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     else if (this.leaveWalk >= 0 && this.powerT >= 0) this.powerT += dt;
     this.updatePower(dt);
     this.updateMazeDoor(dt);
+    this.updateExit(dt);
 
     // ---- Weapon slots. The shotgun is not carried until it is handed over.
     if (playable && this.hasShotgun && !this.dialogue.isActive) {
@@ -628,7 +645,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     }
     if (input.wasPressed('KeyF') && this.player.alive) {
       this.torchOn = !this.torchOn;
-      this.torch.intensity = this.torchOn ? 2.1 : 0;
+      this.torch.intensity = this.torchOn ? TORCH_ON : 0;
       this.ctx.audio.uiBeep(this.torchOn);
       const h = this.ui.querySelector<HTMLElement>('.torch-hint');
       if (h) h.classList.toggle('on', this.torchOn);
@@ -879,7 +896,48 @@ export class Level4Scene extends CombatScene<Level4Data> {
       headshot,
       by: byPlayer ? 'RAVI' : 'FRIENDLY FIRE'
     });
-    if (this.remaining <= 0) this.setObjective('FLOOR CLEAR');
+    if (this.remaining <= 0 && !this.cleared) {
+      this.cleared = true;
+      // The back door unlocks: the panel over it goes red to green
+      this.level.exitPanel.emissive.setHex(0x2bff6a);
+      this.level.exitPanel.color.setHex(0x0a2a12);
+      this.level.exitPanelLight.color.setHex(0x2bff6a);
+      this.ctx.audio.uiBeep(true);
+      this.setObjective('FLOOR CLEAR — THE BACK DOOR IS OPEN');
+    }
+  }
+
+  /**
+   * Standing at the back door with the floor clear takes Ravi down. Same as
+   * level three's: the leaf never opens, the trigger in front of it gates the
+   * change, and the screen goes to black before the next level loads.
+   */
+  private updateExit(dt: number): void {
+    if (this.leaving) {
+      this.fade = Math.min(1, this.fade + dt * 1.4);
+      if (this.fadeEl) this.fadeEl.style.opacity = String(this.fade);
+      if (this.fade >= 1 && !this.handedOff) {
+        this.handedOff = true;
+        this.ctx.bus.emit(Events.Level4Complete);
+      }
+      return;
+    }
+    if (this.phase !== 'play' || !this.player.alive || this.over) return;
+    const p = this.player.position;
+    if (!this.level.exitTrigger.containsPoint(new THREE.Vector3(p.x, p.y + 0.9, p.z))) return;
+    if (!this.cleared) {
+      this.setObjective('LOCKED — CLEAR THE FLOOR FIRST');
+      return;
+    }
+    this.leaving = true;
+    this.setObjective('');
+    this.ctx.audio.doorOpen();
+    if (!this.fadeEl) {
+      this.fadeEl = document.createElement('div');
+      this.fadeEl.className = 'intro-fade';
+      this.ctx.uiRoot.appendChild(this.fadeEl);
+    }
+    this.ctx.input.exitPointerLock();
   }
 
   render(renderer: THREE.WebGLRenderer): void {

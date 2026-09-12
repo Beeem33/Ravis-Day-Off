@@ -65,6 +65,9 @@ export const Events = {
   /** Level three cleared — on to the dark floor. */
   Level3Complete: 'level3-complete',
   RestartLevel4: 'restart-level4',
+  /** Level four cleared and the back door taken — down to the basement. */
+  Level4Complete: 'level4-complete',
+  RestartLevel5: 'restart-level5',
   /** {lethal: boolean} */
   HitMarker: 'hit-marker',
   Resize: 'resize'

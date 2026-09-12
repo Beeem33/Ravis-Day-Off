@@ -697,6 +697,100 @@ export class AudioManager {
     n.stop(t + 0.85);
   }
 
+  /** The chime a lift gives when it arrives: two soft sine notes. */
+  elevatorDing(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    for (const [f, at] of [[1318, 0], [1046, 0.22]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(0.28, t + at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 1.1);
+      o.connect(g).connect(this.sfxBus);
+      o.start(t + at);
+      o.stop(t + at + 1.2);
+    }
+  }
+
+  /** Lift doors running along their track: a low rumble with a thump at the end. */
+  elevatorDoors(seconds = 1.1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 340;
+    f.Q.value = 1.4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.12);
+    g.gain.setValueAtTime(0.16, t + seconds - 0.1);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+    n.connect(f).connect(g).connect(this.sfxBus);
+    n.start(t);
+    n.stop(t + seconds + 0.05);
+    // The leaves meeting
+    const k = ctx.createBufferSource();
+    k.buffer = this.noiseBuffer;
+    const kf = ctx.createBiquadFilter();
+    kf.type = 'lowpass';
+    kf.frequency.value = 420;
+    const kg = ctx.createGain();
+    kg.gain.setValueAtTime(0.0001, t + seconds - 0.04);
+    kg.gain.exponentialRampToValueAtTime(0.34, t + seconds);
+    kg.gain.exponentialRampToValueAtTime(0.0001, t + seconds + 0.18);
+    k.connect(kf).connect(kg).connect(this.sfxBus);
+    k.start(t + seconds - 0.04);
+    k.stop(t + seconds + 0.2);
+  }
+
+  /**
+   * The car moving: motor hum and cable rumble, rising in at the start and
+   * dying away at the end.
+   */
+  elevatorRide(seconds = 2.6): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.3, t + 0.5);
+    bus.gain.setValueAtTime(0.3, t + seconds - 0.6);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+    bus.connect(this.sfxBus);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(58, t);
+    o.frequency.linearRampToValueAtTime(66, t + seconds * 0.5);
+    o.frequency.linearRampToValueAtTime(52, t + seconds);
+    const of = ctx.createBiquadFilter();
+    of.type = 'lowpass';
+    of.frequency.value = 260;
+    const og = ctx.createGain();
+    og.gain.value = 0.5;
+    o.connect(of).connect(og).connect(bus);
+    o.start(t);
+    o.stop(t + seconds + 0.05);
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'lowpass';
+    nf.frequency.value = 180;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.55;
+    n.connect(nf).connect(ng).connect(bus);
+    n.start(t);
+    n.stop(t + seconds + 0.05);
+  }
+
   startMenuMusic(): void {
     if (!this.ctx) return;
     if (this.ctx.state === 'suspended') void this.ctx.resume();

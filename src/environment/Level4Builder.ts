@@ -33,6 +33,10 @@ export interface Level4Data {
   mazeDoor: THREE.Mesh;
   /** Hinge the leaf hangs on, so it can be swung rather than vanished. */
   mazeDoorPivot: THREE.Group;
+  /** The way down to level five: red until the floor is clear, then green. */
+  exitPanel: THREE.MeshStandardMaterial;
+  exitPanelLight: THREE.PointLight;
+  exitTrigger: THREE.Box3;
   /** Index into `colliders`: everything below this is structure, not furniture. */
   wallColliders: number;
   /** Centre of every doorway, for the build check. */
@@ -154,6 +158,8 @@ export class Level4Builder {
   private worktopMat!: THREE.MeshLambertMaterial;
   private mazeDoor!: THREE.Mesh;
   private mazeDoorPivot!: THREE.Group;
+  private exitPanel!: THREE.MeshStandardMaterial;
+  private exitPanelLight!: THREE.PointLight;
   private mazeDoorCollider!: Collider;
   /**
    * The centre of every doorway cut into a wall, with the two points either
@@ -193,6 +199,13 @@ export class Level4Builder {
       backDoorway: new THREE.Vector3(HALL_X0 + 0.4, 0, 0),
       mazeDoor: this.mazeDoor,
       mazeDoorPivot: this.mazeDoorPivot,
+      exitPanel: this.exitPanel,
+      exitPanelLight: this.exitPanelLight,
+      // A metre deep in front of the leaf, the full width of the frame
+      exitTrigger: new THREE.Box3(
+        new THREE.Vector3(X1 - T / 2 - 1.1, 0, -0.9),
+        new THREE.Vector3(X1 - T / 2 - 0.05, 2.2, 0.9)
+      ),
       wallColliders: this.wallColliders,
       doorways: this.doorPoints.filter((_, i) => i % 3 === 1),
       // Staff caught on the floor when the team came through. Kept out on open
@@ -364,6 +377,7 @@ export class Level4Builder {
     // West wall, with the door in from the approach corridor
     this.wall('z', Z0, Z1, X0, [{ at: 0, w: 2.0, kind: 'door' }]);
     this.buildMazeDoor();
+    this.buildExitDoor();
   }
 
   /** The door out of the approach. Shut and solid until the cutscene ends. */
@@ -394,6 +408,43 @@ export class Level4Builder {
       occlude: false,
       collide: false
     });
+  }
+
+  /**
+   * The service door out, on the east wall at the far end of the main spine —
+   * straight ahead of where you come in, the whole floor away.
+   *
+   * Built the way level three's is: the leaf stays shut and solid, and a
+   * trigger box in front of it gates the change, so there is never a hole in
+   * the wall to walk off through. The panel light is deliberately kept out of
+   * `lights` and `lampMats`: the blackout zeroes both, and this is meant to
+   * be the one red glow left burning at the end of the corridor.
+   */
+  private buildExitDoor(): void {
+    const face = X1 - T / 2; // the corridor face of the east wall
+    const w = 1.6;
+    for (const z of [-w / 2, w / 2]) {
+      this.solid(0.12, 2.25, 0.1, face - 0.06, 0, z, this.darkMetalMat, { surface: 'metal', collide: false });
+    }
+    this.solid(0.12, 0.1, w + 0.1, face - 0.06, 2.25, 0, this.darkMetalMat, { surface: 'metal', collide: false });
+    this.solid(0.07, 2.2, w - 0.06, face - 0.05, 0, 0, this.deskMat, { surface: 'wood' });
+    // Push bar across the leaf
+    this.solid(0.06, 0.06, w * 0.7, face - 0.12, 1.02, 0, this.darkMetalMat, {
+      surface: 'metal',
+      occlude: false,
+      collide: false
+    });
+
+    this.exitPanel = new THREE.MeshStandardMaterial({ color: 0x2a0a0a, emissive: 0xff2b1c, emissiveIntensity: 1.6 });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.26, w * 0.8), this.exitPanel);
+    panel.position.set(face - 0.04, 2.55, 0);
+    this.group.add(panel);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.05, w * 0.9), this.darkMetalMat);
+    hood.position.set(face - 0.07, 2.72, 0);
+    this.group.add(hood);
+    this.exitPanelLight = new THREE.PointLight(0xff3b28, 3.2, 5, 1.9);
+    this.exitPanelLight.position.set(face - 0.6, 2.4, 0);
+    this.group.add(this.exitPanelLight);
   }
 
   // ----------------------------------------------------------------- rooms

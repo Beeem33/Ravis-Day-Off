@@ -66,10 +66,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
   /** Ravi's own torch. Off at the start; F works it. */
   private torch!: THREE.SpotLight;
   private torchOn = false;
-  // ---- Night vision goggles (N): green amplified view of the dark floor
-  private nv = false;
-  private nvLight!: THREE.AmbientLight;
-  private nvSaved: { bg: THREE.Color; fog: THREE.Fog | null } | null = null;
   private leaveWalk = -1;
   private leaveFrom = new THREE.Vector3();
 
@@ -126,9 +122,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)
     this.emote = new EmoteViewmodel(this.player.camera);
     this.shotgun.stow = 1; // stowed, and not even carried yet
-    // The goggles' amplifier: a flat green wash across everything when down
-    this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
-    this.scene.add(this.nvLight);
 
     // Ravi's torch. Deliberately modest: enough to pick a doorway out of the
     // black a few metres ahead, not enough to light the room and undo the
@@ -269,39 +262,12 @@ export class Level4Scene extends CombatScene<Level4Data> {
     Enemy.flashPool = null;
   }
 
-  /**
-   * Flip the goggles: a green ambient wash lifts the whole floor out of the
-   * dark, the fog pulls back (amplified light carries further), and the DOM
-   * overlay adds the tube vignette, scanlines and green cast.
-   */
-  private toggleNightVision(): void {
-    this.nv = !this.nv;
-    this.ctx.audio.uiBeep(this.nv);
-    this.ui.querySelector('.nv-overlay')?.classList.toggle('on', this.nv);
-    if (this.nv) {
-      const f = this.scene.fog as THREE.Fog | null;
-      this.nvSaved = { bg: (this.scene.background as THREE.Color).clone(), fog: f };
-      this.scene.background = new THREE.Color(0x0a2010);
-      this.scene.fog = new THREE.Fog(0x0c2812, f ? f.near * 1.3 : 10, f ? f.far * 1.9 : 50);
-      this.nvLight.intensity = 2.3;
-    } else {
-      if (this.nvSaved) {
-        this.scene.background = this.nvSaved.bg;
-        this.scene.fog = this.nvSaved.fog;
-        this.nvSaved = null;
-      }
-      this.nvLight.intensity = 0;
-    }
-  }
-
   private buildUI(): void {
     const el = document.createElement('div');
     el.id = 'intro-ui';
     el.innerHTML = `
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
-      <div class="nv-overlay"></div>
-      <div class="nv-hint" style="display:none">[ N ] NIGHT VISION</div>
       <div class="torch-hint" style="display:none">[ F ] FLASHLIGHT</div>
     `;
     this.ctx.uiRoot.appendChild(el);
@@ -532,14 +498,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.blackout = true;
     for (const l of this.level.lights) l.intensity = 0;
     for (const m of this.level.lampMats) m.emissiveIntensity = 0;
-    // Dim every ambient EXCEPT the night-vision amplifier — the goggles must
-    // still work (that's the whole point of the dark floor)
     this.scene.traverse((o) => {
-      if (o.type === 'AmbientLight' && o !== this.nvLight) (o as THREE.AmbientLight).intensity = 0.12;
+      if (o.type === 'AmbientLight') (o as THREE.AmbientLight).intensity = 0.12;
     });
-    // And now the goggles are worth knowing about
-    const hint = this.ui.querySelector<HTMLElement>('.nv-hint');
-    if (hint) hint.style.display = 'block';
+    // And now the torch is worth knowing about
     const th = this.ui.querySelector<HTMLElement>('.torch-hint');
     if (th) th.style.display = 'block';
     // Fog from four metres was quietly eating the level: every weapon light
@@ -664,8 +626,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
         this.playerShootShotgun();
       }
     }
-    // Night vision: flip the goggles down/up
-    if (input.wasPressed('KeyN') && this.player.alive) this.toggleNightVision();
     if (input.wasPressed('KeyF') && this.player.alive) {
       this.torchOn = !this.torchOn;
       this.torch.intensity = this.torchOn ? 2.1 : 0;

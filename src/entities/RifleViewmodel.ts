@@ -46,6 +46,8 @@ export class RifleViewmodel {
   private recoil = 0;
   private boltKick = 0;
   private flashTimer = 0;
+  /** Scales every recoil-driven movement of the viewmodel (1 = the original). */
+  private static readonly KICK = 0.8;
 
   private basePos = new THREE.Vector3(0.2, -0.235, -0.47);
   private baseRot = new THREE.Euler(0.02, -0.07, 0);
@@ -69,7 +71,7 @@ export class RifleViewmodel {
   reloading = false;
   private reloadT = 0;
   private reloadFired = new Set<string>();
-  static readonly RELOAD_TIME = 2.1;
+  static readonly RELOAD_TIME = 2.35;
   onReloadEvent: ((e: RifleReloadEvent) => void) | null = null;
   // Per-reload imperfection, rolled in startReload(): cadence, hand tremor,
   // strike overshoot and mag tilt all drift so no two reloads land the same
@@ -286,8 +288,8 @@ export class RifleViewmodel {
     // Bring the rifle in and cant it so the mag well faces the camera, hold
     // that for the mag swap, then roll the other way to expose the charging
     // handle for the rack, then back to the ready.
-    const inBlend = ease(c01(t / 0.25)) * (1 - ease(c01((t - (T - 0.3)) / 0.3)));
-    const rackBlend = ease(c01((t - 1.25) / 0.22)) * (1 - ease(c01((t - 1.82) / 0.25)));
+    const inBlend = ease(c01(t / 0.3)) * (1 - ease(c01((t - (T - 0.32)) / 0.32)));
+    const rackBlend = ease(c01((t - 1.46) / 0.24)) * (1 - ease(c01((t - 2.12) / 0.25)));
     // Camera sits off the rifle's left flank, so: lift the gun into frame,
     // pull it toward the centre, muzzle up a touch, and roll the top AWAY so
     // the underside / mag well (and later the charging handle) face the eye.
@@ -308,7 +310,7 @@ export class RifleViewmodel {
     const seatAt = gl(0.11, -0.17, 0); // rocked back and latched
     const overTop = gl(0.03, 0.09, -0.06); // hand travelling over the receiver
     const onHandle = gl(0.03, 0.055, -0.045); // fingers on the charging handle
-    const tImp = 0.615; // schedule time the fresh mag cracks the paddle
+    const tImp = 0.7; // schedule time the fresh mag cracks the paddle
     const handMagLocal = (rot: number) => {
       // The lug rides 7 cm above the palm; tilt is about the mag's own lug
       if (!this.handMag) return;
@@ -316,46 +318,61 @@ export class RifleViewmodel {
       this.handMag.rotation.set(0, Math.PI / 2, 0);
       this.handMag.rotateZ(rot);
     };
+    /**
+     * Quadratic Bézier from `a` to `c` that passes exactly through `b` at
+     * u = 0.5 — one continuous arc for the swing, so there is no corner
+     * where a straight approach used to meet a straight follow-through.
+     */
+    const arc = (out: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, u: number) => {
+      const iu = 1 - u;
+      const w0 = iu * iu;
+      const w1 = 2 * iu * u;
+      const w2 = u * u;
+      out.set(
+        w0 * a.x + w1 * (2 * b.x - 0.5 * a.x - 0.5 * c.x) + w2 * c.x,
+        w0 * a.y + w1 * (2 * b.y - 0.5 * a.y - 0.5 * c.y) + w2 * c.y,
+        w0 * a.z + w1 * (2 * b.z - 0.5 * a.z - 0.5 * c.z) + w2 * c.z
+      );
+    };
 
-    if (t < 0.3) {
+    if (t < 0.34) {
       // Hand lets go of the handguard and drops out of frame for a mag
-      const k = ease(c01(t / 0.3));
+      const k = ease(c01(t / 0.34));
       this.supportHand.position.lerpVectors(this.handHome, offscreen, k);
       this.supportHand.rotation.set(0.3 * k, 0, 0);
       if (this.handMag) this.handMag.visible = false;
       if (k > 0.5) this.reloadEvent('grab');
-    } else if (t < 0.55) {
+    } else if (t < 0.6) {
       // Up it comes with a fresh mag, winding up low and behind the well
-      const k = ease(c01((t - 0.3) / 0.25));
+      const k = ease(c01((t - 0.34) / 0.26));
       if (this.handMag) this.handMag.visible = true;
       this.supportHand.position.lerpVectors(offscreen, windUp, k);
       this.supportHand.rotation.set(0.25, 0, 0.1);
       handMagLocal(0.6 + this.rTilt);
-    } else if (t < 0.68) {
-      // The flick: the fresh mag swings forward THROUGH the paddle, batting
-      // the old mag out ahead of the gun and following it through
-      const k = c01((t - 0.55) / 0.13);
-      const kk = k * k; // accelerating swing — it's a hit, not a placement
-      if (kk < 0.45) {
-        this.supportHand.position.lerpVectors(windUp, strikeAt, kk / 0.45);
-      } else {
-        this.supportHand.position.lerpVectors(strikeAt, strikeThrough, ease((kk - 0.45) / 0.55));
-      }
-      this.supportHand.rotation.set(0.25 - 0.2 * kk, 0, 0.1);
-      handMagLocal(0.6 - 0.2 * kk + this.rTilt);
+    } else if (t < 0.8) {
+      // The flick: the fresh mag swings forward THROUGH the paddle on one
+      // continuous arc, batting the old mag out ahead of the gun and
+      // following it through. Cosine easing puts peak speed exactly at
+      // contact and bleeds it off after, so the swing carries rather than
+      // snapping between poses.
+      const k = c01((t - 0.6) / 0.2);
+      const u = 0.5 * (1 - Math.cos(Math.PI * k));
+      arc(this.supportHand.position, windUp, strikeAt, strikeThrough, u);
+      this.supportHand.rotation.set(0.25 - 0.2 * u, 0, 0.1);
+      handMagLocal(0.6 - 0.22 * u + this.rTilt * (1 - u));
       if (t >= tImp) {
         this.reloadEvent('strike');
         this.reloadEvent('magOut');
       }
-    } else if (t < 0.95) {
+    } else if (t < 1.1) {
       // Follow-through spent; draw back to hook the lug
-      const k = ease(c01((t - 0.68) / 0.27));
+      const k = ease(c01((t - 0.8) / 0.3));
       this.supportHand.position.lerpVectors(strikeThrough, seatFrom, k);
       this.supportHand.rotation.set(0.05 + 0.1 * k, 0, 0.1);
-      handMagLocal(0.4 + 0.05 * k + this.rTilt * (1 - k));
-    } else if (t < 1.25) {
+      handMagLocal(0.38 + 0.07 * k);
+    } else if (t < 1.46) {
       // Hook the front lug and rock the mag back into the well
-      const k = ease(c01((t - 0.95) / 0.3));
+      const k = ease(c01((t - 1.1) / 0.36));
       this.supportHand.position.lerpVectors(seatFrom, seatAt, k);
       this.supportHand.rotation.set(0.15 * (1 - k), 0, 0.1 * (1 - k));
       handMagLocal(0.45 * (1 - k));
@@ -369,26 +386,27 @@ export class RifleViewmodel {
         this.reloadEvent('magIn');
       }
       // Latching jolt
-      rotX += -0.1 * Math.sin(c01((k - 0.9) / 0.1) * Math.PI);
-    } else if (t < 1.5) {
-      // Left hand comes up and over the receiver to the charging handle
-      const k = ease(c01((t - 1.25) / 0.25));
-      const p = k < 0.5 ? new THREE.Vector3().lerpVectors(seatAt, overTop, ease(k / 0.5)) : new THREE.Vector3().lerpVectors(overTop, onHandle, ease((k - 0.5) / 0.5));
-      this.supportHand.position.copy(p);
+      rotX += -0.06 * Math.sin(c01((k - 0.84) / 0.16) * Math.PI);
+    } else if (t < 1.76) {
+      // Left hand sweeps up and over the receiver to the charging handle —
+      // one arc through the top of the travel, not two lerps meeting at a
+      // dead stop
+      const k = ease(c01((t - 1.46) / 0.3));
+      arc(this.supportHand.position, seatAt, overTop, onHandle, k);
       this.supportHand.rotation.set(-0.5 * k, 0, 0.9 * k);
-    } else if (t < 1.82) {
+    } else if (t < 2.12) {
       // Rack: haul the bolt back (slow), let it fly forward (fast)
-      const k = c01((t - 1.5) / 0.32);
-      const pull = k < 0.62 ? ease(k / 0.62) : 1 - ease(((k - 0.62) / 0.38) ** 0.4);
+      const k = c01((t - 1.76) / 0.36);
+      const pull = k < 0.62 ? ease(k / 0.62) : 1 - ease(((k - 0.62) / 0.38) ** 0.55);
       if (bolt) bolt.position.set(0.03 - 0.105 * pull, bolt.position.y, bolt.position.z);
       this.supportHand.position.copy(onHandle).add(new THREE.Vector3(0, 0, 0.105 * SCALE * pull));
       this.supportHand.rotation.set(-0.5, 0, 0.9);
       if (k > 0.58) this.reloadEvent('rackBack');
       if (k > 0.75) this.reloadEvent('rack');
-      rotX += 0.06 * Math.sin(k * Math.PI);
+      rotX += 0.05 * Math.sin(k * Math.PI);
     } else {
       // Hand back to the handguard, done
-      const k = ease(c01((t - 1.82) / 0.28));
+      const k = ease(c01((t - 2.12) / 0.23));
       if (bolt) bolt.position.set(0.03, bolt.position.y, bolt.position.z);
       this.supportHand.position.lerpVectors(onHandle, this.handHome, k);
       this.supportHand.rotation.set(-0.5 * (1 - k), 0, 0.9 * (1 - k));
@@ -403,19 +421,23 @@ export class RifleViewmodel {
     // physics copy takes it from there
     if (mag && this.reloadFired.has('magOut') && !this.reloadFired.has('magIn')) {
       const dI = t - tImp;
-      if (dI < 0.16) {
-        mag.rotation.set(0, 0, Math.min(1.3, 7 * dI));
-        mag.position.set(0.109 + 1.3 * dI, -3.2 * dI * dI, 0);
+      if (dI < 0.2) {
+        // Shoved off the paddle over a few frames rather than teleporting off
+        // it, then away under its own momentum
+        const travel = dI * ease(c01(dI / 0.05));
+        mag.rotation.set(0, 0, Math.min(1.3, 6.5 * travel));
+        mag.position.set(0.109 + 1.3 * travel, -3.2 * travel * travel, 0);
       } else if (mag.visible) {
         this.reloadEvent('magDrop');
         mag.visible = false;
       }
     }
     // The whack shivers through the whole rifle
-    if (t >= tImp && t < tImp + 0.14) {
-      const j = c01((t - tImp) / 0.14);
-      rotX += -0.1 * Math.sin(j * Math.PI);
-      rotZ += 0.05 * Math.sin(j * Math.PI);
+    if (t >= tImp && t < tImp + 0.2) {
+      const j = c01((t - tImp) / 0.2);
+      const shiver = Math.sin(j * Math.PI) ** 1.4;
+      rotX += -0.07 * shiver;
+      rotZ += 0.035 * shiver;
     }
 
     // Nobody's hands are servo motors: a low tremor rides the support hand
@@ -495,10 +517,12 @@ export class RifleViewmodel {
     const sprintSwayY = Math.sin(phase * 2) * 0.018 * sp;
     const sprintRoll = -Math.sin(phase) * 0.08 * sp;
 
-    // Rifle recoil: sharp, and the bolt carrier cycles with every shot
+    // Rifle recoil: sharp, and the bolt carrier cycles with every shot.
+    // KICK holds the butt down — the stock was throwing itself around far
+    // more than the round warrants.
     this.recoil = Math.max(0, this.recoil - dt * 9);
     this.boltKick = Math.max(0, this.boltKick - dt * 16);
-    const r = this.recoil * this.recoil * (1 - 0.35 * a);
+    const r = this.recoil * this.recoil * (1 - 0.35 * a) * RifleViewmodel.KICK;
     if (this.boltPivot && !this.reloading) {
       const cycle = Math.sin(Math.min(1, this.boltKick) * Math.PI);
       this.boltPivot.position.x = 0.03 - 0.105 * cycle;

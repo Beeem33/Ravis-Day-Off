@@ -62,9 +62,6 @@ export class Level5Scene extends CombatScene<Level5Data> {
 
   private torch!: THREE.SpotLight;
   private torchOn = false;
-  private nv = false;
-  private nvLight!: THREE.AmbientLight;
-  private nvSaved: { bg: THREE.Color; fog: THREE.Fog | null } | null = null;
 
   private stage: Stage = 'hall';
   private stageT = 0;
@@ -111,9 +108,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.emote = new EmoteViewmodel(this.player.camera);
     this.shotgun.stow = 1;
 
-    this.nvLight = new THREE.AmbientLight(0x86ff9c, 0);
-    this.scene.add(this.nvLight);
-    // Same torch as the dark floor: on-but-zero, driven by intensity only
+    // Same torch as the dark floor, and the only way to see down here — the
+    // goggles went in level four. On-but-zero, driven by intensity only.
     this.torch = new THREE.SpotLight(0xffe6c0, 0, 18, Math.PI / 8, 0.5, 1.6);
     // The beam starts out past the muzzle. Sat at the eye, the gun was the
     // nearest thing in the cone by a long way and took nearly all of it —
@@ -168,8 +164,6 @@ export class Level5Scene extends CombatScene<Level5Data> {
     el.id = 'intro-ui';
     el.innerHTML = `
       <div class="intro-objective"></div>
-      <div class="nv-overlay"></div>
-      <div class="nv-hint">[ N ] NIGHT VISION</div>
       <div class="torch-hint">[ F ] FLASHLIGHT</div>
       <div class="l5-prompt" style="position:absolute;left:50%;top:58%;transform:translateX(-50%);
         font:bold 13px monospace;letter-spacing:3px;color:#ffd27a;text-shadow:0 0 6px #000;
@@ -189,26 +183,6 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.objective.classList.remove('show');
     void this.objective.offsetWidth;
     this.objective.classList.add('show');
-  }
-
-  private toggleNightVision(): void {
-    this.nv = !this.nv;
-    this.ctx.audio.uiBeep(this.nv);
-    this.ui.querySelector('.nv-overlay')?.classList.toggle('on', this.nv);
-    if (this.nv) {
-      const f = this.scene.fog as THREE.Fog | null;
-      this.nvSaved = { bg: (this.scene.background as THREE.Color).clone(), fog: f };
-      this.scene.background = new THREE.Color(0x0a2010);
-      this.scene.fog = new THREE.Fog(0x0c2812, f ? f.near * 1.3 : 10, f ? f.far * 1.9 : 50);
-      this.nvLight.intensity = 2.3;
-    } else {
-      if (this.nvSaved) {
-        this.scene.background = this.nvSaved.bg;
-        this.scene.fog = this.nvSaved.fog;
-        this.nvSaved = null;
-      }
-      this.nvLight.intensity = 0;
-    }
   }
 
   // ------------------------------------------------------------------ lift
@@ -454,7 +428,6 @@ export class Level5Scene extends CombatScene<Level5Data> {
         this.playerShootShotgun();
       }
     }
-    if (input.wasPressed('KeyN') && this.player.alive) this.toggleNightVision();
     if (input.wasPressed('KeyF') && this.player.alive) {
       this.torchOn = !this.torchOn;
       this.torch.intensity = this.torchOn ? TORCH_ON : 0;

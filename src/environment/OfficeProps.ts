@@ -1788,7 +1788,7 @@ export function paperStack(sheets = 7, spread = 0.06): THREE.Group {
     g.add(clip);
   }
   return g;
-}
+}
 /** A few sheets scattered flat on the floor, as if swept off a desk. */
 export function scatteredPaper(count = 5, radius = 0.8): THREE.Group {
   const g = new THREE.Group();
@@ -1944,6 +1944,13 @@ function vendingSide(): THREE.MeshLambertMaterial {
  * glass, a keypad with real buttons, coin slot, card reader, coin return
  * and a delivery flap.
  */
+/**
+ * The product window's size and where it sits in the machine's own space,
+ * so a level builder can stand a breakable pane exactly over it. Kept beside
+ * the prop so the two cannot drift apart.
+ */
+export const VENDING_GLASS = { w: 0.64, h: 1.404, x: -0.15, y: 1.131, z: -0.404 } as const;
+
 export function vendingMachine(): THREE.Group {
   const g = new THREE.Group();
   const W = 1.0;
@@ -1972,6 +1979,9 @@ export function vendingMachine(): THREE.Group {
   glass.position.set(-W * 0.15, H * 0.58, -D / 2 - 0.014);
   glass.rotation.y = Math.PI;
   g.add(glass);
+  // A builder that wants this window to be breakable hides this pane and
+  // stands a real one in its place — see VENDING_GLASS.
+  g.userData.glassPane = glass;
   // Window surround
   for (const [fw, fh, fx, fy] of [
     [W * 0.68, 0.04, -W * 0.15, H * 0.58 + (H * 0.72) / 2],

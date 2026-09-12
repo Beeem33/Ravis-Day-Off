@@ -789,6 +789,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     const base = new THREE.Vector3();
     this.player.camera.getWorldDirection(base);
     const muzzle = this.shotgun.muzzleWorld();
+    this.particles.barrelSmoke(muzzle, base);
     for (let i = 0; i < 9; i++) {
       const dir = base.clone();
       dir.x += (Math.random() - 0.5) * 0.09;

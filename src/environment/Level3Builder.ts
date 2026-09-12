@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FlickeringLight } from './FlickeringLight';
 import { BreakableGlass } from './BreakableGlass';
+import { breakableVendingGlass, type LevelParts } from './vendingGlass';
 import {
   Collider, Waypoint, EnemySpawn, noiseCanvas, ceilingTileCanvas, spreadsheetCanvas, makeTex
 } from './OfficeLevelBuilder';
@@ -128,6 +129,11 @@ export class Level3Builder {
   private coolerMat!: THREE.MeshLambertMaterial;
 
   private truckParts!: ReturnType<typeof swatTruck>;
+
+  /** The collections a shared prop helper needs to register things into. */
+  private parts(): LevelParts {
+    return { group: this.group, shootables: this.shootables, glassPanes: this.glassPanes };
+  }
 
   build(): Level3Data {
     this.makeMaterials();
@@ -627,7 +633,8 @@ export class Level3Builder {
     // Machines against the east wall, backs to it
     // Backs to the east wall, fronts facing WEST into the room
     for (const vz of [4.0, 5.6]) {
-      this.place(vendingMachine(), OFF_X1 - 0.5, 0, vz, Math.PI / 2);
+      const m = this.place(vendingMachine(), OFF_X1 - 0.5, 0, vz, Math.PI / 2) as THREE.Group;
+      breakableVendingGlass(m, OFF_X1 - 0.5, vz, Math.PI / 2, this.parts());
       this.colliders.push({
         box: new THREE.Box3(new THREE.Vector3(OFF_X1 - 0.95, 0, vz - 0.5), new THREE.Vector3(OFF_X1 - 0.05, 1.95, vz + 0.5))
       });

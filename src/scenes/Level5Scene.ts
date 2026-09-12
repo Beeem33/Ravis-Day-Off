@@ -98,6 +98,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
   private arcs!: ElectricArcs;
   private arcTimer = 0;
   private sparkTimer = 1;
+  /** Clock for the swell that the bodies and helmets ride. */
+  private floatT = 0;
   /** Seconds into an electrocution, or -1 when not being electrocuted. */
   private zapT = -1;
   private respawned = false;
@@ -267,11 +269,38 @@ export class Level5Scene extends CombatScene<Level5Data> {
     }
     const live = this.arcs.update(dt);
     L.waterLight.intensity = 0.4 + Math.random() * 0.3 + live * (1.4 + Math.random() * 1.2);
-    L.waterMat.emissiveIntensity = 0.28 + live * 0.16 + Math.random() * 0.05;
-    // A slow drift across the surface so it reads as liquid, not a lit floor
+    // Lower than it was: the water used to glow its own colour whatever the
+    // room was doing, which is the one thing standing water never does.
+    L.waterMat.emissiveIntensity = 0.15 + live * 0.2 + Math.random() * 0.04;
+    // Three layers drifting at different speeds and angles. One scrolling
+    // texture always reads as a picture being slid along underneath; crossed
+    // at different rates they interfere, which is what moving water does.
+    // The normals are the important one — they are what bends the highlights.
     if (L.waterMat.map) {
       L.waterMat.map.offset.x += dt * 0.018;
       L.waterMat.map.offset.y += dt * 0.011;
+    }
+    if (L.waterMat.normalMap) {
+      L.waterMat.normalMap.offset.x -= dt * 0.026;
+      L.waterMat.normalMap.offset.y += dt * 0.034;
+      // The chop picks up while the water is live
+      const chop = 0.5 + live * 0.5;
+      L.waterMat.normalScale.set(chop, chop);
+    }
+    if (L.waterGlintMat.map) {
+      L.waterGlintMat.map.offset.x += dt * 0.043;
+      L.waterGlintMat.map.offset.y -= dt * 0.007;
+      L.waterGlintMat.opacity = 0.12 + live * 0.24 + Math.random() * 0.02;
+    }
+    // What is floating in it rides the swell: a slow bob and a lazy turn,
+    // each on its own phase so they are not a raft
+    this.floatT += dt;
+    for (let i = 0; i < L.floaters.length; i++) {
+      const f = L.floaters[i];
+      const p = this.floatT * 0.6 + i * 1.7;
+      f.position.y = L.pit.waterY + Math.sin(p) * 0.022;
+      f.rotation.z = Math.sin(p * 0.8 + 1.1) * 0.035;
+      f.rotation.x = Math.sin(p * 0.63) * 0.028;
     }
 
     this.sparkTimer -= dt;
@@ -664,6 +693,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     const base = new THREE.Vector3();
     this.player.camera.getWorldDirection(base);
     const muzzle = this.shotgun.muzzleWorld();
+    this.particles.barrelSmoke(muzzle, base);
     for (let i = 0; i < 9; i++) {
       const dir = base.clone();
       dir.x += (Math.random() - 0.5) * 0.09;

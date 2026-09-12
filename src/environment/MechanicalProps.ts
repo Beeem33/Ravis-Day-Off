@@ -397,21 +397,33 @@ export function debrisPlatform(w: number, d: number, depth = 1.05, seed = 1): TH
   const core = new THREE.Mesh(new THREE.BoxGeometry(w, depth, d), M.concrete);
   core.position.y = -depth / 2;
   g.add(core);
-  // Ragged lumps round the sides, all below the top so none sticks up to trip on
-  for (let i = 0; i < 6; i++) {
-    const cw = 0.2 + rnd() * 0.35;
-    const cd = 0.2 + rnd() * 0.35;
-    const ch = 0.25 + rnd() * 0.4;
+  // Broken edges. These are pieces of a floor that was torn apart, not cut,
+  // so the sides want to be a mess of wedges canted every which way — angled
+  // steeply enough to read as fracture rather than trim. Everything sits
+  // below the walking face so none of it can be tripped on.
+  for (let i = 0; i < 11; i++) {
+    const cw = 0.14 + rnd() * 0.3;
+    const cd = 0.14 + rnd() * 0.3;
+    const ch = 0.22 + rnd() * 0.55;
     const lump = new THREE.Mesh(new THREE.BoxGeometry(cw, ch, cd), rnd() < 0.5 ? M.concrete : M.concreteDark);
     const side = i % 4;
-    const along = (rnd() - 0.5) * 0.8;
+    const along = (rnd() - 0.5) * 0.95;
     lump.position.set(
-      side === 0 ? w / 2 : side === 1 ? -w / 2 : along * w,
-      -0.12 - ch / 2 - rnd() * 0.25,
-      side === 2 ? d / 2 : side === 3 ? -d / 2 : along * d
+      side === 0 ? w / 2 + (rnd() - 0.3) * 0.12 : side === 1 ? -w / 2 - (rnd() - 0.3) * 0.12 : along * w,
+      -0.1 - ch / 2 - rnd() * 0.3,
+      side === 2 ? d / 2 + (rnd() - 0.3) * 0.12 : side === 3 ? -d / 2 - (rnd() - 0.3) * 0.12 : along * d
     );
-    lump.rotation.set(rnd() * 0.5, rnd() * 1.2, rnd() * 0.5);
+    lump.rotation.set((rnd() - 0.5) * 1.5, rnd() * Math.PI, (rnd() - 0.5) * 1.5);
     g.add(lump);
+  }
+  // Shards still hanging off the broken lip, tipped out and down
+  for (let i = 0; i < 4; i++) {
+    const side = i < 2 ? 1 : -1;
+    const sw = 0.1 + rnd() * 0.16;
+    const shard = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.05, 0.1 + rnd() * 0.2), M.concreteDark);
+    shard.position.set(side * (w / 2 - 0.02 + rnd() * 0.14), -0.05 - rnd() * 0.1, (rnd() - 0.5) * d * 0.85);
+    shard.rotation.set((rnd() - 0.5) * 0.7, (rnd() - 0.5) * 0.9, side * (0.35 + rnd() * 0.55));
+    g.add(shard);
   }
   // A darker skin on the top so the walkable face reads against the water
   const top = new THREE.Mesh(new THREE.BoxGeometry(w - 0.04, 0.02, d - 0.04), M.concreteDark);
@@ -542,4 +554,176 @@ export function mainBreaker(): {
   g.add(hazardSticker(0.2, 0.34, 0.62, D + 0.014));
   g.add(hazardSticker(0.2, -0.34, 0.62, D + 0.014));
   return { group: g, lever, lamp };
+}
+
+/**
+ * A length of broken service pipe, still bracketed to the wall, standing
+ * just clear of the water — the only way across the far end of the flooded
+ * hall. The pipe's top is at y = 0 so the caller can drop it straight onto
+ * the walking height; the brackets and the torn ends hang below.
+ *
+ * @param len   how far it runs along X
+ * @param r     pipe radius
+ */
+export function brokenPipeStep(len: number, r = 0.17, seed = 1): THREE.Group {
+  const g = new THREE.Group();
+  let s = seed * 9301 + 49297;
+  const rnd = (): number => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+  const yc = -r; // so the crown of the pipe is the walking surface at y = 0
+
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), M.pipeRust);
+  pipe.rotation.z = Math.PI / 2;
+  pipe.position.y = yc;
+  g.add(pipe);
+  // A flat of grip worn along the crown — walking on a bare cylinder reads
+  // as balancing on nothing
+  const tread = new THREE.Mesh(new THREE.BoxGeometry(len - 0.04, 0.012, r * 1.1), M.darkSteel);
+  tread.position.y = -0.004;
+  g.add(tread);
+
+  // Torn ends: a collar of jagged steel where the run snapped
+  for (const end of [-1, 1]) {
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.14, r * 1.14, 0.05, 12), M.flange);
+    collar.rotation.z = Math.PI / 2;
+    collar.position.set((end * len) / 2, yc, 0);
+    g.add(collar);
+    for (let i = 0; i < 4; i++) {
+      const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.05 + rnd() * 0.07, 0.05, 0.05), M.darkSteel);
+      const a = rnd() * Math.PI * 2;
+      tooth.position.set((end * (len + 0.06)) / 2, yc + Math.sin(a) * r * 0.85, Math.cos(a) * r * 0.85);
+      tooth.rotation.set(rnd(), rnd(), rnd());
+      g.add(tooth);
+    }
+  }
+
+  // Wall brackets, and the stubs of the smaller lines that ran with it
+  for (const bx of [-len * 0.3, len * 0.3]) {
+    const strap = new THREE.Mesh(new THREE.TorusGeometry(r * 1.2, 0.022, 6, 12), M.steel);
+    strap.rotation.y = Math.PI / 2;
+    strap.position.set(bx, yc, 0);
+    g.add(strap);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.5), M.darkSteel);
+    arm.position.set(bx, yc, 0.3);
+    g.add(arm);
+  }
+  const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, len * 0.8, 8), M.pipeCopper);
+  stub.rotation.z = Math.PI / 2;
+  stub.position.set(rnd() * 0.1, yc - r - 0.09, 0.16);
+  g.add(stub);
+  // Something dripping off it
+  const drip = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.14, 5), M.pipeGrey);
+  drip.position.set((rnd() - 0.5) * len * 0.6, yc - r - 0.07, 0);
+  g.add(drip);
+  return g;
+}
+
+/** Hi-vis orange, and the yellow of a site helmet. */
+const WORKER = {
+  vest: lam(0xd8571a),
+  band: lam(0xd9dde0),
+  shirt: lam(0x9aa3ad),
+  trouser: lam(0x2f3a4a),
+  skin: lam(0x8a5c3b),
+  helmet: lam(0xd9b023),
+  boot: lam(0x1b1d20)
+};
+
+/**
+ * One of the maintenance crew, face-down in the water.
+ *
+ * Built to be seen from above and from one side only: what breaks the
+ * surface is the back of the vest, the shoulders and the backs of the legs,
+ * with the head and the limbs hanging below where the water hides how
+ * little of them there is. The group's origin is the waterline.
+ */
+export function floatingWorker(seed = 1): THREE.Group {
+  const g = new THREE.Group();
+  let s = seed * 9301 + 49297;
+  const rnd = (): number => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+
+  // Torso: the high point. It has to ride properly proud of the surface —
+  // sunk to the waterline it read as a plank floating there, not a man.
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.3, 0.62), WORKER.vest);
+  torso.position.set(0, 0.02, 0);
+  torso.rotation.x = -0.06;
+  g.add(torso);
+  // Reflective bands across the back of the vest
+  for (const bz of [-0.14, 0.12]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.06, 0.085), WORKER.band);
+    band.position.set(0, 0.09, bz);
+    g.add(band);
+  }
+  const collar = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.1), WORKER.shirt);
+  collar.position.set(0, 0.0, -0.33);
+  g.add(collar);
+
+  // Head, face-down: the back of the skull is what breaks the surface
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.23, 0.25), WORKER.skin);
+  head.position.set(0, -0.05, -0.48);
+  head.rotation.x = -0.3;
+  g.add(head);
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.235, 0.08, 0.26), lam(0x1a1410));
+  hair.position.set(0, 0.055, -0.475);
+  hair.rotation.x = -0.3;
+  g.add(hair);
+
+  // Arms out to the sides, floating at the surface
+  for (const side of [-1, 1]) {
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.13, 0.14), WORKER.shirt);
+    upper.position.set(side * 0.38, -0.01, -0.16);
+    upper.rotation.y = side * (0.15 + rnd() * 0.2);
+    g.add(upper);
+    const fore = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.11, 0.12), WORKER.skin);
+    fore.position.set(side * 0.68, -0.04, -0.05 + rnd() * 0.16);
+    fore.rotation.y = side * (0.3 + rnd() * 0.35);
+    fore.rotation.z = side * 0.08;
+    g.add(fore);
+  }
+
+  // Legs trailing under the surface, one knee bent
+  for (const side of [-1, 1]) {
+    const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.18, 0.42), WORKER.trouser);
+    thigh.position.set(side * 0.12, -0.04, 0.5);
+    g.add(thigh);
+    const bend = side * (rnd() * 0.3);
+    const calf = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.14, 0.4), WORKER.trouser);
+    calf.position.set(side * 0.12 + bend, -0.11, 0.88);
+    calf.rotation.y = bend;
+    g.add(calf);
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.24), WORKER.boot);
+    boot.position.set(side * 0.12 + bend * 1.8, -0.16, 1.16);
+    g.add(boot);
+  }
+  return g;
+}
+
+/**
+ * A site helmet on its own, floating brim-down like an upturned bowl —
+ * whoever it belongs to is face-down somewhere nearby. Origin is the
+ * waterline.
+ */
+export function floatingHelmet(seed = 1): THREE.Group {
+  const g = new THREE.Group();
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), WORKER.helmet);
+  dome.position.y = -0.02;
+  g.add(dome);
+  // The ridge along the crown
+  const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.035, 0.26), WORKER.helmet);
+  ridge.position.y = 0.11;
+  g.add(ridge);
+  // Brim, sitting at the waterline
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.21, 0.022, 14), WORKER.helmet);
+  brim.position.y = -0.02;
+  g.add(brim);
+  const peak = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.02, 0.1), WORKER.helmet);
+  peak.position.set(0, -0.02, -0.2);
+  g.add(peak);
+  g.rotation.y = seed * 1.7;
+  return g;
 }

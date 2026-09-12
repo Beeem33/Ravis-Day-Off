@@ -4,7 +4,7 @@ import { Collider, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevel
 import { vent } from './OfficeProps';
 import {
   pipe, duct, cable, barrel, controlConsole, electricalBox, generator, cageLamp, ceilingFixture,
-  warningSign, debrisPlatform, rubble, mainBreaker
+  warningSign, debrisPlatform, rubble, mainBreaker, brokenPipeStep, floatingWorker, floatingHelmet
 } from './MechanicalProps';
 import { mergeStatic } from './mergeStatic';
 
@@ -50,6 +50,10 @@ export interface Level5Data {
   pit: { x0: number; x1: number; z0: number; z1: number; waterY: number; deathY: number };
   water: THREE.Mesh;
   waterMat: THREE.MeshStandardMaterial;
+  /** The additive sheet of glints riding over the water. */
+  waterGlintMat: THREE.MeshBasicMaterial;
+  /** What is floating in it — bobbed by the scene. */
+  floaters: THREE.Object3D[];
   /** The cold flicker over the water, driven by the arcs. */
   waterLight: THREE.PointLight;
   /** Where arcs can strike: round the foot of each slab and across open water. */
@@ -91,7 +95,15 @@ interface Cell {
 }
 
 // ---- The flooded hall's crossing
-const PIT = { x0: 165.3, x1: 182.7, z0: 4, z1: 20, waterY: -0.25 };
+/**
+ * The hall used to be a 16m-wide barn with the route straight down the
+ * middle, leaving seven metres of nothing either side. Narrowed about the
+ * same centre line so the far wall is somewhere you can see. The pit runs
+ * further west than the room's old ledge to make room for the pipe traverse
+ * at the end of the crossing.
+ */
+const HALL = { x0: 162, x1: 186, z0: 6.4, z1: 17.6 };
+const PIT = { x0: 163.4, x1: 182.7, z0: HALL.z0, z1: HALL.z1, waterY: -0.25 };
 /** Slab tops stand a shade above the ledges, and 0.27m above the water. */
 const PLATFORM_TOP = 0.02;
 /**
@@ -99,32 +111,115 @@ const PLATFORM_TOP = 0.02;
  *
  * Sized off the player's own jump, measured with the real physics: a walking
  * jump carries about 2.7m and a sprinting one about 4.1m, and air control is
- * too weak to do much about it once you are off. Slabs are 2.6m deep with
- * 1.4m gaps, which catches both — a walking jump from anywhere in the last
- * metre, and a sprinting jump taken right on the lip. At 2.0m deep a sprint
- * jump from the lip cleared the next slab entirely and came down in the gap
- * after it, which is the one way to fall in that feels like the game's fault.
+ * too weak to do much about it once you are off. The slabs are small now —
+ * 1.3 x 0.9, half what they were — so each is a footing rather than a floor,
+ * and the gaps came down to 1.8m to match: a walking jump from anywhere on
+ * the slab makes it, but nothing can be stepped or straddled.
  *
- * Each overlaps its neighbours by a metre or more across the width, so the
- * jumps can be taken straight rather than threaded at an angle.
+ * The route also bends north over the last two, which walks the player into
+ * the pipe traverse along the wall rather than dropping them at it.
  */
 const PLATFORMS: [number, number, number, number, number][] = [
-  [178.7, 181.3, 11.0, 12.8, 1],
-  [174.7, 177.3, 10.5, 12.3, 2],
-  [170.7, 173.3, 11.2, 13.0, 3],
-  [166.7, 169.3, 10.6, 12.4, 4]
+  [179.6, 180.9, 11.55, 12.45, 1],
+  [176.5, 177.8, 12.15, 13.05, 2],
+  [173.4, 174.7, 13.35, 14.25, 3],
+  [170.3, 171.6, 14.55, 15.45, 4]
 ];
+/**
+ * [x0, x1, z, seed] — the last stretch. The floor gave out entirely at this
+ * end, and what is left to cross on is the service run that was clipped to
+ * the north wall: two lengths of broken pipe, still bracketed up, standing
+ * just clear of the water. Narrow enough that they have to be walked.
+ */
+const PIPE_STEPS: [number, number, number, number][] = [
+  [167.6, 168.8, 16.55, 11],
+  [164.9, 166.1, 16.55, 12]
+];
+/**
+ * How wide a footing each pipe gives. Wider than the pipe itself: landing a
+ * jump on a bare 0.34m cylinder is a coin toss rather than a test of nerve,
+ * and the pipe reads as something you balance along either way.
+ */
+const PIPE_WALK = 0.52;
 /** [x, z, w, d, seed]: slabs barely breaking the surface. No colliders. */
 const DECOYS: [number, number, number, number, number][] = [
-  [176.2, 16.4, 1.1, 0.9, 5],
-  [172.8, 6.8, 0.9, 1.1, 6],
-  [179.6, 17.4, 0.8, 0.8, 7],
-  [169.6, 16.8, 1.0, 0.9, 8],
-  [178.6, 6.2, 0.9, 0.7, 9],
-  [167.4, 6.9, 0.9, 0.8, 10]
+  [177.4, 15.9, 1.1, 0.9, 5],
+  [173.2, 8.3, 0.9, 1.1, 6],
+  [180.2, 16.6, 0.8, 0.8, 7],
+  [169.2, 9.4, 1.0, 0.9, 8],
+  [179.1, 7.8, 0.9, 0.7, 9],
+  [166.3, 11.7, 0.9, 0.8, 10]
 ];
 
 const T = 0.24;
+
+/**
+ * A tangent-space normal map of shallow overlapping ripples. Three sine
+ * gratings at different angles and wavelengths are summed into a height
+ * field, and the map stores its slope — so the water's highlights bend the
+ * way a disturbed surface bends them, instead of a flat plane sliding a
+ * picture of ripples along underneath itself.
+ */
+function rippleNormalCanvas(size = 128): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(size, size);
+  const waves = [
+    { ax: 1.0, az: 0.25, k: 7.0, amp: 1.0 },
+    { ax: -0.4, az: 1.0, k: 11.0, amp: 0.65 },
+    { ax: 0.7, az: -0.8, k: 17.0, amp: 0.35 }
+  ];
+  const h = (u: number, v: number): number => {
+    let s = 0;
+    for (const w of waves) s += w.amp * Math.sin((u * w.ax + v * w.az) * w.k * Math.PI * 2);
+    return s;
+  };
+  const e = 1 / size;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const v = y / size;
+      // Central differences give the slope; scale sets how steep it reads
+      const dx = (h(u + e, v) - h(u - e, v)) * 0.09;
+      const dy = (h(u, v + e) - h(u, v - e)) * 0.09;
+      const len = Math.hypot(-dx, -dy, 1);
+      const i = (y * size + x) * 4;
+      img.data[i] = ((-dx / len) * 0.5 + 0.5) * 255;
+      img.data[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+/** Sparse specular glints, for the additive sheet that rides over the water. */
+function glintCanvas(size = 128): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, size, size);
+  // Few, long and soft. Many short ones read as rain on a window rather than
+  // light lying along a swell, and they have to fade out at both ends or the
+  // texture's own tiling shows up as dashes.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const w = 14 + Math.random() * 46;
+    const h = 1.2 + Math.random() * 2.2;
+    const grad = g.createLinearGradient(x - w / 2, y, x + w / 2, y);
+    grad.addColorStop(0, 'rgba(120,210,235,0)');
+    grad.addColorStop(0.35, `rgba(170,235,255,${0.1 + Math.random() * 0.16})`);
+    grad.addColorStop(0.55, `rgba(200,245,255,${0.16 + Math.random() * 0.22})`);
+    grad.addColorStop(1, 'rgba(120,210,235,0)');
+    g.fillStyle = grad;
+    g.fillRect(x - w / 2, y - h / 2, w, h);
+  }
+  return c;
+}
 
 // ---- The hallway down to the lift. Deliberately plain and deliberately dark.
 const HALL_X0 = 0;
@@ -162,7 +257,10 @@ export class Level5Builder {
   private sparkAt = new THREE.Vector3();
   private water!: THREE.Mesh;
   private waterMat!: THREE.MeshStandardMaterial;
+  private waterGlintMat!: THREE.MeshBasicMaterial;
   private waterLight!: THREE.PointLight;
+  /** Bodies and helmets riding the surface; the scene bobs them. */
+  private floaters: THREE.Object3D[] = [];
   private breakerLever!: THREE.Group;
   private breakerLamp!: THREE.MeshStandardMaterial;
   private breakerTarget!: THREE.Object3D;
@@ -203,6 +301,8 @@ export class Level5Builder {
       pit: { ...PIT, deathY: -0.08 },
       water: this.water,
       waterMat: this.waterMat,
+      waterGlintMat: this.waterGlintMat,
+      floaters: this.floaters,
       waterLight: this.waterLight,
       arcSpots: this.arcSpots,
       sparkAt: this.sparkAt,
@@ -405,7 +505,7 @@ export class Level5Builder {
       { x0: 186, x1: 198.2, z0: 10.6, z1: 13.4, h: 3.0 },
       // The flooded hall: its floor is built by hand, and its walls go down
       // to the bottom of the pit
-      { x0: 162, x1: 186, z0: 4, z1: 20, h: 5.0, floor: false, floorY: -1.2 },
+      { x0: HALL.x0, x1: HALL.x1, z0: HALL.z0, z1: HALL.z1, h: 5.0, floor: false, floorY: -1.2 },
       { x0: 154, x1: 162, z0: 9, z1: 15, h: 3.2 }
     ];
     this.buildCells(cells);
@@ -426,30 +526,57 @@ export class Level5Builder {
    */
   private buildFloodedHall(): void {
     const { x0, x1, z0, z1, waterY } = PIT;
+    const zc = (z0 + z1) / 2;
+    const zd = z1 - z0;
     // Ledges, solid from the pit floor up so the pit has real sides
-    this.solid(186 - x1, 1.2, 16, (186 + x1) / 2, -1.2, 12, this.basementFloorMat);
-    this.solid(x0 - 162, 1.2, 16, (162 + x0) / 2, -1.2, 12, this.basementFloorMat);
+    this.solid(HALL.x1 - x1, 1.2, zd, (HALL.x1 + x1) / 2, -1.2, zc, this.basementFloorMat);
+    this.solid(x0 - HALL.x0, 1.2, zd, (HALL.x0 + x0) / 2, -1.2, zc, this.basementFloorMat);
     // The pit bottom
-    this.solid(x1 - x0, 0.3, z1 - z0, (x0 + x1) / 2, -1.5, (z0 + z1) / 2, this.concreteMat);
+    this.solid(x1 - x0, 0.3, zd, (x0 + x1) / 2, -1.5, zc, this.concreteMat);
 
-    // The water
-    // Mottled, and drifted by the scene, so the surface moves
-    const ripple = makeTex(noiseCanvas([150, 190, 200], 60), 6, 8);
+    // ---- The water.
+    //
+    // A flat lit plane never reads as liquid however it is coloured: what
+    // sells it is the surface catching light at angles that keep changing.
+    // So the standing water is two sheets. The lower one is the body of it —
+    // dark, glossy, nearly a mirror — with a rippled NORMAL map, which is
+    // what actually bends the highlights about as the scene drifts it. The
+    // upper one is a thin additive sheet of glints drifting the other way at
+    // a different scale; crossing the two makes the interference pattern
+    // moving water has, which a single scrolling texture cannot.
+    const ripple = makeTex(noiseCanvas([150, 190, 200], 40), 5, 6);
+    const normals = makeTex(rippleNormalCanvas(), 7, 9);
     this.waterMat = new THREE.MeshStandardMaterial({
       map: ripple,
-      color: 0x0c1a1e,
-      roughness: 0.12,
-      metalness: 0.4,
-      emissive: 0x0d4a5a,
-      emissiveIntensity: 0.35,
+      normalMap: normals,
+      // Shallow, so the ripples disturb the reflection rather than shredding it
+      normalScale: new THREE.Vector2(0.55, 0.55),
+      color: 0x0a1418,
+      roughness: 0.06,
+      metalness: 0.85,
+      emissive: 0x0b3f4e,
+      emissiveIntensity: 0.3,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.93
     });
     const water = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0 - T), this.waterMat);
     water.rotation.x = -Math.PI / 2;
     water.position.set((x0 + x1) / 2, waterY, (z0 + z1) / 2);
     this.group.add(water);
     this.water = water;
+    // The glint sheet, a hair above the body of the water
+    this.waterGlintMat = new THREE.MeshBasicMaterial({
+      map: makeTex(glintCanvas(), 1.6, 2.2),
+      transparent: true,
+      opacity: 0.16,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const glint = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0 - T), this.waterGlintMat);
+    glint.rotation.x = -Math.PI / 2;
+    glint.position.set((x0 + x1) / 2, waterY + 0.012, (z0 + z1) / 2);
+    glint.renderOrder = 2;
+    this.group.add(glint);
 
     // The way across
     for (const [px0, px1, pz0, pz1, seed] of PLATFORMS) {
@@ -463,10 +590,51 @@ export class Level5Builder {
       this.arcSpots.push(new THREE.Vector3(px0 - 0.1, waterY + 0.02, (pz0 + pz1) / 2));
       this.arcSpots.push(new THREE.Vector3(px1 + 0.1, waterY + 0.02, pz0 + 0.3));
     }
+    // ---- The last stretch: the floor is gone entirely, and what is left to
+    // cross on is the service run bracketed to the north wall. Narrow, so it
+    // has to be walked rather than strolled over.
+    for (const [px0, px1, pz, seed] of PIPE_STEPS) {
+      this.colliders.push({
+        box: new THREE.Box3(
+          new THREE.Vector3(px0, -1.2, pz - PIPE_WALK / 2),
+          new THREE.Vector3(px1, PLATFORM_TOP, pz + PIPE_WALK / 2)
+        )
+      });
+      this.put(brokenPipeStep(px1 - px0, 0.22, seed), (px0 + px1) / 2, pz, 0, PLATFORM_TOP);
+      this.arcSpots.push(new THREE.Vector3(px0 - 0.15, waterY + 0.02, pz));
+      this.arcSpots.push(new THREE.Vector3(px1 + 0.15, waterY + 0.02, pz - 0.2));
+    }
+    // The rest of the run, snapped off and hanging above the water — the
+    // stumps of what the two footings used to be part of
+    for (const [sx, sz, len] of [[169.9, 16.55, 0.7], [163.9, 16.55, 0.5], [166.9, 17.25, 1.6]] as const) {
+      const stub = brokenPipeStep(len, 0.15, Math.round(sx));
+      stub.rotation.z = 0.16;
+      this.put(stub, sx, sz, 0, waterY + 0.32);
+    }
+
     // Debris just breaking the surface: something to look at, nothing to stand on
     for (const [cx, cz, w, d, seed] of DECOYS) {
       this.put(debrisPlatform(w, d, 0.9, seed), cx, cz, seed * 0.7, waterY + 0.07);
       this.arcSpots.push(new THREE.Vector3(cx, waterY + 0.02, cz));
+    }
+
+    // ---- The crew who were down here when it flooded. Two of them face
+    // down in the water, and the helmets that came off them drifting
+    // separately — kept off the route so they are something you look at
+    // rather than something you land on.
+    for (const [fx, fz, yaw, seed] of [[178.2, 8.6, 0.7, 21], [168.4, 10.2, 2.4, 22]] as const) {
+      const body = floatingWorker(seed);
+      body.position.set(fx, waterY, fz);
+      body.rotation.y = yaw;
+      this.group.add(body);
+      this.floaters.push(body);
+      this.shootables.push(body);
+    }
+    for (const [hx, hz, seed] of [[176.9, 9.4, 23], [171.6, 8.1, 24], [165.2, 13.4, 25]] as const) {
+      const hat = floatingHelmet(seed);
+      hat.position.set(hx, waterY, hz);
+      this.group.add(hat);
+      this.floaters.push(hat);
     }
     // Open water, for the arcs that are not at anything in particular
     for (let i = 0; i < 10; i++) {
@@ -611,17 +779,19 @@ export class Level5Builder {
     this.mainLight(189, 2.72, 12);
 
     // ---- The hall
-    this.pipeRun(23.6, 0.18, 'green', 174, 4.2, 19.6);
-    this.pipeRun(23.6, 0.14, 'rust', 174, 4.0, 4.4);
-    this.pipeRun(23.6, 0.08, 'grey', 174, 4.55, 4.35);
+    this.pipeRun(23.6, 0.18, 'green', 174, 4.2, HALL.z1 - 0.2);
+    this.pipeRun(23.6, 0.14, 'rust', 174, 4.0, HALL.z0 + 0.4);
+    this.pipeRun(23.6, 0.08, 'grey', 174, 4.55, HALL.z0 + 0.35);
     this.put(duct(23.2, 0.8, 0.5), 174, 12, 0, 4.6);
-    this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, 4.12, 0, 1.75);
-    this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, 19.88, Math.PI, 1.75);
-    this.redLamp(185.88, 3.4, 7.0, -Math.PI / 2);
-    this.redLamp(162.12, 3.4, 17.0, Math.PI / 2);
+    this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, HALL.z0 + 0.12, 0, 1.75);
+    this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, HALL.z1 - 0.12, Math.PI, 1.75);
+    this.redLamp(185.88, 3.4, HALL.z0 + 0.9, -Math.PI / 2);
+    this.redLamp(162.12, 3.4, HALL.z1 - 0.9, Math.PI / 2);
     this.mainLight(184, 4.62, 12);
-    this.mainLight(174, 4.62, 8);
-    this.mainLight(174, 4.62, 16);
+    this.mainLight(174, 4.62, HALL.z0 + 2.4);
+    this.mainLight(174, 4.62, HALL.z1 - 2.4);
+    // Over the pipe traverse, so the last stretch is not crossed blind
+    this.mainLight(166.5, 4.62, HALL.z1 - 1.6);
     this.mainLight(164, 4.62, 12);
 
     // ---- Breaker room

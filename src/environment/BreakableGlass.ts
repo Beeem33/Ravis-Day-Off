@@ -36,7 +36,13 @@ export class BreakableGlass {
   constructor(
     public readonly width: number,
     public readonly height: number,
-    public readonly horizontalAxis: 'x' | 'z'
+    public readonly horizontalAxis: 'x' | 'z',
+    /**
+     * Partitions come with their own aluminium frame. A vending machine's
+     * window already has a surround moulded into the shell, so it asks for
+     * the glass on its own.
+     */
+    withFrame = true
   ) {
     this.group = new THREE.Group();
 
@@ -65,6 +71,7 @@ export class BreakableGlass {
     });
 
     // Aluminum frame
+    if (!withFrame) return;
     const frameMat = new THREE.MeshLambertMaterial({ color: 0x6a7076 });
     const t = 0.05;
     const mkBar = (w: number, h: number, d: number, x: number, y: number, z: number) => {

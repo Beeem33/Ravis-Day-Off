@@ -24,6 +24,8 @@ export class ShotgunViewmodel {
   private muzzle = new THREE.Object3D();
   private port = new THREE.Object3D();
   private flashSprite: THREE.Sprite;
+  /** Wider, dimmer second star, spun independently of the core. */
+  private flashHalo!: THREE.Sprite;
   private flashLight: THREE.PointLight;
 
   /**
@@ -41,6 +43,8 @@ export class ShotgunViewmodel {
   private swayY = 0;
   private recoil = 0;
   private flashTimer = 0;
+  /** Scales every recoil-driven movement of the viewmodel (1 = the original). */
+  private static readonly KICK = 0.7;
 
   private basePos = new THREE.Vector3(0.2, -0.24, -0.46);
   /** Aim pose: bead lined up with the crosshair. */
@@ -159,9 +163,19 @@ export class ShotgunViewmodel {
     this.flashSprite = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })
     );
-    this.flashSprite.scale.setScalar(0.26);
+    this.flashSprite.scale.setScalar(0.52);
     this.flashSprite.visible = false;
     this.muzzle.add(this.flashSprite);
+    // A second, wider copy spun the other way: two overlapping stars read as
+    // one ragged bloom rather than a rubber-stamped sprite
+    this.flashHalo = new THREE.Sprite(
+      (this.flashSprite.material as THREE.SpriteMaterial).clone()
+    );
+    this.flashHalo.material.opacity = 0.55;
+    this.flashHalo.scale.setScalar(0.78);
+    this.flashHalo.position.z = -0.03;
+    this.flashHalo.visible = false;
+    this.muzzle.add(this.flashHalo);
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 6, 1.8);
     // Stays in the scene for good: switching a light off changes the
     // scene's visible light count, which recompiles every material in it.
@@ -187,25 +201,54 @@ export class ShotgunViewmodel {
     });
   }
 
+  /**
+   * A 12 gauge's flash is a big ragged star, not the pistol's little blob:
+   * a white-hot core, petals of burning powder thrown out around it, and a
+   * dirty orange haze behind the lot.
+   */
   private static makeFlashTexture(): THREE.Texture {
+    const S = 128;
     const c = document.createElement('canvas');
-    c.width = c.height = 64;
+    c.width = c.height = S;
     const g = c.getContext('2d')!;
-    const grad = g.createRadialGradient(32, 32, 1, 32, 32, 30);
-    grad.addColorStop(0, 'rgba(255,250,220,1)');
-    grad.addColorStop(0.3, 'rgba(255,190,90,0.85)');
-    grad.addColorStop(1, 'rgba(255,120,20,0)');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 64, 64);
-    g.strokeStyle = 'rgba(255,230,160,0.9)';
-    g.lineWidth = 3;
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI + Math.random() * 0.3;
+    const mid = S / 2;
+
+    // Outer haze
+    const haze = g.createRadialGradient(mid, mid, 2, mid, mid, mid);
+    haze.addColorStop(0, 'rgba(255,236,190,0.95)');
+    haze.addColorStop(0.22, 'rgba(255,186,80,0.7)');
+    haze.addColorStop(0.6, 'rgba(226,118,26,0.28)');
+    haze.addColorStop(1, 'rgba(150,60,10,0)');
+    g.fillStyle = haze;
+    g.fillRect(0, 0, S, S);
+
+    // Petals: uneven spikes of burning powder, the way a cylinder bore throws it
+    g.globalCompositeOperation = 'lighter';
+    const petals = 7;
+    for (let i = 0; i < petals; i++) {
+      const a = (i / petals) * Math.PI * 2 + Math.random() * 0.5;
+      const len = mid * (0.55 + Math.random() * 0.45);
+      const wide = 0.12 + Math.random() * 0.14;
+      const grad = g.createLinearGradient(mid, mid, mid + Math.cos(a) * len, mid + Math.sin(a) * len);
+      grad.addColorStop(0, 'rgba(255,245,215,0.95)');
+      grad.addColorStop(0.45, 'rgba(255,178,66,0.5)');
+      grad.addColorStop(1, 'rgba(255,120,20,0)');
+      g.fillStyle = grad;
       g.beginPath();
-      g.moveTo(32 - Math.cos(a) * 30, 32 - Math.sin(a) * 30);
-      g.lineTo(32 + Math.cos(a) * 30, 32 + Math.sin(a) * 30);
-      g.stroke();
+      g.moveTo(mid + Math.cos(a - wide) * mid * 0.16, mid + Math.sin(a - wide) * mid * 0.16);
+      g.lineTo(mid + Math.cos(a) * len, mid + Math.sin(a) * len);
+      g.lineTo(mid + Math.cos(a + wide) * mid * 0.16, mid + Math.sin(a + wide) * mid * 0.16);
+      g.closePath();
+      g.fill();
     }
+
+    // White-hot core last, over everything
+    const core = g.createRadialGradient(mid, mid, 0, mid, mid, mid * 0.2);
+    core.addColorStop(0, 'rgba(255,255,248,1)');
+    core.addColorStop(1, 'rgba(255,214,140,0)');
+    g.fillStyle = core;
+    g.fillRect(0, 0, S, S);
+
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
@@ -233,10 +276,18 @@ export class ShotgunViewmodel {
 
   fire(): void {
     this.recoil = 1;
-    this.flashTimer = 0.05;
+    this.flashTimer = 0.075;
     this.flashSprite.visible = true;
-    this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
-    this.flashLight.intensity = 5;
+    this.flashHalo.visible = true;
+    // Both stars spin, in opposite directions and by different amounts, so
+    // no two blasts show the same shape
+    const spin = Math.random() * Math.PI * 2;
+    this.flashSprite.material.rotation = spin;
+    this.flashHalo.material.rotation = -spin * 0.6 + Math.random();
+    const size = 0.46 + Math.random() * 0.14;
+    this.flashSprite.scale.setScalar(size);
+    this.flashHalo.scale.setScalar(size * 1.55);
+    this.flashLight.intensity = 9;
     this.pumpT = 0;
     this.pumpFired.clear();
   }
@@ -367,9 +418,10 @@ export class ShotgunViewmodel {
     const sprintSwayY = Math.sin(phase * 2) * 0.018 * sp;
     const sprintRoll = -Math.sin(phase) * 0.08 * sp;
 
-    // Heavier recoil spring than the pistol — it's a 12 gauge
+    // Heavier recoil spring than the pistol — it's a 12 gauge. KICK holds
+    // the whole thing down: the gun was throwing itself around too far.
     this.recoil = Math.max(0, this.recoil - dt * 5);
-    const r = this.recoil * this.recoil * (1 - 0.3 * a);
+    const r = this.recoil * this.recoil * (1 - 0.3 * a) * ShotgunViewmodel.KICK;
 
     const px = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.x, this.aimPos.x, a), this.sprintPos.x, sp);
     const py = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.y, this.aimPos.y, a), this.sprintPos.y, sp);
@@ -401,7 +453,12 @@ export class ShotgunViewmodel {
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
       this.flashLight.intensity *= 0.6;
+      // The halo collapses faster than the core, so the star shrinks away
+      this.flashHalo.scale.multiplyScalar(0.82);
+      this.flashHalo.material.opacity *= 0.7;
       if (this.flashTimer <= 0) {
+        this.flashHalo.visible = false;
+        this.flashHalo.material.opacity = 0.55;
         this.flashSprite.visible = false;
         // The light stays in the scene for good — switching one off moves
         // the visible light count and recompiles every material. Zeroing

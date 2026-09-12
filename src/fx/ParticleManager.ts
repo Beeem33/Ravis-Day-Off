@@ -216,6 +216,38 @@ export class ParticleManager {
   }
 
   /**
+   * A 12 gauge's parting gift: burning powder thrown out of the bore, then
+   * the smoke it leaves hanging. Spawned in world space, so it stays where
+   * the shot was fired rather than riding the camera around.
+   */
+  barrelSmoke(pos: THREE.Vector3, dir: THREE.Vector3): void {
+    // The bright head of it — unburnt powder, gone in a blink
+    const ember = new THREE.Color(1.0, 0.62, 0.22);
+    for (let i = 0; i < 10; i++) {
+      this.glow.spawn(pos, this.scatter(dir, 0.5, 7), 0.06 + Math.random() * 0.07, 0.35, ember, 0, 7);
+    }
+    // The cloud: shoved out of the bore, slowed hard by drag, then drifting
+    // up. Mixed sizes and lifetimes so it breaks up instead of moving as one
+    // lump, and a negative gravity because warm smoke lifts.
+    const ahead = pos.clone().addScaledVector(dir, 0.12);
+    for (let i = 0; i < 22; i++) {
+      const shade = 0.34 + Math.random() * 0.26;
+      const col = new THREE.Color(shade, shade * 0.97, shade * 0.92);
+      const vel = this.scatter(dir, 0.55, 1.6);
+      vel.y += 0.25 + Math.random() * 0.4;
+      this.solid.spawn(
+        ahead.clone().addScaledVector(dir, Math.random() * 0.18),
+        vel,
+        0.75 + Math.random() * 0.85,
+        0.16 + Math.random() * 0.22,
+        col,
+        -0.22,
+        2.6
+      );
+    }
+  }
+
+  /**
    * Wound spray. Most of it is an EXIT jet continuing along the bullet's
    * path (tight cone, fast), with a smaller entry splash back toward the
    * shooter and a little mist — so every kill reads as "bullet went

@@ -793,6 +793,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     const baseDir = new THREE.Vector3();
     this.player.camera.getWorldDirection(baseDir);
     const muzzle = this.shotgun.muzzleWorld();
+    this.particles.barrelSmoke(muzzle, baseDir);
     for (let i = 0; i < PELLETS; i++) {
       const dir = baseDir.clone();
       dir.x += (Math.random() - 0.5) * spread * 2;

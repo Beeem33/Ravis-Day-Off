@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FlickeringLight } from './FlickeringLight';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BreakableGlass } from './BreakableGlass';
+import { breakableVendingGlass, type LevelParts } from './vendingGlass';
 import {
   officeChair, trashCan, sodaCan, book, spilledCoffee, chipsBox, rubblePile, wallArt,
   flowerPot, coffeeTable, printer, vent, fireAlarm, breakTable, fileCabinet, paperStack,
@@ -172,6 +173,11 @@ export class Level4Builder {
   private wallColliders = 0;
   private dressingBoxes: THREE.Box3[] = [];
   private mountProbes: { pos: THREE.Vector3; yaw: number }[] = [];
+
+  /** The collections a shared prop helper needs to register things into. */
+  private parts(): LevelParts {
+    return { group: this.group, shootables: this.shootables, glassPanes: this.glassPanes };
+  }
 
   build(): Level4Data {
     this.makeMaterials();
@@ -1136,8 +1142,10 @@ export class Level4Builder {
     this.prop(sodaCan(), -9.6, -5.3, 0, 0.76);
     this.prop(sodaCan(), -10.4, -5.9, 0, 0.76);
     for (let i = 0; i < 2; i++) {
-      this.prop(vendingMachine(), -12.35, -8.4 + i * 1.4, -Math.PI / 2);
-      this.block(-12.35, -8.4 + i * 1.4, 0.85, 1.3, 2.0);
+      const vz = -8.4 + i * 1.4;
+      const m = this.prop(vendingMachine(), -12.35, vz, -Math.PI / 2) as THREE.Group;
+      breakableVendingGlass(m, -12.35, vz, -Math.PI / 2, this.parts());
+      this.block(-12.35, vz, 0.85, 1.3, 2.0);
     }
     this.prop(trashCan(), -7.4, -2.5);
     this.prop(waterCooler(), -7.4, -8.6);
@@ -1157,9 +1165,9 @@ export class Level4Builder {
     this.block(7.4, 2.4, 0.72, 0.7, 1.75);
     // Off the west wall entirely: the gap beside the stub is the only way
     // round into the blind corner, and a machine parked in it sealed the lot.
-    this.prop(vendingMachine(), 7.7, 5.9, Math.PI / 2);
+    breakableVendingGlass(this.prop(vendingMachine(), 7.7, 5.9, Math.PI / 2) as THREE.Group, 7.7, 5.9, Math.PI / 2, this.parts());
     this.block(7.7, 5.9, 0.85, 1.3, 2.0);
-    this.prop(vendingMachine(), 6.5, 8.45, 0);
+    breakableVendingGlass(this.prop(vendingMachine(), 6.5, 8.45, 0) as THREE.Group, 6.5, 8.45, 0, this.parts());
     this.block(6.5, 8.45, 1.3, 0.85, 2.0);
     this.prop(waterCooler(), 7.6, 4.6);
     this.block(7.6, 4.6, 0.4, 0.4, 1.0);

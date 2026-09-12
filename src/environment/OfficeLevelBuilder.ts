@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BreakableGlass } from './BreakableGlass';
+import { breakableVendingGlass, type LevelParts } from './vendingGlass';
 import { FlickeringLight } from './FlickeringLight';
 import {
   officeChair, trashCan, scatteredPaper, vendingMachine, sodaCan,
@@ -190,6 +191,11 @@ export class OfficeLevelBuilder {
   private stickyMats!: THREE.MeshLambertMaterial[];
   private exitPanelMat!: THREE.MeshStandardMaterial;
   private exitPanelLight!: THREE.PointLight;
+
+  /** The collections a shared prop helper needs to register things into. */
+  private parts(): LevelParts {
+    return { group: this.group, shootables: this.shootables, glassPanes: this.glassPanes };
+  }
 
   build(): LevelData {
     this.makeMaterials();
@@ -908,6 +914,8 @@ export class OfficeLevelBuilder {
       m.position.set(x, y, z);
       m.rotation.y = yaw;
       this.group.add(m);
+      // The product window is real glass — shoot it and it goes
+      breakableVendingGlass(m, x, z, yaw, this.parts());
       // Footprint is 1.0 x 0.78 before rotation; swap for the quarter turns
       const swap = Math.abs(Math.sin(yaw)) > 0.5;
       const hw = (swap ? 0.78 : 1.0) / 2;

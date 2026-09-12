@@ -3,8 +3,9 @@ import type { BreakableGlass } from './BreakableGlass';
 import { Collider, noiseCanvas, ceilingTileCanvas, makeTex } from './OfficeLevelBuilder';
 import { vent } from './OfficeProps';
 import {
-  pipe, duct, cable, barrel, controlConsole, electricalBox, generator, cageLamp, ceilingFixture,
-  warningSign, debrisPlatform, rubble, mainBreaker, brokenPipeStep, floatingWorker, floatingHelmet
+  duct, cable, routedCable, barrel, controlConsole, CONSOLE_H, electricalBox, generator, cageLamp, ceilingFixture,
+  warningSign, debrisPlatform, rubble, mainBreaker, brokenPipeStep, floatingWorker, floatingHelmet,
+  pipeRoute, pipeClamp, pipeHanger, ductWallCollar, ductCeilingCollar, ductRiser, BREAKER_TOP, type PipeKind
 } from './MechanicalProps';
 import { mergeStatic } from './mergeStatic';
 
@@ -65,10 +66,15 @@ export interface Level5Data {
 
   breaker: {
     lever: THREE.Group;
+    /** Middle of the lever's handle, riding with it: where the hand takes hold. */
+    grip: THREE.Object3D;
     lamp: THREE.MeshStandardMaterial;
     /** What E has to be aimed at. */
     target: THREE.Object3D;
     light: THREE.PointLight;
+    /** Face of the cabinet: x of its front, and the z it is centred on. */
+    faceX: number;
+    z: number;
   };
   /** Emergency lamps, dimmed once the power is back. */
   redLights: THREE.PointLight[];
@@ -152,6 +158,9 @@ const DECOYS: [number, number, number, number, number][] = [
 ];
 
 const T = 0.24;
+/** The main breaker's back, on the breaker room's far wall, and its centre line. */
+const BREAKER_X = 154 + T / 2;
+const BREAKER_Z = 12;
 
 /**
  * A tangent-space normal map of shallow overlapping ripples. Three sine
@@ -262,6 +271,7 @@ export class Level5Builder {
   /** Bodies and helmets riding the surface; the scene bobs them. */
   private floaters: THREE.Object3D[] = [];
   private breakerLever!: THREE.Group;
+  private breakerGrip!: THREE.Object3D;
   private breakerLamp!: THREE.MeshStandardMaterial;
   private breakerTarget!: THREE.Object3D;
   private breakerLight!: THREE.PointLight;
@@ -307,7 +317,15 @@ export class Level5Builder {
       arcSpots: this.arcSpots,
       sparkAt: this.sparkAt,
       checkpoint: { pos: new THREE.Vector3(184.7, 0, 12), yaw: Math.PI / 2 },
-      breaker: { lever: this.breakerLever, lamp: this.breakerLamp, target: this.breakerTarget, light: this.breakerLight },
+      breaker: {
+        lever: this.breakerLever,
+        grip: this.breakerGrip,
+        lamp: this.breakerLamp,
+        target: this.breakerTarget,
+        light: this.breakerLight,
+        faceX: BREAKER_X + 0.34,
+        z: BREAKER_Z
+      },
       redLights: this.redLights,
       mainLights: this.mainLights,
       tubeMat: this.tubeMat,
@@ -463,9 +481,186 @@ export class Level5Builder {
     });
   }
 
-  /** A pipe laid along x (yaw 0) or z (yaw PI/2). */
-  private pipeRun(len: number, r: number, kind: 'grey' | 'green' | 'rust' | 'copper', x: number, y: number, z: number, alongZ = false): void {
-    this.put(pipe(len, r, kind), x, z, alongZ ? Math.PI / 2 : 0, y);
+  /** Is `p` inside anything solid? */
+  private insideSolid(p: THREE.Vector3): boolean {
+    for (const c of this.colliders) if (!c.disabled && c.box.containsPoint(p)) return true;
+    return false;
+  }
+
+  /**
+   * Lay one pipe through world points and hold it up: a clamp back to the
+   * wall every couple of metres wherever there is wall behind it, and a rod
+   * up to the ceiling where there is not — across the mouth of the generator
+   * room, where the run carries straight on over the opening.
+   */
+  private pipeLine(pts: THREE.Vector3[], r: number, kind: PipeKind, ends = { start: true, end: true }): void {
+    this.put(pipeRoute(pts, r, kind, ends), 0, 0);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const d = pts[i + 1].clone().sub(a);
+      const len = d.length();
+      d.normalize();
+      const keep = r * 3 + 0.35; // clear of the elbows and their flanges
+      const span = len - 2 * keep;
+      if (span < 0.3) continue;
+      const count = Math.max(1, Math.round(span / 2.2));
+      for (let k = 0; k < count; k++) {
+        this.pipeSupport(a.clone().addScaledVector(d, keep + (span * (k + 0.5)) / count), d, r);
+      }
+    }
+  }
+
+  private pipeSupport(p: THREE.Vector3, along: THREE.Vector3, r: number): void {
+    const sides =
+      Math.abs(along.y) > 0.9
+        ? [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)]
+        : [new THREE.Vector3(-along.z, 0, along.x).normalize(), new THREE.Vector3(along.z, 0, -along.x).normalize()];
+    const q = new THREE.Vector3();
+    let best: { s: THREE.Vector3; reach: number } | null = null;
+    for (const s of sides) {
+      for (let t = r + 0.01; t <= r + 0.36; t += 0.01) {
+        if (!this.insideSolid(q.copy(p).addScaledVector(s, t))) continue;
+        if (!best || t - r < best.reach) best = { s, reach: t - r };
+        break;
+      }
+    }
+    if (best) {
+      this.put(pipeClamp(r, along, best.s, best.reach), p.x, p.z, 0, p.y);
+      return;
+    }
+    for (let y = p.y + r + 0.01; y < p.y + 2.5; y += 0.02) {
+      if (!this.insideSolid(q.set(p.x, y, p.z))) continue;
+      this.put(pipeHanger(r, along, y - (p.y + r)), p.x, p.z, 0, p.y);
+      return;
+    }
+  }
+
+  /**
+   * The two pipe bundles that follow the route from the lift to the breaker,
+   * one down each side, taking every corner with it.
+   *
+   * Each pipe sits `r + 0.1` off whatever wall it is running along — a hand's
+   * width behind it for the clamps and the conduit — and keeps that gap from
+   * both walls through a corner, so on an inside corner it cuts across and on
+   * an outside one it swings round the end of the wall. In the tall flooded
+   * hall both bundles climb up to run high round its walls and come back down
+   * to go on into the breaker room: the higher pipe of each pair always
+   * climbs first and comes down last, so neither ever crosses the other.
+   *
+   * The left bundle ends in the main breaker itself, dropping into the top of
+   * its cabinet. Everything else ends in a wall, with a collar on the face.
+   */
+  private pipeworks(): void {
+    const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+    // Inside faces of the walls the bundles follow
+    const LIFT = 217.88;
+    const LOBBY_W = 213.12;
+    const B_N = 1.28;
+    const B_S = -1.28;
+    const LOBBY_N = 2.28;
+    const LOBBY_S = -2.28;
+    const C_E = 200.88;
+    const C_W = 198.32;
+    const E_N = 13.28;
+    const E_S = 10.72;
+    const F_E = HALL.x1 - T / 2;
+    const F_W = HALL.x0 + T / 2;
+    const F_N = HALL.z1 - T / 2;
+    const F_S = HALL.z0 + T / 2;
+    const G_N = 14.88;
+    const G_S = 9.12;
+    const G_W = 154.12;
+
+    // Left-hand bundle: grey over copper. [radius, kind, low y, high y, climb z, drop z]
+    // (The drop is kept south of the red lamp on the hall's west wall.)
+    const left: [number, PipeKind, number, number, number, number][] = [
+      [0.09, 'grey', 2.58, 4.25, 14.3, 15.5],
+      [0.055, 'copper', 2.32, 4.0, 14.75, 15.95]
+    ];
+    for (const [r, kind, lo, hi, climb, drop] of left) {
+      const d = r + 0.1;
+      const pts = [
+        V(LIFT, lo, LOBBY_N - d),
+        V(LOBBY_W + d, lo, LOBBY_N - d),
+        V(LOBBY_W + d, lo, B_N - d),
+        V(C_E - d, lo, B_N - d),
+        V(C_E - d, lo, E_N - d),
+        V(F_E - d, lo, E_N - d),
+        V(F_E - d, lo, climb),
+        V(F_E - d, hi, climb),
+        V(F_E - d, hi, F_N - d),
+        V(F_W + d, hi, F_N - d),
+        V(F_W + d, hi, drop),
+        V(F_W + d, lo, drop),
+        V(F_W + d, lo, G_N - d)
+      ];
+      if (kind === 'grey') {
+        // Round onto the breaker wall and down into the top of the cabinet
+        pts.push(V(G_W + d, lo, G_N - d), V(G_W + d, lo, 12.2), V(G_W + d, BREAKER_TOP, 12.2));
+      } else {
+        pts.push(V(G_W, lo, G_N - d));
+      }
+      this.pipeLine(pts, r, kind);
+    }
+
+    // Right-hand bundle: green over rust
+    const right: [number, PipeKind, number, number, number, number][] = [
+      [0.12, 'green', 2.62, 4.3, 9.9, 7.65],
+      [0.07, 'rust', 2.36, 4.05, 9.45, 7.2]
+    ];
+    for (const [r, kind, lo, hi, climb, drop] of right) {
+      const d = r + 0.1;
+      this.pipeLine(
+        [
+          V(LIFT, lo, LOBBY_S + d),
+          V(LOBBY_W + d, lo, LOBBY_S + d),
+          V(LOBBY_W + d, lo, B_S + d),
+          V(C_W + d, lo, B_S + d),
+          // Straight on across the mouth of the generator room, hung from the ceiling
+          V(C_W + d, lo, E_S + d),
+          V(F_E - d, lo, E_S + d),
+          V(F_E - d, lo, climb),
+          V(F_E - d, hi, climb),
+          V(F_E - d, hi, F_S + d),
+          V(F_W + d, hi, F_S + d),
+          V(F_W + d, hi, drop),
+          V(F_W + d, lo, drop),
+          V(F_W + d, lo, G_S + d),
+          V(G_W, lo, G_S + d)
+        ],
+        r,
+        kind
+      );
+    }
+
+    // The hall's own mains, wall to wall below the bundles
+    this.pipeLine([V(F_E, 3.35, F_N - 0.26), V(F_W, 3.35, F_N - 0.26)], 0.16, 'rust');
+    this.pipeLine([V(F_E, 3.35, F_S + 0.3), V(F_W, 3.35, F_S + 0.3)], 0.2, 'green');
+  }
+
+  /**
+   * A straight duct that runs into a wall at each end, with a frame on the
+   * wall face where it goes through. `x0 < x1`; the ends are the wall faces.
+   */
+  private ductRun(x0: number, x1: number, y: number, z: number, w: number, h: number): void {
+    this.put(duct(x1 - x0 + 0.08, w, h), (x0 + x1) / 2, z, 0, y);
+    this.put(ductWallCollar(w, h), x0 + 0.02, z, 0, y);
+    this.put(ductWallCollar(w, h), x1 - 0.02, z, 0, y);
+  }
+
+  /**
+   * A duct that comes down out of the ceiling, runs along x and goes back up
+   * into it: a riser box of its own section at each end, into the slab.
+   */
+  private ductDrop(x0: number, x1: number, y: number, z: number, w: number, h: number, ceiling: number): void {
+    const boot = 0.36;
+    this.put(duct(x1 - x0 - 2 * boot, w, h), (x0 + x1) / 2, z, 0, y);
+    const bottom = y - h / 2;
+    const riseH = ceiling + 0.04 - bottom;
+    for (const x of [x0 + boot / 2, x1 - boot / 2]) {
+      this.put(ductRiser(boot, riseH, w), x, z, 0, bottom + riseH / 2);
+      this.put(ductCeilingCollar(boot, w), x, z, 0, ceiling - 0.015);
+    }
   }
 
   /** Caged red emergency lamp on a wall, and the dim light it throws. */
@@ -657,45 +852,53 @@ export class Level5Builder {
   /** The thing he came down for, on the far wall of the last room. */
   private buildBreaker(): void {
     const b = mainBreaker();
-    b.group.position.set(154 + T / 2, 0, 12);
+    b.group.position.set(BREAKER_X, 0, BREAKER_Z);
     b.group.rotation.y = Math.PI / 2;
     this.group.add(b.group);
     b.group.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) this.shootables.push(o);
     });
-    this.blk(154 + T / 2 + 0.2, 12, 0.42, 1.1, 2.2);
+    this.blk(BREAKER_X + 0.2, BREAKER_Z, 0.42, 1.1, 2.2);
     this.breakerLever = b.lever;
+    this.breakerGrip = b.grip;
     this.breakerLamp = b.lamp;
     this.breakerTarget = b.group;
     this.breakerLight = new THREE.PointLight(0xff2a18, 2.4, 7, 1.5);
-    this.breakerLight.position.set(155.1, 1.8, 12);
+    this.breakerLight.position.set(155.1, 1.8, BREAKER_Z);
     this.group.add(this.breakerLight);
   }
 
-  /** Everything that makes it a plant room rather than a concrete maze. */
+  /**
+   * Everything that makes it a plant room rather than a concrete maze.
+   *
+   * Lamps on the corridor walls sit at 2.0m, under the pipe bundles rather
+   * than in among them.
+   */
   private dressBasement(): void {
+    this.pipeworks();
+
     // ---- Lift lobby
-    this.pipeRun(4.8, 0.1, 'green', 215.5, 2.62, 2.12);
-    this.pipeRun(4.8, 0.06, 'copper', 215.5, 2.36, 2.16);
     this.put(controlConsole(), 215.6, -1.83);
-    this.blk(215.6, -1.83, 1.2, 0.64, 1.3);
+    this.blk(215.6, -1.83, 1.2, 0.64, CONSOLE_H);
     this.put(warningSign(['AUTHORISED', 'PERSONNEL ONLY']), 214.2, 2.28 - 0.001, Math.PI, 1.55);
-    this.redLamp(216.9, 2.5, 2.28, Math.PI);
+    this.redLamp(216.9, 2.0, 2.28, Math.PI);
     this.mainLight(215.5, 2.95, 0);
 
     // ---- First corridor, heading west
-    this.pipeRun(12, 0.09, 'grey', 207, 2.55, 1.12);
-    this.pipeRun(12, 0.055, 'copper', 207, 2.3, 1.17);
-    this.pipeRun(12, 0.13, 'green', 207, 2.58, -1.08);
-    this.put(duct(11.6, 0.55, 0.34), 207, 0.1, 0, 2.8);
+    // The duct comes down out of the ceiling past the lobby and goes back up
+    // into it short of the turn: no open ends hanging in the corridor
+    this.ductDrop(201.8, 212.4, 2.7, 0.1, 0.55, 0.34, 3.0);
     this.put(electricalBox(0.6, 0.8), 206.5, -1.28, 0, 1.45);
     this.put(electricalBox(0.45, 0.6), 205.6, -1.28, 0, 1.3);
+    // Down out of the ceiling, along the wall and into the top of the box
     this.put(
       cable([
-        new THREE.Vector3(212.6, 2.2, -1.2),
-        new THREE.Vector3(209.5, 1.7, -1.18),
-        new THREE.Vector3(207.1, 1.95, -1.18),
-        new THREE.Vector3(206.6, 1.85, -1.14)
+        new THREE.Vector3(212.72, 3.06, -1.236),
+        new THREE.Vector3(212.66, 2.18, -1.235),
+        new THREE.Vector3(209.5, 1.66, -1.22),
+        new THREE.Vector3(207.1, 1.92, -1.2),
+        new THREE.Vector3(206.64, 1.9, -1.16),
+        new THREE.Vector3(206.62, 1.8, -1.16)
       ]),
       0,
       0
@@ -705,23 +908,20 @@ export class Level5Builder {
       this.blk(bx, 0.95, 0.6, 0.6, 0.9);
     }
     this.put(vent(), 211.4, 1.28, Math.PI, 0.45);
-    this.redLamp(209.2, 2.3, -1.28, 0);
-    this.redLamp(204.0, 2.3, 1.28, Math.PI);
+    this.redLamp(209.2, 2.0, -1.28, 0);
+    this.redLamp(204.0, 2.0, 1.28, Math.PI);
     this.mainLight(210, 2.72, -0.35);
     this.mainLight(204, 2.72, -0.35);
 
     // ---- Second corridor, heading north
-    this.pipeRun(14.6, 0.1, 'rust', 200.7, 2.6, 6, true);
-    this.pipeRun(14.6, 0.07, 'grey', 200.72, 2.35, 6, true);
-    this.pipeRun(14.6, 0.12, 'green', 198.5, 2.62, 6, true);
     this.put(electricalBox(0.7, 0.9), 200.88, 6.4, -Math.PI / 2, 1.4);
-    this.put(warningSign(['GENERATOR', 'ROOM'], 0.6, 0.38), 198.32, 9.55, Math.PI / 2, 2.1);
+    this.put(warningSign(['GENERATOR', 'ROOM'], 0.6, 0.38), 198.32, 9.55, Math.PI / 2, 1.9);
     this.put(barrel('rust'), 198.66, -0.9, 0.4);
     this.blk(198.66, -0.9, 0.6, 0.6, 0.9);
     this.put(barrel('blue'), 199.3, -0.95, 1.9);
     this.blk(199.3, -0.95, 0.6, 0.6, 0.9);
-    this.redLamp(200.88, 2.3, 3.8, -Math.PI / 2);
-    this.redLamp(198.32, 2.3, 0.6, Math.PI / 2);
+    this.redLamp(200.88, 2.0, 3.8, -Math.PI / 2);
+    this.redLamp(198.32, 2.0, 0.6, Math.PI / 2);
     this.mainLight(199.6, 2.72, 1.6, true);
     this.mainLight(199.6, 2.72, 9.6, true);
 
@@ -731,27 +931,35 @@ export class Level5Builder {
     this.put(generator(), 194.1, 7.68, Math.PI);
     this.blk(194.1, 7.68, 2.7, 1.2, 1.7);
     this.put(electricalBox(0.8, 1.0), 191.12, 5.5, Math.PI / 2, 1.5);
+    // Each set's output: out of the bottom of its control box, straight down
+    // clear of the skid, across the floor lying ON it, and up the wall into
+    // the distribution box
+    const onFloor = 0.03 + 0.004;
+    const atWall = 191.12 + 0.03 + 0.004;
     this.put(
-      cable([
-        new THREE.Vector3(193.6, 1.0, 3.95),
-        new THREE.Vector3(192.7, 0.06, 4.5),
-        new THREE.Vector3(191.7, 0.06, 5.1),
-        new THREE.Vector3(191.3, 0.95, 5.35)
-      ], 0.03),
+      routedCable([
+        new THREE.Vector3(193.6, 0.93, 3.96),
+        new THREE.Vector3(193.6, onFloor, 3.96),
+        new THREE.Vector3(192.55, onFloor, 4.62),
+        new THREE.Vector3(atWall, onFloor, 5.3),
+        new THREE.Vector3(atWall, 1.04, 5.3)
+      ]),
       0,
       0
     );
     this.put(
-      cable([
-        new THREE.Vector3(194.6, 1.0, 7.05),
-        new THREE.Vector3(193.0, 0.06, 6.6),
-        new THREE.Vector3(191.7, 0.06, 6.0),
-        new THREE.Vector3(191.3, 0.95, 5.65)
-      ], 0.03),
+      routedCable([
+        new THREE.Vector3(194.6, 0.93, 7.04),
+        new THREE.Vector3(194.6, onFloor, 7.04),
+        new THREE.Vector3(193.1, onFloor, 6.42),
+        new THREE.Vector3(atWall, onFloor, 5.7),
+        new THREE.Vector3(atWall, 1.04, 5.7)
+      ]),
       0,
       0
     );
-    this.put(duct(7.0, 0.7, 0.4), 194.6, 5.5, 0, 3.3);
+    // Wall to header, straight through the room overhead
+    this.ductRun(191.12, 198.08, 3.3, 5.5, 0.7, 0.4);
     this.put(barrel('yellow'), 191.6, 3.1, 0.2);
     this.blk(191.6, 3.1, 0.6, 0.6, 0.9);
     this.put(barrel('yellow'), 191.6, 7.9, 1.3);
@@ -762,46 +970,40 @@ export class Level5Builder {
     this.mainLight(194.6, 3.3, 5.5);
 
     // ---- Third corridor, heading west to the hall
-    this.pipeRun(12.2, 0.1, 'grey', 192.1, 2.58, 13.1);
-    this.pipeRun(12.2, 0.06, 'copper', 192.1, 2.32, 13.14);
-    this.pipeRun(12.2, 0.12, 'rust', 192.1, 2.6, 10.9);
     this.put(controlConsole(), 192.5, 12.96, Math.PI);
-    this.blk(192.5, 12.96, 1.2, 0.64, 1.3);
+    this.blk(192.5, 12.96, 1.2, 0.64, CONSOLE_H);
     this.put(barrel('blue'), 196.6, 10.99, 0.7);
     this.blk(196.6, 10.99, 0.6, 0.6, 0.9);
     this.put(barrel('rust'), 197.25, 11.0, 2.4);
     this.blk(197.25, 11.0, 0.6, 0.6, 0.9);
     this.put(warningSign(['DANGER', 'HIGH VOLTAGE']), 187.3, 10.72, 0, 1.65);
     this.put(warningSign(['FLOODED AREA', 'KEEP CLEAR']), 187.3, 13.28, Math.PI, 1.65);
-    this.redLamp(194.6, 2.3, 10.72, 0);
-    this.redLamp(189.0, 2.3, 13.28, Math.PI);
+    this.redLamp(194.6, 2.0, 10.72, 0);
+    this.redLamp(189.0, 2.0, 13.28, Math.PI);
     this.mainLight(195, 2.72, 12);
     this.mainLight(189, 2.72, 12);
 
     // ---- The hall
-    this.pipeRun(23.6, 0.18, 'green', 174, 4.2, HALL.z1 - 0.2);
-    this.pipeRun(23.6, 0.14, 'rust', 174, 4.0, HALL.z0 + 0.4);
-    this.pipeRun(23.6, 0.08, 'grey', 174, 4.55, HALL.z0 + 0.35);
-    this.put(duct(23.2, 0.8, 0.5), 174, 12, 0, 4.6);
+    // The big duct runs wall to wall down the middle. The two fittings that
+    // were on the centre line hung inside it; they sit either side now.
+    this.ductRun(162.12, 185.88, 4.6, 12, 0.8, 0.5);
     this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, HALL.z0 + 0.12, 0, 1.75);
     this.put(warningSign(['DANGER', 'ELECTRIFIED WATER']), 184.2, HALL.z1 - 0.12, Math.PI, 1.75);
     this.redLamp(185.88, 3.4, HALL.z0 + 0.9, -Math.PI / 2);
     this.redLamp(162.12, 3.4, HALL.z1 - 0.9, Math.PI / 2);
-    this.mainLight(184, 4.62, 12);
+    this.mainLight(184, 4.62, 14.4);
     this.mainLight(174, 4.62, HALL.z0 + 2.4);
     this.mainLight(174, 4.62, HALL.z1 - 2.4);
     // Over the pipe traverse, so the last stretch is not crossed blind
     this.mainLight(166.5, 4.62, HALL.z1 - 1.6);
-    this.mainLight(164, 4.62, 12);
+    this.mainLight(164, 4.62, 9.6);
 
     // ---- Breaker room
-    this.pipeRun(7.8, 0.08, 'grey', 158, 2.7, 14.7);
-    this.pipeRun(7.8, 0.06, 'copper', 158, 2.45, 14.74);
     this.put(electricalBox(0.6, 0.8), 157.2, 9.12, 0, 1.5);
     this.put(electricalBox(0.6, 0.8), 158.2, 9.12, 0, 1.5);
     this.put(controlConsole(), 159.2, 14.56, Math.PI);
-    this.blk(159.2, 14.56, 1.2, 0.64, 1.3);
-    this.put(warningSign(['MAIN', 'ELECTRICAL'], 0.6, 0.38), 154.12, 14.1, Math.PI / 2, 2.1);
+    this.blk(159.2, 14.56, 1.2, 0.64, CONSOLE_H);
+    this.put(warningSign(['MAIN', 'ELECTRICAL'], 0.6, 0.38), 154.12, 14.1, Math.PI / 2, 1.95);
     this.mainLight(158, 2.95, 12);
   }
 

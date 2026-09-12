@@ -33,8 +33,19 @@ const M = {
   drumRust: lam(0x7a3f26),
   concrete: lam(0x7f8184),
   concreteDark: lam(0x5f6164),
-  rebar: metal(0x5a4a3e, 0.8, 0.5)
+  rebar: metal(0x5a4a3e, 0.8, 0.5),
+  screen: new THREE.MeshStandardMaterial({ color: 0x0c1410, roughness: 0.2, metalness: 0.4 }),
+  dialFace: lam(0xe8e4d6),
+  needle: lam(0x9a1a12),
+  chrome: metal(0xb9bec4, 0.3, 0.85),
+  estop: lam(0xb3201a)
 };
+
+export type PipeKind = 'grey' | 'green' | 'rust' | 'copper';
+const pipeMat = (kind: PipeKind): THREE.MeshStandardMaterial =>
+  ({ grey: M.pipeGrey, green: M.pipeGreen, rust: M.pipeRust, copper: M.pipeCopper })[kind];
+const UP = new THREE.Vector3(0, 1, 0);
+const FWD = new THREE.Vector3(0, 0, 1);
 
 const lampMats = {
   red: new THREE.MeshStandardMaterial({ color: 0x3a0806, emissive: 0xff2a18, emissiveIntensity: 1.3 }),
@@ -48,9 +59,9 @@ const lampMats = {
  * A straight pipe run along local X, centred on the origin, with flanged
  * joints every couple of metres. Lay it along a wall or the ceiling.
  */
-export function pipe(length: number, r = 0.08, kind: 'grey' | 'green' | 'rust' | 'copper' = 'grey'): THREE.Group {
+export function pipe(length: number, r = 0.08, kind: PipeKind = 'grey'): THREE.Group {
   const g = new THREE.Group();
-  const mat = { grey: M.pipeGrey, green: M.pipeGreen, rust: M.pipeRust, copper: M.pipeCopper }[kind];
+  const mat = pipeMat(kind);
   const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, length, 12), mat);
   body.rotation.z = Math.PI / 2;
   g.add(body);
@@ -74,6 +85,132 @@ export function pipeBracket(drop = 0.22): THREE.Group {
   return g;
 }
 
+/** Flange ring round a pipe of radius `r` at `at`, square to `dir`. */
+function flangeAt(g: THREE.Group, at: THREE.Vector3, dir: THREE.Vector3, r: number, grow = 1.4, thick = 0.05): void {
+  const f = new THREE.Mesh(new THREE.CylinderGeometry(r * grow, r * grow, thick, 14), M.flange);
+  f.position.copy(at);
+  f.quaternion.setFromUnitVectors(UP, dir);
+  g.add(f);
+}
+
+/**
+ * One continuous pipe laid through the world-space points `pts`: straight
+ * runs, joined at every change of direction by a long-radius elbow (bend
+ * radius three times the pipe's), with a flange either side of each elbow
+ * and every few metres along the runs.
+ *
+ * This is how a pipe gets round a corner. The old corridors laid each one
+ * as a separate straight that stopped dead at the end of its wall, and the
+ * next corridor started a fresh one — so every bend was a row of cut ends.
+ *
+ * Where an end meets a wall, floor or ceiling (`ends`), the run carries on a
+ * few centimetres into it and a collar sits on the face, so it reads as
+ * going through rather than stopping short. Built in world space: add the
+ * group at the origin.
+ */
+export function pipeRoute(
+  pts: THREE.Vector3[],
+  r: number,
+  kind: PipeKind,
+  ends: { start: boolean; end: boolean } = { start: true, end: true },
+  flangeEvery = 3.0
+): THREE.Group {
+  const g = new THREE.Group();
+  const mat = pipeMat(kind);
+  const bend = r * 3;
+  const n = pts.length;
+  const dirs: THREE.Vector3[] = [];
+  for (let i = 0; i < n - 1; i++) dirs.push(pts[i + 1].clone().sub(pts[i]).normalize());
+
+  // How far each run stops short of its corner to make room for the elbow
+  const trim = new Array<number>(n).fill(0);
+  const turn = new Array<number>(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const th = Math.acos(THREE.MathUtils.clamp(dirs[i - 1].dot(dirs[i]), -1, 1));
+    turn[i] = th;
+    trim[i] = th > 1e-3 ? bend * Math.tan(th / 2) : 0;
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const d = dirs[i];
+    const a = pts[i].clone().addScaledVector(d, trim[i]);
+    const b = pts[i + 1].clone().addScaledVector(d, -trim[i + 1]);
+    if (i === 0 && ends.start) a.addScaledVector(d, -0.06);
+    if (i === n - 2 && ends.end) b.addScaledVector(d, 0.06);
+    const len = a.distanceTo(b);
+    if (len < 1e-3) continue;
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), mat);
+    body.position.copy(a).add(b).multiplyScalar(0.5);
+    body.quaternion.setFromUnitVectors(UP, d);
+    g.add(body);
+    // Joints along the run, kept clear of the fittings at either end
+    const clear = 0.45;
+    const span = len - 2 * clear;
+    const joints = Math.floor(span / flangeEvery);
+    for (let k = 1; k <= joints; k++) {
+      flangeAt(g, a.clone().addScaledVector(d, clear + (span * k) / (joints + 1)), d, r);
+    }
+  }
+
+  // The elbows
+  for (let i = 1; i < n - 1; i++) {
+    if (turn[i] < 1e-3) continue;
+    const d1 = dirs[i - 1];
+    const d2 = dirs[i];
+    // In the plane of the turn, square to the incoming run, towards the outgoing one
+    const side = d2.clone().addScaledVector(d1, -d1.dot(d2)).normalize();
+    const start = pts[i].clone().addScaledVector(d1, -trim[i]);
+    const centre = start.clone().addScaledVector(side, bend);
+    // TorusGeometry sweeps from +X towards +Y about Z: +X is centre→start,
+    // +Y the direction of travel at the start
+    const X = side.clone().negate();
+    const Y = d1.clone();
+    const Z = X.clone().cross(Y);
+    const elbow = new THREE.Mesh(new THREE.TorusGeometry(bend, r, 12, 10, turn[i]), mat);
+    elbow.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+    elbow.position.copy(centre);
+    g.add(elbow);
+    flangeAt(g, start, d1, r);
+    flangeAt(g, pts[i].clone().addScaledVector(d2, trim[i]), d2, r);
+  }
+
+  // Collars where it goes into the structure
+  if (ends.start) flangeAt(g, pts[0].clone().addScaledVector(dirs[0], 0.018), dirs[0], r, 1.75, 0.036);
+  if (ends.end) flangeAt(g, pts[n - 1].clone().addScaledVector(dirs[n - 2], -0.018), dirs[n - 2], r, 1.75, 0.036);
+  return g;
+}
+
+/**
+ * A clamp holding a pipe off the wall behind it: a band round the pipe and
+ * a strut back to the wall. Origin at the pipe's centre; `toWall` is the way
+ * to the wall and `reach` how far it is from the pipe's surface.
+ */
+export function pipeClamp(r: number, along: THREE.Vector3, toWall: THREE.Vector3, reach: number): THREE.Group {
+  const g = new THREE.Group();
+  const band = new THREE.Mesh(new THREE.TorusGeometry(r + 0.009, 0.01, 5, 16), M.darkSteel);
+  band.quaternion.setFromUnitVectors(FWD, along);
+  g.add(band);
+  const L = reach + 0.03; // into the wall a touch, so there is no gap at the face
+  const strut = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.036, L), M.darkSteel);
+  strut.quaternion.setFromUnitVectors(FWD, toWall);
+  strut.position.copy(toWall).multiplyScalar(r + L / 2);
+  g.add(strut);
+  return g;
+}
+
+/** A band and a drop rod to the ceiling `rise` metres above the pipe's top. */
+export function pipeHanger(r: number, along: THREE.Vector3, rise: number): THREE.Group {
+  const g = new THREE.Group();
+  const band = new THREE.Mesh(new THREE.TorusGeometry(r + 0.009, 0.01, 5, 16), M.darkSteel);
+  band.quaternion.setFromUnitVectors(FWD, along);
+  g.add(band);
+  const L = rise + 0.04;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, L, 6), M.darkSteel);
+  rod.position.y = r + L / 2;
+  g.add(rod);
+  return g;
+}
+
 /** Rectangular ventilation duct along local X, with its seams. */
 export function duct(length: number, w = 0.6, h = 0.42): THREE.Group {
   const g = new THREE.Group();
@@ -89,12 +226,110 @@ export function duct(length: number, w = 0.6, h = 0.42): THREE.Group {
 }
 
 /**
+ * The frame round a duct where it goes into a wall square to its run (local
+ * X): four bars round the w × h section, flat on the face.
+ */
+export function ductWallCollar(w: number, h: number): THREE.Group {
+  const g = new THREE.Group();
+  const t = 0.05;
+  const bar = (sy: number, sz: number, y: number, z: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.04, sy, sz), M.darkSteel);
+    m.position.set(0, y, z);
+    g.add(m);
+  };
+  bar(t, w + 2 * t, h / 2 + t / 2, 0);
+  bar(t, w + 2 * t, -h / 2 - t / 2, 0);
+  bar(h, t, 0, w / 2 + t / 2);
+  bar(h, t, 0, -w / 2 - t / 2);
+  return g;
+}
+
+/** The same frame lying flat, where a riser goes up through the ceiling. */
+export function ductCeilingCollar(lx: number, w: number): THREE.Group {
+  const g = new THREE.Group();
+  const t = 0.05;
+  const bar = (sx: number, sz: number, x: number, z: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.03, sz), M.darkSteel);
+    m.position.set(x, 0, z);
+    g.add(m);
+  };
+  bar(lx + 2 * t, t, 0, w / 2 + t / 2);
+  bar(lx + 2 * t, t, 0, -w / 2 - t / 2);
+  bar(t, w, lx / 2 + t / 2, 0);
+  bar(t, w, -lx / 2 - t / 2, 0);
+  return g;
+}
+
+/** Where a duct turns up into the slab: an upright box of its own section. */
+export function ductRiser(lx: number, h: number, w: number): THREE.Group {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(lx, h, w), M.steel));
+  // A seam round it just above the run it turns out of
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(lx + 0.03, 0.04, w + 0.03), M.darkSteel);
+  seam.position.y = -h / 2 + 0.36;
+  g.add(seam);
+  return g;
+}
+
+/**
  * A cable slung through `points`, sagging between them. Heavy rubber, so it
  * reads at a distance in torchlight.
  */
 export function cable(points: THREE.Vector3[], r = 0.022): THREE.Mesh {
   const curve = new THREE.CatmullRomCurve3(points);
   return new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(8, points.length * 6), r, 6, false), M.rubber);
+}
+
+/**
+ * A heavy cable laid through the world-space corners `corners` — straight
+ * lengths with each corner rounded off to a gentle bend — for anything that
+ * has to lie on the floor or run tight to a wall.
+ *
+ * `cable()` threads a spline through its points, and a spline overshoots:
+ * coming down off a generator steeply and then along the floor, it carried
+ * on past the floor point and back, dipping a few centimetres into the
+ * concrete between every pair of floor points. Straight runs and circular
+ * bends cannot overshoot, so a corner at y = r puts the cable exactly on the
+ * floor, touching it and never through it.
+ */
+export function routedCable(corners: THREE.Vector3[], r = 0.03, fillet = 0.14): THREE.Mesh {
+  const n = corners.length;
+  const dirs: THREE.Vector3[] = [];
+  const lens: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const d = corners[i + 1].clone().sub(corners[i]);
+    lens.push(d.length());
+    dirs.push(d.normalize());
+  }
+  const path = new THREE.CurvePath<THREE.Vector3>();
+  let cursor = corners[0].clone();
+  for (let i = 1; i < n - 1; i++) {
+    const d1 = dirs[i - 1];
+    const d2 = dirs[i];
+    const th = Math.acos(THREE.MathUtils.clamp(d1.dot(d2), -1, 1));
+    if (th < 1e-3) continue;
+    // Bend radius, shrunk if a leg is too short to take the full one
+    const rb = Math.min(fillet, (0.45 * Math.min(lens[i - 1], lens[i])) / Math.tan(th / 2));
+    const t = rb * Math.tan(th / 2);
+    const start = corners[i].clone().addScaledVector(d1, -t);
+    const end = corners[i].clone().addScaledVector(d2, t);
+    path.add(new THREE.LineCurve3(cursor, start));
+    const side = d2.clone().addScaledVector(d1, -d1.dot(d2)).normalize();
+    const centre = start.clone().addScaledVector(side, rb);
+    const axis = d1.clone().cross(d2).normalize();
+    const from = start.clone().sub(centre);
+    const steps = 8;
+    let prev = start;
+    for (let k = 1; k <= steps; k++) {
+      const p = centre.clone().add(from.clone().applyAxisAngle(axis, (th * k) / steps));
+      path.add(new THREE.LineCurve3(prev, p));
+      prev = p;
+    }
+    cursor = end;
+  }
+  path.add(new THREE.LineCurve3(cursor, corners[n - 1].clone()));
+  const segments = Math.max(16, Math.round(path.getLength() / 0.035));
+  return new THREE.Mesh(new THREE.TubeGeometry(path, segments, r, 8, false), M.rubber);
 }
 
 // ------------------------------------------------------------------- drums
@@ -132,50 +367,133 @@ export function barrel(kind: 'yellow' | 'blue' | 'rust' = 'blue'): THREE.Group {
 
 // ----------------------------------------------------------------- consoles
 
+/** Console height, for the collider the level puts round it. */
+export const CONSOLE_H = 1.52;
+
 /**
- * Floor-standing control console: a body with a sloped face carrying rows of
- * lamps and push buttons, a dead monitor, and a pair of dials.
+ * Floor-standing control console, operator side on +Z. The top of the
+ * cabinet slopes DOWN towards whoever stands at it, so the rows of lamps,
+ * buttons and switches on it face them, and an upright instrument panel
+ * along the back carries a dead monitor, two gauges and a strip of status
+ * lamps.
+ *
+ * The desk used to be tilted the other way — high at the front edge and
+ * falling away to the back — with its buttons laid on the opposite slope,
+ * sunk into the face along one row and standing off it along the other.
+ * From the front that is a panel turned away from you with its controls
+ * upside down. Everything on the desk now hangs off one frame laid exactly
+ * on the slope, so it cannot drift off the surface again.
  */
 export function controlConsole(): THREE.Group {
   const g = new THREE.Group();
   const W = 1.2;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(W, 0.9, 0.62), M.paintGrey);
-  body.position.set(0, 0.45, 0);
-  g.add(body);
-  // Sloped desk face
-  const desk = new THREE.Mesh(new THREE.BoxGeometry(W, 0.05, 0.5), M.darkSteel);
-  desk.position.set(0, 0.98, 0.08);
-  desk.rotation.x = -0.45;
+  const FRONT = 0.31;
+  const BACK = -0.31;
+  const LIP_Y = 0.86; // front edge of the desk, nearest the operator
+  const DESK_Z = -0.14; // where the desk runs up into the instrument panel
+  const DESK_Y = 1.06;
+
+  // The cabinet is one extruded side profile, so the slope has proper
+  // sides rather than a gap under a tilted board
+  const profile = new THREE.Shape();
+  profile.moveTo(FRONT, 0);
+  profile.lineTo(FRONT, LIP_Y);
+  profile.lineTo(DESK_Z, DESK_Y);
+  profile.lineTo(DESK_Z, CONSOLE_H);
+  profile.lineTo(BACK, CONSOLE_H);
+  profile.lineTo(BACK, 0);
+  profile.closePath();
+  const bodyGeo = new THREE.ExtrudeGeometry(profile, { depth: W, bevelEnabled: false });
+  // Profile x is the console's z; the extrusion runs across its width
+  bodyGeo.rotateY(-Math.PI / 2);
+  bodyGeo.translate(W / 2, 0, 0);
+  g.add(new THREE.Mesh(bodyGeo, M.paintGrey));
+  // Toe kick and a steel lip along the front edge of the desk
+  const kick = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, 0.08, 0.012), M.black);
+  kick.position.set(0, 0.04, FRONT + 0.004);
+  g.add(kick);
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(W + 0.01, 0.026, 0.03), M.darkSteel);
+  lip.position.set(0, LIP_Y - 0.004, FRONT - 0.008);
+  g.add(lip);
+
+  // ---- The desk: a frame lying on the slope, +Y out of the face and +Z
+  // running down it towards the operator
+  const run = FRONT - DESK_Z;
+  const rise = DESK_Y - LIP_Y;
+  const len = Math.hypot(run, rise);
+  const desk = new THREE.Group();
+  desk.position.set(0, (LIP_Y + DESK_Y) / 2, (FRONT + DESK_Z) / 2);
+  desk.rotation.x = Math.atan2(rise, run);
   g.add(desk);
-  // Upper instrument panel
-  const upper = new THREE.Mesh(new THREE.BoxGeometry(W, 0.46, 0.14), M.paintGrey);
-  upper.position.set(0, 1.28, -0.22);
-  g.add(upper);
-  const screen = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.42, 0.26),
-    new THREE.MeshStandardMaterial({ color: 0x0c1410, roughness: 0.2, metalness: 0.4 })
-  );
-  screen.position.set(-0.26, 1.29, -0.149);
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(W - 0.12, 0.012, len - 0.07), M.darkSteel);
+  plate.position.y = 0.006;
+  desk.add(plate);
+  const onDesk = (m: THREE.Mesh, x: number, z: number, h: number): void => {
+    m.position.set(x, 0.012 + h / 2, z);
+    desk.add(m);
+  };
+  // Top row: square lamp buttons, lit
+  const lampCols = [lampMats.green, lampMats.amber, lampMats.red, lampMats.green];
+  for (let c = 0; c < 8; c++) {
+    onDesk(new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.018, 0.046), lampCols[c % 4]), -0.42 + c * 0.12, -0.15, 0.018);
+  }
+  // Middle row: round push buttons
+  for (let c = 0; c < 6; c++) {
+    onDesk(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.02, 14), M.black), -0.3 + c * 0.12, -0.035, 0.02);
+  }
+  // Bottom row: toggle switches on their plates, all thrown towards the operator
+  for (let c = 0; c < 6; c++) {
+    const x = -0.3 + c * 0.12;
+    onDesk(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.008, 0.042), M.steel), x, 0.085, 0.008);
+    const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.006, 0.05, 6), M.chrome);
+    lever.position.set(x, 0.035, 0.095);
+    lever.rotation.x = 0.45;
+    desk.add(lever);
+  }
+  // Rotary selectors at the left end, each with a pointer line
+  for (const z of [-0.035, 0.085]) {
+    onDesk(new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.026, 0.028, 16), M.black), -0.46, z, 0.028);
+    const tick = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.003, 0.022), M.dialFace);
+    tick.position.set(-0.46, 0.0415, z - 0.008);
+    desk.add(tick);
+  }
+  // Emergency stop at the right end: red mushroom on a yellow collar
+  onDesk(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.01, 18), M.paintYellow), 0.46, 0.03, 0.01);
+  const estop = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.03, 0.03, 18), M.estop);
+  estop.position.set(0.46, 0.022 + 0.015, 0.03);
+  desk.add(estop);
+
+  // ---- The instrument panel, facing the operator over the desk
+  const face = DESK_Z;
+  const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.3, 0.02), M.black);
+  bezel.position.set(-0.27, 1.29, face + 0.01);
+  g.add(bezel);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.26), M.screen);
+  screen.position.set(-0.27, 1.29, face + 0.021);
   g.add(screen);
-  for (const x of [0.2, 0.42]) {
-    const dial = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), M.steel);
-    dial.rotation.x = Math.PI / 2;
-    dial.position.set(x, 1.3, -0.14);
+  const needleAngles = [0.7, -0.35];
+  [0.15, 0.37].forEach((x, i) => {
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.024, 20), M.darkSteel);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(x, 1.29, face + 0.012);
+    g.add(ring);
+    const dial = new THREE.Mesh(new THREE.CircleGeometry(0.063, 20), M.dialFace);
+    dial.position.set(x, 1.29, face + 0.0245);
     g.add(dial);
-    const face = new THREE.Mesh(new THREE.CircleGeometry(0.06, 16), lam(0xe8e4d6));
-    face.position.set(x, 1.3, -0.128);
-    g.add(face);
-  }
-  // Rows of lamps and buttons on the desk
-  const cols = [lampMats.red, lampMats.green, lampMats.amber];
-  for (let r = 0; r < 2; r++) {
-    for (let c = 0; c < 7; c++) {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.02, 0.045), r === 0 ? cols[(c * 2 + 1) % 3] : M.black);
-      b.position.set(-0.45 + c * 0.15, 1.0 + r * 0.02, 0.18 - r * 0.12);
-      b.rotation.x = -0.45;
-      g.add(b);
-    }
-  }
+    const needle = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.05, 0.003), M.needle);
+    needle.geometry.translate(0, 0.022, 0);
+    needle.position.set(x, 1.29, face + 0.027);
+    needle.rotation.z = needleAngles[i];
+    g.add(needle);
+  });
+  // Status lamps along the top of the panel
+  const stripCols = [lampMats.green, lampMats.green, lampMats.amber, lampMats.green, lampMats.red, lampMats.amber];
+  stripCols.forEach((m, i) => {
+    const l = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.014, 12), m);
+    l.rotation.x = Math.PI / 2;
+    l.position.set(-0.45 + i * 0.18, 1.465, face + 0.007);
+    g.add(l);
+  });
   return g;
 }
 
@@ -459,20 +777,33 @@ export function rubble(scale = 1, seed = 3): THREE.Group {
 
 // ----------------------------------------------------------------- breaker
 
+/** Top of the breaker cabinet, where the feed comes in. */
+export const BREAKER_TOP = 2.15;
+/** The lever's travel: 0 hangs straight down (off), this is thrown (on). */
+export const LEVER_ON = -0.78 * Math.PI;
+
 /**
  * The main breaker. A tall cabinet on the wall with its label plate, a
- * red lamp over the switch, and the big lever itself — hung from a pivot
- * so the scene can throw it. Back on z = 0. The lever starts down (off).
+ * lamp beside the switch, and the big lever itself — hung from a pivot so
+ * the scene can throw it, with `grip` marking the middle of its handle for
+ * a hand to take hold of. Back on z = 0. The lever starts down (off).
+ *
+ * The switch sits at chest height, where somebody standing at it would
+ * actually take hold of it; the lamp is off to one side so the handle,
+ * thrown, does not end up in front of it.
  */
 export function mainBreaker(): {
   group: THREE.Group;
   lever: THREE.Group;
+  grip: THREE.Object3D;
   lamp: THREE.MeshStandardMaterial;
 } {
   const g = new THREE.Group();
   const W = 1.0;
-  const H = 1.9;
+  const H = BREAKER_TOP - 0.25;
   const D = 0.34;
+  const PIVOT_Y = 1.3;
+  const ARM = 0.36;
   const cab = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), M.paintGrey);
   cab.position.set(0, H / 2 + 0.25, D / 2);
   g.add(cab);
@@ -504,56 +835,72 @@ export function mainBreaker(): {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   const label = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.34), new THREE.MeshLambertMaterial({ map: tex }));
-  label.position.set(0, 1.84, D + 0.014);
+  label.position.set(0, 1.9, D + 0.014);
   g.add(label);
 
-  // ON / OFF markings either side of the lever's travel
+  // The switch's backing plate, the lever's travel marked on it
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.66, 0.02), M.darkSteel);
+  back.position.set(0, PIVOT_Y, D + 0.018);
+  g.add(back);
+
+  // ON / OFF, beside the lever where the handle cannot cover them
   const oc = document.createElement('canvas');
-  oc.width = 128;
-  oc.height = 256;
+  oc.width = 100;
+  oc.height = 250;
   const o = oc.getContext('2d')!;
   o.fillStyle = '#2c3136';
-  o.fillRect(0, 0, 128, 256);
+  o.fillRect(0, 0, 100, 250);
   o.fillStyle = '#e6e2d4';
   o.textAlign = 'center';
-  o.font = 'bold 34px Arial, Helvetica, sans-serif';
-  o.fillText('ON', 64, 44);
-  o.fillText('OFF', 64, 236);
+  o.font = 'bold 32px Arial, Helvetica, sans-serif';
+  o.fillText('ON', 50, 44);
+  o.fillText('OFF', 50, 232);
+  // An arrow up the middle: which way is on
+  o.fillRect(46, 80, 8, 96);
+  o.beginPath();
+  o.moveTo(34, 86);
+  o.lineTo(50, 62);
+  o.lineTo(66, 86);
+  o.closePath();
+  o.fill();
   const otex = new THREE.CanvasTexture(oc);
   otex.colorSpace = THREE.SRGBColorSpace;
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.52), new THREE.MeshLambertMaterial({ map: otex }));
-  plate.position.set(0, 1.08, D + 0.014);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.5), new THREE.MeshLambertMaterial({ map: otex }));
+  plate.position.set(0.25, PIVOT_Y, D + 0.014);
   g.add(plate);
 
-  // Lamp over the switch: red now, green when thrown
+  // Lamp to the other side of the switch: red now, green when thrown
   const lamp = new THREE.MeshStandardMaterial({ color: 0x3a0806, emissive: 0xff2a18, emissiveIntensity: 2.2 });
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), lamp);
-  bulb.position.set(0, 1.5, D + 0.05);
+  bulb.position.set(-0.27, PIVOT_Y + 0.14, D + 0.05);
   g.add(bulb);
   const bezel = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.03, 16), M.darkSteel);
   bezel.rotation.x = Math.PI / 2;
-  bezel.position.set(0, 1.5, D + 0.02);
+  bezel.position.set(-0.27, PIVOT_Y + 0.14, D + 0.02);
   g.add(bezel);
 
   // The lever, on its pivot. Down is off.
   const lever = new THREE.Group();
-  lever.position.set(0, 1.08, D + 0.06);
+  lever.position.set(0, PIVOT_Y, D + 0.06);
   const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.1, 16), M.darkSteel);
   boss.rotation.x = Math.PI / 2;
   lever.add(boss);
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 0.05), M.steel);
-  arm.position.set(0, -0.21, 0.04);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, ARM, 0.05), M.steel);
+  arm.position.set(0, -ARM / 2, 0.04);
   lever.add(arm);
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.24, 12), lampMats.red.clone());
-  (grip.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.2;
-  grip.rotation.z = Math.PI / 2;
-  grip.position.set(0, -0.42, 0.06);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.24, 12), lampMats.red.clone());
+  (handle.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.2;
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(0, -ARM, 0.06);
+  lever.add(handle);
+  const grip = new THREE.Object3D();
+  grip.position.copy(handle.position);
   lever.add(grip);
   g.add(lever);
 
   g.add(hazardSticker(0.2, 0.34, 0.62, D + 0.014));
   g.add(hazardSticker(0.2, -0.34, 0.62, D + 0.014));
-  return { group: g, lever, lamp };
+  return { group: g, lever, grip, lamp };
 }
 
 /**

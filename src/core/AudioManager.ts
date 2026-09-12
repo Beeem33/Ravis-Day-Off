@@ -791,6 +791,129 @@ export class AudioManager {
     n.stop(t + seconds + 0.05);
   }
 
+  /**
+   * A short arc across the water: a hard snap of broadband noise with a buzz
+   * under it, quieter the further off it is.
+   */
+  electricCrackle(distance: number): void {
+    if (!this.ctx) return;
+    const a = this.atten(distance, 22);
+    if (a < 0.03) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.playbackRate.value = 1.6;
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = 2200;
+    const g = ctx.createGain();
+    const len = 0.06 + Math.random() * 0.1;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.32 * a, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    n.connect(f).connect(g).connect(this.sfxBus);
+    n.start(t, Math.random() * 1.5);
+    n.stop(t + len + 0.02);
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.value = 110 + Math.random() * 60;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.06 * a, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(og).connect(this.sfxBus);
+    o.start(t);
+    o.stop(t + len + 0.02);
+  }
+
+  /** Stepping into it: a loud sustained buzz that chokes off. */
+  electrocute(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.6, t + 0.01);
+    bus.gain.setValueAtTime(0.55, t + 0.55);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + 0.85);
+    bus.connect(this.sfxBus);
+    for (const f of [120, 180, 240]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.linearRampToValueAtTime(f * 0.8, t + 0.8);
+      const g = ctx.createGain();
+      g.gain.value = 0.18;
+      o.connect(g).connect(bus);
+      o.start(t);
+      o.stop(t + 0.9);
+    }
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'bandpass';
+    nf.frequency.value = 3400;
+    nf.Q.value = 2;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.35;
+    n.connect(nf).connect(ng).connect(bus);
+    n.start(t);
+    n.stop(t + 0.9);
+  }
+
+  /** The breaker going over: a heavy mechanical clack. */
+  breakerThrow(): void {
+    if (!this.ctx) return;
+    this.noise(0.09, 'lowpass', 900, 0.7);
+    this.tone('square', 220, 70, 0.12, 0.22);
+    this.noise(0.05, 'bandpass', 2600, 0.3);
+  }
+
+  /**
+   * Power coming back to a floor: a rising hum as the plant spins up, with
+   * relays pulling in along the way.
+   */
+  powerUp(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.4, t + 0.8);
+    bus.gain.setValueAtTime(0.38, t + 2.2);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + 3.4);
+    bus.connect(this.sfxBus);
+    for (const base of [55, 82]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(base * 0.3, t);
+      o.frequency.exponentialRampToValueAtTime(base, t + 2.0);
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.setValueAtTime(200, t);
+      f.frequency.exponentialRampToValueAtTime(1600, t + 2.0);
+      const g = ctx.createGain();
+      g.gain.value = 0.22;
+      o.connect(f).connect(g).connect(bus);
+      o.start(t);
+      o.stop(t + 3.5);
+    }
+    for (const at of [0.3, 0.75, 1.3]) {
+      const n = ctx.createBufferSource();
+      n.buffer = this.noiseBuffer;
+      const nf = ctx.createBiquadFilter();
+      nf.type = 'bandpass';
+      nf.frequency.value = 260;
+      nf.Q.value = 2;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.4, t + at);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.14);
+      n.connect(nf).connect(ng).connect(this.sfxBus);
+      n.start(t + at);
+      n.stop(t + at + 0.16);
+    }
+  }
+
   startMenuMusic(): void {
     if (!this.ctx) return;
     if (this.ctx.state === 'suspended') void this.ctx.resume();

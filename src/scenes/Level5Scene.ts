@@ -13,6 +13,7 @@ import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
+import { ElectricArcs } from '../fx/ElectricArcs';
 
 const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
@@ -32,6 +33,19 @@ const FADE_TIME = 0.55;
 const CARD_TIME = 1.1;
 /** How close the panel has to be for E to reach it. */
 const REACH = 1.9;
+/** The fluorescents' strength once the breaker is back on. */
+const MAIN_LIGHT = 4.5;
+/**
+ * The lights coming back after the breaker: on, off, on, off, then steady.
+ * [seconds after the throw, on?]
+ */
+const POWER_FLICKER: [number, boolean][] = [
+  [0.45, true],
+  [0.55, false],
+  [0.8, true],
+  [0.88, false],
+  [1.15, true]
+];
 
 type Stage = 'hall' | 'closing' | 'ride' | 'fadeOut' | 'card' | 'fadeIn' | 'opening' | 'room';
 
@@ -78,6 +92,21 @@ export class Level5Scene extends CombatScene<Level5Data> {
   private prompt!: HTMLElement;
   private fadeEl!: HTMLElement;
   private card: HTMLElement | null = null;
+  private flashEl!: HTMLElement;
+
+  // ---- The basement
+  private arcs!: ElectricArcs;
+  private arcTimer = 0;
+  private sparkTimer = 1;
+  /** Seconds into an electrocution, or -1 when not being electrocuted. */
+  private zapT = -1;
+  private respawned = false;
+  /** Where along the route he is, for the objective line. */
+  private leg: 'corridors' | 'hall' | 'crossed' = 'corridors';
+  private powered = false;
+  private throwT = -1;
+  private powerT = -1;
+  private flickerStep = 0;
   private unsubs: (() => void)[] = [];
   private dead = false;
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
@@ -123,6 +152,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.decals = new BloodDecalSystem(this.scene);
     this.flashPool = new MuzzleFlashPool(this.scene);
     Enemy.flashPool = this.flashPool;
+    this.arcs = new ElectricArcs(this.scene, 8);
 
     // The basement car waits with its doors shut
     this.setDoors(this.level.carB, 0);
@@ -154,6 +184,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.hud.destroy();
     this.dialogue.destroy();
     this.flashPool.dispose();
+    this.arcs.dispose();
     this.ui.remove();
     this.card?.remove();
     Enemy.flashPool = null;
@@ -169,12 +200,15 @@ export class Level5Scene extends CombatScene<Level5Data> {
         font:bold 13px monospace;letter-spacing:3px;color:#ffd27a;text-shadow:0 0 6px #000;
         display:none;pointer-events:none"></div>
       <div class="intro-fade"></div>
+      <div class="l5-zap" style="position:absolute;inset:0;background:#cdf6ff;opacity:0;pointer-events:none;
+        mix-blend-mode:screen"></div>
     `;
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
     this.objective = el.querySelector('.intro-objective')!;
     this.prompt = el.querySelector('.l5-prompt')!;
     this.fadeEl = el.querySelector('.intro-fade')!;
+    this.flashEl = el.querySelector('.l5-zap')!;
   }
 
   private setObjective(text: string): void {
@@ -203,11 +237,163 @@ export class Level5Scene extends CombatScene<Level5Data> {
 
   /** Is the crosshair on the panel, close enough to press? */
   private aimingAtPanel(car: ElevatorCar): boolean {
+    return this.aimingAt(car.panel, REACH);
+  }
+
+  /** Is the crosshair on `target` within `reach` metres? */
+  private aimingAt(target: THREE.Object3D, reach: number): boolean {
     const eye = this.player.eyePosition(Level5Scene.tmpA);
     const dir = this.player.camera.getWorldDirection(Level5Scene.tmpB);
     this.raycaster.set(eye, dir);
-    this.raycaster.far = REACH;
-    return this.raycaster.intersectObject(car.panel, true).length > 0;
+    this.raycaster.far = reach;
+    return this.raycaster.intersectObject(target, true).length > 0;
+  }
+
+  // -------------------------------------------------------------- basement
+
+  /**
+   * The live water: arcs striking across it, a cold light that jumps with
+   * every one, and a junction box on the pit wall spitting sparks. All of it
+   * is the warning — nothing down there says "don't" in words except the
+   * signs, and nobody reads signs.
+   */
+  private updateHazard(dt: number): void {
+    const L = this.level;
+    this.arcTimer -= dt;
+    if (this.arcTimer <= 0) {
+      this.arcTimer = 0.12 + Math.random() * 0.33;
+      const spot = L.arcSpots[Math.floor(Math.random() * L.arcSpots.length)];
+      if (this.arcs.strike(spot)) this.ctx.audio.electricCrackle(this.player.position.distanceTo(spot));
+    }
+    const live = this.arcs.update(dt);
+    L.waterLight.intensity = 0.4 + Math.random() * 0.3 + live * (1.4 + Math.random() * 1.2);
+    L.waterMat.emissiveIntensity = 0.28 + live * 0.16 + Math.random() * 0.05;
+    // A slow drift across the surface so it reads as liquid, not a lit floor
+    if (L.waterMat.map) {
+      L.waterMat.map.offset.x += dt * 0.018;
+      L.waterMat.map.offset.y += dt * 0.011;
+    }
+
+    this.sparkTimer -= dt;
+    if (this.sparkTimer <= 0) {
+      this.sparkTimer = 0.5 + Math.random() * 1.4;
+      this.particles.electricSparks(L.sparkAt, 8);
+      this.ctx.audio.electricCrackle(this.player.position.distanceTo(L.sparkAt));
+    }
+
+    // Stepping off into it
+    if (this.zapT < 0 && this.stage === 'room') {
+      const q = this.player.position;
+      const pit = L.pit;
+      if (q.x > pit.x0 && q.x < pit.x1 && q.z > pit.z0 && q.z < pit.z1 && q.y < pit.deathY) this.startZap();
+    }
+    if (this.zapT >= 0) this.updateZap(dt);
+
+    // The objective follows him along the route
+    const x = this.player.position.x;
+    if (this.stage === 'room' && this.zapT < 0) {
+      if (this.leg === 'corridors' && x < L.pit.x1 + 4) {
+        this.leg = 'hall';
+        if (!this.powered) this.setObjective('CROSS THE BROKEN FLOOR — THE WATER IS LIVE');
+      } else if (this.leg === 'hall' && x < L.pit.x0) {
+        this.leg = 'crossed';
+        if (!this.powered) this.setObjective('RESET THE MAIN BREAKER');
+      }
+    }
+  }
+
+  /** In the water: flash, buzz, then back to the near ledge to try again. */
+  private startZap(): void {
+    this.zapT = 0;
+    this.respawned = false;
+    this.player.cinematic = true;
+    this.player.velocity.set(0, 0, 0);
+    this.ctx.audio.electrocute();
+    this.particles.electricSparks(this.player.position.clone().setY(this.level.pit.waterY + 0.1), 22);
+  }
+
+  private updateZap(dt: number): void {
+    this.zapT += dt;
+    const t = this.zapT;
+    // A stutter of blue-white while the current goes through him
+    this.flashEl.style.opacity = t < 0.7 ? String(Math.random() < 0.5 ? 0.8 : 0.2) : '0';
+    if (t < 0.8) {
+      const cam = this.player.camera.position;
+      cam.x += (Math.random() - 0.5) * 0.07;
+      cam.y += (Math.random() - 0.5) * 0.07;
+      cam.z += (Math.random() - 0.5) * 0.07;
+    }
+    if (t > 0.7 && t < 1.15) this.fadeEl.style.opacity = String(Math.min(1, (t - 0.7) / 0.35));
+    if (t >= 1.15 && !this.respawned) {
+      this.respawned = true;
+      const cp = this.level.checkpoint;
+      this.player.position.copy(cp.pos);
+      this.player.velocity.set(0, 0, 0);
+      this.player.yaw = cp.yaw;
+      this.player.pitch = 0;
+    }
+    if (t >= 1.15) this.fadeEl.style.opacity = String(Math.max(0, 1 - (t - 1.15) / 0.5));
+    if (t >= 1.65) {
+      this.zapT = -1;
+      this.fadeEl.style.opacity = '0';
+      this.flashEl.style.opacity = '0';
+      this.player.cinematic = false;
+      this.setObjective('JUMP THE GAPS — STAY OUT OF THE WATER');
+    }
+  }
+
+  /** The main breaker: aim, E, and the lever goes over. */
+  private updateBreaker(dt: number): void {
+    const L = this.level;
+    if (!this.powered && this.stage === 'room' && this.zapT < 0) {
+      const on = this.aimingAt(L.breaker.target, 2.1);
+      if (on) {
+        this.prompt.textContent = '[ E ]  RESET THE BREAKER';
+        this.prompt.style.display = 'block';
+      } else if (this.prompt.textContent === '[ E ]  RESET THE BREAKER') {
+        this.prompt.style.display = 'none';
+      }
+      if (on && this.ctx.input.wasPressed('KeyE') && !this.eSpent) {
+        this.powered = true;
+        this.throwT = 0;
+        this.prompt.style.display = 'none';
+        this.ctx.audio.breakerThrow();
+      }
+    }
+    if (this.throwT >= 0) {
+      this.throwT += dt;
+      const k = Math.min(1, this.throwT / 0.32);
+      const eased = 1 - (1 - k) * (1 - k);
+      // Down is off; it swings up through the front and stops short of
+      // vertical — any further and the grip sits right over the lamp
+      L.breaker.lever.rotation.x = -0.78 * Math.PI * eased;
+      if (k >= 1) {
+        this.throwT = -1;
+        L.breaker.lamp.emissive.setHex(0x33ff66);
+        L.breaker.lamp.color.setHex(0x0a2a10);
+        L.breaker.light.color.setHex(0x33ff66);
+        // A green tell, not a green room: the fluorescents take over from here
+        L.breaker.light.intensity = 0.7;
+        this.powerT = 0;
+        this.flickerStep = 0;
+        this.ctx.audio.powerUp();
+      }
+    }
+    if (this.powerT >= 0) {
+      this.powerT += dt;
+      while (this.flickerStep < POWER_FLICKER.length && this.powerT >= POWER_FLICKER[this.flickerStep][0]) {
+        const on = POWER_FLICKER[this.flickerStep++][1];
+        for (const l of L.mainLights) l.intensity = on ? MAIN_LIGHT : 0;
+        L.tubeMat.emissiveIntensity = on ? 1.5 : 0;
+        this.ctx.audio.fluorescentBuzz(on ? 0.24 : 0.12, on ? 0.36 : 0.2);
+      }
+      if (this.flickerStep >= POWER_FLICKER.length) {
+        this.powerT = -1;
+        for (const l of L.redLights) l.intensity = 0.25;
+        L.ambient.intensity = 0.42;
+        this.setObjective('POWER RESTORED');
+      }
+    }
   }
 
   /**
@@ -319,7 +505,6 @@ export class Level5Scene extends CombatScene<Level5Data> {
       case 'room':
         break;
     }
-    this.eSpent = false;
   }
 
   private go(stage: Stage): void {
@@ -382,6 +567,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
     }
 
     this.updateLift(dt);
+    this.updateHazard(dt);
+    this.updateBreaker(dt);
 
     if (playable && !this.dialogue.isActive) {
       if (input.wasPressed('Digit1')) this.wanted = 'pistol';
@@ -451,6 +638,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.flashPool.update(dt);
     this.decals.update(dt);
     this.updateDebris(dt);
+    // Cleared last, so every interaction this frame saw the same answer
+    this.eSpent = false;
     input.endFrame();
   }
 

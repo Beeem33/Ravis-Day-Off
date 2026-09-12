@@ -252,6 +252,16 @@ export class ParticleManager {
     }
   }
 
+  /** Sparks off a short: a burst of hot blue-white points that fall and die. */
+  electricSparks(pos: THREE.Vector3, count = 10): void {
+    const up = new THREE.Vector3(0, 1, 0);
+    for (let i = 0; i < count; i++) {
+      const c = new THREE.Color().setHSL(0.52 + Math.random() * 0.08, 0.9, 0.7 + Math.random() * 0.25);
+      this.glow.spawn(pos, this.scatter(up, 1.4, 3.6), 0.18 + Math.random() * 0.3, 0.05 + Math.random() * 0.05, c, 9, 0.6);
+    }
+    this.glow.spawn(pos, up.clone().multiplyScalar(0.2), 0.07, 0.5, new THREE.Color(0.7, 0.95, 1), 0, 0);
+  }
+
   concreteChips(pos: THREE.Vector3, normal: THREE.Vector3, tint = 0xb9b3a8): void {
     const base = new THREE.Color(tint);
     for (let i = 0; i < 10; i++) {

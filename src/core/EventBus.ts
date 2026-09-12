@@ -68,7 +68,20 @@ export const Events = {
   /** Level four cleared and the back door taken — down to the basement. */
   Level4Complete: 'level4-complete',
   RestartLevel5: 'restart-level5',
+  /** {level: LevelId} — jump straight to a level from the menu's test page. */
+  SelectLevel: 'select-level',
   /** {lethal: boolean} */
   HitMarker: 'hit-marker',
   Resize: 'resize'
 } as const;
+
+/** The levels the menu's test page can start from, in running order. */
+export const LEVELS = [
+  { id: 'intro', n: '1', name: 'THE CALL FLOOR', blurb: 'The desk, the drawer, the first agent' },
+  { id: 'office', n: '2', name: 'RAVI-CALL SYSTEMS', blurb: 'The call floor proper — pistol, shotgun, AK' },
+  { id: 'level3', n: '3', name: 'THE OTHER FLOOR', blurb: 'Upstairs, and whoever is still up there' },
+  { id: 'level4', n: '4', name: 'LIGHTS OUT', blurb: 'The dark floor, by torchlight' },
+  { id: 'level5', n: '5', name: 'THE SERVICE LIFT', blurb: 'Down to the basement' }
+] as const;
+
+export type LevelId = (typeof LEVELS)[number]['id'];

@@ -681,6 +681,25 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
   }
 
   /** The AK's empty mag, flicked out forward by the fresh one, lands in the level. */
+  /**
+   * A polymer magazine on office carpet: it skitters and bounces rather than
+   * landing dead, which the world's default (restitution 0.12, for draping
+   * ragdolls) will not do. Registered once, on first use.
+   */
+  private magMat: CANNON.Material | null = null;
+  private magMaterial(): CANNON.Material {
+    if (!this.magMat) {
+      this.magMat = new CANNON.Material('rifleMag');
+      this.world.addContactMaterial(
+        new CANNON.ContactMaterial(this.magMat, this.world.defaultMaterial, {
+          restitution: 0.45,
+          friction: 0.22
+        })
+      );
+    }
+    return this.magMat;
+  }
+
   private dropRifleMagazine(): void {
     const mesh = this.rifle.makeDroppedMag();
     if (!mesh) return;
@@ -693,8 +712,9 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
       mass: 0.4,
       shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.075, 0.014)),
       position: new CANNON.Vec3(position.x, position.y, position.z),
-      linearDamping: 0.05,
-      angularDamping: 0.25
+      linearDamping: 0.02,
+      angularDamping: 0.12,
+      material: this.magMaterial()
     });
     body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
     body.velocity.set(velocity.x, velocity.y, velocity.z);

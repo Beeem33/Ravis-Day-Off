@@ -37,6 +37,15 @@
     .menu-panel td { padding: 3px 2px; font-size: 12px; }
     .menu-panel td:first-child { color: #2e8f47; width: 46%; }
     .menu-panel input[type=range] { width: 100%; accent-color: #52e07a; }
+    .menu-panel .dim { color: #2e8f47; margin-top: 5px; line-height: 1.5; }
+    /* Level-select rows: number, name, and a line on what you are dropping into */
+    .menu-item.level-pick { font-size: 14px; padding: 6px 4px; }
+    .level-pick .lvl-n { color: #2e8f47; margin-right: 6px; }
+    .level-pick .lvl-blurb {
+      display: block; font-size: 10px; color: #2e8f47; letter-spacing: 0.5px;
+      margin: 1px 0 0 18px; text-transform: none;
+    }
+    .level-pick:hover .lvl-n, .level-pick:hover .lvl-blurb { color: #7de99a; }
     .blink { animation: blink 1.1s steps(2) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
 

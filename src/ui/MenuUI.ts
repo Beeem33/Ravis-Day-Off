@@ -1,7 +1,7 @@
-import { EventBus, Events } from '../core/EventBus';
+import { EventBus, Events, LEVELS, LevelId } from '../core/EventBus';
 import type { AudioManager } from '../core/AudioManager';
 
-type Panel = 'main' | 'audio' | 'controls' | 'quit';
+type Panel = 'main' | 'audio' | 'controls' | 'admin' | 'quit';
 
 /**
  * MenuUI — the diegetic security-terminal overlay for the main menu:
@@ -41,7 +41,25 @@ export class MenuUI {
         <button class="menu-item" data-act="start">START SHIFT</button>
         <button class="menu-item" data-act="audio">AUDIO SETTINGS</button>
         <button class="menu-item" data-act="controls">CONTROLS</button>
+        <button class="menu-item" data-act="admin">ADMIN — LEVEL SELECT</button>
         <button class="menu-item" data-act="quit">QUIT</button>
+      `;
+    } else if (panel === 'admin') {
+      this.el.innerHTML = `
+        ${this.header()}
+        <div class="menu-panel">
+          <div>SUPERVISOR ACCESS — SHIFT PLAYBACK</div>
+          <div class="dim">Jump straight to any floor. Each one starts exactly as it would have if you had reached it: same weapons, same script.</div>
+        </div>
+        <div class="divider"></div>
+        ${LEVELS.map(
+          (l) => `<button class="menu-item level-pick" data-act="level" data-level="${l.id}">
+            <span class="lvl-n">${l.n}</span> ${l.name}
+            <span class="lvl-blurb">${l.blurb}</span>
+          </button>`
+        ).join('')}
+        <div class="divider"></div>
+        <button class="menu-item" data-act="back">BACK</button>
       `;
     } else if (panel === 'audio') {
       this.el.innerHTML = `
@@ -109,6 +127,9 @@ export class MenuUI {
         if (act === 'start') {
           this.audio.uiBeep(true);
           this.bus.emit(Events.StartGame);
+        } else if (act === 'level') {
+          this.audio.uiBeep(true);
+          this.bus.emit(Events.SelectLevel, { level: btn.dataset.level as LevelId });
         } else if (act === 'back') {
           this.audio.uiBeep();
           this.renderPanel('main');

@@ -223,8 +223,18 @@ export class RifleViewmodel {
     const position = this.magPivot
       ? new THREE.Box3().setFromObject(this.magPivot).getCenter(new THREE.Vector3())
       : this.magCentre.getWorldPosition(new THREE.Vector3());
-    // Carry the tumble over too, about the axis the animation was spinning it
-    const angularVelocity = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion).multiplyScalar(-this.magSpin);
+    // Carry the tumble over, about the axis the animation was spinning it,
+    // plus a bit of wobble off that axis so it does not cartwheel flatly
+    const angularVelocity = new THREE.Vector3(0, 0, 1)
+      .applyQuaternion(quaternion)
+      .multiplyScalar(-this.magSpin)
+      .add(
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 5,
+          (Math.random() - 0.5) * 5,
+          (Math.random() - 0.5) * 5
+        )
+      );
     return { position, quaternion, velocity: this.magVel.clone(), angularVelocity };
   }
 
@@ -443,15 +453,19 @@ export class RifleViewmodel {
     // physics copy takes it from there
     if (mag && this.reloadFired.has('magOut') && !this.reloadFired.has('magIn')) {
       const dI = t - tImp;
-      if (dI < 0.12) {
-        // Shoved off the paddle over a few frames rather than teleporting off
-        // it, then away under its own momentum. It is handed to the level's
-        // physics as soon as it is clear of the well, so the fall to the
-        // floor is real rather than animated.
-        const travel = dI * ease(c01(dI / 0.05));
-        this.magSpin = 6.5 * this.rSpeed;
-        mag.rotation.set(0, 0, Math.min(1.3, 6.5 * travel));
-        mag.position.set(0.109 + 1.3 * travel, -3.2 * travel * travel, 0);
+      if (dI < 0.085) {
+        // Knocked clear rather than dropped: the fresh mag's spine drives it
+        // out along the well and away to the gun's right, tumbling. It is
+        // handed to the level's physics the moment it is clear of the well,
+        // carrying that speed, so the arc and the landing are real.
+        const travel = dI * ease(c01(dI / 0.04));
+        this.magSpin = 11 * this.rSpeed;
+        mag.rotation.set(0, 0, Math.min(1.4, 11 * travel));
+        mag.position.set(
+          0.109 + 3.4 * travel, // driven forward along the magwell
+          -2.2 * travel * travel, // barely dropping yet — it was hit, not released
+          1.5 * travel // and out, clear of the gun
+        );
       } else if (mag.visible) {
         this.reloadEvent('magDrop');
         mag.visible = false;

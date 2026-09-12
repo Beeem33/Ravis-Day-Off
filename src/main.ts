@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import type * as THREE from 'three';
-import { GameEngine } from './core/GameEngine';
-import { EventBus, Events } from './core/EventBus';
+import { GameEngine, type GameScene } from './core/GameEngine';
+import { EventBus, Events, type LevelId } from './core/EventBus';
 import { InputManager } from './core/InputManager';
 import { AudioManager } from './core/AudioManager';
 import { MainMenuScene } from './scenes/MainMenuScene';
@@ -76,6 +76,23 @@ bus.on(Events.RestartLevel, () => {
 });
 bus.on(Events.ReturnToMenu, () => {
   engine.setScene(new MainMenuScene(ctx));
+});
+
+// The menu's level-select page: start any floor as if it had been reached
+// normally, so a single level can be played without the four before it.
+const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> = {
+  intro: () => ({ scene: new IntroLevelScene(ctx), title: 'THE CALL FLOOR' }),
+  office: () => ({ scene: new OfficeLevelScene(ctx), title: 'LEVEL 2 — RAVI-CALL SYSTEMS' }),
+  level3: () => ({ scene: new Level3Scene(ctx), title: 'LEVEL 3 — THE OTHER FLOOR' }),
+  level4: () => ({ scene: new Level4Scene(ctx), title: 'LEVEL 4 — LIGHTS OUT' }),
+  level5: () => ({ scene: new Level5Scene(ctx), title: 'THE SERVICE LIFT' })
+};
+bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
+  const make = LEVEL_SCENES[level];
+  if (!make) return;
+  audio.stopMenuMusic();
+  const { scene, title } = make();
+  engine.setScene(scene, title);
 });
 
 engine.uiRoot = uiRoot;

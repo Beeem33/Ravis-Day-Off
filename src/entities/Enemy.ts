@@ -591,6 +591,67 @@ export class Enemy {
     this.foreR.add(this.rifle);
   }
 
+  /**
+   * A pose held by a cutscene. While set it wins over every animated pose:
+   * shoulders as rotations in the body's own frame, elbows as bends, and a
+   * lean of the chest. Anything left out keeps animating as normal.
+   */
+  pose: {
+    armR?: THREE.Quaternion;
+    foreR?: number;
+    armL?: THREE.Quaternion;
+    foreL?: number;
+    lean?: number;
+  } | null = null;
+
+  /** The right shoulder's pivot, in the body's own frame — for aiming a pose. */
+  shoulderR(out = new THREE.Vector3()): THREE.Vector3 {
+    return out.copy(this.armR.position);
+  }
+
+  /**
+   * Put the rifle away and hold a pistol in the right hand instead, for a
+   * close-quarters beat. The gun sits in the fist with its barrel running
+   * on along the forearm and its slide on the back of the hand, so wherever
+   * the arm points, the muzzle points.
+   */
+  equipPistol(): void {
+    this.rifle.visible = false;
+    const metal = this.mat(0x1a1c20, 0.5);
+    // Lighter than the frame and the suit behind it: seen end-on, pointed
+    // at the camera, a black slide on a black sleeve was just a dark blob
+    const slideMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.35, metalness: 0.7 });
+    const bore = this.mat(0x050505, 0.9);
+    const gun = new THREE.Group();
+    // Forearm frame: -Y runs out through the hand, -Z is the back of the
+    // fist (up, with the arm held out in front)
+    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.2, 0.042), slideMat);
+    slide.position.set(0, -0.065, -0.05);
+    gun.add(slide);
+    // The hole it would come out of, and the sights along the top
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.0085, 0.0085, 0.006, 12), bore);
+    muzzle.position.set(0, -0.166, -0.052);
+    gun.add(muzzle);
+    const front = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.01, 0.012), metal);
+    front.position.set(0, -0.155, -0.076);
+    gun.add(front);
+    const rear = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.01, 0.01), metal);
+    rear.position.set(0, 0.025, -0.076);
+    gun.add(rear);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.16, 0.03), metal);
+    frame.position.set(0, -0.05, -0.02);
+    gun.add(frame);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, 0.13), metal);
+    grip.position.set(0, 0.02, 0.02);
+    grip.rotation.x = -0.2;
+    gun.add(grip);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.05, 0.008), metal);
+    guard.position.set(0, -0.04, 0.012);
+    gun.add(guard);
+    gun.position.set(0, -0.31, 0);
+    this.foreR.add(gun);
+  }
+
   /** Civilian only: put your hands up. Also drops the calm face. */
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
@@ -1421,6 +1482,16 @@ export class Enemy {
     this.torso.position.set(sway * 0.85, 1.27 + drop + Math.sin(at * 2.2) * 0.008 * (1 - stride), 0);
     this.torso.rotation.x = lean;
     this.torso.rotation.z = -sway * 2.2;
+
+    // A cutscene's held pose goes on last, over everything above
+    const p = this.pose;
+    if (p) {
+      if (p.armR) this.armR.quaternion.copy(p.armR);
+      if (p.foreR !== undefined) this.foreR.rotation.set(p.foreR, 0, 0);
+      if (p.armL) this.armL.quaternion.copy(p.armL);
+      if (p.foreL !== undefined) this.foreL.rotation.set(p.foreL, 0, 0);
+      if (p.lean !== undefined) this.torso.rotation.x = p.lean;
+    }
   }
 
   private updateDead(dt: number): void {

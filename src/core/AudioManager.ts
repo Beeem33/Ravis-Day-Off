@@ -861,6 +861,177 @@ export class AudioManager {
     n.stop(t + 0.9);
   }
 
+  /**
+   * A seized lever being forced: a low metal groan that wanders in pitch as
+   * it binds and gives, with a scrape of grit in the pivot over it and a
+   * couple of high squeals where it catches. Runs for `seconds`.
+   */
+  leverStrain(seconds = 1.4): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.5, t + 0.12);
+    bus.gain.setValueAtTime(0.5, t + seconds - 0.15);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+    bus.connect(this.sfxBus);
+    // The groan: two detuned saws through a band that sweeps as it binds
+    const steps = 24;
+    const curve = new Float32Array(steps);
+    for (let i = 0; i < steps; i++) curve[i] = 260 + Math.random() * 340;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 5;
+    band.frequency.setValueCurveAtTime(curve, t, seconds);
+    band.connect(bus);
+    for (const f of [68, 71.5]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.linearRampToValueAtTime(f * 1.25, t + seconds);
+      const g = ctx.createGain();
+      g.gain.value = 0.34;
+      o.connect(g).connect(band);
+      o.start(t);
+      o.stop(t + seconds + 0.05);
+    }
+    // Grit in the pivot
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'bandpass';
+    nf.frequency.value = 1300;
+    nf.Q.value = 1.6;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.12;
+    n.connect(nf).connect(ng).connect(bus);
+    n.start(t);
+    n.stop(t + seconds + 0.05);
+    // Where it catches and squeals
+    for (const at of [seconds * 0.22, seconds * 0.63]) {
+      const s = ctx.createOscillator();
+      s.type = 'triangle';
+      s.frequency.setValueAtTime(1150 + Math.random() * 300, t + at);
+      s.frequency.linearRampToValueAtTime(900 + Math.random() * 250, t + at + 0.22);
+      const sg = ctx.createGain();
+      sg.gain.setValueAtTime(0.0001, t + at);
+      sg.gain.exponentialRampToValueAtTime(0.07, t + at + 0.03);
+      sg.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.25);
+      s.connect(sg).connect(bus);
+      s.start(t + at);
+      s.stop(t + at + 0.3);
+    }
+  }
+
+  /** Ravi straining at something: a short voiced grunt with breath under it. */
+  effortGrunt(strength = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const len = 0.32 + 0.12 * strength;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.32 * strength, t + 0.05);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    bus.connect(this.sfxBus);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(118, t);
+    o.frequency.linearRampToValueAtTime(104, t + len);
+    // A throaty vowel: one formant band, low-passed
+    const f1 = ctx.createBiquadFilter();
+    f1.type = 'bandpass';
+    f1.frequency.value = 520;
+    f1.Q.value = 2.2;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1400;
+    o.connect(f1).connect(lp).connect(bus);
+    o.start(t);
+    o.stop(t + len + 0.05);
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'bandpass';
+    nf.frequency.value = 900;
+    nf.Q.value = 0.8;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.25;
+    n.connect(nf).connect(ng).connect(bus);
+    n.start(t, Math.random());
+    n.stop(t + len + 0.05);
+  }
+
+  /** The turn and the face behind him: a low hit with a sour high pair over it. */
+  revealSting(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.setValueAtTime(64, t);
+    boom.frequency.exponentialRampToValueAtTime(34, t + 1.1);
+    const bg = ctx.createGain();
+    bg.gain.setValueAtTime(0.0001, t);
+    bg.gain.exponentialRampToValueAtTime(0.75, t + 0.02);
+    bg.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+    boom.connect(bg).connect(this.sfxBus);
+    boom.start(t);
+    boom.stop(t + 1.35);
+    this.noise(0.5, 'lowpass', 380, 0.4);
+    for (const f of [740, 784]) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.05, t + 0.08);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
+      o.connect(g).connect(this.sfxBus);
+      o.start(t);
+      o.stop(t + 1.65);
+    }
+  }
+
+  /**
+   * A pistol across the side of the head, heard from inside it: a hard low
+   * thud and a crack, and then the ringing that is all there is afterwards.
+   * The ring goes straight to the master bus and takes `ring` seconds to die.
+   */
+  knockoutHit(ring = 4.5): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(110, t);
+    thud.frequency.exponentialRampToValueAtTime(38, t + 0.28);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(1.0, t);
+    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+    thud.connect(tg).connect(this.sfxBus);
+    thud.start(t);
+    thud.stop(t + 0.36);
+    this.noise(0.06, 'bandpass', 2300, 0.9, true, 1.2);
+    this.noise(0.16, 'lowpass', 850, 0.8);
+    // Tinnitus: one thin tone, and a second a hair off it that beats against it
+    for (const [f, g0] of [[3720, 0.045], [3736, 0.03]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(g0, t + 0.3);
+      g.gain.setValueAtTime(g0, t + ring * 0.35);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + ring);
+      o.connect(g).connect(this.master);
+      o.start(t + 0.05);
+      o.stop(t + ring + 0.05);
+    }
+  }
+
   /** The breaker going over: a heavy mechanical clack. */
   breakerThrow(): void {
     if (!this.ctx) return;

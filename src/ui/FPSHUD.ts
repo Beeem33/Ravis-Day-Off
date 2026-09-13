@@ -160,6 +160,11 @@ export class FPSHUD {
     this.startTime = performance.now();
   }
 
+  /** Out of the way for a cutscene: crosshair, vitals, ammo and all. */
+  hide(): void {
+    this.hud.style.display = 'none';
+  }
+
   destroy(): void {
     for (const u of this.unsubs) u();
     this.hud.remove();

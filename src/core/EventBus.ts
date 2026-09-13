@@ -68,6 +68,8 @@ export const Events = {
   /** Level four cleared and the back door taken — down to the basement. */
   Level4Complete: 'level4-complete',
   RestartLevel5: 'restart-level5',
+  /** Knocked out at the breaker — the screen has gone to black. */
+  Level5Complete: 'level5-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */

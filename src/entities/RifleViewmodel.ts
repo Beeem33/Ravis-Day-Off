@@ -140,8 +140,10 @@ export class RifleViewmodel {
     this.flashSprite.scale.setScalar(0.2);
     this.flashSprite.visible = false;
     this.muzzle.add(this.flashSprite);
+    // In the scene for good, at zero between shots: switching a light's
+    // visibility moves the scene's light count, and that recompiles every
+    // material in it — which it used to do on every single round.
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 5, 1.9);
-    this.flashLight.visible = false;
     this.muzzle.add(this.flashLight);
 
     new GLTFLoader().load(`${import.meta.env.BASE_URL}models/ak47.glb`, (gltf) => {
@@ -285,7 +287,6 @@ export class RifleViewmodel {
     this.flashTimer = 0.04;
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
-    this.flashLight.visible = true;
     this.flashLight.intensity = 4;
     // The keychain gets a jolt off every shot
     this.charm.vSwing += 6 + Math.random() * 3;
@@ -618,7 +619,7 @@ export class RifleViewmodel {
       this.flashLight.intensity *= 0.55;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;
-        this.flashLight.visible = false;
+        this.flashLight.intensity = 0;
       }
     }
   }

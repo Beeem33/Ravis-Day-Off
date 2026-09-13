@@ -86,15 +86,27 @@ export class Enemy {
   private struggleTime = 0;
   private rifleDropped = false;
   private flashTime = 0;
+  /** The boss: heavier build, beard, cap, no weapon. */
+  readonly boss: boolean = false;
+  /** Half the span of the shoulders and of the hips — the boss is wider. */
+  private shoulderX = 0.29;
+  private hipX = 0.115;
+  /** Where the support hand takes the weapon, in the weapon's own space. */
+  private handguard = new THREE.Vector3(0, 0.02, -0.19);
 
   constructor(
     spawn: THREE.Vector3,
     yaw: number,
     index: number,
-    opts: { name?: string; civilian?: boolean } = {}
+    opts: { name?: string; civilian?: boolean; boss?: boolean } = {}
   ) {
     this.name = opts.name ?? AMERICAN_NAMES[index % AMERICAN_NAMES.length];
     this.civilian = opts.civilian ?? false;
+    this.boss = opts.boss ?? false;
+    if (this.boss) {
+      this.shoulderX = 0.34;
+      this.hipX = 0.135;
+    }
     this.variant = index;
     this.root.position.copy(spawn);
     this.yaw = yaw;
@@ -362,7 +374,219 @@ export class Enemy {
     return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
   }
 
+  /**
+   * The boss's face: heavy brows dragged down at the middle, small hard
+   * eyes, and a flat mouth under the moustache. The beard is its own mesh
+   * over the jaw, so the texture stops at the mouth.
+   */
+  private static drawBossFace(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#c08b66';
+    g.fillRect(0, 0, 64, 64);
+    // Ruddy cheeks
+    g.fillStyle = 'rgba(170,70,50,0.22)';
+    g.fillRect(8, 33, 14, 8);
+    g.fillRect(42, 33, 14, 8);
+    // Stubble creeping up above the beard line
+    g.fillStyle = 'rgba(40,26,18,0.35)';
+    for (let i = 0; i < 70; i++) g.fillRect(8 + Math.random() * 48, 38 + Math.random() * 8, 1, 1);
+    g.strokeStyle = '#1d140e';
+    g.lineCap = 'round';
+    // Thick brows, slanted hard in towards the nose
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(11, 19);
+    g.lineTo(28, 24);
+    g.moveTo(53, 19);
+    g.lineTo(36, 24);
+    g.stroke();
+    // Small, narrowed eyes
+    g.fillStyle = '#f1ede6';
+    g.fillRect(16, 27, 10, 4);
+    g.fillRect(38, 27, 10, 4);
+    g.fillStyle = '#16100b';
+    g.fillRect(20, 27, 4, 4);
+    g.fillRect(40, 27, 4, 4);
+    // Heavy lids over them
+    g.fillStyle = 'rgba(120,70,48,0.7)';
+    g.fillRect(15, 26, 12, 2);
+    g.fillRect(37, 26, 12, 2);
+    // Nose, broad
+    g.fillStyle = 'rgba(120,64,44,0.55)';
+    g.fillRect(29, 30, 6, 9);
+    g.fillRect(27, 37, 10, 3);
+    // A flat, unimpressed mouth
+    g.strokeStyle = '#5a2c1e';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(24, 47);
+    g.lineTo(32, 46.5);
+    g.lineTo(40, 47.5);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
+
+  /** Rough beard: near-black with lighter and darker flecks all through it. */
+  private static beardTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#231913';
+    g.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 520; i++) {
+      const l = Math.random();
+      g.fillStyle = l < 0.5 ? 'rgba(12,8,6,0.8)' : l < 0.85 ? 'rgba(62,44,32,0.75)' : 'rgba(110,92,80,0.6)';
+      g.fillRect(Math.random() * 64, Math.random() * 64, 1 + Math.random(), 2 + Math.random() * 2);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return tex;
+  }
+
+  /** A club tie: broad gold and red stripes on the diagonal, fine dark rules between. */
+  private static stripedTieTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 128;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#a3161c';
+    g.fillRect(0, 0, 32, 128);
+    g.save();
+    g.translate(16, 64);
+    g.rotate(-Math.PI / 4);
+    for (let y = -120; y < 120; y += 22) {
+      g.fillStyle = '#d6a72c';
+      g.fillRect(-120, y, 240, 9);
+      g.fillStyle = '#3a0a0c';
+      g.fillRect(-120, y + 9, 240, 2);
+      g.fillRect(-120, y - 2, 240, 2);
+    }
+    g.restore();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * The boss. Same kit as everyone else — capsule limbs, a rounded box for a
+   * head with a painted face — built heavy: a barrel of a chest with a belly
+   * standing proud of the jacket below it, thick legs, and a neck that has
+   * given up and become a second chin under a rough beard. Black suit, a tie
+   * in gold and red stripes, and a red cap with a gold band round it.
+   */
+  private buildBoss(): void {
+    const suit = this.mat(0x131316, 0.8);
+    const shirt = this.mat(0xeeebe4, 0.9);
+    const skin = this.mat(0xc08b66);
+    const shoe = this.mat(0x0d0d10, 0.45);
+    const capRed = this.mat(0xa3161c, 0.75);
+    const gold = new THREE.MeshStandardMaterial({ color: 0xd4a52a, roughness: 0.35, metalness: 0.75 });
+    const beard = new THREE.MeshStandardMaterial({ map: Enemy.beardTexture(), roughness: 0.95 });
+    const tie = new THREE.MeshStandardMaterial({ map: Enemy.stripedTieTexture(), roughness: 0.6 });
+
+    const mkLeg = (side: number): [THREE.Group, THREE.Group] => {
+      const hip = new THREE.Group();
+      hip.position.set(side * this.hipX, 0.82, 0);
+      const thigh = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.105, 0.24, 4, 12), suit), 'leg');
+      thigh.position.set(0, -0.205, 0);
+      hip.add(thigh);
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.41, 0);
+      const shin = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.088, 0.28, 4, 12), suit), 'leg');
+      shin.position.set(0, -0.205, 0);
+      knee.add(shin);
+      const s = new THREE.Mesh(new RoundedBoxGeometry(0.17, 0.085, 0.29, 3, 0.035), shoe);
+      s.position.set(0, -0.37, -0.04);
+      knee.add(s);
+      hip.add(knee);
+      this.root.add(hip);
+      return [hip, knee];
+    };
+    [this.legL, this.shinL] = mkLeg(-1);
+    [this.legR, this.shinR] = mkLeg(1);
+
+    // A barrel of a chest, and the belly pushing the jacket out under it
+    const jacketGeo = new RoundedBoxGeometry(0.62, 0.52, 0.42, 5, 0.15);
+    jacketGeo.translate(0, -0.06, 0);
+    this.torso = this.addPart(new THREE.Mesh(jacketGeo, suit), 'torso');
+    this.torso.position.set(0, 1.27, 0);
+    this.root.add(this.torso);
+    const belly = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.54, 0.34, 0.26, 5, 0.12), suit), 'torso');
+    belly.position.set(0, -0.22, -0.12);
+    this.torso.add(belly);
+    this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.3, 0.4, 4, 0.1), suit), 'torso');
+    this.pelvis.position.set(0, 0.96, 0);
+    this.root.add(this.pelvis);
+    // Shirt front, the striped tie, lapels — skins on the chest face
+    const front = -0.2115;
+    const shirtFront = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.3), shirt);
+    shirtFront.position.set(0, 0.03, front);
+    shirtFront.rotation.y = Math.PI;
+    this.torso.add(shirtFront);
+    const tieMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.065, 0.34), tie);
+    tieMesh.position.set(0, -0.02, front - 0.001);
+    tieMesh.rotation.y = Math.PI;
+    this.torso.add(tieMesh);
+    const knot = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.05), tie);
+    knot.position.set(0, 0.165, front - 0.0015);
+    knot.rotation.y = Math.PI;
+    this.torso.add(knot);
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.3), suit);
+      lapel.rotation.y = Math.PI;
+      lapel.position.set(side * 0.1, 0.02, front - 0.0012);
+      lapel.rotation.z = side * 0.2;
+      this.torso.add(lapel);
+    }
+
+    // Head, a size up, with the gruff face on the front (-Z)
+    const face = Enemy.drawBossFace();
+    this.head = this.addPart(
+      new THREE.Mesh(new RoundedBoxGeometry(0.27, 0.28, 0.26, 5, 0.08), [skin, skin, skin, skin, skin, face]),
+      'head'
+    );
+    this.head.position.set(0, 1.585, 0);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.08, 12), skin);
+    neck.position.set(0, -0.12, 0);
+    this.head.add(neck);
+    this.root.add(this.head);
+    // The beard round the jaw, a moustache over the mouth, and under it all
+    // the second chin, bearded too
+    const jaw = new THREE.Mesh(new RoundedBoxGeometry(0.28, 0.1, 0.27, 4, 0.04), beard);
+    jaw.position.set(0, -0.1, 0.004);
+    this.head.add(jaw);
+    const tache = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.028, 0.03, 2, 0.01), beard);
+    tache.position.set(0, -0.043, -0.132);
+    this.head.add(tache);
+    const chin2 = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.08, 0.17, 4, 0.036), beard);
+    chin2.position.set(0, -0.17, -0.05);
+    this.head.add(chin2);
+    // The cap: red crown, gold band all the way round its base, the peak
+    const crown = new THREE.Mesh(new RoundedBoxGeometry(0.286, 0.1, 0.286, 4, 0.05), capRed);
+    crown.position.set(0, 0.158, 0.006);
+    this.head.add(crown);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.292, 0.03, 0.292), gold);
+    band.position.set(0, 0.122, 0.006);
+    this.head.add(band);
+    const peak = new THREE.Mesh(new RoundedBoxGeometry(0.25, 0.024, 0.13, 3, 0.011), capRed);
+    peak.position.set(0, 0.118, -0.18);
+    peak.rotation.x = 0.1;
+    this.head.add(peak);
+    const btn = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), gold);
+    btn.position.set(0, 0.212, 0.006);
+    this.head.add(btn);
+
+    this.finishBody(suit, shirt, skin, this.mat(0x1a1c20, 0.5), 1.25);
+  }
+
   private buildBody(): void {
+    if (this.boss) return this.buildBoss();
     // The civilian wears what the floor staff wear: white shirt, blue
     // chinos, ball cap. Agents are in black suits.
     const suit = this.civilian ? this.mat(0x2f4a7a, 0.9) : this.mat(0x15161a, 0.8);
@@ -545,21 +769,22 @@ export class Enemy {
     sleeveMat: THREE.Material,
     cuffMat: THREE.Material,
     handMat: THREE.Material,
-    gunmetal: THREE.Material
+    gunmetal: THREE.Material,
+    thick = 1
   ): void {
     // Upper arm pivots at the shoulder; forearm (cuff + hand) pivots at the elbow
     const mkArm = (side: number): [THREE.Group, THREE.Group] => {
       const g = new THREE.Group();
-      g.position.set(side * 0.29, 1.4, 0);
-      const upper = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.2, 4, 12), sleeveMat), 'arm');
+      g.position.set(side * this.shoulderX, 1.4, 0);
+      const upper = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.065 * thick, 0.2, 4, 12), sleeveMat), 'arm');
       upper.position.set(0, -0.145, 0);
       g.add(upper);
       const fore = new THREE.Group();
       fore.position.set(0, -0.29, 0); // elbow
-      const lower = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.2, 4, 12), sleeveMat), 'arm');
+      const lower = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.055 * thick, 0.2, 4, 12), sleeveMat), 'arm');
       lower.position.set(0, -0.145, 0);
       fore.add(lower);
-      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.03, 14), cuffMat);
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.062 * thick, 0.062 * thick, 0.03, 14), cuffMat);
       cuff.position.set(0, -0.24, 0);
       fore.add(cuff);
       const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), handMat);
@@ -572,9 +797,9 @@ export class Enemy {
     [this.armL, this.foreL] = mkArm(-1);
     [this.armR, this.foreR] = mkArm(1);
 
-    // Rifle held by the right arm
+    // Rifle held by the right arm (the boss leaves the guns to other people)
     this.rifle = new THREE.Group();
-    if (!this.civilian) {
+    if (!this.civilian && !this.boss) {
       const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.62), gunmetal);
       this.rifle.add(receiver);
       const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.08), gunmetal);
@@ -602,7 +827,58 @@ export class Enemy {
     armL?: THREE.Quaternion;
     foreL?: number;
     lean?: number;
+    /** Hand targets in the body's own frame, reached by bending the elbow. */
+    handR?: THREE.Vector3;
+    handL?: THREE.Vector3;
+    /** Which way the elbows go when the hands are placed; x is mirrored for the left. */
+    elbow?: THREE.Vector3;
+    /** Shoulders and head moved by this, in the body's frame: hunching over a desk. */
+    shift?: THREE.Vector3;
+    /** Head rotation, instead of whatever the head would otherwise be doing. */
+    head?: THREE.Euler;
   } | null = null;
+
+  private static _ikW = new THREE.Vector3();
+  private static _ikN = new THREE.Vector3();
+  private static _ikE = new THREE.Vector3();
+  private static _ikU = new THREE.Vector3();
+  private static _ikF = new THREE.Vector3();
+  private static _ikX = new THREE.Vector3();
+  private static _ikY = new THREE.Vector3();
+  private static _ikZ = new THREE.Vector3();
+  private static _ikM = new THREE.Matrix4();
+
+  /**
+   * Two-bone reach: put this arm's hand on `hand` (body frame). The elbow
+   * goes where the two bones meet, on the side `pole` asks for, and the
+   * shoulder is turned about the upper arm so the elbow's hinge lies in the
+   * plane of all three points — the forearm then folds straight onto the
+   * target, as gripRifle does for the rifle.
+   */
+  private reachArm(arm: THREE.Group, fore: THREE.Group, hand: THREE.Vector3, side: number, pole?: THREE.Vector3): void {
+    const UPPER = 0.29;
+    const FORE = 0.31;
+    const S = arm.position;
+    const w = Enemy._ikW.copy(hand).sub(S);
+    const d = THREE.MathUtils.clamp(w.length(), 0.08, (UPPER + FORE) * 0.999);
+    w.normalize();
+    const a = Math.acos(THREE.MathUtils.clamp((UPPER * UPPER + d * d - FORE * FORE) / (2 * UPPER * d), -1, 1));
+    const n = Enemy._ikN.set((pole?.x ?? 0.3) * side, pole?.y ?? -1, pole?.z ?? -0.3);
+    n.addScaledVector(w, -n.dot(w));
+    if (n.lengthSq() < 1e-6) n.set(0, -1, 0).addScaledVector(w, -w.y);
+    n.normalize();
+    const E = Enemy._ikE.copy(S).addScaledVector(w, Math.cos(a) * UPPER).addScaledVector(n, Math.sin(a) * UPPER);
+    const u = Enemy._ikU.copy(E).sub(S).normalize();
+    const f = Enemy._ikF.copy(S).addScaledVector(w, d).sub(E).normalize();
+    // Upper arm hangs down its -Y; the elbow folds the forearm towards its -Z
+    const Y = Enemy._ikY.copy(u).negate();
+    const Z = Enemy._ikZ.copy(f).addScaledVector(u, -u.dot(f));
+    if (Z.lengthSq() < 1e-6) Z.copy(n);
+    Z.normalize().negate();
+    const X = Enemy._ikX.crossVectors(Y, Z);
+    arm.quaternion.setFromRotationMatrix(Enemy._ikM.makeBasis(X, Y, Z));
+    fore.rotation.set(Math.acos(THREE.MathUtils.clamp(u.dot(f), -1, 1)), 0, 0);
+  }
 
   /** The right shoulder's pivot, in the body's own frame — for aiming a pose. */
   shoulderR(out = new THREE.Vector3()): THREE.Vector3 {
@@ -650,6 +926,56 @@ export class Enemy {
     gun.add(guard);
     gun.position.set(0, -0.31, 0);
     this.foreR.add(gun);
+  }
+
+  /**
+   * Carry `model` in place of the stand-in rifle: the real AK, say. `grip`
+   * is where the right hand holds it and `handguard` where the left does,
+   * and `muzzle` the end of the barrel — all in the model's own space, with
+   * the barrel pointing down its −Z. The model is shifted so its grip sits
+   * where the stand-in's did, and the support hand's reach is re-aimed at
+   * its handguard.
+   */
+  equipWeapon(model: THREE.Object3D, grip: THREE.Vector3, handguard: THREE.Vector3, muzzle: THREE.Vector3): void {
+    for (const c of [...this.rifle.children]) if (c !== this.muzzle) this.rifle.remove(c);
+    const at = new THREE.Vector3(0, -0.02, 0.1).sub(grip);
+    model.position.add(at);
+    this.rifle.add(model);
+    this.handguard.copy(handguard).add(at);
+    this.muzzle.position.copy(muzzle).add(at);
+  }
+
+  /** Stop drawing whatever is in his hands — it has gone to somebody else. */
+  hideWeapon(): void {
+    this.rifle.visible = false;
+  }
+
+  private slung = false;
+
+  /**
+   * Weapon across his back, hands free — or back into his hands. Slung, it
+   * rides the chest diagonally behind him, barrel up over his left shoulder,
+   * so both hands can be used for something else without a rifle sticking
+   * out of one of them.
+   */
+  slingWeapon(on: boolean): void {
+    if (on === this.slung || this.rifleDropped) return;
+    this.slung = on;
+    this.rifle.removeFromParent();
+    if (on) {
+      this.torso.add(this.rifle);
+      // Barrel up over his left shoulder (his left is -x in his own frame),
+      // stock down by his right hip
+      const barrel = new THREE.Vector3(-0.5, 0.86, 0).normalize();
+      const Z = barrel.clone().negate(); // the weapon's barrel runs down its -Z
+      const Y = new THREE.Vector3(0, 0, 1); // top of the gun away from his back
+      const X = Y.clone().cross(Z);
+      this.rifle.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+      this.rifle.position.set(0.12, -0.2, 0.2);
+    } else {
+      this.foreR.add(this.rifle);
+      this.rifle.position.set(-0.12, -0.21, -0.12);
+    }
   }
 
   /** Civilian only: put your hands up. Also drops the calm face. */
@@ -856,7 +1182,7 @@ export class Enemy {
     // Walk the handguard up the right arm's chain into root space by hand.
     // Going through world space would depend on matrixWorld, which is only
     // refreshed at render time and is a frame stale here.
-    const local = Enemy._gripLocal.set(0, 0.02, -0.19); // handguard, in rifle space
+    const local = Enemy._gripLocal.copy(this.handguard); // handguard, in rifle space
     local.applyQuaternion(this.rifle.quaternion).add(this.rifle.position); // → forearm
     local.applyQuaternion(this.foreR.quaternion).add(this.foreR.position); // → upper arm
     local.applyQuaternion(this.armR.quaternion).add(this.armR.position); // → root
@@ -885,6 +1211,12 @@ export class Enemy {
 
   muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
     return this.muzzle.getWorldPosition(out);
+  }
+
+  /** Where the head actually is — kneeling, sitting, hunched — not a standing eye height. */
+  headWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    this.head.updateWorldMatrix(true, false);
+    return this.head.getWorldPosition(out);
   }
 
   eyePosition(out = new THREE.Vector3()): THREE.Vector3 {
@@ -932,7 +1264,9 @@ export class Enemy {
     bulletDir: THREE.Vector3,
     world: CANNON.World,
     hitPart: string = 'torso',
-    impulseScale = 1
+    impulseScale = 1,
+    /** A fist, not a bullet: no hole. And a weapon that goes to his killer rather than the floor. */
+    opts: { wound?: boolean; keepWeapon?: boolean } = {}
   ): void {
     if (!this.alive) return;
     this.alive = false;
@@ -1174,10 +1508,12 @@ export class Enemy {
         side: THREE.DoubleSide
       });
     }
-    this.addWound(hitPoint, bulletDir, struck);
+    if (opts.wound !== false) this.addWound(hitPoint, bulletDir, struck);
 
     // The rifle leaves their hands: it becomes its own body and clatters away
-    this.dropRifle(world, bulletDir);
+    // — unless it is going to whoever killed him
+    if (opts.keepWeapon) this.hideWeapon();
+    else this.dropRifle(world, bulletDir);
 
     // Limbs just let go. Nothing is posed: every limb simply inherits a
     // share of the bullet's momentum (a bit more the closer it is to the
@@ -1265,8 +1601,8 @@ export class Enemy {
     const drop = bob - 0.355 * sit - 0.38 * kneel - 0.66 * slump;
 
     // Hips ride with the pelvis, or the legs detach from it as it sways
-    this.legL.position.set(-0.115 + sway, 0.82 + drop, 0);
-    this.legR.position.set(0.115 + sway, 0.82 + drop, 0);
+    this.legL.position.set(-this.hipX + sway, 0.82 + drop, 0);
+    this.legR.position.set(this.hipX + sway, 0.82 + drop, 0);
     this.pelvis.position.set(sway, 0.96 + drop, 0);
     this.pelvis.rotation.z = -sway * 1.6;
     // Shoulders and head hang off the root rather than the chest, so the
@@ -1274,7 +1610,7 @@ export class Enemy {
     this.head.position.set(sway * 0.6, 1.585 + drop, 0);
     this.head.rotation.x = -lean * 0.7; // head stays level as the chest tips
     for (const [g, side] of [[this.armL, -1], [this.armR, 1]] as const) {
-      g.position.set(side * 0.29 + sway * 0.7, 1.4 + drop, 0);
+      g.position.set(side * this.shoulderX + sway * 0.7, 1.4 + drop, 0);
     }
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
@@ -1296,7 +1632,7 @@ export class Enemy {
     // rotations one Euler axis at a time leaves a yaw behind, so undo the
     // whole parent rotation instead and set the pose we actually want.
     // (Skip all of it once the rifle is on the floor as its own body.)
-    if (!this.rifleDropped) {
+    if (!this.rifleDropped && !this.slung) {
       Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend), 0, 0); // muzzle dips when carried
       Enemy._rifleQuat.copy(this.armR.quaternion).multiply(this.foreR.quaternion).invert();
       this.rifle.quaternion.copy(Enemy._rifleQuat).multiply(Enemy._rifleAim.setFromEuler(Enemy._rifleEuler));
@@ -1486,10 +1822,18 @@ export class Enemy {
     // A cutscene's held pose goes on last, over everything above
     const p = this.pose;
     if (p) {
+      if (p.shift) {
+        this.armL.position.add(p.shift);
+        this.armR.position.add(p.shift);
+        this.head.position.add(p.shift);
+      }
       if (p.armR) this.armR.quaternion.copy(p.armR);
       if (p.foreR !== undefined) this.foreR.rotation.set(p.foreR, 0, 0);
       if (p.armL) this.armL.quaternion.copy(p.armL);
       if (p.foreL !== undefined) this.foreL.rotation.set(p.foreL, 0, 0);
+      if (p.handR) this.reachArm(this.armR, this.foreR, p.handR, 1, p.elbow);
+      if (p.handL) this.reachArm(this.armL, this.foreL, p.handL, -1, p.elbow);
+      if (p.head) this.head.rotation.copy(p.head);
       if (p.lean !== undefined) this.torso.rotation.x = p.lean;
     }
   }

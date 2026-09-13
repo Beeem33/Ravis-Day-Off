@@ -50,6 +50,16 @@ export class DialogueBox {
     return this.active;
   }
 
+  /** Who is speaking right now, while a line is up. */
+  get speaker(): string | null {
+    return this.active ? (this.lines[this.index]?.speaker ?? null) : null;
+  }
+
+  /** True while the current line is still typing out: the speaker is mid-sentence. */
+  get typing(): boolean {
+    return this.active && !this.lineComplete;
+  }
+
   /** Whether the current line has finished typing. */
   private get lineComplete(): boolean {
     const line = this.lines[this.index];

@@ -10,6 +10,7 @@ import { OfficeLevelScene } from './scenes/OfficeLevelScene';
 import { Level3Scene } from './scenes/Level3Scene';
 import { Level4Scene } from './scenes/Level4Scene';
 import { Level5Scene } from './scenes/Level5Scene';
+import { Level6Scene } from './scenes/Level6Scene';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -63,6 +64,13 @@ bus.on(Events.Level4Complete, () => {
 bus.on(Events.RestartLevel5, () => {
   engine.setScene(new Level5Scene(ctx), 'THE SERVICE LIFT');
 });
+bus.on(Events.Level5Complete, () => {
+  engine.setScene(new Level6Scene(ctx), 'LEVEL 6 — THE BOSS');
+});
+bus.on(Events.RestartLevel6, () => {
+  // A retry picks up at the fight — nobody wants the whole talk again
+  engine.setScene(new Level6Scene(ctx, true), 'LEVEL 6 — THE BOSS');
+});
 bus.on(Events.RestartLevel4, () => {
   // A retry picks up in the corridor with the shotgun already in hand —
   // nobody wants to sit through Sanjay's send-off on every death.
@@ -85,7 +93,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   office: () => ({ scene: new OfficeLevelScene(ctx), title: 'LEVEL 2 — RAVI-CALL SYSTEMS' }),
   level3: () => ({ scene: new Level3Scene(ctx), title: 'LEVEL 3 — THE OTHER FLOOR' }),
   level4: () => ({ scene: new Level4Scene(ctx), title: 'LEVEL 4 — LIGHTS OUT' }),
-  level5: () => ({ scene: new Level5Scene(ctx), title: 'THE SERVICE LIFT' })
+  level5: () => ({ scene: new Level5Scene(ctx), title: 'THE SERVICE LIFT' }),
+  level6: () => ({ scene: new Level6Scene(ctx), title: 'LEVEL 6 — THE BOSS' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

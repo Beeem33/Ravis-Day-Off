@@ -1032,6 +1032,158 @@ export class AudioManager {
     }
   }
 
+  /** Coming round: the ringing again, quieter, fading out over `seconds`. */
+  wakeRing(seconds = 5): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    for (const [f, g0] of [[3720, 0.028], [3738, 0.018]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(g0, t + 0.6);
+      g.gain.setValueAtTime(g0, t + seconds * 0.4);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+      o.connect(g).connect(this.sfxBus);
+      o.start(t);
+      o.stop(t + seconds + 0.05);
+    }
+  }
+
+  /** A low, dazed groan: a voiced tone sliding down through a dull vowel. */
+  groan(strength = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const len = 0.9;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, t);
+    bus.gain.exponentialRampToValueAtTime(0.26 * strength, t + 0.15);
+    bus.gain.setValueAtTime(0.22 * strength, t + len * 0.6);
+    bus.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    bus.connect(this.sfxBus);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(112, t);
+    o.frequency.linearRampToValueAtTime(92, t + len);
+    const f1 = ctx.createBiquadFilter();
+    f1.type = 'bandpass';
+    f1.frequency.setValueAtTime(560, t);
+    f1.frequency.linearRampToValueAtTime(380, t + len);
+    f1.Q.value = 2.4;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1100;
+    o.connect(f1).connect(lp).connect(bus);
+    o.start(t);
+    o.stop(t + len + 0.05);
+  }
+
+  /** Hands working at a knot: bursts of rough fibre scraping on fibre. */
+  ropeWork(seconds = 1.2): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    for (let at = 0; at < seconds; at += 0.12 + Math.random() * 0.14) {
+      const t = t0 + at;
+      const n = ctx.createBufferSource();
+      n.buffer = this.noiseBuffer;
+      n.playbackRate.value = 0.6 + Math.random() * 0.3;
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 900 + Math.random() * 900;
+      f.Q.value = 1.2;
+      const g = ctx.createGain();
+      const len = 0.06 + Math.random() * 0.1;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      n.connect(f).connect(g).connect(this.sfxBus);
+      n.start(t, Math.random());
+      n.stop(t + len + 0.02);
+    }
+  }
+
+  /** The last knot giving: a rope whipped out through a loop. */
+  ropeFree(): void {
+    if (!this.ctx) return;
+    this.noise(0.18, 'bandpass', 1500, 0.3, true, 0.9);
+    this.noise(0.08, 'highpass', 3000, 0.12);
+  }
+
+  /** A bare fist into a face: a meaty slap and a crack, and a thud under both. */
+  punchHit(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(48, t + 0.16);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.9, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g).connect(this.sfxBus);
+    o.start(t);
+    o.stop(t + 0.22);
+    this.noise(0.07, 'bandpass', 1800, 0.85, true, 0.8);
+    this.noise(0.03, 'highpass', 4200, 0.35);
+    this.noise(0.12, 'lowpass', 600, 0.6);
+  }
+
+  /** An office chair shoved back hard on its castors. */
+  chairScrape(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(700, t);
+    f.frequency.exponentialRampToValueAtTime(320, t + 0.35);
+    f.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.3, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    n.connect(f).connect(g).connect(this.sfxBus);
+    n.start(t, Math.random());
+    n.stop(t + 0.45);
+  }
+
+  /**
+   * A vent cover wrenched off and somebody heavy scrambling into the duct
+   * behind it: a clang, the cover landing, then hollow knocks moving away.
+   */
+  ventRattle(distance: number): void {
+    if (!this.ctx) return;
+    const a = this.atten(distance, 20) * 0.8 + 0.2;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const clang = (at: number, f: number, gain: number, len: number): void => {
+      const t = t0 + at;
+      for (const m of [1, 2.76, 5.4]) {
+        const o = ctx.createOscillator();
+        o.type = 'triangle';
+        o.frequency.value = f * m;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime((gain * a) / m, t + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+        o.connect(g).connect(this.sfxBus);
+        o.start(t);
+        o.stop(t + len + 0.02);
+      }
+    };
+    clang(0, 310, 0.3, 0.5);
+    clang(0.32, 240, 0.22, 0.35);
+    // Knees and elbows in sheet metal, going away
+    for (let i = 0; i < 6; i++) clang(0.7 + i * 0.26, 150 + Math.random() * 40, 0.16 * (1 - i / 7), 0.18);
+  }
+
   /** The breaker going over: a heavy mechanical clack. */
   breakerThrow(): void {
     if (!this.ctx) return;

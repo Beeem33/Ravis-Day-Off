@@ -1,15 +1,17 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
 
 /**
- * WeaponViewmodel — Ravi's sidearm, built from primitives and parented to
- * the camera. Procedural idle sway (mouse-driven), movement bob synced to
+ * WeaponViewmodel — Ravi's sidearm, a modelled Glock 17 (models/glock.glb)
+ * parented to the camera. Procedural idle sway (mouse-driven), movement bob synced to
  * the player's stride, spring recoil, and a muzzle flash light + sprite.
  */
 export class WeaponViewmodel {
   readonly root = new THREE.Group();
   private gun = new THREE.Group();
-  private slide!: THREE.Mesh;
+  private model = new THREE.Group();
+  private slide = new THREE.Group();
   private muzzle = new THREE.Object3D();
   private flashSprite: THREE.Sprite;
   private flashLight: THREE.PointLight;
@@ -44,7 +46,7 @@ export class WeaponViewmodel {
   // ---- Reload (John Wick style: flick the empty mag out left, slam a new one in)
   private supportHand!: THREE.Mesh;
   private magazine = new THREE.Group();
-  private handHome = new THREE.Vector3(-0.015, -0.1, 0.03);
+  private handHome = new THREE.Vector3(-0.015, -0.075, 0.014);
   reloading = false;
   private reloadT = 0;
   private reloadFired = new Set<string>();
@@ -199,38 +201,23 @@ export class WeaponViewmodel {
     this.root.position.copy(this.basePos);
     this.root.add(this.gun);
 
-    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.45, metalness: 0.7 });
-    const darkMetal = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.6, metalness: 0.5 });
-    const grip = new THREE.MeshStandardMaterial({ color: 0x3a3228, roughness: 0.9 });
-
-    // Frame + barrel housing
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.22), metal);
-    frame.position.set(0, 0, -0.02);
-    this.gun.add(frame);
-    // Slide (kicks back on fire)
-    this.slide = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.045, 0.24), darkMetal);
-    this.slide.position.set(0, 0.045, -0.03);
+    // The modelled pistol: +X muzzle, +Y up, +Z the shooter's right, in metres.
+    // Turning it 90° about Y puts the muzzle down gun-local −Z and the ejection
+    // port on +X, which is where the primitive version had them. It is built at
+    // viewmodel scale already, so it needs no scale or offset: the muzzle lands
+    // on z = −0.150 and the sight plane on y = +0.073, which is what aimPos
+    // lines up with the crosshair.
+    this.model.rotation.y = Math.PI / 2;
+    this.gun.add(this.model);
+    // The two parts that move on their own. The glb's meshes get attached into
+    // these once it loads, so recoil and the reload drive them exactly as they
+    // drove the primitive slide and magazine.
     this.gun.add(this.slide);
-    // Front sight / rear sight
-    const fSight = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.012, 0.01), darkMetal);
-    fSight.position.set(0, 0.073, -0.135);
-    this.gun.add(fSight);
-    const rSight = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.01, 0.012), darkMetal);
-    rSight.position.set(0, 0.072, 0.075);
-    this.gun.add(rSight);
-    // Grip
-    const gripMesh = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.11, 0.05), grip);
-    gripMesh.position.set(0, -0.07, 0.07);
-    gripMesh.rotation.x = 0.22;
-    this.gun.add(gripMesh);
-    // Trigger guard
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.008, 0.06), metal);
-    guard.position.set(0, -0.045, 0.015);
-    this.gun.add(guard);
+    this.gun.add(this.magazine);
     // Hands (simple mitts so it doesn't look like a floating gun)
     const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.07), skin);
-    hand.position.set(0, -0.075, 0.075);
+    hand.position.set(0, -0.055, 0.058);
     hand.rotation.x = 0.22;
     this.gun.add(hand);
     this.supportHand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), skin);
@@ -256,85 +243,6 @@ export class WeaponViewmodel {
     // Left forearm hangs off the support hand toward the lower-left
     mkForearm(this.supportHand, new THREE.Vector3(-0.2, -0.2, 0.26));
 
-    // ---- Cosmetic detail (no gameplay effect) ----
-    const steel = new THREE.MeshStandardMaterial({ color: 0x6c7077, roughness: 0.35, metalness: 0.9 });
-    const polymer = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 });
-    const white = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x9a9a9a, roughness: 0.6 });
-
-    // Exposed barrel crown at the slide's mouth
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.03, 10), steel);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.045, -0.155);
-    this.gun.add(barrel);
-    // Rear slide serrations — grip cuts on both sides
-    // (children of the slide, so they travel with it when it cycles)
-    for (let i = 0; i < 5; i++) {
-      for (const side of [-1, 1]) {
-        const cut = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.03, 0.004), polymer);
-        cut.position.set(side * 0.0205, 0, 0.065 + i * 0.011);
-        this.slide.add(cut);
-      }
-    }
-    // Ejection port (right side)
-    const port = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.016, 0.04), polymer);
-    port.position.set(0.021, 0.008, -0.005);
-    this.slide.add(port);
-    // Hammer peeking out the back of the slide
-    const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.018, 0.01), steel);
-    hammer.position.set(0, 0.03, 0.095);
-    hammer.rotation.x = -0.5;
-    this.gun.add(hammer);
-    // Trigger inside the guard
-    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.024, 0.006), steel);
-    trigger.position.set(0, -0.03, 0.02);
-    trigger.rotation.x = 0.35;
-    this.gun.add(trigger);
-    // Slide release + thumb safety levers (left side)
-    const release = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.008, 0.03), steel);
-    release.position.set(-0.02, 0.012, 0.03);
-    this.gun.add(release);
-    const safety = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.01, 0.012), steel);
-    safety.position.set(-0.02, 0.02, 0.085);
-    this.gun.add(safety);
-    // Stippled grip panels, slightly proud of the frame
-    for (const side of [-1, 1]) {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.08, 0.036), polymer);
-      panel.position.set(side * 0.019, -0.07, 0.072);
-      panel.rotation.x = 0.22;
-      this.gun.add(panel);
-    }
-    // Magazine: body inside the grip + baseplate below it. Grouped so the
-    // reload can flick the whole thing out and seat a fresh one.
-    const magBody = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.1, 0.04), polymer);
-    magBody.position.set(0, -0.075, 0.078);
-    magBody.rotation.x = 0.22;
-    this.magazine.add(magBody);
-    const baseplate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.012, 0.056), polymer);
-    baseplate.position.set(0, -0.128, 0.082);
-    baseplate.rotation.x = 0.22;
-    this.magazine.add(baseplate);
-    // Brass peeking out the top of a fresh mag
-    const round = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.018, 8), new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.8, roughness: 0.35 }));
-    round.rotation.x = Math.PI / 2;
-    round.position.set(0, -0.02, 0.07);
-    this.magazine.add(round);
-    this.gun.add(this.magazine);
-    // Accessory rail under the frame
-    for (let i = 0; i < 3; i++) {
-      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.008), polymer);
-      slot.position.set(0, -0.028, -0.06 - i * 0.02);
-      this.gun.add(slot);
-    }
-    // Three-dot sights: white dots you can actually line up when aiming
-    const fDot = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.003, 0.002), white);
-    fDot.position.set(0, 0.075, -0.1405);
-    this.gun.add(fDot);
-    for (const side of [-1, 1]) {
-      const rDot = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.003, 0.002), white);
-      rDot.position.set(side * 0.007, 0.073, 0.0815);
-      this.gun.add(rDot);
-    }
-
     // Muzzle anchor at barrel tip
     this.muzzle.position.set(0, 0.045, -0.16);
     this.gun.add(this.muzzle);
@@ -351,6 +259,29 @@ export class WeaponViewmodel {
     // Stays in the scene for good: switching a light off changes the
     // scene's visible light count, which recompiles every material in it.
     this.muzzle.add(this.flashLight);
+
+    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/glock.glb`, (gltf) => {
+      const scene = gltf.scene;
+      scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = false;
+          m.receiveShadow = false;
+          m.frustumCulled = false; // it sits inside the near plane's neighbourhood
+        }
+      });
+      this.model.add(scene);
+      // attach() keeps world position, so park the two moving groups at rest
+      // first — otherwise a reload mid-load would bake its offset into them.
+      this.slide.position.set(0, 0, 0);
+      this.magazine.position.set(0, 0, 0);
+      this.magazine.rotation.set(0, 0, 0);
+      this.model.updateWorldMatrix(true, true);
+      const slidePart = scene.getObjectByName('Slide');
+      if (slidePart) this.slide.attach(slidePart);
+      const magPart = scene.getObjectByName('Magazine');
+      if (magPart) this.magazine.attach(magPart);
+    });
   }
 
   private static makeFlashTexture(): THREE.Texture {
@@ -439,7 +370,7 @@ export class WeaponViewmodel {
       this.swayX * 3 + this.sprintRot.y * sp + rlY,
       this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
     );
-    this.slide.position.z = -0.03 + this.slideKick * 0.045 + this.slidePull * 0.06;
+    this.slide.position.z = this.slideKick * 0.045 + this.slidePull * 0.06;
 
     // ---- Taking it off the desk. The hand sweeps in from the right edge of
     // frame, low and across the desktop, and the gun comes up out of the

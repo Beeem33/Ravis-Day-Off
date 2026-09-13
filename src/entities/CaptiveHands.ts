@@ -31,6 +31,13 @@ class Hand {
   private thumb = new THREE.Group();
   /** 0 open, 1 a fist. */
   curl = 0;
+  /**
+   * 0..1: how far the hand is turned to run straight on from the forearm,
+   * whatever way the scene posed it. Freed, his wrists are straight; posed
+   * hands left alone ended up bent down off the ends of the arms, with the
+   * forearm going through the rope band at an angle.
+   */
+  straight = 0;
   /** Just inside the heel of the palm, where the forearm starts. */
   private static readonly WRIST = new THREE.Vector3(0, -0.004, 0.05);
 
@@ -68,18 +75,26 @@ class Hand {
     this.thumb.add(t1);
     this.root.add(this.thumb);
 
-    // Where the rope was: a band still round the wrist and a frayed end hanging
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.043, 0.009, 6, 16), rope);
+    // Where the rope was: a band still round the wrist and a frayed end
+    // hanging from it. The band sits on the forearm just behind the heel of
+    // the hand, loose enough to clear it all the way round (the forearm is
+    // 0.029 across at the wrist, the band's inside 0.0325), and the end
+    // hangs from its underside rather than starting inside the arm.
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.041, 0.0085, 6, 18), rope);
     band.position.set(0, -0.004, 0.085);
     this.root.add(band);
-    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.006, 0.11, 6), rope);
-    tail.position.set(side * 0.02, -0.06, 0.09);
-    tail.rotation.z = side * 0.35;
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.006, 0.08, 6), rope);
+    tail.position.set(side * 0.012, -0.086, 0.088);
+    tail.rotation.z = side * 0.3;
     this.root.add(tail);
 
     // His arm, the same rolled-up shirt sleeves the gun viewmodels have: bare
-    // forearm, the sleeve bunched below the elbow, sleeve up to the shoulder
-    this.fore = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.056, 1), skin);
+    // forearm, the sleeve bunched below the elbow, sleeve up to the shoulder.
+    // The forearm is round, not a box — a box's corners came out through
+    // the rope band. Its axis is turned onto Z for lay(), wrist end at −Z.
+    const foreGeo = new THREE.CylinderGeometry(0.032, 0.029, 1, 10);
+    foreGeo.rotateX(Math.PI / 2);
+    this.fore = new THREE.Mesh(foreGeo, skin);
     this.roll = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.08, 1), sleeve);
     this.elbow = new THREE.Mesh(new THREE.SphereGeometry(0.043, 10, 8), sleeve);
     this.upper = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.084, 1), sleeve);
@@ -113,6 +128,27 @@ class Hand {
     // Open it sticks out inboard; closed it lies across the front of the fist
     this.thumb.rotation.set(-0.4 * c, this.side * (0.7 * (1 - c) - 1.0 * c), 0);
 
+    let { wrist, elbow, top } = this.solve(shoulder);
+    if (this.straight > 0) {
+      // Fingers on along the line of the forearm (they run down the hand's
+      // −Z), keeping the back of the hand the side the scene had it
+      const z = elbow.clone().sub(wrist).normalize();
+      const y = new THREE.Vector3(0, 1, 0).applyQuaternion(this.root.quaternion);
+      y.addScaledVector(z, -y.dot(z)).normalize();
+      const x = new THREE.Vector3().crossVectors(y, z);
+      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+      this.root.quaternion.slerp(q, THREE.MathUtils.clamp(this.straight, 0, 1));
+      // Turning the hand moves the wrist a little: hang the arm again from there
+      ({ wrist, elbow, top } = this.solve(shoulder));
+    }
+    lay(this.fore, wrist, elbow);
+    lay(this.roll, wrist.clone().lerp(elbow, 0.7), elbow);
+    this.elbow.position.copy(elbow);
+    lay(this.upper, elbow, top);
+  }
+
+  /** The wrist where the hand is, and the elbow and shoulder end of an arm hung from it. */
+  private solve(shoulder: THREE.Vector3): { wrist: THREE.Vector3; elbow: THREE.Vector3; top: THREE.Vector3 } {
     const wrist = Hand.WRIST.clone().applyQuaternion(this.root.quaternion).add(this.root.position);
     const w = shoulder.clone().sub(wrist);
     const d = THREE.MathUtils.clamp(w.length(), 0.05, (FORE + UPPER) * 0.999);
@@ -122,11 +158,7 @@ class Hand {
     const n = new THREE.Vector3(this.side * 0.6, -1, 0.15);
     n.addScaledVector(w, -n.dot(w)).normalize();
     const elbow = wrist.clone().addScaledVector(w, Math.cos(a) * FORE).addScaledVector(n, Math.sin(a) * FORE);
-    const top = wrist.clone().addScaledVector(w, d);
-    lay(this.fore, wrist, elbow);
-    lay(this.roll, wrist.clone().lerp(elbow, 0.7), elbow);
-    this.elbow.position.copy(elbow);
-    lay(this.upper, elbow, top);
+    return { wrist, elbow, top: wrist.clone().addScaledVector(w, d) };
   }
 }
 

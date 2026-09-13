@@ -383,18 +383,22 @@ export class Level6Builder {
     this.put(g, at.x, at.z);
     this.blk(at.x, at.z, 0.56, 0.52, 0.5);
 
-    // The wrist ropes are their own objects: they come off one at a time
+    // The wrist ropes are their own objects: they come off one at a time.
+    // Each turn goes round the chair arm and his wrist on top of it together,
+    // so it is oval — taller than wide — and clears both: chair arm y 0.643
+    // to 0.678, his forearm 0.681 to 0.739, the loop's inside 0.638 to 0.743.
     const wrist = (s: number): THREE.Group => {
       const w = new THREE.Group();
       for (let i = 0; i < 4; i++) {
-        const t = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.009, 6, 18), this.rope);
+        const t = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.009, 6, 18), this.rope);
         t.position.set(0, 0, (i - 1.5) * 0.024);
+        t.scale.y = 1.28;
         w.add(t);
       }
       const knot = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 6), this.rope);
-      knot.position.set(s * 0.05, -0.02, 0);
+      knot.position.set(s * 0.053, -0.02, 0);
       w.add(knot);
-      w.position.set(at.x + s * 0.25, 0.68, at.z - 0.1);
+      w.position.set(at.x + s * 0.25, 0.6905, at.z - 0.1);
       this.group.add(w);
       return w;
     };

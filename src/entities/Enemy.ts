@@ -449,6 +449,21 @@ export class Enemy {
     return tex;
   }
 
+  /** His skin with a day's growth through it, for the roll under the beard. */
+  private static stubbleTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = c.height = 32;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#b8835f';
+    g.fillRect(0, 0, 32, 32);
+    g.fillStyle = 'rgba(40,26,18,0.4)';
+    for (let i = 0; i < 90; i++) g.fillRect(Math.random() * 32, Math.random() * 32, 1, 1);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return tex;
+  }
+
   /** A club tie: broad gold and red stripes on the diagonal, fine dark rules between. */
   private static stripedTieTexture(): THREE.CanvasTexture {
     const c = document.createElement('canvas');
@@ -523,24 +538,28 @@ export class Enemy {
     this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.3, 0.4, 4, 0.1), suit), 'torso');
     this.pelvis.position.set(0, 0.96, 0);
     this.root.add(this.pelvis);
-    // Shirt front, the striped tie, lapels — skins on the chest face
+    // Shirt front, the striped tie, lapels — skins on the chest face. They
+    // are flat, so they have to stay on the flat of it: the jacket rounds
+    // back hard above y 0.05 (a 0.15 radius on its edges), and anything
+    // taller stood off the curve into thin air — the lapels' tops were two
+    // black slabs hanging under his chin.
     const front = -0.2115;
-    const shirtFront = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.3), shirt);
-    shirtFront.position.set(0, 0.03, front);
+    const shirtFront = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.2), shirt);
+    shirtFront.position.set(0, -0.06, front);
     shirtFront.rotation.y = Math.PI;
     this.torso.add(shirtFront);
-    const tieMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.065, 0.34), tie);
-    tieMesh.position.set(0, -0.02, front - 0.001);
+    const tieMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.065, 0.26), tie);
+    tieMesh.position.set(0, -0.1, front - 0.001);
     tieMesh.rotation.y = Math.PI;
     this.torso.add(tieMesh);
-    const knot = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.05), tie);
-    knot.position.set(0, 0.165, front - 0.0015);
+    const knot = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.045), tie);
+    knot.position.set(0, 0.018, front - 0.0015);
     knot.rotation.y = Math.PI;
     this.torso.add(knot);
     for (const side of [-1, 1]) {
-      const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.3), suit);
+      const lapel = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.2), suit);
       lapel.rotation.y = Math.PI;
-      lapel.position.set(side * 0.1, 0.02, front - 0.0012);
+      lapel.position.set(side * 0.095, -0.06, front - 0.0012);
       lapel.rotation.z = side * 0.2;
       this.torso.add(lapel);
     }
@@ -556,16 +575,23 @@ export class Enemy {
     neck.position.set(0, -0.12, 0);
     this.head.add(neck);
     this.root.add(this.head);
-    // The beard round the jaw, a moustache over the mouth, and under it all
-    // the second chin, bearded too
-    const jaw = new THREE.Mesh(new RoundedBoxGeometry(0.28, 0.1, 0.27, 4, 0.04), beard);
-    jaw.position.set(0, -0.1, 0.004);
+    // The beard: over the chin and along the jaw as far as under the ears,
+    // and no further — the back of his head and neck stay bare. Its top edge
+    // rounds in to meet the face just under the mouth. A moustache over the
+    // mouth.
+    const jaw = new THREE.Mesh(new RoundedBoxGeometry(0.29, 0.11, 0.165, 4, 0.045), beard);
+    jaw.position.set(0, -0.12, -0.066);
     this.head.add(jaw);
     const tache = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.028, 0.03, 2, 0.01), beard);
     tache.position.set(0, -0.043, -0.132);
     this.head.add(tache);
-    const chin2 = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.08, 0.17, 4, 0.036), beard);
-    chin2.position.set(0, -0.17, -0.05);
+    // And under the beard, the second chin: bare, stubbled skin, a roll of
+    // it sitting back behind the beard's front and hanging below it
+    const chin2 = new THREE.Mesh(
+      new RoundedBoxGeometry(0.21, 0.075, 0.15, 4, 0.034),
+      new THREE.MeshStandardMaterial({ map: Enemy.stubbleTexture(), roughness: 0.85 })
+    );
+    chin2.position.set(0, -0.19, -0.056);
     this.head.add(chin2);
     // The cap: red crown, gold band all the way round its base, the peak
     const crown = new THREE.Mesh(new RoundedBoxGeometry(0.286, 0.1, 0.286, 4, 0.05), capRed);

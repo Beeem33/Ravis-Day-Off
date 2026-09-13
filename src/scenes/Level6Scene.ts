@@ -743,6 +743,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
       const layTurn = Level6Scene.tmpQ.setFromEuler(new THREE.Euler(-0.35, 0, 0)).premultiply(cam.quaternion.clone().invert());
       hand.root.position.lerpVectors(lay, this.restHand(side), up);
       hand.root.quaternion.slerpQuaternions(layTurn, this.restTurn(side), up);
+      // Hanging limp off the end of the chair arm, then a straight wrist
+      hand.straight = up;
       // Slack as it comes off the chair, then open, shut, open, shut: getting
       // the feeling back, ending half closed
       hand.curl = ft < 0.5 ? 0.6 - 0.5 * smooth(ft / 0.5) : ft < 2.22 ? 0.5 - 0.42 * Math.cos((ft - 0.5) * 8.5) : 0.7;
@@ -754,6 +756,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
     const r = H.right;
     const l = H.left;
     const restL = this.restHand(-1);
+    r.straight = 1;
+    l.straight = 1;
     if (this.afterT < 0) {
       r.visible = true;
       l.root.position.copy(restL);

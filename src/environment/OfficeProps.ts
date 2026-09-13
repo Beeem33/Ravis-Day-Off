@@ -434,7 +434,7 @@ export function chipsBox(): THREE.Group {
 
 let fbiMat: THREE.MeshLambertMaterial | null = null;
 
-/** FBI livery for the truck flanks: blue band, big white lettering. */
+/** Police force livery for the truck flanks: blue band, big white lettering. */
 function fbiLivery(): THREE.MeshLambertMaterial {
   if (fbiMat) return fbiMat;
   const c = document.createElement('canvas');
@@ -450,20 +450,26 @@ function fbiLivery(): THREE.MeshLambertMaterial {
   g.fillRect(0, 118, 512, 8);
   g.fillStyle = '#f4f6f8';
   g.textBaseline = 'middle';
-  // Mark on the left third, long name stacked on the right, both left-aligned
-  // from fixed columns so the two can never run into each other.
+  // The name across the band, sized to its column; the unit stacked small
+  // on the right. Both left-aligned from fixed columns and measured, so the
+  // two can never run into each other.
   g.textAlign = 'left';
-  g.font = 'bold 78px Impact, Arial Black, sans-serif';
-  g.fillText('FBI', 26, 82);
+  const MARK_W = 330;
+  let size = 64;
+  g.font = `bold ${size}px Impact, Arial Black, sans-serif`;
+  const w = g.measureText('POLICE FORCE').width;
+  if (w > MARK_W) size = Math.floor((size * MARK_W) / w);
+  g.font = `bold ${size}px Impact, Arial Black, sans-serif`;
+  g.fillText('POLICE FORCE', 22, 82);
   g.fillStyle = '#9fb6e8';
-  g.fillRect(196, 52, 4, 58);
+  g.fillRect(368, 52, 4, 58);
   g.fillStyle = '#f4f6f8';
-  g.font = 'bold 20px monospace';
-  g.fillText('FEDERAL BUREAU', 218, 66);
-  g.fillText('OF INVESTIGATION', 218, 90);
+  g.font = 'bold 17px monospace';
+  g.fillText('TACTICAL', 384, 64);
+  g.fillText('RESPONSE', 384, 84);
   g.font = 'bold 13px monospace';
   g.fillStyle = '#9fb6e8';
-  g.fillText('TACTICAL RESPONSE UNIT', 218, 110);
+  g.fillText('UNIT', 384, 104);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   fbiMat = new THREE.MeshLambertMaterial({ map: tex });
@@ -471,7 +477,7 @@ function fbiLivery(): THREE.MeshLambertMaterial {
 }
 
 /**
- * FBI breaching truck. Built nose-first along +Z: cab and push bumper at the
+ * Police force breaching truck. Built nose-first along +Z: cab and push bumper at the
  * +Z end, so driving it forward leads with the ram. Armoured box behind, a
  * roof hatch with a pintle-mounted LMG, and a side door toward the rear that
  * swings open to let the team out.
@@ -573,7 +579,7 @@ export function swatTruck(): {
   const bayLight = new THREE.PointLight(0xffd2a0, 2.2, 3.4, 2);
   bayLight.position.set(0, domeY - 0.15, boxZ);
   g.add(bayLight);
-  // FBI livery down both flanks
+  // Police force livery down both flanks
   for (const sx of [-1, 1]) {
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(boxL * 0.92, H * 0.62), fbiLivery());
     panel.position.set(sx * (W / 2 + 0.012), DECK + H * 0.52, boxZ);

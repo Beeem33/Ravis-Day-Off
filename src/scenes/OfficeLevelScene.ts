@@ -850,7 +850,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
         name: enemy.name,
         remaining: this.remaining,
         headshot,
-        by: byPlayer ? 'RAVI ✖' : 'FBI'
+        by: byPlayer ? 'RAVI ✖' : 'POLICE FORCE'
       });
       return;
     }

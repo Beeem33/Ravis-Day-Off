@@ -370,7 +370,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
       // materialise in a heap and then path to the same waypoint together.
       const mouth = L.truck.position.clone().add(L.truckDoorMouth);
       L.agentSpawns.forEach((sp, i) => {
-        const e = new Enemy(mouth, sp.yaw, i + 5, { name: 'FBI AGENT' });
+        const e = new Enemy(mouth, sp.yaw, i + 5, { name: 'POLICE FORCE AGENT' });
         e.setAiming(true);
         this.scene.add(e.root);
         this.agents.push(e);
@@ -983,7 +983,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
     if (enemy.civilian) {
       this.staffAI.get(enemy)?.dispose();
-      bus.emit(Events.EnemyKilled, { name: enemy.name, remaining: this.remaining, headshot, by: byPlayer ? 'RAVI ✖' : 'FBI' });
+      bus.emit(Events.EnemyKilled, { name: enemy.name, remaining: this.remaining, headshot, by: byPlayer ? 'RAVI ✖' : 'POLICE FORCE' });
       return;
     }
 

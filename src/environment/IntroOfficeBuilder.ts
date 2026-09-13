@@ -58,7 +58,7 @@ const VEST_Z = -5.0; // back of the little lobby behind it
 
 /**
  * IntroOfficeBuilder — the opening level: Ravi's private office behind a
- * glass partition, the open floor where the FBI come through, and a corridor
+ * glass partition, the open floor where the police force come through, and a corridor
  * to the door that leads into the main call centre.
  *
  * Deliberately small and hand-placed. Same conventions as
@@ -89,7 +89,7 @@ export class IntroOfficeBuilder {
 
   /**
    * What is on Ravi's monitor when the level opens: a news story about the
-   * Bureau raiding call centres. He is reading about it as it happens to him.
+   * police force raiding call centres. He is reading about it as it happens to him.
    */
   private static newsCanvas(): HTMLCanvasElement {
     const c = document.createElement('canvas');
@@ -107,11 +107,16 @@ export class IntroOfficeBuilder {
     g.fillStyle = '#7a7a7a';
     g.font = '8px monospace';
     g.fillText('BREAKING', 258, 15);
-    // Headline
+    // Headline, shrunk to fit if a line would run off the page
     g.fillStyle = '#111';
-    g.font = 'bold 17px Georgia, serif';
-    g.fillText('FBI CRACKS DOWN ON', 10, 48);
-    g.fillText('SCAM CALL CENTERS', 10, 68);
+    const headline = ['POLICE FORCE CRACKS DOWN', 'ON SCAM CALL CENTERS'];
+    let size = 17;
+    g.font = `bold ${size}px Georgia, serif`;
+    const widest = Math.max(...headline.map((l) => g.measureText(l).width));
+    if (widest > 300) size = Math.floor((size * 300) / widest);
+    g.font = `bold ${size}px Georgia, serif`;
+    g.fillText(headline[0], 10, 48);
+    g.fillText(headline[1], 10, 68);
     g.fillStyle = '#444';
     g.font = 'italic 9px Georgia, serif';
     g.fillText('Nationwide raids target phone fraud rings', 10, 84);
@@ -352,7 +357,7 @@ export class IntroOfficeBuilder {
     this.solid(hw, 0.3, HALL_Z1 - HALL_Z0, (HALL_X + X1) / 2, WALL_H, 0, this.ceilMat, { surface: 'concrete' });
 
     // Outer walls of the office + front floor. The north wall carries the
-    // side entrance the FBI come through.
+    // side entrance the police force come through.
     this.wallX(X0, BURST_X0, Z0);
     this.wallX(BURST_X1, HALL_X, Z0);
     this.solid(BURST_X1 - BURST_X0, WALL_H - 2.25, T, (BURST_X0 + BURST_X1) / 2, 2.25, Z0, this.wallMat); // header

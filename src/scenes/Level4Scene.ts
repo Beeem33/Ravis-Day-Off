@@ -224,7 +224,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       return { dist, normal: n ?? new THREE.Vector3(0, 1, 0) };
     });
     this.level.enemySpawns.forEach((sp, i) => {
-      const e = new Enemy(sp.pos, sp.yaw, i + 11, { name: `FBI AGENT ${i + 1}` });
+      const e = new Enemy(sp.pos, sp.yaw, i + 11, { name: `POLICE FORCE AGENT ${i + 1}` });
       e.setAiming(true);
       this.scene.add(e.root);
       this.agents.push(e);
@@ -403,7 +403,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
         },
         {
           speaker: 'SANJAY',
-          text: 'If the FBI gets their hands on that, then even if we make it out, we will never be free. You need to find him.',
+          text: 'If the police force gets their hands on that, then even if we make it out, we will never be free. You need to find him.',
           pitch: 0.88
         },
         { speaker: 'SANJAY', text: 'Here, take this shotgun. I am not very good with it. Good luck, Ravi.', pitch: 0.88 }

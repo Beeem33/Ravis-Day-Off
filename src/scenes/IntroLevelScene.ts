@@ -49,7 +49,7 @@ function track(keys: readonly (readonly [number, number])[], t: number): number 
 
 /**
  * IntroLevelScene — the opening. Ravi is at his desk in the back office when
- * the FBI come through the front; a scripted first-person beat shows his last
+ * the police force come through the front; a scripted first-person beat shows his last
  * coworker shot through the glass, then hands control over mid-motion as he
  * pulls the gun out of his drawer.
  *
@@ -174,7 +174,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     // The agent — rifle already up as he comes through the door; his AI is
     // withheld until the cutscene is done.
     const ag = this.level.agentSpawn;
-    this.agent = new Enemy(ag.pos, ag.yaw, 1, { name: 'FBI AGENT' });
+    this.agent = new Enemy(ag.pos, ag.yaw, 1, { name: 'POLICE FORCE AGENT' });
     this.agent.setAiming(true); // comes through the door with it already shouldered
     this.scene.add(this.agent.root);
     for (const p of this.agent.parts) this.level.shootables.push(p);

@@ -978,6 +978,89 @@ export class Enemy {
     }
   }
 
+  /** Where the rifle hangs off the right forearm when carried or aimed (elbow at the origin). */
+  private static RIFLE_HELD = new THREE.Vector3(-0.12, -0.21, -0.12);
+  /** The rifle's grip, in its own space — equipWeapon lines every model up on it. */
+  private static RIFLE_GRIP = new THREE.Vector3(0, -0.02, 0.1);
+  /**
+   * At rest: the grip in front of his right hip (from the right shoulder),
+   * the barrel down and across his front to the floor off his left foot,
+   * and the elbows out and back. Low enough that nobody is being aimed at,
+   * close enough in that the short left arm still gets to the handguard.
+   * Mostly across rather than forward: pointed out towards whoever is in
+   * front of him, it is end-on to them and reads as a stick held upright.
+   */
+  private static REST_GRIP = new THREE.Vector3(-0.19, -0.2, -0.26);
+  private static REST_DIR = new THREE.Vector3(-0.66, -0.62, -0.42).normalize();
+  private static REST_ELBOW = new THREE.Vector3(0.9, -0.6, 0.5);
+  private restCarry = false;
+  private restBlend = 0;
+  private static _rq = Array.from({ length: 8 }, () => new THREE.Quaternion());
+  private static _rv = Array.from({ length: 5 }, () => new THREE.Vector3());
+  private static _rm = new THREE.Matrix4();
+
+  /**
+   * Stand holding the rifle at rest — two hands on it, muzzle to the floor —
+   * whenever not aiming, rather than carrying it one-handed at the hip.
+   * `instant` skips the blend, for someone who was already stood like that.
+   */
+  setRestCarry(on: boolean, instant = false): void {
+    this.restCarry = on;
+    if (instant) this.restBlend = on ? 1 : 0;
+  }
+
+  /**
+   * Put the rifle in the rest position and both hands on it, blended `k` of
+   * the way over whatever the arms and the gun were doing. The right arm is
+   * solved onto the grip, the gun hung in that fist, and then the left arm
+   * solved onto the handguard wherever the gun has put it.
+   */
+  private holdAtRest(k: number): void {
+    const [armR0, foreR0, armL0, foreL0, gun0, gunRest, tmp, fore] = Enemy._rq;
+    const [up, zb, xb, grip, guard] = Enemy._rv;
+    const dir = Enemy.REST_DIR;
+    up.set(0, 1, 0).addScaledVector(dir, -dir.y).normalize();
+    zb.copy(dir).negate(); // the barrel runs down the weapon's −Z
+    xb.crossVectors(up, zb);
+    gunRest.setFromRotationMatrix(Enemy._rm.makeBasis(xb, up, zb));
+
+    // What the animation had, to blend from
+    armR0.copy(this.armR.quaternion);
+    foreR0.copy(this.foreR.quaternion);
+    armL0.copy(this.armL.quaternion);
+    foreL0.copy(this.foreL.quaternion);
+    gun0.copy(armR0).multiply(foreR0).multiply(this.rifle.quaternion);
+
+    // Right hand to the grip
+    grip.copy(Enemy.REST_GRIP).add(this.armR.position);
+    this.reachArm(this.armR, this.foreR, grip, 1, Enemy.REST_ELBOW);
+    this.armR.quaternion.copy(tmp.copy(armR0).slerp(this.armR.quaternion, k));
+    this.foreR.quaternion.copy(tmp.copy(foreR0).slerp(this.foreR.quaternion, k));
+
+    // The gun into that fist — the hand is the forearm's (0, -0.31, 0)
+    fore.copy(this.armR.quaternion).multiply(this.foreR.quaternion);
+    tmp.copy(gun0).slerp(gunRest, k);
+    this.rifle.quaternion.copy(fore).invert().multiply(tmp);
+    xb.copy(Enemy.RIFLE_GRIP).applyQuaternion(this.rifle.quaternion);
+    zb.set(0, -0.31, 0).sub(xb);
+    this.rifle.position.lerpVectors(Enemy.RIFLE_HELD, zb, k);
+
+    // Left hand to the handguard, towards its back end, where a man holding
+    // it low takes it — walked up the right arm into the body frame
+    guard
+      .copy(this.handguard)
+      .lerp(Enemy.RIFLE_GRIP, 0.2)
+      .applyQuaternion(this.rifle.quaternion)
+      .add(this.rifle.position)
+      .applyQuaternion(this.foreR.quaternion)
+      .add(this.foreR.position)
+      .applyQuaternion(this.armR.quaternion)
+      .add(this.armR.position);
+    this.reachArm(this.armL, this.foreL, guard, -1, Enemy.REST_ELBOW);
+    this.armL.quaternion.copy(tmp.copy(armL0).slerp(this.armL.quaternion, k));
+    this.foreL.quaternion.copy(tmp.copy(foreL0).slerp(this.foreL.quaternion, k));
+  }
+
   /** Civilian only: put your hands up. Also drops the calm face. */
   setHandsUp(on: boolean): void {
     this.handsUpTarget = on ? 1 : 0;
@@ -1642,6 +1725,11 @@ export class Enemy {
       if (!this.civilian && this.aimBlend > 0.01) {
         this.gripRifle(this.aimBlend);
       }
+      // Or at rest: held low across the body, the arms solved onto it
+      const restGoal = this.restCarry && this.aimTarget === 0 && !this.civilian ? 1 : 0;
+      this.restBlend += (restGoal - this.restBlend) * Math.min(1, dt * 6);
+      if (this.restBlend > 0.001) this.holdAtRest(this.restBlend);
+      else this.rifle.position.copy(Enemy.RIFLE_HELD);
     } else if (this.gunBody) {
       // Dropped while still alive (takedown): the visual tracks the physics
       this.rifle.position.set(this.gunBody.position.x, this.gunBody.position.y, this.gunBody.position.z);
@@ -1795,9 +1883,13 @@ export class Enemy {
       while (rel < -Math.PI) rel += Math.PI * 2;
       const wantYaw = THREE.MathUtils.clamp(rel, -1.15, 1.15);
       const eyeY = this.root.position.y + 1.585 + drop;
+      // A positive tilt about X lifts the face (it is on the head's −Z), so
+      // this is the plain elevation. It used to be negated, which had people
+      // looking up at the ceiling at anything below them and down at the
+      // floor at anyone standing over them. Chin can go further down than up.
       const wantPitch = THREE.MathUtils.clamp(
-        -Math.atan2(this.headLook.y - eyeY, Math.hypot(dx, dz)),
-        -0.5,
+        Math.atan2(this.headLook.y - eyeY, Math.hypot(dx, dz)),
+        -0.85,
         0.6
       );
       this.headYaw += (wantYaw - this.headYaw) * Math.min(1, dt * 5);

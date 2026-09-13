@@ -21,6 +21,8 @@ export interface Level6Data {
   /** His own forearms, lying tied along the chair's arms until each is freed. */
   tiedR: THREE.Object3D;
   tiedL: THREE.Object3D;
+  /** The rest of Ravi, sat in the chair — until he gets up out of it. */
+  raviSat: THREE.Object3D;
   /** The boss, sat behind the desk facing Ravi. */
   bossAt: THREE.Vector3;
   /** The two agents either side of him: [his left, his right]. */
@@ -111,6 +113,7 @@ export class Level6Builder {
       ropeL: chair.ropeL,
       tiedR: chair.tiedR,
       tiedL: chair.tiedL,
+      raviSat: chair.body,
       bossAt: new THREE.Vector3(DESK.cx, 0, DESK_BACK - BOSS_BACK),
       agentAt: [new THREE.Vector3(1.28, 0, -2.12), new THREE.Vector3(-1.28, 0, -2.12)],
       desk,
@@ -348,6 +351,7 @@ export class Level6Builder {
     ropeL: THREE.Object3D;
     tiedR: THREE.Object3D;
     tiedL: THREE.Object3D;
+    body: THREE.Object3D;
   } {
     const at = new THREE.Vector3(0, 0, 2.0);
     const g = new THREE.Group();
@@ -410,10 +414,50 @@ export class Level6Builder {
         f.rotation.x = -1.0;
         a.add(f);
       }
+      // Upper arm, from the elbow at the back of the chair arm up to his
+      // shoulder — which is a little in front of it, his back being against
+      // the chair and his eye at 1.18 over the seat
+      const elbow = new THREE.Vector3(0, 0.715, 0.25);
+      const shoulder = new THREE.Vector3(-s * 0.05, 0.88, 0.11);
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.084, elbow.distanceTo(shoulder) + 0.04), sleeve);
+      upper.position.copy(elbow).lerp(shoulder, 0.5);
+      upper.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), shoulder.clone().sub(elbow).normalize());
+      a.add(upper);
       a.position.set(at.x + s * 0.25, 0, at.z - 0.08);
       this.group.add(a);
       return a;
     };
+
+    // The rest of him, sat in it: his back against the chair, thighs along
+    // the seat, shins back to the front legs where his ankles are tied, and
+    // his shoes. Only ever seen from his own eyes, looking down into his lap.
+    const trousers = new THREE.MeshStandardMaterial({ color: 0x3a445a, roughness: 0.9 });
+    const shoe = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.6 });
+    const body = new THREE.Group();
+    const limb = (a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material): void => {
+      const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, a.distanceTo(b), 4, 10), mat);
+      m.position.copy(a).lerp(b, 0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      body.add(m);
+    };
+    // Topping out at the shoulders, 0.23 under the eye: any higher and its
+    // flat top fills the bottom of the frame whenever he looks down at a wrist
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.38, 0.22), sleeve);
+    torso.position.set(0, 0.73, 0.09);
+    body.add(torso);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.14, 0.34), trousers);
+    seat.position.set(0, 0.55, 0.05);
+    body.add(seat);
+    for (const s of [-1, 1]) {
+      limb(new THREE.Vector3(s * 0.1, 0.56, 0.08), new THREE.Vector3(s * 0.12, 0.55, -0.34), 0.08, trousers);
+      limb(new THREE.Vector3(s * 0.12, 0.52, -0.35), new THREE.Vector3(s * 0.15, 0.14, -0.16), 0.064, trousers);
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.25), shoe);
+      foot.position.set(s * 0.15, 0.045, -0.23);
+      body.add(foot);
+    }
+    body.position.copy(at);
+    this.group.add(body);
+
     return {
       at,
       wristR: new THREE.Vector3(at.x + 0.25, 0.7, at.z - 0.1),
@@ -421,7 +465,8 @@ export class Level6Builder {
       ropeR: wrist(1),
       ropeL: wrist(-1),
       tiedR: tied(1),
-      tiedL: tied(-1)
+      tiedL: tied(-1),
+      body
     };
   }
 

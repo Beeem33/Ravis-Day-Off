@@ -3,18 +3,36 @@ import * as THREE from 'three';
 const SKIN = 0x8a5c3b;
 const SLEEVE = 0x4d6f9c;
 const ROPE = 0x9a7b4f;
+/** Wrist to elbow, and elbow to shoulder. */
+const FORE = 0.29;
+const UPPER = 0.3;
+const Z = new THREE.Vector3(0, 0, 1);
 
-/** One of the two: a hand whose fingers close, a rope burn, and a forearm. */
+/** Stretch a mesh one unit long down its Z from `a` to `b`. */
+function lay(m: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3): void {
+  const d = b.clone().sub(a);
+  const len = Math.max(d.length(), 1e-4);
+  m.position.copy(a).addScaledVector(d, 0.5);
+  m.scale.set(1, 1, len);
+  m.quaternion.setFromUnitVectors(Z, d.divideScalar(len));
+}
+
+/** One of the two: a hand whose fingers close, a rope burn, and the arm behind it. */
 class Hand {
   /** Posed by the scene in camera space. Fingers run out along −Z, back of the hand +Y. */
   readonly root = new THREE.Group();
-  readonly fore: THREE.Mesh;
-  readonly cuff: THREE.Mesh;
+  /** Forearm, the rolled-up sleeve below the elbow, the elbow, the upper arm. */
+  private arm = new THREE.Group();
+  private fore: THREE.Mesh;
+  private roll: THREE.Mesh;
+  private elbow: THREE.Mesh;
+  private upper: THREE.Mesh;
   private fingers: { knuckle: THREE.Group; mid: THREE.Group }[] = [];
   private thumb = new THREE.Group();
   /** 0 open, 1 a fist. */
   curl = 0;
-  private static readonly WRIST = new THREE.Vector3(0, -0.005, 0.062);
+  /** Just inside the heel of the palm, where the forearm starts. */
+  private static readonly WRIST = new THREE.Vector3(0, -0.004, 0.05);
 
   constructor(
     camera: THREE.Camera,
@@ -59,23 +77,32 @@ class Hand {
     tail.rotation.z = side * 0.35;
     this.root.add(tail);
 
-    this.fore = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 1), skin);
-    this.cuff = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.11), sleeve);
-    camera.add(this.fore, this.cuff);
+    // His arm, the same rolled-up shirt sleeves the gun viewmodels have: bare
+    // forearm, the sleeve bunched below the elbow, sleeve up to the shoulder
+    this.fore = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.056, 1), skin);
+    this.roll = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.08, 1), sleeve);
+    this.elbow = new THREE.Mesh(new THREE.SphereGeometry(0.043, 10, 8), sleeve);
+    this.upper = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.084, 1), sleeve);
+    this.arm.add(this.fore, this.roll, this.elbow, this.upper);
+    camera.add(this.arm);
     this.visible = false;
   }
 
   set visible(on: boolean) {
     this.root.visible = on;
-    this.fore.visible = on;
-    this.cuff.visible = on;
+    this.arm.visible = on;
   }
 
   get visible(): boolean {
     return this.root.visible;
   }
 
-  /** Close the fingers and lay the forearm back to `shoulder` (camera space). */
+  /**
+   * Close the fingers, and hang the arm between the wrist and `shoulder`
+   * (camera space): two bones, the elbow out to the side and down. Past the
+   * arm's reach the elbow straightens and the upper arm stops short of the
+   * shoulder, which is behind the camera by then anyway.
+   */
   update(shoulder: THREE.Vector3): void {
     const c = THREE.MathUtils.clamp(this.curl, 0, 1);
     // Down into the palm (the back of the hand is +Y)
@@ -85,33 +112,38 @@ class Hand {
     }
     // Open it sticks out inboard; closed it lies across the front of the fist
     this.thumb.rotation.set(-0.4 * c, this.side * (0.7 * (1 - c) - 1.0 * c), 0);
+
     const wrist = Hand.WRIST.clone().applyQuaternion(this.root.quaternion).add(this.root.position);
-    const dir = shoulder.clone().sub(wrist);
-    const len = Math.min(dir.length(), 0.7);
-    dir.normalize();
-    this.fore.scale.set(1, 1, len);
-    this.fore.position.copy(wrist).addScaledVector(dir, len / 2);
-    this.fore.lookAt(wrist.clone().addScaledVector(dir, len));
-    this.cuff.position.copy(wrist).addScaledVector(dir, len * 0.82);
-    this.cuff.quaternion.copy(this.fore.quaternion);
+    const w = shoulder.clone().sub(wrist);
+    const d = THREE.MathUtils.clamp(w.length(), 0.05, (FORE + UPPER) * 0.999);
+    w.normalize();
+    // The wrist's angle in the triangle wrist–elbow–shoulder
+    const a = Math.acos(THREE.MathUtils.clamp((FORE * FORE + d * d - UPPER * UPPER) / (2 * FORE * d), -1, 1));
+    const n = new THREE.Vector3(this.side * 0.6, -1, 0.15);
+    n.addScaledVector(w, -n.dot(w)).normalize();
+    const elbow = wrist.clone().addScaledVector(w, Math.cos(a) * FORE).addScaledVector(n, Math.sin(a) * FORE);
+    const top = wrist.clone().addScaledVector(w, d);
+    lay(this.fore, wrist, elbow);
+    lay(this.roll, wrist.clone().lerp(elbow, 0.7), elbow);
+    this.elbow.position.copy(elbow);
+    lay(this.upper, elbow, top);
   }
 }
 
 /**
- * CaptiveHands — Ravi's own two hands for the start of level six: tied down
+ * CaptiveHands — Ravi's own two arms for the start of level six: tied down
  * out of shot, then freed one at a time and brought up into view, and then
  * the right one thrown into a face.
  *
  * Camera-space, like the weapon viewmodels, because they only ever have to
- * be where his eyes are. The scene poses each hand; each forearm is laid
- * back to a shoulder point under the frame so it always reads as his arm.
+ * be where his eyes are. The scene poses each hand and says where his
+ * shoulders are; each arm hangs between the two with a proper elbow, so it
+ * runs off the bottom of the frame as an arm rather than a hand on its own.
  * A band of the rope is still round each wrist.
  */
 export class CaptiveHands {
   readonly right: Hand;
   readonly left: Hand;
-  private shoulderR = new THREE.Vector3(0.24, -0.56, 0.16);
-  private shoulderL = new THREE.Vector3(-0.24, -0.56, 0.16);
 
   constructor(camera: THREE.Camera) {
     const skin = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.8 });
@@ -121,8 +153,9 @@ export class CaptiveHands {
     this.left = new Hand(camera, -1, skin, sleeve, rope);
   }
 
-  update(): void {
-    if (this.right.visible) this.right.update(this.shoulderR);
-    if (this.left.visible) this.left.update(this.shoulderL);
+  /** Shoulders in camera space — the scene works them out from his body, which the head turns on. */
+  update(shoulderR: THREE.Vector3, shoulderL: THREE.Vector3): void {
+    if (this.right.visible) this.right.update(shoulderR);
+    if (this.left.visible) this.left.update(shoulderL);
   }
 }

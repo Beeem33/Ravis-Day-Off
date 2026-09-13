@@ -191,10 +191,10 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.boss.setSitting(true, true);
     this.scene.add(this.boss.root);
     this.poseBoss(0);
-    // And the two either side of him, rifles on Ravi
+    // And the two either side of him, rifles held at rest — Ravi is tied up
     L.agentAt.forEach((at, i) => {
       const e = new Enemy(at, Math.PI, 3 + i * 2, { name: 'POLICE FORCE AGENT' });
-      e.setAiming(true);
+      e.setRestCarry(true, true);
       this.scene.add(e.root);
       for (const p of e.parts) L.shootables.push(p);
       this.agents.push(e);
@@ -327,7 +327,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     const fillTo = this.phase === 'untie' ? 2.4 : this.phase === 'talk' ? 0.7 : 0;
     this.fill.intensity += (fillTo - this.fill.intensity) * Math.min(1, dt * 2);
     this.updateBoss(dt);
-    this.hands.update();
+    this.updateArms();
 
     // Agents
     for (let i = 0; i < this.agents.length; i++) {
@@ -508,7 +508,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.stepT = 0;
     this.walkLeg = 0;
     const a = this.agents[0];
-    a.setAiming(false);
+    a.setRestCarry(false, true);
     a.slingWeapon(true);
   }
 
@@ -571,7 +571,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
     const { audio } = this.ctx;
     this.stepT += dt;
     const s = this.stepT;
-    const chairEye = Level6Scene.tmpB.set(L.chairAt.x, SEATED_EYE, L.chairAt.z);
+    // Its own vector, not a scratch one: setHeadLook keeps hold of what it
+    // is given and reads it when the agent updates, later in the frame
+    const chairEye = this.chairEye.set(L.chairAt.x, SEATED_EYE, L.chairAt.z);
 
     switch (this.step) {
       case 'walkR':
@@ -641,7 +643,12 @@ export class Level6Scene extends CombatScene<Level6Data> {
       case 'beat':
         a.faceToward(chairEye, dt, 6);
         a.setHeadLook(this.player.camera.position);
-        if (s > 0.35) this.next('windup');
+        if (s > 0.35) {
+          // Up out of the chair: the sat body stays behind, so it goes —
+          // below the frame, with his eyes on the man's face
+          L.raviSat.visible = false;
+          this.next('windup');
+        }
         break;
       case 'windup':
         // Ravi comes up out of the chair as he draws back
@@ -671,6 +678,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     }
   }
   private walkPts: THREE.Vector3[] = [];
+  private chairEye = new THREE.Vector3();
 
   /** Both of the agent's hands on the knot at `wrist`, working it. */
   private reachFor(wrist: THREE.Vector3, work: number): void {
@@ -683,6 +691,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
       handR: local.clone().add(new THREE.Vector3(0.05 + pick, 0.01 + tug, 0.02)),
       handL: local.clone().add(new THREE.Vector3(-0.05 - pick, -0.01 - tug, 0.03)),
       elbow: new THREE.Vector3(0.6, -0.6, 0.4),
+      // Hunched over the knot: the shoulders and head come forward and down
+      // with the chest, or the head sits back over his hips on a stalk
+      shift: new THREE.Vector3(0, -0.03, -0.07),
       lean: -0.3
     };
   }
@@ -696,12 +707,24 @@ export class Level6Scene extends CombatScene<Level6Data> {
     else this.freeL = 0;
   }
 
+  /** Where each freed hand is held up in front of him, flexing, until the punch. */
+  private restHand(side: number, out = new THREE.Vector3()): THREE.Vector3 {
+    return out.set(side * 0.19, -0.2, -0.46);
+  }
+
+  /** The hand at rest, turned in a little: knuckles up, fingers forward. */
+  private restTurn(side: number): THREE.Quaternion {
+    return new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.3, side * 0.35, side * 0.12));
+  }
+
   /**
-   * His hands in the cutscene: each comes up into view as it is freed and
-   * flexes the blood back into it; then the right one is thrown.
+   * His hands in the cutscene: each lifts off the arm of the chair where it
+   * was tied as it comes free, up into view, and flexes the blood back into
+   * it; then the right one is thrown.
    */
   private updateHandsInCut(dt: number): void {
     const H = this.hands;
+    const cam = this.player.camera;
     const punching = this.step === 'windup' || this.step === 'strike' || this.afterT >= 0;
     for (const side of [1, -1] as const) {
       const hand = side > 0 ? H.right : H.left;
@@ -712,53 +735,88 @@ export class Level6Scene extends CombatScene<Level6Data> {
       if (side > 0) this.freeR = ft;
       else this.freeL = ft;
       hand.visible = true;
-      const up = smooth(ft / 0.55);
-      const rest = new THREE.Vector3(side * 0.2, -0.26, -0.5);
-      const below = new THREE.Vector3(side * 0.34, -0.8, -0.34);
-      hand.root.position.lerpVectors(below, rest, up);
-      hand.root.rotation.set(-0.3 + 0.2 * (1 - up), side * 0.35, side * 0.12);
-      // Open, shut, open, shut: getting the feeling back
-      hand.curl = ft < 1.6 ? 0.5 + 0.42 * Math.cos(ft * 8.5) : 0.7;
+      const up = smooth(ft / 0.75);
+      // Where it lay: on the end of the chair arm, fingers hanging over it.
+      // Taken into camera space afresh each frame — the head is turning.
+      const c = this.level.chairAt;
+      const lay = cam.worldToLocal(Level6Scene.tmpA.set(c.x + side * 0.25, 0.705, c.z - 0.21));
+      const layTurn = Level6Scene.tmpQ.setFromEuler(new THREE.Euler(-0.35, 0, 0)).premultiply(cam.quaternion.clone().invert());
+      hand.root.position.lerpVectors(lay, this.restHand(side), up);
+      hand.root.quaternion.slerpQuaternions(layTurn, this.restTurn(side), up);
+      // Slack as it comes off the chair, then open, shut, open, shut: getting
+      // the feeling back, ending half closed
+      hand.curl = ft < 0.5 ? 0.6 - 0.5 * smooth(ft / 0.5) : ft < 2.22 ? 0.5 - 0.42 * Math.cos((ft - 0.5) * 8.5) : 0.7;
     }
 
     if (!punching) return;
-    // The punch: the right hand winds back and goes into his face
+    // The punch: the right hand winds back and goes into his face, the
+    // shoulder going in behind it
     const r = H.right;
     const l = H.left;
-    const restL = new THREE.Vector3(-0.2, -0.26, -0.5);
+    const restL = this.restHand(-1);
     if (this.afterT < 0) {
       r.visible = true;
       l.root.position.copy(restL);
-      const cam = this.player.camera;
       const head = this.agents[0].headWorld(Level6Scene.tmpA);
       const target = cam.worldToLocal(head.clone());
       // Stop at the face, not inside it
       target.addScaledVector(target.clone().normalize(), -0.12);
-      const back = new THREE.Vector3(0.27, -0.37, -0.3);
+      const back = new THREE.Vector3(0.25, -0.32, -0.3);
       const dir = target.clone().sub(back).normalize();
       const aim = Level6Scene.tmpQ.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
       r.curl = 1;
+      const drawn = new THREE.Vector3(0.03, -0.02, 0.06);
+      const thrown = new THREE.Vector3(-0.04, 0.03, -0.1);
       if (this.step === 'windup') {
         const k = smooth(this.stepT / WINDUP);
-        r.root.position.lerpVectors(new THREE.Vector3(0.2, -0.26, -0.5), back, k);
-        r.root.quaternion.slerp(aim, k);
+        r.root.position.lerpVectors(this.restHand(1), back, k);
+        r.root.quaternion.slerpQuaternions(this.restTurn(1), aim, k);
+        this.punchLean.copy(drawn).multiplyScalar(k);
       } else {
         const k = clamp01(this.stepT / 0.1);
         r.root.position.lerpVectors(back, target, k * k);
         r.root.quaternion.copy(aim);
+        this.punchLean.lerpVectors(drawn, thrown, k * k);
         this.punchAt.copy(r.root.position);
       }
       return;
     }
     // Drawn back and down out of shot, both hands, as the gun comes up
     const k = smooth((this.afterT - 0.1) / 0.45);
-    r.root.position.lerpVectors(this.punchAt, new THREE.Vector3(0.34, -0.9, -0.3), k);
-    l.root.position.lerpVectors(restL, new THREE.Vector3(-0.34, -0.9, -0.3), k);
+    r.root.position.lerpVectors(this.punchAt, new THREE.Vector3(0.3, -0.75, -0.25), k);
+    l.root.position.lerpVectors(restL, new THREE.Vector3(-0.3, -0.75, -0.25), k);
+    this.punchLean.multiplyScalar(1 - k);
     if (this.afterT > 0.6) {
       r.visible = false;
       l.visible = false;
     }
   }
+
+  /** How far his right shoulder has gone into the punch, in his body's frame. */
+  private punchLean = new THREE.Vector3();
+
+  /**
+   * Hang his arms from his shoulders. Those are on his body, not his head:
+   * sat in the chair it faces the desk, and it turns only part of the way
+   * the head does — so looking down at one wrist, that shoulder is there
+   * beside the camera, and the arm runs from it as it should.
+   */
+  private updateArms(): void {
+    const H = this.hands;
+    if (!H.right.visible && !H.left.visible) return;
+    const cam = this.player.camera;
+    const bodyYaw = this.camYaw * 0.6;
+    const at = (side: number, out: THREE.Vector3): THREE.Vector3 => {
+      out.set(side * 0.2, -0.3, 0.03);
+      if (side > 0) out.add(this.punchLean);
+      out.applyAxisAngle(Level6Scene.UP, bodyYaw).add(cam.position);
+      return cam.worldToLocal(out);
+    };
+    H.update(at(1, Level6Scene.shoulderR), at(-1, Level6Scene.shoulderL));
+  }
+  private static UP = new THREE.Vector3(0, 1, 0);
+  private static shoulderR = new THREE.Vector3();
+  private static shoulderL = new THREE.Vector3();
 
   /** Where the camera looks during the untying: at him, and where his hands are. */
   private untieLook(): [number, number] {
@@ -811,8 +869,10 @@ export class Level6Scene extends CombatScene<Level6Data> {
     // A spray off the blow, not a gunshot's worth
     this.particles.bloodSpray(head, dir, false, 0.02);
     this.duckT = 0;
+    // The other one brings his rifle up off the rest
     const b = this.agents[1];
     b.faceToward(this.player.position, 1, 10);
+    b.setAiming(true);
     audio.enemyShout(3);
   }
 
@@ -883,6 +943,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
   private wakeAgent(): void {
     const b = this.agents[1];
     if (!b.alive || this.agentAI) return;
+    // The fight's carry is the AI's business from here on
+    b.setRestCarry(false);
     this.agentAI = new EnemyAI(b, {
       player: this.player,
       waypoints: this.level.waypoints,
@@ -1023,11 +1085,14 @@ export class Level6Scene extends CombatScene<Level6Data> {
     L.ropeL.visible = false;
     L.tiedR.visible = false;
     L.tiedL.visible = false;
+    L.raviSat.visible = false;
     this.shoveChair();
     this.openVent(false);
     const a = this.agents[0];
+    a.setRestCarry(false, true);
     a.slingWeapon(true);
     a.position.copy(this.kneelSpot(-1));
+    this.agents[1].setAiming(true);
     a.root.updateMatrixWorld(true);
     const head = a.eyePosition(new THREE.Vector3());
     this.killEnemy(a, head, new THREE.Vector3(-0.5, 0.3, -1).normalize(), true, true, 'head');

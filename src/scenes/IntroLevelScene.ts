@@ -11,6 +11,8 @@ import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -61,6 +63,14 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private takedownVm!: TakedownViewmodel;
   /** Middle-finger emote on T; the left hand goes back to work on reload. */
   private emote!: EmoteViewmodel;
+  /** Deadbull on G: three seconds with no gun, and he's back on full health. */
+  private drink!: DrinkViewmodel;
+  /** Drop kick on Q. */
+  private dropKick!: DropKickViewmodel;
+  /** Who the kick was aimed at, and the slide it drags Ravi along. */
+  private kickVictim: Enemy | null = null;
+  private kickFrom: THREE.Vector3 | null = null;
+  private kickTo: THREE.Vector3 | null = null;
   /** The agent, if he's currently held for a knife execution. */
   private takedown: Enemy | null = null;
   private agent!: Enemy;
@@ -122,6 +132,39 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     };
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)
     this.emote = new EmoteViewmodel(this.player.camera);
+    // Deadbull (G) and the drop kick (Q)
+    this.drink = new DrinkViewmodel(this.player.camera);
+    this.drink.onEvent = (e, i) => {
+      if (e === 'crack') audio.canCrack();
+      else if (e === 'gulp') audio.gulp(i);
+      else if (e === 'heal') this.player.healFull();
+      else if (e === 'crush') audio.canCrush();
+      else if (e === 'toss') this.dropCan(this.drink.tossPose());
+    };
+    this.dropKick = new DropKickViewmodel(this.player.camera);
+    this.dropKick.onEvent = (e) => {
+      if (e === 'launch') {
+        audio.kickWhoosh();
+      } else if (e === 'impact') {
+        // Re-check at the last instant rather than trusting who was in front
+        // when the key went down — half a second is plenty of time for him to
+        // have walked off, or for someone else to have walked in.
+        const victim = this.kickVictim?.alive ? this.kickVictim : this.kickTarget();
+        this.kickVictim = null;
+        if (!victim) return; // kicked the air; the rest of the move still plays
+        this.dropKick.hit = true;
+        this.dropKickEnemy(victim);
+      } else if (e === 'land') {
+        audio.backLanding();
+        bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 9, kind: 'footstep' });
+      } else if (e === 'up') {
+        audio.scuff();
+      } else if (e === 'done') {
+        this.player.cinematic = false;
+        this.kickFrom = null;
+        this.kickTo = null;
+      }
+    };
     // Knife takedown arms (F next to the agent)
     this.takedownVm = new TakedownViewmodel(this.player.camera);
     this.takedownVm.onEvent = (e) => {
@@ -465,7 +508,14 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     // ---- Knife takedown: F next to the agent
     const tdTarget = playable && !this.takedown ? this.takedownTarget() : null;
     this.hud.setTakedownHint(!!tdTarget && input.pointerLocked);
-    if (tdTarget && input.wasPressed('KeyF') && input.pointerLocked && !this.weapon.reloading) {
+    if (
+      tdTarget &&
+      input.wasPressed('KeyF') &&
+      input.pointerLocked &&
+      !this.weapon.reloading &&
+      !this.drink.engaged &&
+      !this.dropKick.engaged
+    ) {
       this.takedown = tdTarget;
       this.player.cinematic = true;
       this.player.aiming = false;
@@ -484,8 +534,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.takedownVm.update(dt);
     const inTakedown = this.takedown !== null;
     if (playable) {
-      // The pistol drops out of frame while both hands are on the knife
-      if (inTakedown) this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
+      // The pistol drops out of frame while both hands are on the knife, a
+      // can, or the floor
+      if (inTakedown || this.drink.engaged || this.dropKick.engaged) this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
       else this.weapon.stow = Math.max(0, this.weapon.stow - dt * 5);
     }
 
@@ -504,12 +555,77 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     if (this.weapon.reloading || inTakedown || !this.player.alive) this.emote.cancel();
     this.weapon.hideSupportHand = this.emote.engaged;
 
+    // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
+    // whole time, and the price of a full heal is three seconds with the gun
+    // out of frame.
+    if (
+      playable &&
+      input.wasPressed('KeyG') &&
+      this.player.alive &&
+      input.pointerLocked &&
+      !inTakedown &&
+      !this.weapon.reloading &&
+      !this.dropKick.engaged
+    ) {
+      // The finger stays up if it was up: that is the left hand and this is
+      // the right, and with the gun stowed there is nothing for it to do.
+      this.drink.start();
+    }
+    if (!this.player.alive || inTakedown) this.drink.abort();
+
+    // ---- Drop kick on Q. It plays whether or not anyone is in front of him:
+    // a move that silently does nothing when you misjudge the range just
+    // reads as a broken button.
+    if (
+      playable &&
+      input.wasPressed('KeyQ') &&
+      this.player.alive &&
+      input.pointerLocked &&
+      !inTakedown &&
+      !this.weapon.reloading &&
+      !this.drink.engaged &&
+      this.player.grounded
+    ) {
+      if (this.dropKick.start()) {
+        this.emote.cancel();
+        this.player.cinematic = true; // the kick owns the camera until he's up
+        this.player.aiming = false;
+        this.kickVictim = this.kickTarget();
+        if (this.kickVictim) {
+          // Close to about a boot's length off him. Only ever a short slide
+          // toward someone already stood in the open, so it can skip collision
+          // the way the takedown does without putting Ravi inside a wall.
+          const away = this.player.position.clone().sub(this.kickVictim.position).setY(0).normalize();
+          this.kickFrom = this.player.position.clone();
+          this.kickTo = this.kickVictim.position.clone().addScaledVector(away, 1.05);
+          this.kickTo.y = this.player.position.y;
+        }
+      }
+    }
+    if (this.dropKick.engaged && !this.player.alive) {
+      this.dropKick.abort();
+      this.player.cinematic = false;
+      this.kickVictim = null;
+      this.kickFrom = null;
+      this.kickTo = null;
+    }
+    if (this.dropKick.engaged && this.kickFrom && this.kickTo) {
+      this.player.position.lerpVectors(this.kickFrom, this.kickTo, this.dropKick.lunge);
+    }
+    this.dropKick.update(dt);
+    // Both hands are busy — or holding a drink — so nothing else can happen
+    const busy = inTakedown || this.drink.engaged || this.dropKick.engaged;
+
     const aiming =
-      playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !inTakedown;
+      playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !busy;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
+    // Layered on after player.update so the leap and the landing ride on top
+    // of the ordinary eye position instead of being overwritten by it
+    this.dropKick.applyCamera(this.player);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
     this.emote.update(dt, this.player);
+    this.drink.update(dt, this.player);
     const targetFov = 74 - 22 * this.weapon.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
@@ -521,7 +637,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.fireCooldown -= dt;
     const canFire =
       playable && this.player.alive && this.fireCooldown <= 0 && input.pointerLocked &&
-      !this.player.sprinting && !this.weapon.reloading && !inTakedown;
+      !this.player.sprinting && !this.weapon.reloading && !busy;
     if (input.consumeClick() && canFire) {
       if (this.ammo > 0) {
         this.fireCooldown = FIRE_COOLDOWN;
@@ -532,7 +648,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
         this.weapon.startReload();
       }
     }
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting && !inTakedown) {
+    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting && !busy) {
       this.weapon.startReload();
     }
     this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
@@ -569,6 +685,12 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     return this.agent;
   }
 
+  /** Who the drop kick would land on right now, if anyone. */
+  private kickTarget(): Enemy | null {
+    if (this.phase !== 'play') return null;
+    return this.kickTargetFrom([this.agent]);
+  }
+
   /** Same choreography as the office level: square up, lock on, shake. */
   private updateTakedownCamera(dt: number, time: number): void {
     const enemy = this.takedown!;
@@ -595,6 +717,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private stepWorld(dt: number): void {
     for (const f of this.level.flickering) f.update(dt);
     for (const g of this.level.glassPanes) g.update(dt);
+    // The thrown Deadbull empty is the only loose object this level makes, and
+    // without this it hangs in the air at the point he let go of it
+    this.updateDebris(dt);
     this.decals.update(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
@@ -673,16 +798,19 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     byPlayer: boolean,
     headshot: boolean,
     hitPart = 'torso',
-    impulseScale = 1
+    impulseScale = 1,
+    /** A boot rather than a bullet: no hole, and no blood thrown. */
+    opts: { wound?: boolean; keepWeapon?: boolean } = {}
   ): void {
     const { audio, bus } = this.ctx;
-    enemy.die(point, dir, this.world, hitPart, impulseScale);
-    audio.fleshHit();
+    enemy.die(point, dir, this.world, hitPart, impulseScale, opts);
+    if (opts.wound !== false) audio.fleshHit(); // a boot is not a bullet
     if (byPlayer) {
       audio.killConfirm();
       bus.emit(Events.HitMarker, { lethal: true });
     }
-    this.spatter(point, dir, true);
+    // A kick leaves no wound, so there is nothing to throw on the walls
+    if (opts.wound !== false) this.spatter(point, dir, true);
 
     if (enemy === this.agent) {
       this.agentDown = true;

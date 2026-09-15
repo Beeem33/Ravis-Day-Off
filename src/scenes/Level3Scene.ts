@@ -10,6 +10,8 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
@@ -48,6 +50,14 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private weapon!: WeaponViewmodel;
   /** Middle-finger emote on T; the left hand goes back to work on reload. */
   private emote!: EmoteViewmodel;
+  /** Deadbull on G: three seconds with no gun, and he's back on full health. */
+  private drink!: DrinkViewmodel;
+  /** Drop kick on Q. */
+  private dropKick!: DropKickViewmodel;
+  /** Who the kick was aimed at, and the slide it drags Ravi along. */
+  private kickVictim: Enemy | null = null;
+  private kickFrom: THREE.Vector3 | null = null;
+  private kickTo: THREE.Vector3 | null = null;
   private hud!: FPSHUD;
   private dialogue!: DialogueBox;
 
@@ -129,6 +139,39 @@ export class Level3Scene extends CombatScene<Level3Data> {
       else if (e === 'magIn') audio.magIn();
       else if (e === 'rack') audio.slideRack();
       else if (e === 'done') this.ammo = MAG_SIZE;
+    };
+    // Deadbull (G) and the drop kick (Q)
+    this.drink = new DrinkViewmodel(this.player.camera);
+    this.drink.onEvent = (e, i) => {
+      if (e === 'crack') audio.canCrack();
+      else if (e === 'gulp') audio.gulp(i);
+      else if (e === 'heal') this.player.healFull();
+      else if (e === 'crush') audio.canCrush();
+      else if (e === 'toss') this.dropCan(this.drink.tossPose());
+    };
+    this.dropKick = new DropKickViewmodel(this.player.camera);
+    this.dropKick.onEvent = (e) => {
+      if (e === 'launch') {
+        audio.kickWhoosh();
+      } else if (e === 'impact') {
+        // Re-check at the last instant rather than trusting who was in front
+        // when the key went down — half a second is plenty of time for him to
+        // have walked off, or for someone else to have walked in.
+        const victim = this.kickVictim?.alive ? this.kickVictim : this.kickTarget();
+        this.kickVictim = null;
+        if (!victim) return; // kicked the air; the rest of the move still plays
+        this.dropKick.hit = true;
+        this.dropKickEnemy(victim);
+      } else if (e === 'land') {
+        audio.backLanding();
+        bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 9, kind: 'footstep' });
+      } else if (e === 'up') {
+        audio.scuff();
+      } else if (e === 'done') {
+        this.player.cinematic = false;
+        this.kickFrom = null;
+        this.kickTo = null;
+      }
     };
 
     this.particles = new ParticleManager(this.scene);
@@ -818,11 +861,74 @@ export class Level3Scene extends CombatScene<Level3Data> {
     if (this.weapon.reloading || !this.player.alive) this.emote.cancel();
     this.weapon.hideSupportHand = this.emote.engaged;
 
-    const aiming = playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading;
+    // Both moves are for the fight only: the walk up the corridor and the
+    // whole crash sequence are scripted, and the scene owns the camera and
+    // Ravi's feet through them.
+    const fighting = this.phase === 'play';
+
+    // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
+    // whole time, and the price of a full heal is three seconds with the gun
+    // out of frame.
+    if (
+      input.wasPressed('KeyG') && fighting && this.player.alive && input.pointerLocked &&
+      !this.weapon.reloading && !this.dropKick.engaged
+    ) {
+      // The finger stays up if it was up: that is the left hand and this is
+      // the right, and with the gun stowed there is nothing for it to do.
+      this.drink.start();
+    }
+    if (!this.player.alive || !fighting) this.drink.abort();
+
+    // ---- Drop kick on Q. It plays whether or not anyone is in front of him:
+    // a move that silently does nothing when you misjudge the range just
+    // reads as a broken button.
+    if (
+      input.wasPressed('KeyQ') && fighting && this.player.alive && input.pointerLocked &&
+      !this.weapon.reloading && !this.drink.engaged && this.player.grounded
+    ) {
+      if (this.dropKick.start()) {
+        this.emote.cancel();
+        this.player.cinematic = true; // the kick owns the camera until he's up
+        this.player.aiming = false;
+        this.kickVictim = this.kickTarget();
+        if (this.kickVictim) {
+          // Close to about a boot's length off him. Only ever a short slide
+          // toward someone already stood in the open, so it can skip collision
+          // without ever putting Ravi inside a wall.
+          const away = this.player.position.clone().sub(this.kickVictim.position).setY(0).normalize();
+          this.kickFrom = this.player.position.clone();
+          this.kickTo = this.kickVictim.position.clone().addScaledVector(away, 1.05);
+          this.kickTo.y = this.player.position.y;
+        }
+      }
+    }
+    if (this.dropKick.engaged && (!this.player.alive || !fighting)) {
+      this.dropKick.abort();
+      this.player.cinematic = false;
+      this.kickVictim = null;
+      this.kickFrom = null;
+      this.kickTo = null;
+    }
+    if (this.dropKick.engaged && this.kickFrom && this.kickTo) {
+      this.player.position.lerpVectors(this.kickFrom, this.kickTo, this.dropKick.lunge);
+    }
+    this.dropKick.update(dt);
+    // Both hands are busy — or holding a drink — so nothing else can happen
+    const busy = this.drink.engaged || this.dropKick.engaged;
+    // Nothing else in this level stows the gun, so the move owns it outright:
+    // down out of frame while it runs, straight back up when it ends.
+    this.weapon.stow = busy ? Math.min(1, this.weapon.stow + dt * 6) : Math.max(0, this.weapon.stow - dt * 5);
+
+    const aiming =
+      playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !busy;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
+    // Layered on after player.update so the leap and the landing ride on top
+    // of the ordinary eye position instead of being overwritten by it
+    this.dropKick.applyCamera(this.player);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
     this.emote.update(dt, this.player);
+    this.drink.update(dt, this.player);
     const targetFov = 74 - 22 * this.weapon.aimBlend;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
@@ -858,7 +964,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.fireCooldown -= dt;
     const canFire =
       this.phase === 'play' && this.player.alive && this.fireCooldown <= 0 && input.pointerLocked &&
-      !this.player.sprinting && !this.weapon.reloading;
+      !this.player.sprinting && !this.weapon.reloading && !busy;
     if (input.consumeClick() && canFire) {
       if (this.ammo > 0) {
         this.fireCooldown = FIRE_COOLDOWN;
@@ -871,7 +977,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     } else if (!playable) {
       input.consumeClick(); // don't let a queued click fire on handover
     }
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting) {
+    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting && !busy) {
       this.weapon.startReload();
     }
     this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
@@ -949,6 +1055,14 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
   // ----------------------------------------------------------- ballistics
 
+  /** Who the drop kick would land on right now, if anyone. */
+  private kickTarget(): Enemy | null {
+    if (this.phase !== 'play') return null;
+    // The gunner is welded to the truck roof the whole time he is alive, so
+    // the agents on the carpet are the only people a boot can reach.
+    return this.kickTargetFrom(this.agents);
+  }
+
   private playerShoot(): void {
     const { audio, bus } = this.ctx;
     audio.playerGunshot();
@@ -974,12 +1088,16 @@ export class Level3Scene extends CombatScene<Level3Data> {
     dir: THREE.Vector3,
     byPlayer: boolean,
     headshot: boolean,
-    hitPart = 'torso'
+    hitPart = 'torso',
+    impulseScale = 1,
+    /** A boot rather than a bullet: no hole, and no blood thrown. */
+    opts: { wound?: boolean; keepWeapon?: boolean } = {}
   ): void {
     const { audio, bus } = this.ctx;
-    enemy.die(point, dir, this.world, hitPart);
-    audio.fleshHit();
-    this.spatter(point, dir, true);
+    enemy.die(point, dir, this.world, hitPart, impulseScale, opts);
+    if (opts.wound !== false) audio.fleshHit(); // a boot is not a bullet
+    // A kick leaves no wound, so there is nothing to throw on the walls
+    if (opts.wound !== false) this.spatter(point, dir, true);
 
     if (enemy.civilian) {
       this.staffAI.get(enemy)?.dispose();

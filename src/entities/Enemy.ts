@@ -1984,6 +1984,26 @@ export class Enemy {
     if ((this.deadTimer > 2.5 && speed < 0.3) || this.deadTimer > 11) this.settle();
   }
 
+  /**
+   * Throw the whole ragdoll at once, on top of whatever die() already did.
+   *
+   * die()'s impulse lands on ONE body and the ten joints then share it out
+   * with the rest, so the assembly ends up at roughly a third of the speed
+   * the struck part was given. That is why no bullet has ever thrown anybody
+   * across a room however hard it hits. A boot is a different kind of event:
+   * it puts the same momentum through every part of the man at once, which
+   * both travels properly and leaves the solver nothing to fight, so the
+   * joints stay together while he is in the air.
+   */
+  launch(v: THREE.Vector3): void {
+    for (const { body } of this.ragdoll) {
+      body.wakeUp();
+      body.velocity.x += v.x;
+      body.velocity.y += v.y;
+      body.velocity.z += v.z;
+    }
+  }
+
   /** Corpse bottom in world space (for the blood pool decal). */
   corpseBase(): THREE.Vector3 {
     const torso = this.ragdollByName.get('torso');

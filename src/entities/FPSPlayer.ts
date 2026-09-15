@@ -387,6 +387,17 @@ export class FPSPlayer {
     if (this.health <= 0) this.kill(killerName);
   }
 
+  /**
+   * Straight back to full — the Deadbull. No event: the HUD reads health
+   * off the scene every frame and pulses green on its own when it goes up,
+   * and PlayerDamaged would flash the hurt vignette at him for healing.
+   */
+  healFull(): void {
+    if (!this.alive) return;
+    this.health = MAX_HEALTH;
+    this.regenTimer = 0;
+  }
+
   kill(killerName: string): void {
     if (!this.alive) return;
     this.alive = false;

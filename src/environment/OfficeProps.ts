@@ -116,14 +116,25 @@ export function trashCan(): THREE.Group {
 }
 
 let deadbullMat: THREE.MeshLambertMaterial | null = null;
+const deadbullWraps = new Map<number, THREE.CanvasTexture>();
 
-/** Wrap texture for the DEADBULL can: silver and blue, with the logo. */
-function deadbullTexture(): THREE.MeshLambertMaterial {
-  if (deadbullMat) return deadbullMat;
+/**
+ * The DEADBULL wrap, drawn at `scale` times the prop resolution.
+ *
+ * The cans on the desks are seen from across a room and 256x128 is plenty.
+ * The one Ravi drinks fills a good part of the screen, so it asks for the
+ * same art at 4x rather than art of its own — there is one Deadbull in this
+ * world and it should be the same can wherever it turns up.
+ */
+export function deadbullWrap(scale = 1): THREE.CanvasTexture {
+  const cached = deadbullWraps.get(scale);
+  if (cached) return cached;
   const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 128;
+  c.width = 256 * scale;
+  c.height = 128 * scale;
   const g = c.getContext('2d')!;
+  // Everything below is authored against the original 256x128 sheet
+  g.scale(scale, scale);
   // Silver body with a blue diagonal band, the energy-drink look
   const grad = g.createLinearGradient(0, 0, 0, 128);
   grad.addColorStop(0, '#d9dde2');
@@ -191,7 +202,13 @@ function deadbullTexture(): THREE.MeshLambertMaterial {
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  deadbullMat = new THREE.MeshLambertMaterial({ map: tex });
+  tex.anisotropy = 4;
+  deadbullWraps.set(scale, tex);
+  return tex;
+}
+
+function deadbullTexture(): THREE.MeshLambertMaterial {
+  if (!deadbullMat) deadbullMat = new THREE.MeshLambertMaterial({ map: deadbullWrap(1) });
   return deadbullMat;
 }
 

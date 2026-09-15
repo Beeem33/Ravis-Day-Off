@@ -10,6 +10,8 @@ import { FPSPlayer } from '../entities/FPSPlayer';
 import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
@@ -135,6 +137,14 @@ export class Level5Scene extends CombatScene<Level5Data> {
   private weapon!: WeaponViewmodel;
   private emote!: EmoteViewmodel;
   private shotgun!: ShotgunViewmodel;
+  /** Deadbull on G: three seconds with no gun, and he's back on full health. */
+  private drink!: DrinkViewmodel;
+  /** Drop kick on Q. */
+  private dropKick!: DropKickViewmodel;
+  /** Who the kick was aimed at, and the slide it drags Ravi along. */
+  private kickVictim: Enemy | null = null;
+  private kickFrom: THREE.Vector3 | null = null;
+  private kickTo: THREE.Vector3 | null = null;
   private hud!: FPSHUD;
   private dialogue!: DialogueBox;
 
@@ -225,6 +235,40 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.shotgun = new ShotgunViewmodel(this.player.camera);
     this.emote = new EmoteViewmodel(this.player.camera);
     this.shotgun.stow = 1;
+
+    // Deadbull (G) and the drop kick (Q)
+    this.drink = new DrinkViewmodel(this.player.camera);
+    this.drink.onEvent = (e, i) => {
+      if (e === 'crack') audio.canCrack();
+      else if (e === 'gulp') audio.gulp(i);
+      else if (e === 'heal') this.player.healFull();
+      else if (e === 'crush') audio.canCrush();
+      else if (e === 'toss') this.dropCan(this.drink.tossPose());
+    };
+    this.dropKick = new DropKickViewmodel(this.player.camera);
+    this.dropKick.onEvent = (e) => {
+      if (e === 'launch') {
+        audio.kickWhoosh();
+      } else if (e === 'impact') {
+        // Asked again at the last instant rather than trusting who was in
+        // front when the key went down. Down here the answer is always
+        // nobody, but the move is the same move wherever it is thrown.
+        const victim = this.kickVictim?.alive ? this.kickVictim : this.kickTarget();
+        this.kickVictim = null;
+        if (!victim) return; // kicked the air; the rest of the move still plays
+        this.dropKick.hit = true;
+        this.dropKickEnemy(victim);
+      } else if (e === 'land') {
+        audio.backLanding();
+        bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 9, kind: 'footstep' });
+      } else if (e === 'up') {
+        audio.scuff();
+      } else if (e === 'done') {
+        this.player.cinematic = false;
+        this.kickFrom = null;
+        this.kickTo = null;
+      }
+    };
 
     // Same torch as the dark floor, and the only way to see down here — the
     // goggles went in level four. On-but-zero, driven by intensity only.
@@ -439,6 +483,10 @@ export class Level5Scene extends CombatScene<Level5Data> {
 
   /** In the water: flash, buzz, then back to the near ledge to try again. */
   private startZap(): void {
+    // The current owns him from here, so anything else holding the camera
+    // lets go of it first
+    this.cancelKick();
+    this.drink.abort();
     this.zapT = 0;
     this.respawned = false;
     this.player.cinematic = true;
@@ -488,7 +536,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
       } else if (this.prompt.textContent === '[ E ]  RESET THE BREAKER') {
         this.prompt.style.display = 'none';
       }
-      if (on && this.ctx.input.wasPressed('KeyE') && !this.eSpent) {
+      if (on && this.ctx.input.wasPressed('KeyE') && !this.eSpent && !this.busy) {
         this.powered = true;
         this.prompt.style.display = 'none';
         this.startCutscene();
@@ -515,6 +563,9 @@ export class Level5Scene extends CombatScene<Level5Data> {
 
   /** E on the breaker: the camera is the scene's from here to the black. */
   private startCutscene(): void {
+    // Whatever was in his hands a moment ago, it is not now
+    this.cancelKick();
+    this.drink.abort();
     this.cutT = 0;
     this.cutBeats.clear();
     this.cutFrom.pos.copy(this.player.position);
@@ -799,7 +850,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
         const onPanel = this.toldWhy && !this.dialogue.isActive && this.aimingAtPanel(carA);
         this.prompt.style.display = onPanel ? 'block' : 'none';
         this.prompt.textContent = '[ E ]  MECHANICAL ROOM';
-        if (onPanel && this.ctx.input.wasPressed('KeyE') && !this.eSpent) {
+        if (onPanel && this.ctx.input.wasPressed('KeyE') && !this.eSpent && !this.busy) {
           if (!this.insideCar(carA)) {
             this.setObjective('STEP INSIDE THE LIFT');
             break;
@@ -935,6 +986,33 @@ export class Level5Scene extends CombatScene<Level5Data> {
     }
   }
 
+  // ------------------------------------------------------------- the moves
+
+  /**
+   * Who the drop kick would land on. Nobody, ever: the basement is empty,
+   * and the agent is only in the world inside the cutscene, where the kick
+   * cannot be started. It whiffs every time down here by design — a key
+   * that does nothing at all in one level out of six reads as a bug.
+   */
+  private kickTarget(): Enemy | null {
+    return null;
+  }
+
+  /** Give the camera back mid-kick: shot, zapped, or the breaker took over. */
+  private cancelKick(): void {
+    if (!this.dropKick.engaged) return;
+    this.dropKick.abort();
+    this.player.cinematic = false;
+    this.kickVictim = null;
+    this.kickFrom = null;
+    this.kickTo = null;
+  }
+
+  /** Hands full: a can in one of them, or both boots off the floor. */
+  private get busy(): boolean {
+    return this.drink.engaged || this.dropKick.engaged;
+  }
+
   // --------------------------------------------------------------- update
 
   update(dt: number, _time: number): void {
@@ -945,10 +1023,61 @@ export class Level5Scene extends CombatScene<Level5Data> {
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
     const held = this.active === 'pistol' ? this.weapon : this.shotgun;
-    const aiming = playable && input.rightHeld && input.pointerLocked && this.player.alive && !held.reloading;
+
+    // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
+    // whole time, and the price of a full heal is three seconds with the gun
+    // out of frame.
+    if (
+      playable && input.wasPressed('KeyG') && this.player.alive && input.pointerLocked &&
+      !this.dialogue.isActive && !held.reloading && this.zapT < 0 && !this.dropKick.engaged
+    ) {
+      // The finger stays up if it was up: that is the left hand and this is
+      // the right, and with the gun stowed there is nothing for it to do.
+      this.drink.start();
+    }
+    // Dead, or in the water — either way he is not finishing it
+    if (!playable || !this.player.alive || this.zapT >= 0) this.drink.abort();
+
+    // ---- Drop kick on Q. It plays whether or not anyone is in front of him,
+    // which in this basement is nobody at all: a move that silently does
+    // nothing when you press it just reads as a broken button.
+    if (
+      playable && input.wasPressed('KeyQ') && this.player.alive && input.pointerLocked &&
+      !this.dialogue.isActive && !held.reloading && this.zapT < 0 && !this.drink.engaged &&
+      this.player.grounded // never off a ledge: the move freezes him mid-air
+    ) {
+      if (this.dropKick.start()) {
+        this.emote.cancel();
+        this.player.cinematic = true; // the kick owns the camera until he's up
+        this.player.aiming = false;
+        this.kickVictim = this.kickTarget();
+        if (this.kickVictim) {
+          // Close to about a boot's length off him. Only ever a short slide
+          // toward someone already stood in the open, so it can skip collision
+          // the way the cutscene does without putting Ravi inside a wall.
+          const away = this.player.position.clone().sub(this.kickVictim.position).setY(0).normalize();
+          this.kickFrom = this.player.position.clone();
+          this.kickTo = this.kickVictim.position.clone().addScaledVector(away, 1.05);
+          this.kickTo.y = this.player.position.y;
+        }
+      }
+    }
+    // The water and the breaker hand it back themselves, on their way to
+    // taking the camera; this is the one that is nobody else's job
+    if (this.dropKick.engaged && !this.player.alive) this.cancelKick();
+    if (this.dropKick.engaged && this.kickFrom && this.kickTo) {
+      this.player.position.lerpVectors(this.kickFrom, this.kickTo, this.dropKick.lunge);
+    }
+    this.dropKick.update(dt);
+
+    const aiming =
+      playable && input.rightHeld && input.pointerLocked && this.player.alive && !held.reloading && !this.busy;
     this.player.aiming = aiming;
     if (cutscene) this.cutscenePose(dt);
     this.player.update(dt, this.level.colliders);
+    // Layered on after player.update so the leap and the landing ride on top
+    // of the ordinary eye position instead of being overwritten by it
+    this.dropKick.applyCamera(this.player);
     // A little of the motor through the floor while the car is moving
     if (this.stage === 'ride' || this.stage === 'fadeOut') {
       this.player.camera.position.y += (Math.random() - 0.5) * 0.008;
@@ -959,7 +1088,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.updateBreaker(dt);
     if (cutscene) this.updateCutscene(dt);
 
-    if (playable && !this.dialogue.isActive) {
+    if (playable && !this.dialogue.isActive && !this.busy) {
       if (input.wasPressed('Digit1')) this.wanted = 'pistol';
       if (input.wasPressed('Digit2')) this.wanted = 'shotgun';
     }
@@ -970,6 +1099,11 @@ export class Level5Scene extends CombatScene<Level5Data> {
       // first frame of the cutscene.
       this.wanted = this.active;
       if (held.stow < 0.99) held.stow = Math.min(0.99, held.stow + dt * 3);
+    } else if (this.busy) {
+      // A can or the floor: whatever he was holding drops out of frame. Held
+      // short of 1 for the same reason as the cutscene above — a fully stowed
+      // weapon is a hidden one, and hiding it costs the recompile.
+      if (held.stow < 0.99) held.stow = Math.min(0.99, held.stow + dt * 6);
     } else if (this.wanted !== this.active) {
       const cur = this.active === 'pistol' ? this.weapon : this.shotgun;
       cur.stow = Math.min(1, cur.stow + dt * 6);
@@ -988,6 +1122,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
     this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
     this.emote.update(dt, this.player);
+    this.drink.update(dt, this.player);
     // The cutscene frames in tighter on the lever, and opens out for the turn
     const targetFov = cutscene
       ? track([[0, 74], [CUT.SETTLE, 60], [CUT.LOOKUP, 60], [CUT.LOOKUP + 0.9, 68]], this.cutT)
@@ -1002,7 +1137,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     const clicked = input.consumeClick();
     if (
       playable && this.player.alive && input.pointerLocked && !this.dialogue.isActive &&
-      clicked && this.fireCooldown <= 0 && !held.reloading
+      clicked && this.fireCooldown <= 0 && !held.reloading && !this.busy
     ) {
       if (this.active === 'pistol' && this.ammo > 0) {
         this.ammo--;
@@ -1020,7 +1155,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
       this.ctx.audio.uiBeep(this.torchOn);
       this.ui.querySelector('.torch-hint')?.classList.toggle('on', this.torchOn);
     }
-    if (input.wasPressed('KeyR') && this.player.alive && !cutscene) {
+    if (input.wasPressed('KeyR') && this.player.alive && !cutscene && !this.busy) {
       if (this.active === 'pistol' && this.ammo < MAG_SIZE) {
         this.weapon.startReload();
         this.ammo = MAG_SIZE;

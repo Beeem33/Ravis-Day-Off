@@ -558,6 +558,144 @@ export class AudioManager {
     this.noise(0.25, 'bandpass', 600, 0.1, true, 1.2);
   }
 
+  // ------------------------------------------------------- Deadbull + kick
+
+  /**
+   * The tab going on a cold can: the aluminium gives with a hard tick, then
+   * the seal breaks and the carbonation lets go. The hiss is what sells it —
+   * the crack on its own just sounds like a light switch.
+   */
+  canCrack(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    // The tab: a sharp tick with a thin metallic ring behind it
+    this.noise(0.025, 'bandpass', 3400, 0.3, true, 4);
+    this.tone('triangle', 2600, 1500, 0.07, 0.05);
+    // Escaping gas, fading over half a second
+    this.noise(0.55, 'highpass', 5000, 0.13);
+    // Foam keeps ticking after the hiss has gone. Scattered in time, because
+    // evenly spaced ticks read as a machine rather than bubbles.
+    for (let i = 0; i < 7; i++) {
+      const at = t + 0.08 + Math.random() * 0.5;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.playbackRate.value = 1.6 + Math.random();
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 4500 + Math.random() * 3500;
+      f.Q.value = 6;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.04 + Math.random() * 0.03, at);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05);
+      src.connect(f).connect(g).connect(this.sfxBus);
+      src.start(at, Math.random());
+      src.stop(at + 0.08);
+    }
+  }
+
+  /**
+   * One swallow. A glug is an air column, so it climbs in pitch as the can
+   * empties — `index` says which gulp this is, and that alone is what keeps
+   * three in a row from sounding like the same sample three times.
+   */
+  gulp(index = 0): void {
+    const rise = 1 + index * 0.17;
+    this.tone('sine', 92 * rise, 235 * rise, 0.11, 0.17);
+    this.noise(0.06, 'lowpass', 620, 0.08);
+    this.tone('sine', 150, 70, 0.09, 0.06); // the throat, under the can
+  }
+
+  /**
+   * Crushing the empty. Thin aluminium doesn't thud, it buckles: a run of
+   * irregular creases, each a short bright crackle, over one dull give.
+   */
+  canCrush(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    this.noise(0.13, 'lowpass', 480, 0.4);
+    for (let i = 0; i < 9; i++) {
+      const at = t + Math.random() * 0.22;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.playbackRate.value = 1.2 + Math.random() * 1.2;
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 1100 + Math.random() * 2600;
+      f.Q.value = 2 + Math.random() * 2;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.22 + Math.random() * 0.18, at);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.03 + Math.random() * 0.04);
+      src.connect(f).connect(g).connect(this.sfxBus);
+      src.start(at, Math.random());
+      src.stop(at + 0.1);
+    }
+  }
+
+  /** The empty landing and rolling off: light, tinny, hollow. */
+  canClatter(distance: number): void {
+    const a = this.atten(distance, 20) * 0.8 + 0.15;
+    this.noise(0.05, 'bandpass', 2600, 0.34 * a, true, 2);
+    this.tone('triangle', 1900, 1400, 0.12, 0.1 * a);
+    this.noise(0.3, 'bandpass', 3400, 0.12 * a, true, 3);
+  }
+
+  /**
+   * Legs swinging through the air. A whoosh is a moving resonance rather
+   * than a noise burst — the band sweeps up as the boots accelerate past
+   * your ear and back down as they go away — so it's built by hand instead
+   * of going through noise(), which can't move its filter.
+   */
+  kickWhoosh(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const D = 0.26;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 1.6;
+    f.frequency.setValueAtTime(280, t);
+    f.frequency.exponentialRampToValueAtTime(1500, t + D * 0.45);
+    f.frequency.exponentialRampToValueAtTime(360, t + D);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + D * 0.45);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + D);
+    src.connect(f).connect(g).connect(this.sfxBus);
+    src.start(t, Math.random());
+    src.stop(t + D + 0.05);
+  }
+
+  /**
+   * Both boots into a chest. Blunter and much heavier than a bullet's flesh
+   * hit — the low end here is a whole body being moved, not a wound.
+   */
+  kickImpact(): void {
+    this.noise(0.05, 'lowpass', 260, 0.58);
+    this.noise(0.18, 'lowpass', 800, 0.26);
+    this.tone('sine', 140, 34, 0.24, 0.45);
+    this.noise(0.07, 'bandpass', 1500, 0.17, true, 1.5); // boot on cloth
+  }
+
+  /**
+   * Ravi's own back hitting the floor. No attenuation on this one: it is
+   * happening to the player, not somewhere across the room.
+   */
+  backLanding(): void {
+    this.noise(0.09, 'lowpass', 200, 0.4);
+    this.tone('sine', 95, 28, 0.3, 0.32);
+    this.noise(0.24, 'bandpass', 900, 0.13, true, 1.2); // the jacket
+  }
+
+  /** A boot dragging for purchase — him rolling up off the floor. */
+  scuff(): void {
+    this.noise(0.22, 'bandpass', 1400, 0.28, true, 1.1);
+    this.noise(0.1, 'lowpass', 600, 0.2);
+  }
+
   uiBeep(high = false): void {
     this.tone('square', high ? 1150 : 740, high ? 1150 : 740, 0.06, 0.06);
   }

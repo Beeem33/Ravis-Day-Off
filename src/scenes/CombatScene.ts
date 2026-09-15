@@ -10,6 +10,7 @@ import type { Enemy } from '../entities/Enemy';
 import type { ParticleManager } from '../fx/ParticleManager';
 import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 
 /** The parts of a level's data that the shared combat code touches. */
 export interface CombatLevel {
@@ -61,7 +62,11 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     dir: THREE.Vector3,
     byPlayer: boolean,
     headshot: boolean,
-    hitPart?: string
+    hitPart?: string,
+    /** How hard they are thrown. 1 is a bullet; a boot is about 2. */
+    impulseScale?: number,
+    /** `wound: false` for a melee kill — no bullet hole, and no blood thrown. */
+    opts?: { wound?: boolean; keepWeapon?: boolean }
   ): void;
 
   // ------------------------------------------------------------- warm-up
@@ -302,6 +307,62 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     }
   }
 
+  // ------------------------------------------------------------- drop kick
+
+  /**
+   * Nearest living enemy in front of Ravi and close enough to reach with a
+   * boot. Wider and a little longer than the knife's grab range — he is
+   * leaping at them, not reaching for them.
+   *
+   * Each level keeps its enemies differently, so they pass their own list.
+   */
+  protected kickTargetFrom(candidates: Enemy[]): Enemy | null {
+    if (!this.player.alive) return null;
+    const fwd = this.player.forwardDir();
+    let best: Enemy | null = null;
+    let bestD = 2.6;
+    for (const e of candidates) {
+      if (!e.alive || e.beingExecuted) continue;
+      const to = e.position.clone().sub(this.player.position);
+      if (Math.abs(to.y) > 1.2) continue; // same floor only
+      to.y = 0;
+      const d = to.length();
+      if (d > bestD || d < 0.05) continue;
+      if (to.normalize().dot(fwd) < 0.55) continue;
+      best = e;
+      bestD = d;
+    }
+    return best;
+  }
+
+  /**
+   * Both boots into a chest. The three numbers here are the whole trick:
+   *
+   * - The hit goes on the torso ragdoll body's exact centre, 1.27 above the
+   *   feet. That gives applyImpulse a zero lever arm, so the only rotation he
+   *   takes is the backward pitch the kick asks for. Aim at the chest SURFACE
+   *   instead and the torque off a steeply angled boot cartwheels him.
+   * - die() de-rates the vertical part of an impulse to 40%, so a boot meant
+   *   to throw him at about 33 degrees has to be aimed at 55.
+   * - die()'s own impulse is left at 1.2 — enough that he folds and spins
+   *   like a man who has been hit hard, but it is NOT what moves him. It
+   *   lands on the torso alone and the joints hand most of it straight to the
+   *   other ten bodies. The travel comes from launch() instead, which throws
+   *   every part of him at the same speed: about half a second of air, half a
+   *   metre up and three metres back before he lands and slides.
+   */
+  protected dropKickEnemy(enemy: Enemy): void {
+    const chest = enemy.position.clone();
+    chest.y += 1.27;
+    const fwd = this.player.forwardDir();
+    const boot = fwd.clone().multiplyScalar(0.547);
+    boot.y = 0.837;
+    this.killEnemy(enemy, chest, boot, true, false, 'torso', 1.2, { wound: false });
+    enemy.launch(new THREE.Vector3(fwd.x * 6.2, 4.6, fwd.z * 6.2));
+    this.ctx.audio.kickImpact();
+    this.ctx.bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 12, kind: 'impact' });
+  }
+
   // ------------------------------------------------------------------- gore
 
   /**
@@ -415,6 +476,63 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     const v = direction.clone().multiplyScalar(3.2 + Math.random()).add(this.player.velocity);
     body.velocity.set(v.x, v.y, v.z);
     body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+    this.addDebris(mesh, body);
+  }
+
+  /**
+   * The crushed Deadbull becomes a real object. Aluminium is almost weightless
+   * and very springy, so it gets its own contact material — on the world's
+   * default (restitution 0.12, tuned for draping ragdolls) an empty can lands
+   * like a bag of sand instead of skittering off under a desk.
+   */
+  private canMat: CANNON.Material | null = null;
+  protected dropCan(pose: {
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    velocity: THREE.Vector3;
+  }): void {
+    if (!this.canMat) {
+      this.canMat = new CANNON.Material('drinkCan');
+      this.world.addContactMaterial(
+        new CANNON.ContactMaterial(this.canMat, this.world.defaultMaterial, {
+          restitution: 0.55,
+          friction: 0.18
+        })
+      );
+    }
+    const { position, quaternion, velocity } = pose;
+    const mesh = DrinkViewmodel.crushedCan();
+    mesh.position.copy(position);
+    mesh.quaternion.copy(quaternion);
+
+    const body = new CANNON.Body({
+      mass: 0.016,
+      shape: new CANNON.Box(new CANNON.Vec3(0.042, 0.03, 0.042)),
+      position: new CANNON.Vec3(position.x, position.y, position.z),
+      material: this.canMat,
+      linearDamping: 0.03,
+      angularDamping: 0.12
+    });
+    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+    const v = velocity.clone().add(this.player.velocity);
+    body.velocity.set(v.x, v.y, v.z);
+    // A flicked can tumbles hard — it weighs nothing and he put a wrist into it
+    body.angularVelocity.set((Math.random() - 0.5) * 26, (Math.random() - 0.5) * 26, (Math.random() - 0.5) * 26);
+    // It rings every time it touches something, not once when it lands — an
+    // empty skittering across a floor is most of the joke. Gated on how hard
+    // the contact was, or a resting can chatters against the carpet forever,
+    // and rate-limited because cannon reports a bounce over several steps.
+    let lastRing = -1;
+    body.addEventListener('collide', (e: { contact: CANNON.ContactEquation }) => {
+      const speed = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if (speed < 0.8) return;
+      const now = this.world.time;
+      if (now - lastRing < 0.09) return;
+      lastRing = now;
+      this.ctx.audio.canClatter(
+        Math.hypot(body.position.x - this.player.position.x, body.position.z - this.player.position.z)
+      );
+    });
     this.addDebris(mesh, body);
   }
 

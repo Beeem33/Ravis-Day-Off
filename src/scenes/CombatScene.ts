@@ -11,6 +11,7 @@ import type { ParticleManager } from '../fx/ParticleManager';
 import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { HitmanVisual } from '../entities/HitmanVisual';
 import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import type { TakedownViewmodel } from '../entities/TakedownViewmodel';
 
@@ -96,6 +97,15 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     if (this.warmedUp) return;
     this.warmedUp = true;
 
+    // An agent, in case the level has none yet: a squad that arrives mid-way
+    // would otherwise compile the model's shaders the moment it came through
+    // the door. Parked under the floor; every hairstyle shows with the rest.
+    const probe = HitmanVisual.ready ? new HitmanVisual(HitmanVisual.lookFor(0)) : null;
+    if (probe) {
+      probe.model.position.set(0, -60, 0);
+      this.scene.add(probe.model);
+    }
+
     const hidden: THREE.Object3D[] = [];
     this.scene.traverse((o) => {
       // Lights are deliberately left alone: the number of VISIBLE lights is
@@ -134,6 +144,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     for (const o of hidden) o.visible = false;
     if (this.decals) this.decals.trimTo(nDecals);
     if (this.particles) this.particles.clear();
+    if (probe) this.scene.remove(probe.model);
   }
 
   // ------------------------------------------------------------- world setup

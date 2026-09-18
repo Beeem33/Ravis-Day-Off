@@ -22,12 +22,57 @@ export class GameEngine {
   private lastTime = 0;
   private elapsed = 0;
 
+  /**
+   * Render resolution, in device pixels per CSS pixel. A Retina screen at its
+   * full 2x is four times the pixels of 1x, and every lit pixel here runs
+   * thirty to forty point lights: at 2x the lights-out floor spent 45 ms a
+   * frame on the GPU, against 9 at 1x. So it starts at 1.25 and moves
+   * between 1 and 1.5 by how long frames are actually taking.
+   */
+  private scale: number;
+  private readonly scaleMin: number;
+  private readonly scaleMax: number;
+  private frameSum = 0;
+  private frameCount = 0;
+  private fastRuns = 0;
+
+  /** A second's worth of frame times at a time: step the resolution down if they run long, up if there is room. */
+  private adaptScale(frameSeconds: number): void {
+    if (frameSeconds > 0.25) return; // a stall or a hidden tab, not the render
+    this.frameSum += frameSeconds;
+    if (++this.frameCount < 60) return;
+    const avgMs = (this.frameSum / this.frameCount) * 1000;
+    this.frameSum = 0;
+    this.frameCount = 0;
+    let next = this.scale;
+    if (avgMs > 21) {
+      next = Math.max(this.scaleMin, this.scale - 0.25);
+      this.fastRuns = 0;
+    } else if (avgMs < 12.5) {
+      // Only after a few quick seconds in a row, so it does not see-saw
+      if (++this.fastRuns >= 3) {
+        next = Math.min(this.scaleMax, this.scale + 0.25);
+        this.fastRuns = 0;
+      }
+    } else {
+      this.fastRuns = 0;
+    }
+    if (next !== this.scale) {
+      this.scale = next;
+      this.renderer.setPixelRatio(next);
+    }
+  }
+
   constructor(
     container: HTMLElement,
     public readonly bus: EventBus
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const dpr = window.devicePixelRatio || 1;
+    this.scaleMin = Math.min(dpr, 1);
+    this.scaleMax = Math.min(dpr, 1.5);
+    this.scale = Math.min(dpr, 1.25);
+    this.renderer.setPixelRatio(this.scale);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Off: nothing casts any more. The weapon lights on the dark floor were
@@ -141,6 +186,9 @@ export class GameEngine {
       const now = performance.now();
       let dt = (now - this.lastTime) / 1000;
       this.lastTime = now;
+      // Not while a level is loading or warming its shaders: those frames are
+      // long for reasons that have nothing to do with the resolution
+      if (!this.pendingScene && !this.loadingCard) this.adaptScale(dt);
       dt = Math.min(dt, 1 / 20); // clamp hitches
       this.elapsed += dt;
       // A scene waiting to be built: hold off until the card has painted

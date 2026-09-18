@@ -2153,7 +2153,23 @@ export class Enemy {
     L.curl = this.curlL;
     d.kneel = this.kneelBlend;
     this.hitman!.sync(d);
+
+    // His face, which the block build painted on and the model has to move:
+    // a scream the instant the knife goes in or the punch lands, easing to a
+    // pained open mouth while it lasts; teeth set while he fights the grip or
+    // hangs on to the knife arm; and slack once he is dead.
+    let face = 0;
+    if (!this.alive) {
+      face = 0.3;
+    } else if (this.beingExecuted) {
+      if (this.stabCount + this.punchCount > 0) face = Math.max(0.5, Math.exp(-this.sinceHit * 1.6));
+      else face = (this.caughtAt >= 0 ? 0.28 : 0.16) + 0.08 * Math.abs(Math.sin(at * 7));
+    }
+    // Opens in a snap, closes slowly
+    this.faceOpen += (face - this.faceOpen) * Math.min(1, dt * (face > this.faceOpen ? 28 : 5));
+    this.hitman!.setScream(this.faceOpen);
   }
+  private faceOpen = 0;
 
   private animate(dt: number): void {
     if (this.flashTime > 0) this.flashTime -= dt;

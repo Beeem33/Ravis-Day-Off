@@ -437,12 +437,43 @@ export class HitmanVisual {
   private cull = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 1.25);
   private curlL = -1;
   private curlR = -1;
+  /** The face's "Scream" shape key, on each of its meshes. */
+  private screamMorphs: { inf: number[]; k: number }[] = [];
+  private screamNow = 0;
+
+  /** 0 a closed mouth and level brows .. 1 the jaw dropped wide, brows up in the middle. */
+  setScream(w: number): void {
+    const v = THREE.MathUtils.clamp(w, 0, 1);
+    if (Math.abs(v - this.screamNow) < 0.002) return;
+    this.screamNow = v;
+    for (const m of this.screamMorphs) m.inf[m.k] = v;
+  }
 
   constructor(look: HitmanLook) {
     const template = HitmanVisual.template;
     if (!template) throw new Error('HitmanVisual used before load()');
     this.model = cloneSkinned(template);
     this.model.name = 'Hitman';
+    // One skeleton for the whole man. The body comes in as a skinned mesh per
+    // material, and the clone gives each its own copy of the same 53 bones —
+    // so every agent recomputed and re-uploaded his bone matrices eleven times
+    // a frame. They share bones, inverses and bind pose, so they can share it.
+    let skeleton: THREE.Skeleton | null = null;
+    this.model.traverse((o) => {
+      const sm = o as THREE.SkinnedMesh;
+      if (!sm.isSkinnedMesh) return;
+      if (!skeleton) skeleton = sm.skeleton;
+      else if (sm.skeleton !== skeleton) {
+        sm.skeleton.dispose();
+        sm.bind(skeleton, sm.bindMatrix);
+      }
+      const k = sm.morphTargetDictionary?.Scream;
+      if (k !== undefined && sm.morphTargetInfluences) {
+        // Closed, whatever weight the file came with
+        sm.morphTargetInfluences[k] = 0;
+        this.screamMorphs.push({ inf: sm.morphTargetInfluences, k });
+      }
+    });
 
     const bones = new Map<string, THREE.Bone>();
     this.model.traverse((o) => {
@@ -551,8 +582,8 @@ export class HitmanVisual {
     add('Head', 'head', new THREE.SphereGeometry(1, 14, 10), new THREE.Vector3(0, 1.628, -0.004), undefined, new THREE.Vector3(0.082, 0.12, 0.1));
     drum('Neck', 'torso', 1.43, 1.53, 0.058, 0.058, 0.009);
     // Body: jacket over the chest, the waist, the hips and the skirt of it
-    drum('UpperChest', 'torso', 1.28, 1.47, 0.192, 0.122, 0.002);
-    drum('Chest', 'torso', 1.1, 1.28, 0.168, 0.11, 0.002);
+    drum('UpperChest', 'torso', 1.28, 1.47, 0.214, 0.126, 0.002);
+    drum('Chest', 'torso', 1.1, 1.28, 0.178, 0.114, 0.002);
     drum('Hips', 'torso', 0.84, 1.1, 0.182, 0.118, 0.004);
     for (const sd of ['L', 'R']) {
       const sh = P(`UpperArm_${sd}`);

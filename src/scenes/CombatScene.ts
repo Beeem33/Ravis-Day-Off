@@ -308,6 +308,21 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     }
   }
 
+  // -------------------------------------------------------------- takedown
+
+  /**
+   * Where the takedown's blade goes in: 1.1m up and 13cm to Ravi's right of
+   * the man's spine — measured off the knife in TakedownViewmodel, where the
+   * blade crosses the front of his torso. His right hand drives it into the
+   * side of the man on that half of the frame, so the blood, the wound and
+   * the way the body twists as it drops all have to come from that side too,
+   * not from the middle of his shirt.
+   */
+  protected knifeWound(victim: Enemy): THREE.Vector3 {
+    const f = this.player.forwardDir();
+    return victim.position.clone().add(new THREE.Vector3(-f.z * 0.13, 1.1, f.x * 0.13));
+  }
+
   // ------------------------------------------------------------- drop kick
 
   /**

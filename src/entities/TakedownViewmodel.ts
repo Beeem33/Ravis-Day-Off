@@ -2,16 +2,19 @@ import * as THREE from 'three';
 
 /**
  * TakedownViewmodel — Ravi's arms for the knife execution, parented to the
- * camera like the weapon viewmodels. The left arm reaches out and clamps the
- * side of the target's face while the right hand pulls a bowie knife from
- * the hip and, after a struggle, drives it up under the jaw.
+ * camera like the weapon viewmodels. The left hand reaches in and takes hold
+ * of him while the right pulls a bowie knife from the hip and, after a
+ * struggle, drives it into his side — the side on Ravi's right, so each arm
+ * stays on its own half of the frame and neither ever reaches across.
  *
  * The scene owns the choreography (locking the camera on the target); this
  * class only animates the arms and reports timeline events.
  */
 export class TakedownViewmodel {
   readonly root = new THREE.Group();
+  /** Left arm: the grab. */
   private armL = new THREE.Group();
+  /** Right arm: the knife. */
   private armR = new THREE.Group();
   private knife = new THREE.Group();
 
@@ -36,7 +39,10 @@ export class TakedownViewmodel {
 
     const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
     const sleeve = new THREE.MeshStandardMaterial({ color: 0x4d6f9c, roughness: 0.9 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0xb8bcc4, roughness: 0.25, metalness: 0.9 });
+    // Half as metallic as real steel would be. The scene has no environment
+    // map, so a 0.9-metal blade has almost nothing to reflect and renders
+    // near-black — the stab read as a dark stick going into a dark suit.
+    const steel = new THREE.MeshStandardMaterial({ color: 0xc4c8cf, roughness: 0.32, metalness: 0.45 });
     const darkSteel = new THREE.MeshStandardMaterial({ color: 0x3a3d44, roughness: 0.5, metalness: 0.7 });
     const wood = new THREE.MeshStandardMaterial({ color: 0x3f2a18, roughness: 0.85 });
 
@@ -62,9 +68,9 @@ export class TakedownViewmodel {
         }
       }
     };
-    // RIGHT hand does the grabbing (open fingers); LEFT hand holds the knife
-    mkArm(this.armL, false);
-    mkArm(this.armR, true);
+    // LEFT hand does the grabbing (open fingers); RIGHT hand holds the knife
+    mkArm(this.armR, false);
+    mkArm(this.armL, true);
 
     // Bowie knife in the right hand: broad clip-point blade, brass guard,
     // wooden handle. Blade runs along -Z with the edge up for the thrust.
@@ -91,10 +97,10 @@ export class TakedownViewmodel {
     // ICEPICK grip: the handle sits IN the fist and the blade exits the
     // pinky side — under the hand — so the overhand strike reads right-way-up.
     this.knife.position.set(0, -0.055, -0.025);
-    this.armL.add(this.knife);
+    this.armR.add(this.knife);
 
-    this.root.add(this.armL);
     this.root.add(this.armR);
+    this.root.add(this.armL);
   }
 
   start(): void {
@@ -140,73 +146,90 @@ export class TakedownViewmodel {
     const jy = (Math.sin(t * 11.4 + 0.8) * 0.6 + Math.sin(t * 8.9 + 3.0) * 0.4) * 0.012 * s;
     const jz = Math.sin(t * 9.6 + 1.5) * 0.012 * s;
 
-    // ---- RIGHT arm: from low off-screen up to clamp the face (screen left
-    // of centre — the left side of their face as Ravi sees it)
-    const gFrom = new THREE.Vector3(0.42, -0.5, -0.25);
+    // ---- LEFT arm: up from low off-screen LEFT to take hold of him, just
+    // left of centre. It used to swing in from the lower right, which only
+    // worked while the knife was on the left; with the knife on the right
+    // now, coming from that side would sweep it straight through the draw.
+    const gFrom = new THREE.Vector3(-0.42, -0.5, -0.25);
     const gGrab = new THREE.Vector3(-0.055, -0.03, -0.56);
     // The grab hand holds them up the whole time — and LETS GO at the release
     const reach = ease(c01(t / T.GRAB_T)) * (1 - ease(c01((t - T.RELEASE_T) / 0.3)));
     // After the release: drop back out of frame
     const out = ease(c01((t - (T.TOTAL_T - 0.55)) / 0.5));
-    this.armR.position.lerpVectors(gFrom, gGrab, reach);
-    this.armR.position.x += jx;
-    this.armR.position.y += jy;
-    this.armR.position.z += jz;
-    this.armR.rotation.set(-0.5 + 0.45 * reach + jy * 3, -(0.5 - 0.35 * reach), -(0.35 - 0.35 * reach));
+    this.armL.position.lerpVectors(gFrom, gGrab, reach);
+    this.armL.position.x += jx;
+    this.armL.position.y += jy;
+    this.armL.position.z += jz;
+    this.armL.rotation.set(-0.5 + 0.45 * reach + jy * 3, -(0.5 - 0.35 * reach), -(0.35 - 0.35 * reach));
     if (reach >= 1) this.event('grab');
 
-    // ---- LEFT arm: draws the knife low at the hip and drives it STRAIGHT
-    // forward into the stomach — no wind-up over the shoulder, no crossing
-    // the grab arm — then keeps it buried there until the release.
-    const kPocket = new THREE.Vector3(-0.3, -0.55, -0.2);
-    const kReady = new THREE.Vector3(-0.28, -0.29, -0.34); // low and wide, blade forward
-    const kCock = new THREE.Vector3(-0.32, -0.34, -0.22); // a short pull-back before the thrust
-    const kStab = new THREE.Vector3(-0.13, -0.3, -0.58); // buried in the stomach
+    // ---- RIGHT arm: draws the knife from his right hip and drives it
+    // straight into the side of the man that is on Ravi's right — the same
+    // side it came from, then keeps it buried there until the release. The
+    // yaw on this arm is what makes it read as a RIGHT arm: it swings the
+    // forearm's back end out toward the right shoulder. Put the hand left of
+    // centre with that yaw (as it used to be) and the forearm has to come up
+    // out of the middle of the screen, which is the reach-across that looked
+    // wrong.
+    //
+    // Heights are against the takedown camera, which looks down about 18° at
+    // his face from 0.95m: -0.2 at this depth is his waist, not his crotch.
+    // The pitch on the arm is positive so its back end drops toward the elbow
+    // at Ravi's hip — an underhand thrust, blade rising slightly into him.
+    const kPocket = new THREE.Vector3(0.32, -0.55, -0.22);
+    const kReady = new THREE.Vector3(0.3, -0.24, -0.42); // low and wide, blade forward
+    const kCock = new THREE.Vector3(0.34, -0.29, -0.32); // a short pull-back before the thrust
+    const kStab = new THREE.Vector3(0.19, -0.2, -0.58); // buried in his side
     if (t < T.DRAW_T) {
-      this.armL.position.copy(kPocket);
-      this.armL.rotation.set(-0.25, 0.2, 0);
+      this.armR.position.copy(kPocket);
+      this.armR.rotation.set(0.1, 0.3, 0);
       this.knife.rotation.set(-0.15, 0, 0);
     } else if (t < T.RAISE_T) {
       // Draw to the low ready, blade levelling out toward them
       const k = ease(c01((t - T.DRAW_T) / 0.3));
       this.event('draw');
-      this.armL.position.lerpVectors(kPocket, kReady, k);
-      this.armL.position.x += jx * 0.7;
-      this.armL.position.y += jy * 0.7;
-      this.armL.rotation.set(-0.25 + 0.1 * k + jy * 2, 0.2, -0.08 * k);
-      this.knife.rotation.set(-0.15 + 0.05 * k, 0.4 * k, 0); // flat rolled to camera so the blade reads
+      this.armR.position.lerpVectors(kPocket, kReady, k);
+      this.armR.position.x += jx * 0.7;
+      this.armR.position.y += jy * 0.7;
+      this.armR.rotation.set(0.1 + 0.1 * k + jy * 2, 0.3, -0.08 * k);
+      // Rolled a touch so the flat catches the camera; with the arm's own yaw
+      // that's plenty for the blade to read
+      this.knife.rotation.set(-0.15 + 0.05 * k, 0.1 * k, 0);
     } else if (t < T.STAB_T) {
       // A short pull-back — the piston loading
       const k = ease(c01((t - T.RAISE_T) / (T.STAB_T - T.RAISE_T)));
-      this.armL.position.lerpVectors(kReady, kCock, k);
-      this.armL.position.x += jx * 0.7;
-      this.armL.position.y += jy * 0.7;
-      this.armL.rotation.set(-0.15 + jy * 2, 0.2, -0.08);
-      this.knife.rotation.set(-0.1, 0.4, 0);
+      this.armR.position.lerpVectors(kReady, kCock, k);
+      this.armR.position.x += jx * 0.7;
+      this.armR.position.y += jy * 0.7;
+      this.armR.rotation.set(0.2 + jy * 2, 0.3, -0.08);
+      this.knife.rotation.set(-0.1, 0.1, 0);
     } else if (t < T.RELEASE_T) {
       // The thrust: straight in at stomach height — then it STAYS there,
       // hand grinding on the handle while he holds them up.
       const k = ease(c01((t - T.STAB_T) / 0.13));
-      this.armL.position.lerpVectors(kCock, kStab, k);
-      this.armL.position.x += jx;
-      this.armL.position.y += jy;
+      this.armR.position.lerpVectors(kCock, kStab, k);
+      this.armR.position.x += jx;
+      this.armR.position.y += jy;
       const held = t > T.STAB_T + 0.13;
       const grind = held ? Math.sin(t * 9) * 0.05 + Math.sin(t * 14.7) * 0.025 : 0;
       // Leaning his weight onto the buried knife
       const lean = held ? Math.sin((t - T.STAB_T) * 2.1) * 0.02 : 0;
-      this.armL.position.z += lean;
-      this.armL.rotation.set(-0.12 + grind, 0.2 - 0.08 * k, -0.08 - grind * 0.5);
+      this.armR.position.z += lean;
+      this.armR.rotation.set(0.2 + 0.1 * k + grind, 0.3 + 0.08 * k, -0.08 - grind * 0.5);
       // Blade level, nose dipped a touch — driving INTO the gut
-      this.knife.rotation.set(-0.1 - 0.15 * k + grind * 0.7, 0.4 - 0.4 * k, 0);
+      // The wrist turns out as it drives, against the arm's inward yaw, so the
+      // blade goes into his side rather than angling across to his navel —
+      // the forearm still reads as coming from the right shoulder.
+      this.knife.rotation.set(-0.1 - 0.15 * k + grind * 0.7, 0.1 - 0.32 * k, 0);
       if (k >= 1) this.event('stab');
     } else {
-      // Let go: the right hand releases, the knife is wrenched back out —
+      // Let go: the left hand releases, the knife is wrenched back out —
       // and THAT is when they drop.
       const k = ease(c01((t - T.RELEASE_T) / 0.3));
       this.event('release');
-      this.armL.position.lerpVectors(kStab, new THREE.Vector3(-0.28, -0.38, -0.3), k);
-      this.armL.rotation.set(-0.5 - 0.3 * k, 0.2, -0.1);
-      this.knife.rotation.set(-0.05 - 0.45 * k, 0, -0.1 * k);
+      this.armR.position.lerpVectors(kStab, new THREE.Vector3(0.3, -0.36, -0.34), k);
+      this.armR.rotation.set(0.3 - 0.5 * k, 0.38, -0.1);
+      this.knife.rotation.set(-0.05 - 0.45 * k, -0.22 * (1 - k), -0.1 * k);
     }
 
     // Recover: everything sinks out of the frame together

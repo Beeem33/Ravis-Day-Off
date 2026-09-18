@@ -201,9 +201,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
         if (victim && victim.alive) {
           if (i === 0) {
             // In the gut: the air goes out of him and he folds
-            victim.punched();
-            audio.punchImpact(false);
-            audio.enemyGrunt('oof');
+            this.winded(victim);
           } else {
             this.knockOut(victim);
           }

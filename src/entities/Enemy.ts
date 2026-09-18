@@ -1469,6 +1469,7 @@ export class Enemy {
   private static _wp = new THREE.Vector3();
   private static _ha = new THREE.Vector3();
   private static _hb = new THREE.Vector3();
+  private static _gut = new THREE.Vector3();
 
   /**
    * Held for a knife takedown.
@@ -1501,22 +1502,26 @@ export class Enemy {
     // Holding it off he hunches over the arm, forcing it aside — his arms
     // only reach 0.6m and the knife is that long again, so leaning back from
     // it would put Ravi's wrist out of his reach.
-    const goal = this.stabCount >= 2 ? 1 : this.stabCount ? 0.72 : this.punchCount ? 0.6 : caught ? 0.25 : 0;
+    const goal = this.stabCount >= 2 ? 1 : this.stabCount ? 0.72 : this.punchCount ? 1 : caught ? 0.25 : 0;
     this.fold += (goal - this.fold) * Math.min(1, dt * (hurt ? 11 : 4));
     const f = this.fold;
     const jolt = hurt ? Math.exp(-this.sinceHit * 10) : 0; // the instant it lands
+    // Winded by the fist rather than stabbed: he doubles right over it, at the
+    // hips as well, and it has to SHOW — his head drops a hand's width, into
+    // the middle of the frame where the hook is going to find it
+    const gut = this.punchCount && !this.stabCount ? f : 0;
 
     // Most of the fold is at the waist, with the seat pushed well back. Put it
     // in the hips instead and his head swings a quarter of a metre toward the
     // camera, filling the shot; this way it comes about 13cm.
-    const hipFlex = 0.08 * f;
+    const hipFlex = 0.08 * f + 0.2 * gut;
     const waist = -0.12 * (1 - f) + 0.36 * f + 0.1 * jolt + buck * 0.35; // negative leans away from the grab
     // Round toward his left, where the blade goes in — a fist in the middle
     // just folds him straight
     const curl = this.stabCount ? 0.2 * f + Math.sin(s * 5.1) * 0.03 * f : 0;
     const knees = 0.26 * Math.max(0, f);
     const sag = 0.82 * (1 - Math.cos(knees)); // exactly what bent knees take off his height
-    const hipsBack = 0.1 * Math.max(0, f);
+    const hipsBack = 0.1 * Math.max(0, f) + 0.05 * gut;
 
     // Pelvis tips forward about the hip line and drops with the knees
     const hc = Enemy._hc.set(0, 0.82 - sag, hipsBack);
@@ -1536,8 +1541,15 @@ export class Enemy {
     above(0, 1.585, this.head.position);
     // Head thrown back with the scream, then down to look at what's in him
     const scream = hurt ? Math.exp(-this.sinceHit * 3.5) : 0;
-    // Holding the knife off, he watches it: chin down.
-    const tilt = hurt ? 0.34 * scream - 0.34 * f * (1 - scream) : caught ? -0.3 : 0.3 + buck * 0.35;
+    // Holding the knife off, he watches it: chin down. Winded, the chin goes
+    // right down on his chest — no scream, there's no air to do it with.
+    const tilt = gut
+      ? -0.3 - 0.12 * jolt
+      : hurt
+        ? 0.34 * scream - 0.34 * f * (1 - scream)
+        : caught
+          ? -0.3
+          : 0.3 + buck * 0.35;
     const roll = Math.sin(s * 9) * 0.08 * (hurt ? 0.4 : 1);
     this.head.quaternion.copy(qu).multiply(Enemy._qd.setFromEuler(Enemy._eu.set(tilt, 0, roll)));
 
@@ -1573,6 +1585,13 @@ export class Enemy {
         ? ease(c01((s - this.firstStab) / 0.16))
         : 0;
     if (caught) a.lerp(this.holdKnife2, toKnife);
+    // Winded, his right hand comes off the knife arm for where the fist went
+    // in, once the fist is out of the way
+    const toGut = gut ? ease(c01((this.sinceHit - 0.12) / 0.2)) : 0;
+    if (toGut > 0) {
+      const g = Enemy._gut.set(0.07, -0.1, -0.17).applyQuaternion(this.torso.quaternion).add(this.torso.position);
+      a.lerp(g, toGut);
+    }
     a.x += Math.sin(s * 13) * pry;
     a.y += Math.sin(s * 11 + 1) * pry;
     const b = Enemy._hb.copy(this.holdB).lerp(this.holdKnife, toKnife);
@@ -1641,14 +1660,16 @@ export class Enemy {
 
   /**
    * The front of his stomach, off the torso's own frame so it goes wherever
-   * the chest does — leaning back, folded over. The upper stomach, just under
-   * the ribs, and a little to his right: where a left hand thrown by someone
-   * facing him lands. Any lower and, from as close as the takedown camera is,
-   * the punch lands behind his own arms and the bottom letterbox bar.
+   * the chest does — leaning back, folded over. The pit of the stomach, just
+   * under the breastbone, and a little to his right: where a left hand thrown
+   * by someone facing him lands. High for a gut punch on purpose: from as
+   * close as the takedown camera is, anything lower lands in the tangle of
+   * his hands on the knife arm, dark fist on dark suit at the bottom of the
+   * frame, and it isn't seen. Here it lands on the white of his shirt.
    */
   bellyWorld(out = new THREE.Vector3()): THREE.Vector3 {
     this.torso.updateWorldMatrix(true, false);
-    return this.torso.localToWorld(out.set(0.04, -0.05, -0.14));
+    return this.torso.localToWorld(out.set(0.035, 0.03, -0.15));
   }
 
   /** Where the head actually is — kneeling, sitting, hunched — not a standing eye height. */

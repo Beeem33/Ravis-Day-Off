@@ -340,10 +340,27 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
    */
   protected holdOn(vm: TakedownViewmodel, victim: Enemy): void {
     const { _holdA: a, _holdB: b, _holdK: k, _holdK2: k2 } = CombatScene;
-    vm.gap = Math.hypot(this.player.position.x - victim.position.x, this.player.position.z - victim.position.z);
+    vm.applyJolt(this.player.camera);
+    vm.gap =Math.hypot(this.player.position.x - victim.position.x, this.player.position.z - victim.position.z);
     vm.holdPoints(a, b, k, k2);
     victim.clutch(a, b, k, k2);
     if (victim.alive) vm.aimAt(victim.bellyWorld(CombatScene._belly), victim.headWorld(CombatScene._head));
+  }
+
+  /**
+   * The counter's first punch, in the pit of his stomach: he folds round it,
+   * and the air comes out of him — the grunt and a burst of spit toward Ravi.
+   */
+  protected winded(victim: Enemy): void {
+    victim.punched();
+    this.ctx.audio.punchImpact(false);
+    this.ctx.audio.enemyGrunt('oof');
+    const f = this.player.forwardDir();
+    const mouth = victim.headWorld().addScaledVector(f, -0.1);
+    mouth.y -= 0.01;
+    const dir = f.clone().negate().setY(-0.35).normalize();
+    const floor = this.surfaceBelow(mouth, 3);
+    this.particles.spit(mouth, dir, floor ? floor.point.y + 0.02 : -1);
   }
 
   /**

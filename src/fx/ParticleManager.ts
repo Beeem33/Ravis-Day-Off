@@ -284,6 +284,17 @@ export class ParticleManager {
     }
   }
 
+  /**
+   * The air punched out of a man: a short burst of spit from the mouth, pale
+   * and fast, falling almost at once. What makes a gut punch read as landing.
+   */
+  spit(pos: THREE.Vector3, dir: THREE.Vector3, floorY: number): void {
+    for (let i = 0; i < 18; i++) {
+      const c = new THREE.Color().setHSL(0.1, 0.1, 0.55 + Math.random() * 0.2);
+      this.solid.spawn(pos, this.scatter(dir, 0.9, 2.6), 0.25 + Math.random() * 0.3, 0.02 + Math.random() * 0.03, c, 11, 1.2, floorY);
+    }
+  }
+
   /** Sparks off a short: a burst of hot blue-white points that fall and die. */
   electricSparks(pos: THREE.Vector3, count = 10): void {
     const up = new THREE.Vector3(0, 1, 0);

@@ -59,13 +59,16 @@ export class TakedownViewmodel {
   static readonly TAIL = 0.7;
   // The counter. The thrust starts as always and he catches it 30% of the
   // way, a hand's breadth short of him; Ravi's left comes off his chest as he
-  // steps in, and throws two.
+  // steps in, and throws two. Each punch is held cocked in frame before it
+  // goes — at 8 frames a swing, one that starts off-screen is never seen.
   static readonly CATCH_T = 1.32;
   static readonly LETGO_T = 1.45;
-  static readonly JAB_T = 1.58;
-  static readonly JAB_HIT = 1.66;
-  static readonly HOOK_T = 1.86;
-  static readonly HOOK_HIT = 1.95;
+  static readonly STEP_T = 1.7; // stepped in, fist chambered low
+  static readonly JAB_T = 1.78;
+  static readonly JAB_HIT = 1.88;
+  static readonly JAB_OUT = 2.02; // left in him while he folds over it
+  static readonly HOOK_T = 2.32; // wound up out wide, level with his head
+  static readonly HOOK_HIT = 2.44;
 
   /**
    * Where the knife arm is caught, found by sweeping it against his reach.
@@ -79,7 +82,9 @@ export class TakedownViewmodel {
    */
   private static readonly CATCH = {
     at: new THREE.Vector3(0.08, -0.26, -0.74),
-    push: new THREE.Vector3(0.04, -0.04, 0), // he forces it aside and down
+    // He forces it aside and down — low enough that the tangle of hands is
+    // under his stomach, not in front of it where the gut punch has to land
+    push: new THREE.Vector3(0.06, -0.08, 0),
     twist: -1.45,
     armYaw: 0.4
   };
@@ -94,6 +99,9 @@ export class TakedownViewmodel {
   /** His stomach and head in the arms' own space, fed by aimAt() every frame. */
   private belly = new THREE.Vector3(0, -0.26, -0.62);
   private head = new THREE.Vector3(0, 0.02, -0.72);
+  /** The grab hand's fingers: splayed to clamp, curled into a fist to punch. */
+  private fingers: THREE.Mesh[] = [];
+  private gripHand: THREE.Mesh | null = null;
   private static _q = new THREE.Quaternion();
   private static _d = new THREE.Vector3();
   private static readonly FWD = new THREE.Vector3(0, 0, -1);
@@ -124,12 +132,14 @@ export class TakedownViewmodel {
       const hand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.09), skin);
       group.add(hand);
       if (handOpen) {
+        this.gripHand = hand;
         // Fingers splayed forward — a clamping grip, not a fist
         for (let i = 0; i < 4; i++) {
           const finger = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.05, 0.016), skin);
           finger.position.set(-0.015 + i * 0.012, 0.045, -0.03 + (i === 0 || i === 3 ? 0.008 : 0));
           finger.rotation.x = -0.35;
           group.add(finger);
+          this.fingers.push(finger);
         }
       }
     };
@@ -178,11 +188,30 @@ export class TakedownViewmodel {
     this.stabs = variant === 'double' ? 2 : variant === 'single' ? 1 : 0;
     // On a counter the hook is the end of it: that's when the jitter stops
     this.releaseT = variant === 'double' ? T.RELEASE2_T : variant === 'single' ? T.RELEASE_T : T.HOOK_HIT;
-    this.totalT = variant === 'counter' ? T.HOOK_HIT + 0.75 : this.releaseT + T.TAIL;
+    this.totalT = variant === 'counter' ? T.HOOK_HIT + 0.8 : this.releaseT + T.TAIL;
     this.active = true;
     this.t = 0;
     this.fired.clear();
     this.root.visible = true;
+    this.makeFist(0);
+  }
+
+  /**
+   * 0 the grab's open clamp .. 1 a fist: the hand balls up wider than the
+   * wrist and the fingers roll forward into a row of knuckles along its top
+   * edge. From behind, that lumpy knob is what says "fist" — a plain box the
+   * width of the forearm read as the end of a plank.
+   */
+  private makeFist(k: number): void {
+    this.gripHand?.scale.set(1 + 0.22 * k, 1 + 0.1 * k, 1 - 0.08 * k);
+    this.fingers.forEach((f, i) => {
+      const x = (-0.015 + i * 0.012) * (1 + 0.25 * k);
+      const zOpen = -0.03 + (i === 0 || i === 3 ? 0.008 : 0);
+      const zFist = -0.046 + (i === 1 || i === 2 ? -0.004 : 0);
+      f.position.set(x, 0.045 + (0.03 - 0.045) * k, zOpen + (zFist - zOpen) * k);
+      f.rotation.x = -0.35 + (1.25 + 0.35) * k;
+      f.scale.set(1 + 0.35 * k, 1, 1 + 0.25 * k);
+    });
   }
 
   /** Hard stop (player died mid-takedown) — arms vanish, no 'done' event. */
@@ -204,8 +233,35 @@ export class TakedownViewmodel {
   get standOff(): number {
     if (this.variant !== 'counter') return 0.95;
     const T = TakedownViewmodel;
-    const k = Math.min(1, Math.max(0, (this.t - T.LETGO_T) / (T.JAB_T - T.LETGO_T)));
+    const k = Math.min(1, Math.max(0, (this.t - T.LETGO_T) / (T.STEP_T - T.LETGO_T)));
     return 0.95 - 0.21 * k * k * (3 - 2 * k);
+  }
+
+  /**
+   * Ravi's weight going into each punch, as a nudge on the camera: a lunge
+   * and a dip into the gut punch, a turn to the right and a roll with the
+   * hook. Builds over the swing, snaps at the hit, dies away. Call after the
+   * player has set the camera for the frame; it's rewritten every frame, so
+   * nothing accumulates.
+   */
+  applyJolt(camera: THREE.Camera): void {
+    if (!this.active || this.variant !== 'counter') return;
+    const T = TakedownViewmodel;
+    const t = this.t;
+    const pulse = (t0: number, t1: number) => {
+      if (t < t0) return 0;
+      if (t < t1) {
+        const u = (t - t0) / (t1 - t0);
+        return u * u;
+      }
+      return Math.exp(-(t - t1) * 8);
+    };
+    const jab = pulse(T.JAB_T, T.JAB_HIT);
+    const hook = pulse(T.HOOK_T, T.HOOK_HIT);
+    camera.translateZ(-0.05 * jab - 0.035 * hook);
+    camera.rotateX(-0.03 * jab);
+    camera.rotateY(-0.07 * hook);
+    camera.rotateZ(-0.035 * hook);
   }
 
   /** Where his stomach and head are this frame, in world space — the two fists aim at these. */
@@ -297,14 +353,16 @@ export class TakedownViewmodel {
   }
 
   /**
-   * The counter's left hand: off his chest and chambered low, a short
-   * straight shot into his stomach, back out wide, then a hook swung round
-   * into the side of his head. Both accelerate into what they hit — a punch
-   * that eases into its target reads as a push.
+   * The counter's left hand: off his chest and balled into a fist, drawn
+   * back low on the left of the frame and HELD there a moment so you see it
+   * coming, then a short straight shot into his stomach that stays in him
+   * while he folds over it. Out wide again, cocked beside Ravi's head in
+   * frame, and a hook swung round into the side of his. Both accelerate into
+   * what they hit — a punch that eases into its target reads as a push.
    *
    * The fist is aimed from where his body actually is (aimAt), because by
-   * the time it lands he has leaned back from the knife and been folded by
-   * the first one; the knuckles are 4.5cm in front of the arm's origin, so
+   * the time it lands he has leaned from the knife and been folded by the
+   * first one; the knuckles are 4.5cm in front of the arm's origin, so
    * that's where the arm stops short of the target.
    */
   private counterLeft(t: number, grab: THREE.Vector3): void {
@@ -313,43 +371,62 @@ export class TakedownViewmodel {
     const ease = (x: number) => x * x * (3 - 2 * x);
     const V = THREE.Vector3;
     const K = 0.045;
-    const load1 = new V(-0.2, -0.27, -0.3);
-    const load2 = new V(-0.36, -0.04, -0.36);
-    const jabDir = new V().subVectors(this.belly, load1).normalize();
+    // Chambered low on the left, well inside the frame; the last few cm of
+    // the hold are the fist drawing back, loading
+    const load1 = new V(-0.17, -0.11, -0.38);
+    const cock1 = new V(-0.19, -0.12, -0.33);
+    // Cocked out wide beside his own head for the hook — at the frame's edge,
+    // not past it
+    const load2 = new V(-0.3, 0.03, -0.42);
+    const cock2 = new V(-0.34, 0.05, -0.38);
+    const jabDir = new V().subVectors(this.belly, cock1).normalize();
     const jabAt = new V().copy(this.belly).addScaledVector(jabDir, -K);
     // The near side of his head, and a control point out wide of it so the
     // fist comes round rather than straight in
     const temple = new V(this.head.x - 0.12, this.head.y, this.head.z);
-    const ctrl = new V(temple.x - 0.24, temple.y + 0.02, temple.z + 0.08);
+    const ctrl = new V(temple.x - 0.2, temple.y + 0.02, temple.z + 0.06);
     const hookDir = new V().subVectors(temple, ctrl).normalize();
     const hookAt = new V().copy(temple).addScaledVector(hookDir, -K);
     // The grab's own facing, so letting go doesn't snap the wrist round
     const grabDir = TakedownViewmodel._d.set(0, 0, -1).applyEuler(new THREE.Euler(-0.05, -0.15, 0));
+    const toCtrl = new V().subVectors(ctrl, cock2).normalize();
 
+    this.makeFist(ease(c01((t - T.LETGO_T) / 0.12)));
     const pos = new V();
     const dir = new V();
-    if (t < T.JAB_T) {
-      const k = ease(c01((t - T.LETGO_T) / (T.JAB_T - T.LETGO_T)));
+    if (t < T.STEP_T) {
+      // Off his chest and back to the chamber as Ravi steps in
+      const k = ease(c01((t - T.LETGO_T) / (T.STEP_T - T.LETGO_T)));
       pos.lerpVectors(grab, load1, k);
       dir.lerpVectors(grabDir, jabDir, k);
-    } else if (t < T.JAB_HIT + 0.07) {
+    } else if (t < T.JAB_T) {
+      const k = ease(c01((t - T.STEP_T) / (T.JAB_T - T.STEP_T)));
+      pos.lerpVectors(load1, cock1, k);
+      dir.copy(jabDir);
+    } else if (t < T.JAB_OUT) {
       this.event('swing', 0);
       const k = c01((t - T.JAB_T) / (T.JAB_HIT - T.JAB_T));
-      pos.lerpVectors(load1, jabAt, k * k);
+      pos.lerpVectors(cock1, jabAt, k * k * k);
       dir.copy(jabDir);
-      if (k >= 1) this.event('punch', 0);
+      if (k >= 1) {
+        this.event('punch', 0);
+        // Driven on in as he folds round it, riding his stomach down
+        pos.addScaledVector(jabDir, 0.03 * ease(c01((t - T.JAB_HIT) / 0.06)));
+      }
     } else if (t < T.HOOK_T) {
-      // Back off him and out wide, turning the fist to come round
-      const k = ease(c01((t - T.JAB_HIT - 0.07) / (T.HOOK_T - T.JAB_HIT - 0.07)));
-      pos.lerpVectors(jabAt, load2, k);
-      dir.lerpVectors(jabDir, new V().subVectors(ctrl, load2).normalize(), k);
+      // Back out of him and out wide, turning the fist to come round — then
+      // held there, loading
+      const k = ease(c01((t - T.JAB_OUT) / (T.HOOK_T - 0.07 - T.JAB_OUT)));
+      const c = ease(c01((t - (T.HOOK_T - 0.07)) / 0.07));
+      pos.lerpVectors(jabAt, load2, k).lerp(cock2, c);
+      dir.lerpVectors(jabDir, toCtrl, k);
     } else if (t < T.HOOK_HIT) {
       this.event('swing', 1);
       const u = c01((t - T.HOOK_T) / (T.HOOK_HIT - T.HOOK_T));
       const e = u * u;
       // Quadratic Bézier, and its tangent for which way the knuckles face
-      pos.copy(load2).multiplyScalar((1 - e) * (1 - e)).addScaledVector(ctrl, 2 * e * (1 - e)).addScaledVector(hookAt, e * e);
-      dir.copy(ctrl).sub(load2).multiplyScalar(1 - e).add(new V().subVectors(hookAt, ctrl).multiplyScalar(e));
+      pos.copy(cock2).multiplyScalar((1 - e) * (1 - e)).addScaledVector(ctrl, 2 * e * (1 - e)).addScaledVector(hookAt, e * e);
+      dir.copy(ctrl).sub(cock2).multiplyScalar(1 - e).add(new V().subVectors(hookAt, ctrl).multiplyScalar(e));
     } else {
       this.event('punch', 1);
       // Through where his head was, then away

@@ -28,9 +28,11 @@ const GRIP_L = grip([-0.057, -0.012, 0.074], [0.458, 0.186, -0.87], [0.958, 0.08
  * The support hand racking the slide, in the gun's own frame with the slide
  * home: over the top from the left, palm on the back of the slide, the four
  * fingers wrapped down its right side across the rear serrations, the thumb
- * down the left. It rides the slide back and forward as it is hauled.
+ * down the left. It rides the slide back and forward as it is hauled. The
+ * forearm runs in at 45° to the back of the hand, not square to it, so the
+ * wrist is cocked over the slide rather than folded down onto it.
  */
-const GRIP_RACK = grip([-0.071, 0.115, 0.051], [0.938, -0.218, 0.268], [-0.316, -0.948, -0.034], [-0.647, -0.539, 0.539], {
+const GRIP_RACK = grip([-0.071, 0.115, 0.051], [0.938, -0.218, 0.268], [-0.316, -0.948, -0.034], [-0.907, -0.309, 0.286], {
   fingers: [[31, 59, 30], [38, 59, 30], [34, 59, 30], [27, 59, 30]],
   thumb: [0.14, 1, 0.2],
   spread: -8

@@ -30,9 +30,13 @@ const gl = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3
  * right round the pistol grip with the trigger finger in the guard, the left
  * under the handguard, fingers up its right side and thumb along its left.
  */
-const GRIP_R = grip([0.03, -0.012, 0.065], [-0.12, 0.28, -0.95], [-1, 0, -0.1], [0.15, -0.2, 0.3], {
-  fingers: [[4, 25, 20], [85, 85, 35], [88, 85, 35], [90, 85, 35]],
-  thumb: [0.3, 0.2, 0.1]
+const GRIP_R = grip([0.03, -0.012, 0.075], [-0.12, 0.28, -0.95], [-1, 0, -0.1], [0.15, -0.2, 0.3], {
+  fingers: [[-10, 10, 30], [85, 85, 35], [88, 85, 35], [90, 85, 35]],
+  thumb: [0.3, 0.2, 0.1],
+  // The trigger sits low for the grip: the index angles down into the guard
+  // with its pad on the trigger's face, the tip barely past it. Level with
+  // the knuckles it ran inside the receiver and came out of the gun's left side.
+  splay: [-35, 0, 0, 0]
 });
 const GRIP_L = grip([-0.054, 0.008, 0.037], [0.8, 0, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
   fingers: [[60, 70, 30], [62, 70, 30], [64, 70, 32], [66, 70, 34]],

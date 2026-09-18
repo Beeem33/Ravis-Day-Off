@@ -92,7 +92,6 @@ export class ShotgunViewmodel {
   private reloadT = 0;
   private shellsToLoad = 0;
   private shellsDone = 0;
-  private endAfterShell = false;
   static readonly SHELL_TIME = 0.55;
   onReloadEvent: ((e: 'shellIn' | 'done') => void) | null = null;
 
@@ -103,13 +102,15 @@ export class ShotgunViewmodel {
     this.reloadT = 0;
     this.shellsToLoad = count;
     this.shellsDone = 0;
-    this.endAfterShell = false;
     return true;
   }
 
   /** Stop after the shell currently being seated (classic pump-gun interrupt). */
   cancelReload(): void {
-    if (this.reloading) this.endAfterShell = true;
+    if (!this.reloading) return;
+    // Finish the shell already in hand and stop: pin the target now, so it
+    // doesn't creep up one shell at a time as each one goes in
+    this.shellsToLoad = Math.min(this.shellsToLoad, this.shellsDone + 1);
   }
 
   constructor(camera: THREE.PerspectiveCamera) {
@@ -365,7 +366,18 @@ export class ShotgunViewmodel {
     const S = ShotgunViewmodel.SHELL_TIME;
 
     const idx = Math.floor(this.reloadT / S);
-    const totalWanted = this.endAfterShell ? Math.min(this.shellsDone + 1, this.shellsToLoad) : this.shellsToLoad;
+    const totalWanted = this.shellsToLoad;
+    // A shell counts on a thin slice of its cycle; a frame longer than that
+    // slice (anything under ~70fps) could step clean over it, and a shell
+    // never counted meant the tube never filled and the reload never ended.
+    // Any shell whose cycle has gone by is in, whether or not a frame landed
+    // on its moment.
+    while (this.shellsDone < Math.min(idx, totalWanted)) {
+      this.shellsDone++;
+      this.loadingShell.visible = false;
+      this.loadingShell.scale.setScalar(1);
+      this.onReloadEvent?.('shellIn');
+    }
     if (idx >= totalWanted && this.shellsDone >= totalWanted) {
       // Ease back out over the last 0.2s
       const outK = ease(c01((this.reloadT - totalWanted * S) / 0.2));

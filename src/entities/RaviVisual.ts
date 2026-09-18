@@ -23,12 +23,14 @@ export type Curl3 = [number, number, number];
 /**
  * A hand shape. `fingers` is index, middle, ring, pinky: extra bend in
  * degrees at the knuckle, middle and end joints. `thumb` is the same for the
- * thumb's three bones, as fractions of 60°. `spread` fans the fingers (deg).
+ * thumb's three bones, as fractions of 60°. `spread` fans the fingers (deg);
+ * `splay` swings each finger on its own at the knuckle, + toward the thumb.
  */
 export interface HandShape {
   fingers: [Curl3, Curl3, Curl3, Curl3];
   thumb: Curl3;
   spread?: number;
+  splay?: [number, number, number, number];
 }
 
 export const HAND = {
@@ -471,7 +473,7 @@ export class RaviRig {
     const hr = RaviVisual.handRest![side];
     const sgn = side === 'l' ? 1 : -1;
     FINGERS.forEach((f, i) => {
-      const sp = ({ index: 1.0, middle: 0.2, ring: -0.6, pinky: -1.2 } as const)[f] * (shape.spread ?? 0);
+      const sp = ({ index: 1.0, middle: 0.2, ring: -0.6, pinky: -1.2 } as const)[f] * (shape.spread ?? 0) + (shape.splay?.[i] ?? 0);
       for (let j = 0; j < 3; j++) {
         const nm = `${f}_0${j + 1}_${side}`;
         const d = restDir(nm);
@@ -696,7 +698,8 @@ export function mixShape(a: HandShape, b: HandShape, k: number): HandShape {
   return {
     fingers: [l3(a.fingers[0], b.fingers[0]), l3(a.fingers[1], b.fingers[1]), l3(a.fingers[2], b.fingers[2]), l3(a.fingers[3], b.fingers[3])],
     thumb: l3(a.thumb, b.thumb),
-    spread: l(a.spread ?? 0, b.spread ?? 0)
+    spread: l(a.spread ?? 0, b.spread ?? 0),
+    splay: [0, 1, 2, 3].map((i) => l(a.splay?.[i] ?? 0, b.splay?.[i] ?? 0)) as [number, number, number, number]
   };
 }
 

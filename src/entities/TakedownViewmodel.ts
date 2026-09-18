@@ -85,6 +85,11 @@ export class TakedownViewmodel {
   static readonly JAB_OUT = 2.02; // left in him while he folds over it
   static readonly HOOK_T = 2.32; // wound up out wide, level with his head
   static readonly HOOK_HIT = 2.44;
+  /** The hook's follow-through, from the hit to the arm run out. */
+  static readonly FOLLOW = 0.26;
+  /** What the hook swings round: Ravi's shoulder line, in the arms' space. */
+  private static readonly HOOK_PIVOT = new THREE.Vector3(-0.02, -0.18, 0.12);
+  private static readonly UP = new THREE.Vector3(0, 1, 0);
 
   /**
    * Where the knife arm is caught, found by sweeping it against his reach.
@@ -210,7 +215,7 @@ export class TakedownViewmodel {
     this.stabs = variant === 'double' ? 2 : variant === 'single' ? 1 : 0;
     // On a counter the hook is the end of it: that's when the jitter stops
     this.releaseT = variant === 'double' ? T.RELEASE2_T : variant === 'single' ? T.RELEASE_T : T.HOOK_HIT;
-    this.totalT = variant === 'counter' ? T.HOOK_HIT + 0.8 : this.releaseT + T.TAIL;
+    this.totalT = variant === 'counter' ? T.HOOK_HIT + 1.0 : this.releaseT + T.TAIL;
     this.active = true;
     this.t = 0;
     this.fired.clear();
@@ -271,19 +276,22 @@ export class TakedownViewmodel {
     if (!this.active || this.variant !== 'counter') return;
     const T = TakedownViewmodel;
     const t = this.t;
-    const pulse = (t0: number, t1: number) => {
+    const pulse = (t0: number, t1: number, decay: number) => {
       if (t < t0) return 0;
       if (t < t1) {
         const u = (t - t0) / (t1 - t0);
         return u * u;
       }
-      return Math.exp(-(t - t1) * 8);
+      return Math.exp(-(t - t1) * decay);
     };
-    const jab = pulse(T.JAB_T, T.JAB_HIT);
-    const hook = pulse(T.HOOK_T, T.HOOK_HIT);
+    const jab = pulse(T.JAB_T, T.JAB_HIT, 8);
+    // The hook's turn is the body going round with the follow-through, so it
+    // carries on past the hit before it settles
+    const hook = pulse(T.HOOK_T, T.HOOK_HIT, 3.5);
+    const turn = hook * (1 + 0.6 * Math.min(1, Math.max(0, (t - T.HOOK_HIT) / T.FOLLOW)));
     camera.translateZ(-0.05 * jab - 0.035 * hook);
     camera.rotateX(-0.03 * jab);
-    camera.rotateY(-0.07 * hook);
+    camera.rotateY(-0.07 * turn);
     camera.rotateZ(-0.035 * hook);
   }
 
@@ -452,11 +460,17 @@ export class TakedownViewmodel {
       dir.copy(ctrl).sub(cock2).multiplyScalar(1 - e).add(new V().subVectors(hookAt, ctrl).multiplyScalar(e));
     } else {
       this.event('punch', 1);
-      // Through where his head was, then away
-      const k = ease(c01((t - T.HOOK_HIT) / 0.14));
-      pos.copy(hookAt).addScaledVector(hookDir, 0.1 * k);
-      pos.y -= 0.12 * ease(c01((t - T.HOOK_HIT - 0.14) / 0.3));
-      dir.copy(hookDir);
+      // Follow-through: the fist carries on round the same arc, through
+      // where his head was, turning about Ravi's own shoulder line the way a
+      // hook does — fast off the hit, slowing as the arm runs out and the
+      // body finishes turning — then drops away
+      const u = c01((t - T.HOOK_HIT) / T.FOLLOW);
+      const sweep = 0.55 * (1 - (1 - u) * (1 - u) * (1 - u));
+      const pivot = TakedownViewmodel.HOOK_PIVOT;
+      pos.copy(hookAt).sub(pivot).applyAxisAngle(TakedownViewmodel.UP, -sweep).add(pivot);
+      pos.y -= 0.03 * sweep; // a hook finishes a little low
+      pos.y -= 0.14 * ease(c01((t - T.HOOK_HIT - T.FOLLOW - 0.08) / 0.3));
+      dir.copy(hookDir).applyAxisAngle(TakedownViewmodel.UP, -sweep * 1.15);
     }
     this.armL.position.copy(pos);
     this.armL.quaternion.setFromUnitVectors(TakedownViewmodel.FWD, dir.normalize());

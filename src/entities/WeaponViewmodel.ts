@@ -1,20 +1,39 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
-import { FirstPersonArms, grip } from './RaviVisual';
+import { FirstPersonArms, grip, mixGrip, type Grip } from './RaviVisual';
 
 /**
  * How Ravi's hands sit on the two box anchors below (each in the box's own
  * frame): the shooting hand wrapped round the grip, trigger finger in the
  * guard; the support hand cupped under it, thumb along the frame.
+ *
+ * The shooting hand is fitted to the Glock's own geometry: the web of the
+ * hand high under the back of the slide, the trigger finger laid along the
+ * right of the frame and bent in at the middle joint so its pad is on the
+ * face of the trigger, the other three wrapped across the front strap under
+ * the guard, the thumb along the left side. It used to sit a hand's depth
+ * too low, the finger hooked under the guard and out the other side.
  */
-const GRIP_R = grip([0.029, -0.017, 0.078], [-0.15, 0.12, -0.98], [-1, 0, -0.1], [0.16, -0.22, 0.34], {
-  fingers: [[6, 30, 22], [85, 85, 35], [88, 85, 35], [90, 85, 35]],
-  thumb: [0.3, 0.2, 0.1]
+const GRIP_R = grip([0.0128, -0.0058, 0.0717], [0.172, 0.077, -0.982], [-0.912, -0.003, -0.411], [0.16, -0.22, 0.34], {
+  fingers: [[-5, 39, 63], [72, 57, 35], [73, 57, 35], [70, 57, 35]],
+  thumb: [0.2, -0.09, 0.1],
+  spread: 3.4
 });
 const GRIP_L = grip([-0.057, -0.012, 0.074], [0.458, 0.186, -0.87], [0.958, 0.083, 0.2], [-0.2, -0.2, 0.26], {
   fingers: [[45, 60, 30], [50, 62, 30], [55, 64, 32], [60, 66, 34]],
   thumb: [0.2, 0.15, 0.1]
+});
+/**
+ * The support hand racking the slide, in the gun's own frame with the slide
+ * home: over the top from the left, palm on the back of the slide, the four
+ * fingers wrapped down its right side across the rear serrations, the thumb
+ * down the left. It rides the slide back and forward as it is hauled.
+ */
+const GRIP_RACK = grip([-0.071, 0.115, 0.051], [0.938, -0.218, 0.268], [-0.316, -0.948, -0.034], [-0.647, -0.539, 0.539], {
+  fingers: [[31, 59, 30], [38, 59, 30], [34, 59, 30], [27, 59, 30]],
+  thumb: [0.14, 1, 0.2],
+  spread: -8
 });
 
 /**
@@ -69,6 +88,8 @@ export class WeaponViewmodel {
   private slidePull = 0; // 0..1 while the left hand racks the slide
   /** Ravi's own arms, laid onto the box hands each frame. */
   private arms: FirstPersonArms;
+  private static _m = new THREE.Matrix4();
+  private static _q = new THREE.Quaternion();
   /** Hook for the scene: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done'. */
   onReloadEvent: ((e: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done') => void) | null = null;
   /** True while the emote borrows the left hand — hides the support hand. */
@@ -211,6 +232,32 @@ export class WeaponViewmodel {
       }
     }
     return [rotX, rotY, rotZ, posX, posY, posZ];
+  }
+
+  /**
+   * The support hand's grip this frame, in its box's frame: cupped under the
+   * shooting hand, except through the rack, where it goes over onto the
+   * slide, holds it all the way back and forward, and comes off again.
+   */
+  private leftGrip(): Grip {
+    if (!this.reloading) return GRIP_L;
+    const t = this.reloadT;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    const k = t < 1.18 ? ease(c01((t - 1.0) / 0.18)) : t < 1.43 ? 1 : 1 - ease(c01((t - 1.43) / 0.18));
+    if (k <= 0) return GRIP_L;
+    // Gun frame into the box's, the wrist carried back with the slide
+    this.supportHand.updateMatrix();
+    const m = WeaponViewmodel._m.copy(this.supportHand.matrix).invert();
+    const q = WeaponViewmodel._q.setFromRotationMatrix(m);
+    const rack: Grip = {
+      wrist: GRIP_RACK.wrist.clone().setZ(GRIP_RACK.wrist.z + this.slide.position.z).applyMatrix4(m),
+      along: GRIP_RACK.along.clone().applyQuaternion(q),
+      palm: GRIP_RACK.palm.clone().applyQuaternion(q),
+      toward: GRIP_RACK.toward.clone().applyQuaternion(q),
+      shape: GRIP_RACK.shape
+    };
+    return k >= 1 ? rack : mixGrip(GRIP_L, rack, k);
   }
 
   constructor(camera: THREE.PerspectiveCamera) {
@@ -416,6 +463,7 @@ export class WeaponViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.set('l', this.supportHand, this.leftGrip());
     this.arms.update();
 
     // ---- Muzzle flash decay

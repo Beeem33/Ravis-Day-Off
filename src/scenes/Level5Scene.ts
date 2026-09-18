@@ -141,10 +141,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
   private drink!: DrinkViewmodel;
   /** Drop kick on Q. */
   private dropKick!: DropKickViewmodel;
-  /** Who the kick was aimed at, and the slide it drags Ravi along. */
+  /** Who the kick was aimed at when Q went down. */
   private kickVictim: Enemy | null = null;
-  private kickFrom: THREE.Vector3 | null = null;
-  private kickTo: THREE.Vector3 | null = null;
   private hud!: FPSHUD;
   private dialogue!: DialogueBox;
 
@@ -265,8 +263,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
         audio.scuff();
       } else if (e === 'done') {
         this.player.cinematic = false;
-        this.kickFrom = null;
-        this.kickTo = null;
+        this.endKickRun();
       }
     };
 
@@ -1004,8 +1001,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.dropKick.abort();
     this.player.cinematic = false;
     this.kickVictim = null;
-    this.kickFrom = null;
-    this.kickTo = null;
+    this.endKickRun();
   }
 
   /** Hands full: a can in one of them, or both boots off the floor. */
@@ -1051,23 +1047,13 @@ export class Level5Scene extends CombatScene<Level5Data> {
         this.player.cinematic = true; // the kick owns the camera until he's up
         this.player.aiming = false;
         this.kickVictim = this.kickTarget();
-        if (this.kickVictim) {
-          // Close to about a boot's length off him. Only ever a short slide
-          // toward someone already stood in the open, so it can skip collision
-          // the way the cutscene does without putting Ravi inside a wall.
-          const away = this.player.position.clone().sub(this.kickVictim.position).setY(0).normalize();
-          this.kickFrom = this.player.position.clone();
-          this.kickTo = this.kickVictim.position.clone().addScaledVector(away, 1.05);
-          this.kickTo.y = this.player.position.y;
-        }
+        this.beginKickRun(this.kickVictim);
       }
     }
     // The water and the breaker hand it back themselves, on their way to
     // taking the camera; this is the one that is nobody else's job
     if (this.dropKick.engaged && !this.player.alive) this.cancelKick();
-    if (this.dropKick.engaged && this.kickFrom && this.kickTo) {
-      this.player.position.lerpVectors(this.kickFrom, this.kickTo, this.dropKick.lunge);
-    }
+    this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
 
     const aiming =

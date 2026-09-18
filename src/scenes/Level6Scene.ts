@@ -91,10 +91,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
   private drink!: DrinkViewmodel;
   /** Drop kick on Q. */
   private dropKick!: DropKickViewmodel;
-  /** Who the kick was aimed at, and the slide it drags Ravi along. */
+  /** Who the kick was aimed at when Q went down. */
   private kickVictim: Enemy | null = null;
-  private kickFrom: THREE.Vector3 | null = null;
-  private kickTo: THREE.Vector3 | null = null;
   private hands!: CaptiveHands;
   private fill!: THREE.PointLight;
   private hud!: FPSHUD;
@@ -211,8 +209,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
         audio.scuff();
       } else if (e === 'done') {
         this.player.cinematic = false;
-        this.kickFrom = null;
-        this.kickTo = null;
+        this.endKickRun();
       }
     };
     this.hands = new CaptiveHands(this.player.camera);
@@ -388,28 +385,16 @@ export class Level6Scene extends CombatScene<Level6Data> {
         this.player.cinematic = true; // the kick owns the camera until he's up
         this.player.aiming = false;
         this.kickVictim = this.kickTarget();
-        if (this.kickVictim) {
-          // Close to about a boot's length off him. Only ever a short slide
-          // toward someone already stood in the open, so it can skip collision
-          // the way the walk out of the chair does without putting Ravi inside
-          // the desk.
-          const away = this.player.position.clone().sub(this.kickVictim.position).setY(0).normalize();
-          this.kickFrom = this.player.position.clone();
-          this.kickTo = this.kickVictim.position.clone().addScaledVector(away, 1.05);
-          this.kickTo.y = this.player.position.y;
-        }
+        this.beginKickRun(this.kickVictim);
       }
     }
     if (this.dropKick.engaged && !this.player.alive) {
       this.dropKick.abort();
       this.player.cinematic = false;
       this.kickVictim = null;
-      this.kickFrom = null;
-      this.kickTo = null;
+      this.endKickRun();
     }
-    if (this.dropKick.engaged && this.kickFrom && this.kickTo) {
-      this.player.position.lerpVectors(this.kickFrom, this.kickTo, this.dropKick.lunge);
-    }
+    this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
     // Both hands are busy — or holding a drink — so nothing else can happen
     const busy = this.drink.engaged || this.dropKick.engaged;

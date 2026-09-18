@@ -308,8 +308,37 @@ export class FPSPlayer {
     return false;
   }
 
+  /**
+   * Scripted travel with the level still solid — the drop kick carrying him
+   * on after he leaves the floor. Walls stop him exactly as they stop a walk,
+   * but nothing else in update() runs: no step-up, because he is in the air
+   * or on his back and not climbing a stair, and no going over an edge. The
+   * kick's camera is authored against a floor under him, and gravity is off
+   * while it plays, so a slide off the mezzanine would leave him lying on
+   * thin air until he got up.
+   */
+  shove(dx: number, dz: number, colliders: Collider[]): void {
+    const x = this.position.x;
+    const z = this.position.z;
+    this.moveAxis(dx, 0, colliders, false);
+    this.moveAxis(dz, 2, colliders, false);
+    if (!this.floorUnder(colliders)) {
+      this.position.x = x;
+      this.position.z = z;
+    }
+  }
+
+  /** Anything solid in the 30cm under his feet, near enough to his centre to stand on. */
+  private floorUnder(colliders: Collider[]): boolean {
+    const p = this.position;
+    return this.collides(
+      new THREE.Box3(new THREE.Vector3(p.x - 0.15, p.y - 0.3, p.z - 0.15), new THREE.Vector3(p.x + 0.15, p.y - 0.005, p.z + 0.15)),
+      colliders
+    );
+  }
+
   /** Move along one horizontal axis; try stepping up low obstacles (stairs). */
-  private moveAxis(delta: number, axis: 0 | 2, colliders: Collider[]): void {
+  private moveAxis(delta: number, axis: 0 | 2, colliders: Collider[], allowStep = true): void {
     if (Math.abs(delta) < 1e-8) return;
     const pos = this.position;
     const key = axis === 0 ? 'x' : 'z';
@@ -333,7 +362,7 @@ export class FPSPlayer {
     // Attempt step-up (stairs / thresholds; much higher while vaulting)
     const stepH = blockedTop - pos.y;
     const stepLimit = this.vaultTimer > 0 ? 1.25 : STEP_UP;
-    if ((this.grounded || this.vaultTimer > 0) && stepH > 0 && stepH <= stepLimit) {
+    if (allowStep && (this.grounded || this.vaultTimer > 0) && stepH > 0 && stepH <= stepLimit) {
       const stepped = pos.clone();
       stepped.y = blockedTop + 0.001;
       if (!this.collides(this.box(this.height, stepped, 'horizontal', axis), colliders)) {

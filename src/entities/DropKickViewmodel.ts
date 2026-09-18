@@ -123,15 +123,54 @@ export class DropKickViewmodel {
   }
 
   /**
-   * 0..1 of the way through the lunge. The scene slides Ravi toward his
-   * target by this, so the leap covers real ground — the legs alone would
-   * just be an animation played standing still.
+   * 0..1 of the way from the coil to the boots landing. With a target in
+   * front of him the scene uses this as a floor on his progress, so however
+   * slowly he came in he still arrives at the chest on the impact frame.
    */
   get lunge(): number {
     if (!this.active) return 0;
     const D = DropKickViewmodel;
     const k = Math.min(1, Math.max(0, (this.t - D.COIL_T) / (D.IMPACT_T - D.COIL_T)));
     return k * k * (3 - 2 * k);
+  }
+
+  /** True from the frame the boots land — before it, a target is still ahead of him. */
+  get pastImpact(): boolean {
+    return this.active && this.t >= DropKickViewmodel.IMPACT_T;
+  }
+
+  /** The hop itself, in m/s: what moves a kick thrown from a standing start at all. */
+  private static readonly PUSH = 1.8;
+
+  /**
+   * How fast he is travelling forward right now, in m/s, given the speed he
+   * came in at. A drop kick off a sprint should cover ground; one from a
+   * standstill should still leave the floor going somewhere.
+   *
+   * - Coil: he plants and the weight drops, bleeding off a quarter of it.
+   * - Leap: back up to most of his run, plus the hop.
+   * - In the air after contact: a connection hands most of his momentum to
+   *   the man he hit, so he keeps about a third; a whiff keeps going and only
+   *   slows as he tips over backwards.
+   * - On his back: a skid, not a stop — exponential, so it bleeds out over a
+   *   quarter of a second rather than ending in a wall of friction.
+   */
+  travel(entry: number): number {
+    if (!this.active) return 0;
+    const D = DropKickViewmodel;
+    const P = D.PUSH;
+    const t = this.t;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    const air = (k: number) => (this.hit ? 0.35 : 0.8 - 0.3 * k) * (entry + P);
+    if (t < D.COIL_T) return entry * (1 - 0.3 * ease(c01(t / D.COIL_T)));
+    if (t < D.IMPACT_T) {
+      const k = ease(c01((t - D.COIL_T) / (D.IMPACT_T - D.COIL_T)));
+      return entry * (0.7 + 0.15 * k) + P * k;
+    }
+    if (t < D.LAND_T) return air(c01((t - D.IMPACT_T) / (D.LAND_T - D.IMPACT_T)));
+    if (t < D.RISE_T) return air(1) * Math.exp(-7 * (t - D.LAND_T));
+    return 0;
   }
 
   /** 0..1 shake for the scene to spend on whatever it likes. */

@@ -11,6 +11,7 @@ import type { ParticleManager } from '../fx/ParticleManager';
 import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
 
 /** The parts of a level's data that the shared combat code touches. */
 export interface CombatLevel {
@@ -333,6 +334,61 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       bestD = d;
     }
     return best;
+  }
+
+  /**
+   * The ground a kick covers. Null when none is under way.
+   * - dir: horizontal, fixed at the press — at the man if there is one,
+   *   otherwise wherever Ravi was facing.
+   * - entry: his speed along dir at the press. This is the sprint.
+   * - reach: how far he may travel before the boots land (to a boot's length
+   *   off the man's chest), or -1 with nobody there to stop short of.
+   * - gone: how far along dir he has got.
+   */
+  private kickRun: { dir: THREE.Vector3; entry: number; reach: number; gone: number } | null = null;
+
+  /**
+   * Call on the frame Q goes down, BEFORE player.update(): the kick sets
+   * player.cinematic, and the cinematic branch zeroes his velocity on the very
+   * next update — read it any later and every kick starts from a standstill.
+   */
+  protected beginKickRun(victim: Enemy | null): void {
+    const p = this.player;
+    const dir = p.forwardDir();
+    let reach = -1;
+    if (victim) {
+      const to = victim.position.clone().sub(p.position).setY(0);
+      const d = to.length();
+      if (d > 0.05) dir.copy(to).multiplyScalar(1 / d);
+      reach = Math.max(0, d - 1.05);
+    }
+    // Only the part of his speed that is going the way he kicks: a strafe
+    // doesn't throw him forward, and backpedalling into a kick shouldn't
+    // throw him backwards.
+    const entry = Math.max(0, p.velocity.x * dir.x + p.velocity.z * dir.z);
+    this.kickRun = { dir, entry, reach, gone: 0 };
+  }
+
+  /** Carry him along for this frame. Call where the scene steps the kick, before player.update(). */
+  protected runKick(kick: DropKickViewmodel, dt: number): void {
+    const run = this.kickRun;
+    if (!run || !kick.engaged) return;
+    let step = kick.travel(run.entry) * dt;
+    if (run.reach >= 0 && !kick.pastImpact) {
+      // Somebody's in front of him. Go where the momentum takes him, but be
+      // at a boot's length by the impact frame however slowly he came in —
+      // and never past it, however fast. There is no body collision between
+      // Ravi and the enemies, so without that cap a sprint would carry him
+      // straight through the man he is trying to kick.
+      const want = Math.min(run.reach, Math.max(run.gone + step, run.reach * kick.lunge));
+      step = want - run.gone;
+    }
+    run.gone += step;
+    this.player.shove(run.dir.x * step, run.dir.z * step, this.level.colliders);
+  }
+
+  protected endKickRun(): void {
+    this.kickRun = null;
   }
 
   /**

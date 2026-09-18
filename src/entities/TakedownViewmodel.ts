@@ -1,8 +1,24 @@
 import * as THREE from 'three';
+import { FirstPersonArms, HAND, grip, mixGrip } from './RaviVisual';
 
 /** One stab, two, or the counter: he catches the knife and gets two punches instead. */
 export type TakedownVariant = 'single' | 'double' | 'counter';
 export type TakedownEvent = 'grab' | 'draw' | 'stab' | 'caught' | 'swing' | 'punch' | 'release' | 'done';
+
+/**
+ * Ravi's hands on the takedown's anchors. The right is a fist round the
+ * bowie's handle (in the knife's frame), knuckles across, blade out of the
+ * little-finger side, so it turns with the knife. The left (in its arm's
+ * frame) is flat on the man's chest, fingers up, and balls into a fist with
+ * the knuckles leading when the counter's punches come.
+ */
+const GRIP_KNIFE = grip([0.075, 0.026, 0], [-1, 0, 0], [0, -1, 0], [0.75, -0.1, 0.65], HAND.fist);
+const GRIP_CLAMP = grip([0, -0.035, 0.03], [0, 0.9, -0.4], [0, -0.4, -0.9], [0, -0.2, 1], {
+  fingers: [[18, 22, 10], [16, 20, 10], [18, 22, 10], [20, 24, 12]],
+  thumb: [0.2, 0.1, 0.1],
+  spread: 8
+});
+const GRIP_FIST = grip([0, 0, 0.045], [0, 0.1, -1], [0, -1, -0.1], [0, -0.05, 1], HAND.fist);
 
 /**
  * TakedownViewmodel — Ravi's arms for the knife execution, parented to the
@@ -105,6 +121,8 @@ export class TakedownViewmodel {
   private static _q = new THREE.Quaternion();
   private static _d = new THREE.Vector3();
   private static readonly FWD = new THREE.Vector3(0, 0, -1);
+  /** Ravi's own arms, laid onto the two arm anchors each frame. */
+  private arms: FirstPersonArms;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -176,6 +194,10 @@ export class TakedownViewmodel {
 
     this.root.add(this.armR);
     this.root.add(this.armL);
+
+    // Ravi's real arms ride the knife and the grab arm; the boxes stop drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('r', this.knife, GRIP_KNIFE).set('l', this.armL, GRIP_CLAMP);
+    this.arms.replaces(skin, sleeve);
   }
 
   /**
@@ -203,6 +225,7 @@ export class TakedownViewmodel {
    * width of the forearm read as the end of a plank.
    */
   private makeFist(k: number): void {
+    this.arms?.set('l', this.armL, mixGrip(GRIP_CLAMP, GRIP_FIST, k));
     this.gripHand?.scale.set(1 + 0.22 * k, 1 + 0.1 * k, 1 - 0.08 * k);
     this.fingers.forEach((f, i) => {
       const x = (-0.015 + i * 0.012) * (1 + 0.25 * k);
@@ -565,6 +588,7 @@ export class TakedownViewmodel {
       this.root.position.y = 0;
       this.root.rotation.x = 0;
     }
+    this.arms.update();
 
     if (t >= this.totalT) {
       this.active = false;

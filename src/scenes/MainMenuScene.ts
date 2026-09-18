@@ -5,6 +5,31 @@ import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { CRTPass } from '../fx/CRTShader';
 import { MenuUI } from '../ui/MenuUI';
+import { RaviVisual, HAND, type HandShape, type RaviRig, type SeatPose } from '../entities/RaviVisual';
+
+const V3 = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+/**
+ * How the modelled Ravi sits for the poster, in the scene's own frame (he
+ * faces the camera down +z, his right hand on −x): on the front of the seat,
+ * bowed over his knees, feet planted wide.
+ */
+const POSTER_SEAT = {
+  hips: V3(0, 0.6, -0.14),
+  lean: [8, 12, 14, 12, -6, -18],
+  legs: {
+    r: { ankle: V3(-0.27, 0.08, 0.27), knee: V3(-0.35, 0.5, 1), turn: -8 },
+    l: { ankle: V3(0.27, 0.08, 0.27), knee: V3(0.35, 0.5, 1), turn: 8 }
+  }
+};
+/** How high his hands rest, forearms along his thighs. */
+const HANDS_Y = 0.66;
+/** His shooting hand round the pistol's grip, in the pistol's frame (muzzle −Z, slide up). */
+const POSTER_GUN_GRIP = {
+  wrist: V3(0.029, -0.069, 0.14),
+  along: V3(-0.15, 0.331, -0.93).normalize(),
+  palm: V3(-1, 0.022, -0.098).normalize(),
+  shape: { fingers: [[20, 40, 22], [85, 85, 35], [88, 85, 35], [90, 85, 35]], thumb: [0.3, 0.2, 0.1] } as HandShape
+};
 
 /**
  * MainMenuScene — the poster shot. Ravi sits square to the camera in an
@@ -24,6 +49,12 @@ export class MainMenuScene implements GameScene {
   private ravi!: THREE.Group;
   private head!: THREE.Group;
   private hands!: THREE.Group;
+  /** The pistol in his hand; his fingers close round its grip. */
+  private pistol!: THREE.Group;
+  /** Where his loose left hand hangs, over the other knee. */
+  private looseHand!: THREE.Object3D;
+  /** The modelled Ravi, posed each frame from the groups above; null until it loads. */
+  private rig: RaviRig | null = null;
   private spot!: THREE.SpotLight;
   private mouse = { x: 0, y: 0 };
   private mouseHandler = (e: MouseEvent): void => {
@@ -203,7 +234,8 @@ export class MainMenuScene implements GameScene {
     // Right hand: a fist around the pistol grip, the gun resting on the
     // thigh with the muzzle tipped down past the knee
     this.hands = new THREE.Group();
-    this.hands.position.set(0.26, 0.74, 0.42);
+    // His right hand is on −x: he faces the camera
+    this.hands.position.set(-0.24, HANDS_Y, 0.34);
     const fist = new THREE.Mesh(new RoundedBoxGeometry(0.09, 0.1, 0.11, 3, 0.032), skin);
     this.hands.add(fist);
     for (let i = 0; i < 4; i++) {
@@ -223,16 +255,73 @@ export class MainMenuScene implements GameScene {
     grip.rotation.x = 0.25;
     pistol.add(grip);
     // Muzzle down-forward, like the reference
-    pistol.position.set(0.005, 0.015, 0.02);
-    pistol.rotation.set(-0.85, -0.12, 0);
+    pistol.position.set(-0.005, 0.015, 0.02);
+    pistol.rotation.set(-0.85, 0.12, 0);
     this.hands.add(pistol);
+    this.pistol = pistol;
     this.ravi.add(this.hands);
 
     // Left hand hangs loose over the other knee
     const lHand = new THREE.Mesh(new RoundedBoxGeometry(0.085, 0.12, 0.095, 3, 0.03), skin);
-    lHand.position.set(-0.26, 0.7, 0.44);
+    lHand.position.set(0.24, HANDS_Y - 0.04, 0.37);
     lHand.rotation.x = 0.35;
     this.ravi.add(lHand);
+    this.looseHand = lHand;
+
+    // The modelled Ravi takes over from the blocks as soon as he has loaded:
+    // everything above but the pistol stops drawing, and stays as the frame
+    // his pose is read from
+    RaviVisual.whenReady(() => {
+      const keep = new Set<THREE.Object3D>();
+      pistol.traverse((o) => keep.add(o));
+      this.ravi.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh && !keep.has(o)) o.visible = false;
+      });
+      this.rig = RaviVisual.rig('body');
+      this.ravi.add(this.rig.root);
+      this.poseRavi();
+    });
+  }
+
+  /**
+   * Sit the model down and hang its hands where the blocks' are: the head
+   * nods with this.head, the gun hand closes on the pistol wherever
+   * this.hands has it, the left hangs off the far knee.
+   */
+  private poseRavi(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    this.ravi.updateMatrixWorld(true);
+    const inRavi = (o: THREE.Object3D, v: THREE.Vector3): THREE.Vector3 => this.ravi.worldToLocal(o.localToWorld(v.clone()));
+    const dirIn = (o: THREE.Object3D, v: THREE.Vector3): THREE.Vector3 =>
+      inRavi(o, v).sub(inRavi(o, new THREE.Vector3())).normalize();
+    const g = POSTER_GUN_GRIP;
+    const lean = [...POSTER_SEAT.lean];
+    lean[5] += THREE.MathUtils.radToDeg(this.head.rotation.x - 0.32);
+    const roll = [0, 0, 0, 0, 0, THREE.MathUtils.radToDeg(this.head.rotation.z)];
+    const pose: SeatPose = {
+      hips: POSTER_SEAT.hips,
+      lean,
+      roll,
+      legs: POSTER_SEAT.legs,
+      arms: {
+        r: {
+          wrist: inRavi(this.pistol, g.wrist),
+          along: dirIn(this.pistol, g.along),
+          palm: dirIn(this.pistol, g.palm),
+          elbow: V3(-1, -0.4, -0.5),
+          shape: g.shape
+        },
+        l: {
+          wrist: inRavi(this.looseHand, V3(0, 0.05, -0.02)),
+          along: dirIn(this.looseHand, V3(0, -0.8, 0.6)),
+          palm: dirIn(this.looseHand, V3(-1, 0, 0)),
+          elbow: V3(1, -0.4, -0.5),
+          shape: HAND.relaxed
+        }
+      }
+    };
+    rig.seat(pose);
   }
 
   // -------------------------------------------------------------- lifecycle
@@ -276,7 +365,8 @@ export class MainMenuScene implements GameScene {
     this.head.rotation.x = 0.32 + breath * 0.015;
     this.head.rotation.z = Math.sin(time * 0.13) * 0.015;
     this.hands.rotation.z = Math.sin(time * 0.4) * 0.02;
-    this.hands.position.y = 0.74 + breath * 0.006;
+    this.hands.position.y = HANDS_Y + breath * 0.006;
+    this.poseRavi();
 
     // The lamp above swings by a hair, the way hanging lights do
     this.spot.position.x = Math.sin(time * 0.31) * 0.05;

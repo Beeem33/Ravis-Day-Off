@@ -1,6 +1,17 @@
 import * as THREE from 'three';
 import type { FPSPlayer } from './FPSPlayer';
 import { deadbullWrap } from '../environment/OfficeProps';
+import { FirstPersonArms, grip } from './RaviVisual';
+
+/**
+ * Ravi's right hand round the can (in the can's frame, rim up): back of the
+ * hand to the right, fingers round the far side, thumb across the near face
+ * angled up toward the tab.
+ */
+const GRIP_R = grip([0.035, -0.02, 0.07], [0.45, 0.35, -0.82], [-0.7, 0, -0.45], [0.2, -0.45, 0.85], {
+  fingers: [[45, 50, 25], [48, 50, 25], [52, 50, 25], [56, 50, 25]],
+  thumb: [0.05, 0.1, 0.1]
+});
 
 /**
  * DrinkViewmodel — the can of Deadbull Ravi keeps somewhere on his person,
@@ -22,6 +33,8 @@ export class DrinkViewmodel {
   private tab: THREE.Mesh;
   /** The can body, scaled down when he crushes it. */
   private shell = new THREE.Group();
+  /** Ravi's own arm, laid onto the can each frame. */
+  private arms: FirstPersonArms;
 
   active = false;
   private t = 0;
@@ -144,6 +157,10 @@ export class DrinkViewmodel {
     this.root.traverse((o) => {
       o.frustumCulled = false;
     });
+
+    // Ravi's real arm holds the can; the box hand stops drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('r', this.can, GRIP_R);
+    this.arms.replaces(skin, sleeve);
   }
 
   /** Bring it out. False if one is already on the go. */
@@ -296,6 +313,7 @@ export class DrinkViewmodel {
 
     this.root.position.set(pos.x + bobX, pos.y + bobY, pos.z);
     this.root.rotation.set(rotX, rotY, rotZ);
+    this.arms.update();
 
     if (t >= D.TOTAL_T) {
       this.active = false;

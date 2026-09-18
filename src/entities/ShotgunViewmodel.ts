@@ -1,6 +1,21 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
+import { FirstPersonArms, grip } from './RaviVisual';
+
+/**
+ * Ravi's hands on the two box anchors (each in the box's own frame): the
+ * right round the wrist of the stock, trigger finger in the guard; the left
+ * wrapped round the pump, riding it through every stroke.
+ */
+const GRIP_R = grip([0.0375, 0.061, 0.015], [-0.1, -0.6, -0.79], [-1, 0.1, 0], [0.2, -0.35, 0.9], {
+  fingers: [[-10, 15, 15], [80, 85, 35], [84, 85, 35], [88, 85, 35]],
+  thumb: [0.3, 0.2, 0.1]
+});
+const GRIP_L = grip([-0.046, -0.017, 0.037], [0.8, 0.05, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
+  fingers: [[60, 70, 30], [62, 70, 30], [64, 70, 32], [66, 70, 34]],
+  thumb: [0.2, 0.15, 0.1]
+});
 
 /**
  * ShotgunViewmodel — Ravi's pump-action shotgun. The gun is a modelled
@@ -71,6 +86,8 @@ export class ShotgunViewmodel {
   private supportHand!: THREE.Mesh;
   private loadingShell!: THREE.Mesh;
   private handHome = new THREE.Vector3(-0.01, -0.055, -0.16); // on the forend
+  /** Ravi's own arms, laid onto the box hands each frame. */
+  private arms!: FirstPersonArms;
   reloading = false;
   private reloadT = 0;
   private shellsToLoad = 0;
@@ -155,6 +172,9 @@ export class ShotgunViewmodel {
     this.loadingShell.add(brass);
     this.loadingShell.visible = false;
     this.supportHand.add(this.loadingShell);
+    // Ravi's real arms ride the two box hands; the boxes stop drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('r', gripHand, GRIP_R).set('l', this.supportHand, GRIP_L);
+    this.arms.replaces(skin, sleeve);
 
     // Muzzle anchor + flash, on the modelled barrel's bore
     this.muzzle.position.set(0, 0.042, -0.509);
@@ -449,6 +469,7 @@ export class ShotgunViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.update();
 
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;

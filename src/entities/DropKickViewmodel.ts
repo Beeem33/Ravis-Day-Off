@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FPSPlayer } from './FPSPlayer';
+import { FirstPersonLegs } from './RaviVisual';
 
 /**
  * DropKickViewmodel — Ravi's legs, and the ride they take the camera on.
@@ -32,6 +33,8 @@ export class DropKickViewmodel {
   /** Camera roll, kept so the legs can be counter-rolled out of it. */
   private roll = 0;
   private legRoll = 0;
+  /** Ravi's own legs, laid onto the box legs' hips and knees each frame. */
+  private legs: FirstPersonLegs;
   private fired = new Set<string>();
   onEvent: ((e: 'launch' | 'impact' | 'land' | 'up' | 'done') => void) | null = null;
 
@@ -97,6 +100,13 @@ export class DropKickViewmodel {
     this.root.traverse((o) => {
       o.frustumCulled = false;
     });
+
+    // Ravi's real legs (his trousers and derbies) ride the box hips and knees,
+    // with the same faint lift so they read on a dark floor
+    this.legs = new FirstPersonLegs(this.root, camera, 0x0a0e16)
+      .set('l', this.legL, () => this.kneeL.rotation.x)
+      .set('r', this.legR, () => this.kneeR.rotation.x);
+    this.legs.replaces(denim, boot, sole);
   }
 
   start(): boolean {
@@ -260,6 +270,7 @@ export class DropKickViewmodel {
     this.legR.rotation.set(hip + dangle, spread, -0.04);
     this.kneeL.rotation.x = knee;
     this.kneeR.rotation.x = knee;
+    this.legs.update();
 
     if (t >= D.TOTAL_T) {
       this.active = false;

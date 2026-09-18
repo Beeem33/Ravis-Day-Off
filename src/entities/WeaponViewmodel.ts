@@ -1,6 +1,21 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
+import { FirstPersonArms, grip } from './RaviVisual';
+
+/**
+ * How Ravi's hands sit on the two box anchors below (each in the box's own
+ * frame): the shooting hand wrapped round the grip, trigger finger in the
+ * guard; the support hand cupped under it, thumb along the frame.
+ */
+const GRIP_R = grip([0.029, -0.017, 0.078], [-0.15, 0.12, -0.98], [-1, 0, -0.1], [0.16, -0.22, 0.34], {
+  fingers: [[6, 30, 22], [85, 85, 35], [88, 85, 35], [90, 85, 35]],
+  thumb: [0.3, 0.2, 0.1]
+});
+const GRIP_L = grip([-0.057, -0.012, 0.074], [0.458, 0.186, -0.87], [0.958, 0.083, 0.2], [-0.2, -0.2, 0.26], {
+  fingers: [[45, 60, 30], [50, 62, 30], [55, 64, 32], [60, 66, 34]],
+  thumb: [0.2, 0.15, 0.1]
+});
 
 /**
  * WeaponViewmodel — Ravi's sidearm, a modelled Glock 17 (models/glock.glb)
@@ -52,6 +67,8 @@ export class WeaponViewmodel {
   private reloadFired = new Set<string>();
   static readonly RELOAD_TIME = 1.63;
   private slidePull = 0; // 0..1 while the left hand racks the slide
+  /** Ravi's own arms, laid onto the box hands each frame. */
+  private arms: FirstPersonArms;
   /** Hook for the scene: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done'. */
   onReloadEvent: ((e: 'magOut' | 'magDrop' | 'magIn' | 'rack' | 'done') => void) | null = null;
   /** True while the emote borrows the left hand — hides the support hand. */
@@ -243,6 +260,11 @@ export class WeaponViewmodel {
     // Left forearm hangs off the support hand toward the lower-left
     mkForearm(this.supportHand, new THREE.Vector3(-0.2, -0.2, 0.26));
 
+    // Ravi's real arms ride the two box hands, which stay as the anchors the
+    // recoil and reload animate; the boxes stop drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('r', hand, GRIP_R).set('l', this.supportHand, GRIP_L);
+    this.arms.replaces(skin, sleeve);
+
     // Muzzle anchor at barrel tip
     this.muzzle.position.set(0, 0.045, -0.16);
     this.gun.add(this.muzzle);
@@ -394,6 +416,7 @@ export class WeaponViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.update();
 
     // ---- Muzzle flash decay
     if (this.flashTimer > 0) {

@@ -1,5 +1,15 @@
 import * as THREE from 'three';
 import type { FPSPlayer } from './FPSPlayer';
+import { FirstPersonArms, grip } from './RaviVisual';
+
+/**
+ * Ravi's left hand on the box fist (in its frame): palm to his face, back of
+ * the hand to the room, every finger shut but the middle one.
+ */
+const GRIP_L = grip([0, -0.052, 0.004], [0, 1, 0], [0, 0, 1], [0.03, -0.97, 0.22], {
+  fingers: [[88, 100, 60], [0, 3, 2], [88, 100, 60], [90, 100, 60]],
+  thumb: [0.55, 0.9, 0.8]
+});
 
 /**
  * EmoteViewmodel — Ravi's left arm raised with the middle finger up,
@@ -19,6 +29,8 @@ export class EmoteViewmodel {
 
   private upPos = new THREE.Vector3(-0.24, -0.195, -0.46);
   private downPos = new THREE.Vector3(-0.32, -0.62, -0.5);
+  /** Ravi's own arm, laid onto the box fist each frame. */
+  private arms: FirstPersonArms;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -57,6 +69,10 @@ export class EmoteViewmodel {
     seg2.position.set(0, 0.122, -0.02);
     seg2.rotation.x = -0.08;
     this.root.add(seg2);
+
+    // Ravi's real arm rides the box fist; the boxes stop drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('l', fist, GRIP_L);
+    this.arms.replaces(skin, sleeve);
   }
 
   /** Flip it up / put it away. Returns the new state. */
@@ -94,5 +110,6 @@ export class EmoteViewmodel {
       0.3 * k,
       0.12 * k + waggle
     );
+    this.arms.update();
   }
 }

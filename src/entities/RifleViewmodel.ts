@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
+import { FirstPersonArms, grip } from './RaviVisual';
 
 /**
  * RifleViewmodel — the AK-47, loaded from models/ak47.glb and parented to
@@ -23,6 +24,20 @@ export type RifleReloadEvent = 'grab' | 'strike' | 'magOut' | 'magDrop' | 'magIn
 const SCALE = 0.72;
 /** glb metres → gun-local metres. The glb points its muzzle down +X; the viewmodel convention is −Z. */
 const gl = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(z * SCALE, y * SCALE, -x * SCALE);
+
+/**
+ * Ravi's hands on the two box anchors (each in the box's own frame): the
+ * right round the pistol grip with the trigger finger in the guard, the left
+ * under the handguard, fingers up its right side and thumb along its left.
+ */
+const GRIP_R = grip([0.03, -0.012, 0.065], [-0.12, 0.28, -0.95], [-1, 0, -0.1], [0.15, -0.2, 0.3], {
+  fingers: [[4, 25, 20], [85, 85, 35], [88, 85, 35], [90, 85, 35]],
+  thumb: [0.3, 0.2, 0.1]
+});
+const GRIP_L = grip([-0.054, 0.008, 0.037], [0.8, 0, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
+  fingers: [[60, 70, 30], [62, 70, 30], [64, 70, 32], [66, 70, 34]],
+  thumb: [0.2, 0.15, 0.1]
+});
 
 export class RifleViewmodel {
   readonly root = new THREE.Group();
@@ -64,6 +79,8 @@ export class RifleViewmodel {
   // ---- Hands
   private supportHand!: THREE.Mesh;
   private handHome = gl(0.255, -0.035, 0); // under the lower handguard
+  /** Ravi's own arms, laid onto the box hands each frame. */
+  private arms: FirstPersonArms;
   /** True while the emote borrows the left hand — hides the support hand. */
   hideSupportHand = false;
 
@@ -131,6 +148,9 @@ export class RifleViewmodel {
     this.supportHand.position.copy(this.handHome);
     this.gun.add(this.supportHand);
     mkForearm(this.supportHand, new THREE.Vector3(-0.18, -0.22, 0.3));
+    // Ravi's real arms ride the two box hands; the boxes stop drawing once his model is in
+    this.arms = new FirstPersonArms(this.root, camera).set('r', gripHand, GRIP_R).set('l', this.supportHand, GRIP_L);
+    this.arms.replaces(skin, sleeve);
 
     // Muzzle flash sprite + light
     const flashTex = RifleViewmodel.makeFlashTexture();
@@ -611,6 +631,7 @@ export class RifleViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.update();
 
     this.updateCharm(dt);
 

@@ -1,8 +1,14 @@
 import * as THREE from 'three';
+import { FirstPersonArms, elbowToward, grip, mixShape, type HandShape } from './RaviVisual';
 
 /** Ravi's complexion and shirt, as on every viewmodel. */
 const SKIN = 0x8a5c3b;
 const SLEEVE = 0x4d6f9c;
+/** Ravi's hand open and reaching, and shut over the top of the bar and down behind it. */
+const OPEN: HandShape = { fingers: [[10, 12, 6], [10, 12, 6], [12, 14, 7], [14, 16, 8]], thumb: [0.0, 0.1, 0.1], spread: 6 };
+const SHUT: HandShape = { fingers: [[88, 90, 40], [88, 90, 40], [88, 90, 40], [88, 90, 40]], thumb: [0.6, 0.5, 0.3] };
+/** His wrist in the hand's frame: under the knuckles, behind the back of the hand. */
+const RAVI_WRIST = new THREE.Vector3(0, -0.055, 0.05);
 
 /**
  * GrabHand — Ravi's right hand and forearm as a world-space prop, for a
@@ -43,6 +49,8 @@ export class GrabHand {
   private static readonly FORE_MAX = 0.75;
   private wrist = new THREE.Vector3();
   private dir = new THREE.Vector3();
+  /** Ravi's own right arm, laid onto the posed hand each frame. */
+  private arms: FirstPersonArms;
 
   constructor(scene: THREE.Scene) {
     const skin = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.8 });
@@ -91,6 +99,11 @@ export class GrabHand {
     this.root.visible = false;
     this.arm.visible = false;
     scene.add(this.root, this.arm);
+
+    // His real arm: the back of the hand to the eye, fingers up over the bar,
+    // the forearm hung from the shoulder the scene gives
+    this.arms = new FirstPersonArms(this.root, null);
+    this.arms.replaces(skin, sleeve);
   }
 
   set visible(on: boolean) {
@@ -125,6 +138,16 @@ export class GrabHand {
     this.fore.lookAt(this.wrist.clone().addScaledVector(this.dir, len));
     this.cuff.position.copy(this.wrist).addScaledVector(this.dir, len * 0.8);
     this.cuff.quaternion.copy(this.fore.quaternion);
+
+    // Ravi's arm: the elbow hangs below the line from the wrist to the shoulder
+    const w = RAVI_WRIST.clone().applyMatrix4(this.root.matrixWorld);
+    const toward = elbowToward(w, shoulder, new THREE.Vector3(0, -1, 0)).transformDirection(
+      this.root.matrixWorld.clone().invert()
+    );
+    this.arms
+      .set('r', this.root, grip(RAVI_WRIST.toArray(), [0, 1, 0], [0, 0, -1], toward.toArray(), mixShape(OPEN, SHUT, c)))
+      .shoulder('r', shoulder, true)
+      .update();
   }
 
   dispose(): void {

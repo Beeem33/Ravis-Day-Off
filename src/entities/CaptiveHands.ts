@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FirstPersonArms, HAND, grip, mixShape, type Side } from './RaviVisual';
 
 const SKIN = 0x8a5c3b;
 const SLEEVE = 0x4d6f9c;
@@ -40,6 +41,10 @@ class Hand {
   straight = 0;
   /** Just inside the heel of the palm, where the forearm starts. */
   private static readonly WRIST = new THREE.Vector3(0, -0.004, 0.05);
+  /** Which way the forearm leaves the wrist, in the hand's frame, as last solved. */
+  readonly toward = new THREE.Vector3(0, -0.2, 1).normalize();
+  /** Where the shoulder was, in camera space, as last given. */
+  readonly shoulder = new THREE.Vector3();
 
   constructor(
     camera: THREE.Camera,
@@ -141,6 +146,8 @@ class Hand {
       // Turning the hand moves the wrist a little: hang the arm again from there
       ({ wrist, elbow, top } = this.solve(shoulder));
     }
+    this.toward.copy(elbow).sub(wrist).applyQuaternion(this.root.quaternion.clone().invert()).normalize();
+    this.shoulder.copy(shoulder);
     lay(this.fore, wrist, elbow);
     lay(this.roll, wrist.clone().lerp(elbow, 0.7), elbow);
     this.elbow.position.copy(elbow);
@@ -176,6 +183,8 @@ class Hand {
 export class CaptiveHands {
   readonly right: Hand;
   readonly left: Hand;
+  /** Ravi's own arms, laid onto the two posed hands each frame. */
+  private arms: FirstPersonArms;
 
   constructor(camera: THREE.Camera) {
     const skin = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.8 });
@@ -183,11 +192,25 @@ export class CaptiveHands {
     const rope = new THREE.MeshStandardMaterial({ color: ROPE, roughness: 0.95 });
     this.right = new Hand(camera, 1, skin, sleeve, rope);
     this.left = new Hand(camera, -1, skin, sleeve, rope);
+    // His real arms, each hand where the scene posed it (fingers down −Z, back
+    // of the hand +Y), the forearm along the arm this class solves; the rope
+    // bands stay on his wrists
+    this.arms = new FirstPersonArms(camera, camera);
+    this.arms.replaces(skin, sleeve);
   }
 
   /** Shoulders in camera space — the scene works them out from his body, which the head turns on. */
   update(shoulderR: THREE.Vector3, shoulderL: THREE.Vector3): void {
     if (this.right.visible) this.right.update(shoulderR);
     if (this.left.visible) this.left.update(shoulderL);
+    for (const [side, h] of [['r', this.right], ['l', this.left]] as [Side, Hand][]) {
+      this.arms.set(
+        side,
+        h.root,
+        grip([0, -0.004, 0.05], [0, 0, -1], [0, -1, 0], [h.toward.x, h.toward.y, h.toward.z], mixShape(HAND.open, HAND.fist, THREE.MathUtils.clamp(h.curl, 0, 1)))
+      );
+      this.arms.shoulder(side, h.shoulder);
+    }
+    this.arms.update();
   }
 }

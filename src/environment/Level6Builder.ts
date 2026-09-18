@@ -3,6 +3,7 @@ import type { BreakableGlass } from './BreakableGlass';
 import { Collider, Waypoint, noiseCanvas, makeTex } from './OfficeLevelBuilder';
 import { deskMonitor, deskPhone, namePlate, paperStack, fileCabinet, flowerPot, trashCan, book } from './OfficeProps';
 import { mergeStatic } from './mergeStatic';
+import { RaviVisual, type HandShape } from '../entities/RaviVisual';
 
 export interface Level6Data {
   group: THREE.Group;
@@ -49,6 +50,8 @@ export interface Level6Data {
 }
 
 const T = 0.24;
+/** His hands tied at the wrist, hanging slack over the ends of the chair's arms. */
+const TIED_HAND: HandShape = { fingers: [[40, 35, 18], [42, 38, 18], [45, 40, 20], [48, 42, 22]], thumb: [0.25, 0.2, 0.15] };
 /** Inside faces of the room: a single office, for somebody important. */
 const R = { x0: -2.5, x1: 2.5, z0: -3.0, z1: 3.0, h: 2.8 };
 /** The desk, wide and dark, its back edge towards the boss. */
@@ -432,6 +435,9 @@ export class Level6Builder {
       return a;
     };
 
+    const tiedR = tied(1);
+    const tiedL = tied(-1);
+
     // The rest of him, sat in it: his back against the chair, thighs along
     // the seat, shins back to the front legs where his ankles are tied, and
     // his shoes. Only ever seen from his own eyes, looking down into his lap.
@@ -462,14 +468,45 @@ export class Level6Builder {
     body.position.copy(at);
     this.group.add(body);
 
+    // The modelled Ravi takes the blocks' place once he has loaded: sat back
+    // in the chair, forearms along its arms with the wrists in the rope and
+    // the hands over the ends, ankles back by the front legs. His head is
+    // left off — the camera is where it would be. His trunk rides `body`
+    // (gone when he gets up), and each arm rides that side's tied group (gone
+    // when that hand comes free).
+    RaviVisual.whenReady(() => {
+      for (const m of [skin, sleeve, trousers, shoe]) m.visible = false;
+      const rig = RaviVisual.rig('seated');
+      rig.root.rotation.y = Math.PI; // he faces −z
+      body.add(rig.root);
+      // Model space from here: his chair at the origin, facing +z, his right on −x
+      const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+      rig.seat({
+        hips: V(0, 0.5, -0.07),
+        lean: [-8, 4, 5, 4, 0, 0],
+        legs: {
+          r: { ankle: V(-0.15, 0.078, 0.19), knee: V(-0.1, 0.6, 1) },
+          l: { ankle: V(0.15, 0.078, 0.19), knee: V(0.1, 0.6, 1) }
+        },
+        arms: {
+          r: { wrist: V(-0.25, 0.707, 0.1), along: V(0, -0.35, 0.94), palm: V(0, -1, -0.3), elbow: V(-0.3, -0.2, -1), shape: TIED_HAND },
+          l: { wrist: V(0.25, 0.707, 0.1), along: V(0, -0.35, 0.94), palm: V(0, -1, -0.3), elbow: V(0.3, -0.2, -1), shape: TIED_HAND }
+        }
+      });
+      // The skinned arms draw from the bones wherever the meshes hang, so
+      // each can live in its own tied group and share that group's fate
+      for (const m of rig.sideMeshes('r')) tiedR.attach(m);
+      for (const m of rig.sideMeshes('l')) tiedL.attach(m);
+    });
+
     return {
       at,
       wristR: new THREE.Vector3(at.x + 0.25, 0.7, at.z - 0.1),
       wristL: new THREE.Vector3(at.x - 0.25, 0.7, at.z - 0.1),
       ropeR: wrist(1),
       ropeL: wrist(-1),
-      tiedR: tied(1),
-      tiedL: tied(-1),
+      tiedR,
+      tiedL,
       body
     };
   }

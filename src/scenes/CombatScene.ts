@@ -327,17 +327,43 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
   private static _holdA = new THREE.Vector3();
   private static _holdB = new THREE.Vector3();
   private static _holdK = new THREE.Vector3();
+  private static _holdK2 = new THREE.Vector3();
+  private static _belly = new THREE.Vector3();
+  private static _head = new THREE.Vector3();
 
   /**
-   * Give the man in a takedown Ravi's arms to hold on to — the forearm across
-   * his chest, and the wrist once the knife is in him. Call after
-   * player.update(): the arms ride the camera, and the camera only settles
-   * for the frame there.
+   * Put the two of them in touch for the frame: the man gets Ravi's arms to
+   * hold on to (the forearm across his chest, the knife arm once it's coming
+   * at him) and Ravi's fists get the man's stomach and head to aim at. Call
+   * after player.update(): the arms ride the camera, and the camera only
+   * settles for the frame there.
    */
   protected holdOn(vm: TakedownViewmodel, victim: Enemy): void {
-    const { _holdA: a, _holdB: b, _holdK: k } = CombatScene;
-    vm.holdPoints(a, b, k);
-    victim.clutch(a, b, k);
+    const { _holdA: a, _holdB: b, _holdK: k, _holdK2: k2 } = CombatScene;
+    vm.gap = Math.hypot(this.player.position.x - victim.position.x, this.player.position.z - victim.position.z);
+    vm.holdPoints(a, b, k, k2);
+    victim.clutch(a, b, k, k2);
+    if (victim.alive) vm.aimAt(victim.bellyWorld(CombatScene._belly), victim.headWorld(CombatScene._head));
+  }
+
+  /**
+   * The counter's last punch: a left hook to the side of his head, which
+   * kills him. The blow lands on the side of the head nearest Ravi's left
+   * fist and drives across him to Ravi's right, a little forward, so the
+   * head snaps away and he goes down sideways out of the fold he was in.
+   * No wound — it's a fist — but a spray from the mouth, without the wall
+   * splatter a bullet throws.
+   */
+  protected knockOut(victim: Enemy): void {
+    const f = this.player.forwardDir();
+    const right = new THREE.Vector3(-f.z, 0, f.x);
+    const head = victim.headWorld();
+    const hit = head.clone().addScaledVector(right, -0.11);
+    const dir = right.clone().multiplyScalar(0.9).addScaledVector(f, 0.35).normalize();
+    this.killEnemy(victim, hit, dir, true, false, 'head', 1.0, { wound: false });
+    this.ctx.audio.punchImpact(true);
+    const floor = this.surfaceBelow(head, 3);
+    this.particles.bloodSpray(head, dir, false, floor ? floor.point.y + 0.02 : -1);
   }
 
   // ------------------------------------------------------------- drop kick

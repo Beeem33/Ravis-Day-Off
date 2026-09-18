@@ -90,9 +90,15 @@ export class Enemy {
   private holdA = new THREE.Vector3();
   private holdB = new THREE.Vector3();
   private holdKnife = new THREE.Vector3();
+  /** Further up the knife forearm: where his second hand goes when he catches it. */
+  private holdKnife2 = new THREE.Vector3();
   private hasHold = false;
   private stabCount = 0;
-  private sinceStab = 0;
+  private punchCount = 0;
+  /** Since the last stab or punch landed. */
+  private sinceHit = 0;
+  /** struggleTime when he caught the knife arm (the counter), -1 if he hasn't. */
+  private caughtAt = -1;
   /** struggleTime of the first stab, -1 before it. */
   private firstStab = -1;
   /** 0 upright … 1 doubled over; eased toward wherever the last stab left him. */
@@ -1394,8 +1400,10 @@ export class Enemy {
     this.beingExecuted = true;
     this.struggleTime = 0;
     this.stabCount = 0;
-    this.sinceStab = 0;
+    this.punchCount = 0;
+    this.sinceHit = 0;
     this.firstStab = -1;
+    this.caughtAt = -1;
     this.fold = 0;
     this.hasHold = false;
     this.aimTarget = 0;
@@ -1406,28 +1414,49 @@ export class Enemy {
 
   /**
    * Where Ravi's arms are this frame, in world space: the wrist and the back
-   * of the hand that has him, and the knife wrist. The scene pushes these
-   * every frame of a takedown and the held pose reaches for them, so his
-   * hands stay on Ravi's arms however either of them moves.
+   * of the hand that has him, the knife wrist, and a point further up the
+   * knife forearm. The scene pushes these every frame of a takedown and the
+   * held pose reaches for them, so his hands stay on Ravi's arms however
+   * either of them moves.
    */
-  clutch(a: THREE.Vector3, b: THREE.Vector3, knife: THREE.Vector3): void {
+  clutch(a: THREE.Vector3, b: THREE.Vector3, knife: THREE.Vector3, knife2: THREE.Vector3): void {
     const toBody = (w: THREE.Vector3, out: THREE.Vector3) =>
       out.copy(w).sub(this.root.position).applyAxisAngle(Enemy._up, -this.yaw);
     toBody(a, this.holdA);
     toBody(b, this.holdB);
     toBody(knife, this.holdKnife);
+    toBody(knife2, this.holdKnife2);
     this.hasHold = true;
+  }
+
+  /**
+   * He's got the knife arm before it gets there: both hands leave the grab
+   * and clamp onto it, and he leans away from the blade holding it off.
+   */
+  catchKnife(): void {
+    if (!this.alive || this.caughtAt >= 0) return;
+    this.caughtAt = this.struggleTime;
+  }
+
+  /** A fist in the gut: the air goes out of him and he folds round it. */
+  punched(): void {
+    if (!this.alive) return;
+    this.punchCount++;
+    this.sinceHit = 0;
+    const mats = this.head.material;
+    if (Array.isArray(mats) && Enemy.faceScream) mats[5] = Enemy.faceScream;
   }
 
   /** The blade has gone in (again): the scream, and the jolt that folds him. */
   stabbed(): void {
     if (!this.alive) return;
     this.stabCount++;
-    this.sinceStab = 0;
+    this.sinceHit = 0;
     if (this.firstStab < 0) this.firstStab = this.struggleTime;
     const mats = this.head.material;
     if (Array.isArray(mats) && Enemy.faceScream) mats[5] = Enemy.faceScream;
   }
+
 
   // Scratch for the held pose, which runs every frame someone is held
   private static _up = new THREE.Vector3(0, 1, 0);
@@ -1457,29 +1486,37 @@ export class Enemy {
    */
   private poseExecution(dt: number): void {
     this.struggleTime += dt;
-    this.sinceStab += dt;
+    this.sinceHit += dt;
     const s = this.struggleTime;
-    const hurt = this.stabCount > 0;
+    const hurt = this.stabCount + this.punchCount > 0;
+    const caught = this.caughtAt >= 0;
     const c01 = (x: number) => Math.min(1, Math.max(0, x));
     const ease = (x: number) => x * x * (3 - 2 * x);
 
     // Two incommensurate sines so it reads as fighting, not vibrating. Once
     // the knife is in, the fight goes out of him and it's a shudder.
-    const buck = (Math.sin(s * 12.5) * 0.1 + Math.sin(s * 7.3 + 1.2) * 0.06) * (hurt ? 0.3 : 1);
-    const goal = hurt ? (this.stabCount >= 2 ? 1 : 0.72) : 0;
+    // Holding the knife off is a strain, not a fight: a tremble.
+    const buck = (Math.sin(s * 12.5) * 0.1 + Math.sin(s * 7.3 + 1.2) * 0.06) * (hurt ? 0.3 : caught ? 0.45 : 1);
+    // A gut punch folds him most of the way a stab does.
+    // Holding it off he hunches over the arm, forcing it aside — his arms
+    // only reach 0.6m and the knife is that long again, so leaning back from
+    // it would put Ravi's wrist out of his reach.
+    const goal = this.stabCount >= 2 ? 1 : this.stabCount ? 0.72 : this.punchCount ? 0.6 : caught ? 0.25 : 0;
     this.fold += (goal - this.fold) * Math.min(1, dt * (hurt ? 11 : 4));
     const f = this.fold;
-    const jolt = hurt ? Math.exp(-this.sinceStab * 10) : 0; // the instant the blade lands
+    const jolt = hurt ? Math.exp(-this.sinceHit * 10) : 0; // the instant it lands
 
     // Most of the fold is at the waist, with the seat pushed well back. Put it
     // in the hips instead and his head swings a quarter of a metre toward the
     // camera, filling the shot; this way it comes about 13cm.
     const hipFlex = 0.08 * f;
     const waist = -0.12 * (1 - f) + 0.36 * f + 0.1 * jolt + buck * 0.35; // negative leans away from the grab
-    const curl = 0.2 * f + Math.sin(s * 5.1) * 0.03 * f; // round toward his left, where the blade is
-    const knees = 0.26 * f;
+    // Round toward his left, where the blade goes in — a fist in the middle
+    // just folds him straight
+    const curl = this.stabCount ? 0.2 * f + Math.sin(s * 5.1) * 0.03 * f : 0;
+    const knees = 0.26 * Math.max(0, f);
     const sag = 0.82 * (1 - Math.cos(knees)); // exactly what bent knees take off his height
-    const hipsBack = 0.1 * f;
+    const hipsBack = 0.1 * Math.max(0, f);
 
     // Pelvis tips forward about the hip line and drops with the knees
     const hc = Enemy._hc.set(0, 0.82 - sag, hipsBack);
@@ -1498,8 +1535,9 @@ export class Enemy {
     above(this.shoulderX, 1.4, this.armR.position);
     above(0, 1.585, this.head.position);
     // Head thrown back with the scream, then down to look at what's in him
-    const scream = hurt ? Math.exp(-this.sinceStab * 3.5) : 0;
-    const tilt = hurt ? 0.34 * scream - 0.34 * f * (1 - scream) : 0.3 + buck * 0.35;
+    const scream = hurt ? Math.exp(-this.sinceHit * 3.5) : 0;
+    // Holding the knife off, he watches it: chin down.
+    const tilt = hurt ? 0.34 * scream - 0.34 * f * (1 - scream) : caught ? -0.3 : 0.3 + buck * 0.35;
     const roll = Math.sin(s * 9) * 0.08 * (hurt ? 0.4 : 1);
     this.head.quaternion.copy(qu).multiply(Enemy._qd.setFromEuler(Enemy._eu.set(tilt, 0, roll)));
 
@@ -1525,11 +1563,18 @@ export class Enemy {
     // His right hand stays on Ravi's wrist the whole way. His left starts on
     // the hand gripping his chest, prising at it — then goes for the knife
     // wrist the moment the blade is in, because that's the side it went in on.
-    const pry = hurt ? 0.006 : 0.022;
+    // If he catches the knife instead, both hands go to that arm at once, one
+    // at the wrist and one further up, and they stay there.
+    const pry = hurt && !caught ? 0.006 : 0.022;
     const a = Enemy._ha.copy(this.holdA);
+    const toKnife = caught
+      ? ease(c01((s - this.caughtAt) / 0.09))
+      : this.stabCount
+        ? ease(c01((s - this.firstStab) / 0.16))
+        : 0;
+    if (caught) a.lerp(this.holdKnife2, toKnife);
     a.x += Math.sin(s * 13) * pry;
     a.y += Math.sin(s * 11 + 1) * pry;
-    const toKnife = hurt ? ease(c01((s - this.firstStab) / 0.16)) : 0;
     const b = Enemy._hb.copy(this.holdB).lerp(this.holdKnife, toKnife);
     b.x += Math.sin(s * 12 + 2) * pry;
     b.y += Math.sin(s * 9.7) * pry;
@@ -1592,6 +1637,18 @@ export class Enemy {
 
   muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
     return this.muzzle.getWorldPosition(out);
+  }
+
+  /**
+   * The front of his stomach, off the torso's own frame so it goes wherever
+   * the chest does — leaning back, folded over. The upper stomach, just under
+   * the ribs, and a little to his right: where a left hand thrown by someone
+   * facing him lands. Any lower and, from as close as the takedown camera is,
+   * the punch lands behind his own arms and the bottom letterbox bar.
+   */
+  bellyWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    this.torso.updateWorldMatrix(true, false);
+    return this.torso.localToWorld(out.set(0.04, -0.05, -0.14));
   }
 
   /** Where the head actually is — kneeling, sitting, hunched — not a standing eye height. */

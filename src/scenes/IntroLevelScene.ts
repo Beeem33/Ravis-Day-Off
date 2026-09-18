@@ -187,6 +187,27 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
           audio.enemyScream(i === 0 ? 1 : 0.6);
           this.spatter(wound, spray, true);
         }
+      } else if (e === 'caught') {
+        // The counter: he's got the knife arm in both hands short of his
+        // stomach and it isn't going in
+        if (victim && victim.alive) {
+          victim.catchKnife();
+          audio.enemyGrunt('strain');
+          audio.scuff();
+        }
+      } else if (e === 'swing') {
+        audio.punchSwish();
+      } else if (e === 'punch') {
+        if (victim && victim.alive) {
+          if (i === 0) {
+            // In the gut: the air goes out of him and he folds
+            victim.punched();
+            audio.punchImpact(false);
+            audio.enemyGrunt('oof');
+          } else {
+            this.knockOut(victim);
+          }
+        }
       } else if (e === 'release') {
         // The knife comes out, the hand lets go — NOW they drop.
         if (victim && victim.alive) {
@@ -690,7 +711,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     const enemy = this.takedown!;
     enemy.faceToward(this.player.position, dt, 12);
     const away = this.player.position.clone().sub(enemy.position).setY(0).normalize();
-    const anchor = enemy.position.clone().addScaledVector(away, 0.95);
+    // The knife works from here; a fist needs him closer, so the counter steps in
+    const anchor = enemy.position.clone().addScaledVector(away, this.takedownVm.standOff);
     anchor.y = this.player.position.y;
     this.player.position.lerp(anchor, Math.min(1, dt * 6));
 

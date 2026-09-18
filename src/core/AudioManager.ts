@@ -514,34 +514,39 @@ export class AudioManager {
   }
 
   /**
-   * A man screaming with a knife in him, from half a metre away.
+   * A voice, from half a metre away — the throat the scream and the grunts
+   * share.
    *
    * A single sawtooth is a buzzer; two a few cents apart start to beat like
-   * a throat. They wobble with vibrato plus a slower random-ish drift, and
-   * go through three formant bands tuned to an open "AAH" — that shaping is
-   * what turns an oscillator into a voice. The pitch leaps as the scream
-   * catches, holds, then cracks and falls away, with breath noise riding on
-   * top. `strength` below 1 is the second stab: shorter, lower, choked off.
+   * a throat. They wobble with vibrato, and go through three formant bands
+   * tuned to a vowel — that shaping is what turns an oscillator into a
+   * voice. The pitch leaps to `peak` in `attack`, eases off a little, then
+   * falls to `end` as the breath runs out, with breath noise on top.
    */
-  enemyScream(strength = 1): void {
+  private voice(o: {
+    D: number;
+    base: number;
+    peak: number;
+    end: number;
+    attack: number;
+    level: number;
+    breath: number;
+    formants: readonly (readonly [number, number, number])[];
+    vibrato?: number;
+  }): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
-    const D = 0.35 + 0.6 * strength;
-    const base = 165 + Math.random() * 30;
-    const peak = base * (1.7 + 0.55 * strength);
-    const level = 0.1 + 0.28 * strength;
-
+    const { D } = o;
     const out = ctx.createGain();
     out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(level, t + 0.035);
-    out.gain.setValueAtTime(level, t + D * 0.6);
+    out.gain.exponentialRampToValueAtTime(o.level, t + Math.min(0.035, D * 0.2));
+    out.gain.setValueAtTime(o.level, t + D * 0.6);
     out.gain.exponentialRampToValueAtTime(0.0001, t + D);
     out.connect(this.sfxBus);
 
-    // "AAH": F1 ~800, F2 ~1150, F3 ~2600, each a fairly narrow band
     const voice = ctx.createGain();
-    for (const [f, q, g] of [[800, 5, 1.0], [1150, 6, 0.75], [2600, 8, 0.4]] as const) {
+    for (const [f, q, g] of o.formants) {
       const bp = ctx.createBiquadFilter();
       bp.type = 'bandpass';
       bp.frequency.value = f * (0.96 + Math.random() * 0.08);
@@ -554,17 +559,16 @@ export class AudioManager {
     const vib = ctx.createOscillator();
     vib.frequency.value = 6 + Math.random() * 1.5;
     const vibDepth = ctx.createGain();
-    vibDepth.gain.value = peak * 0.035;
+    vibDepth.gain.value = o.peak * (o.vibrato ?? 0.035);
     vib.connect(vibDepth);
     for (const detune of [-6, 6]) {
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
       osc.detune.value = detune;
-      osc.frequency.setValueAtTime(base, t);
-      osc.frequency.exponentialRampToValueAtTime(peak, t + 0.09);
-      osc.frequency.exponentialRampToValueAtTime(peak * 0.9, t + D * 0.6);
-      // The crack: the voice gives out and drops most of an octave
-      osc.frequency.exponentialRampToValueAtTime(base * 0.62, t + D);
+      osc.frequency.setValueAtTime(o.base, t);
+      osc.frequency.exponentialRampToValueAtTime(o.peak, t + o.attack);
+      osc.frequency.exponentialRampToValueAtTime(o.peak * 0.9, t + D * 0.6);
+      osc.frequency.exponentialRampToValueAtTime(o.end, t + D);
       vibDepth.connect(osc.frequency);
       osc.connect(voice);
       osc.start(t);
@@ -573,7 +577,6 @@ export class AudioManager {
     vib.start(t);
     vib.stop(t + D + 0.05);
 
-    // Breath through the scream, hoarser as it goes
     const air = ctx.createBufferSource();
     air.buffer = this.noiseBuffer;
     const airF = ctx.createBiquadFilter();
@@ -582,11 +585,63 @@ export class AudioManager {
     airF.Q.value = 0.9;
     const airG = ctx.createGain();
     airG.gain.setValueAtTime(0.0001, t);
-    airG.gain.exponentialRampToValueAtTime(0.09 * strength + 0.03, t + 0.05);
+    airG.gain.exponentialRampToValueAtTime(o.breath, t + Math.min(0.05, D * 0.25));
     airG.gain.exponentialRampToValueAtTime(0.0001, t + D);
     air.connect(airF).connect(airG).connect(this.sfxBus);
     air.start(t, Math.random());
     air.stop(t + D + 0.05);
+  }
+
+  /**
+   * A man screaming with a knife in him: an open "AAH" that catches, holds,
+   * then cracks and drops most of an octave. `strength` below 1 is the
+   * second stab — shorter, lower, choked off.
+   */
+  enemyScream(strength = 1): void {
+    const base = 165 + Math.random() * 30;
+    this.voice({
+      D: 0.35 + 0.6 * strength,
+      base,
+      peak: base * (1.7 + 0.55 * strength),
+      end: base * 0.62,
+      attack: 0.09,
+      level: 0.1 + 0.28 * strength,
+      breath: 0.09 * strength + 0.03,
+      formants: [[800, 5, 1.0], [1150, 6, 0.75], [2600, 8, 0.4]]
+    });
+  }
+
+  /**
+   * Effort, not pain. 'strain' is teeth-gritted, holding a knife off his own
+   * stomach: a low closed "UH" that barely moves in pitch and shakes. 'oof'
+   * is a fist in the gut — the air driven out of him in one short drop.
+   */
+  enemyGrunt(kind: 'strain' | 'oof'): void {
+    const base = 110 + Math.random() * 20;
+    if (kind === 'strain') {
+      this.voice({
+        D: 0.5,
+        base,
+        peak: base * 1.3,
+        end: base * 1.1,
+        attack: 0.12,
+        level: 0.27,
+        breath: 0.07,
+        vibrato: 0.08, // a shake, not a singer's vibrato
+        formants: [[600, 6, 1.0], [1000, 7, 0.6], [2400, 8, 0.25]]
+      });
+    } else {
+      this.voice({
+        D: 0.2,
+        base: base * 1.35,
+        peak: base * 1.5,
+        end: base * 0.75,
+        attack: 0.02,
+        level: 0.3,
+        breath: 0.16,
+        formants: [[500, 5, 1.0], [850, 6, 0.7], [2500, 8, 0.3]]
+      });
+    }
   }
 
   radioChirp(distance: number): void {
@@ -724,25 +779,52 @@ export class AudioManager {
    * of going through noise(), which can't move its filter.
    */
   kickWhoosh(): void {
+    this.whoosh(0.26, 280, 1500, 360, 0.5, 1.6);
+  }
+
+  /** A fist going past: shorter and higher than legs. */
+  punchSwish(): void {
+    this.whoosh(0.13, 700, 2400, 900, 0.32, 1.3);
+  }
+
+  /** A band of noise swept from f0 up to fPeak and back down to f1 over D, loudest at the top. */
+  private whoosh(D: number, f0: number, fPeak: number, f1: number, gain: number, q: number): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
-    const D = 0.26;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
     const f = ctx.createBiquadFilter();
     f.type = 'bandpass';
-    f.Q.value = 1.6;
-    f.frequency.setValueAtTime(280, t);
-    f.frequency.exponentialRampToValueAtTime(1500, t + D * 0.45);
-    f.frequency.exponentialRampToValueAtTime(360, t + D);
+    f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t);
+    f.frequency.exponentialRampToValueAtTime(fPeak, t + D * 0.45);
+    f.frequency.exponentialRampToValueAtTime(f1, t + D);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.5, t + D * 0.45);
+    g.gain.exponentialRampToValueAtTime(gain, t + D * 0.45);
     g.gain.exponentialRampToValueAtTime(0.0001, t + D);
     src.connect(f).connect(g).connect(this.sfxBus);
     src.start(t, Math.random());
     src.stop(t + D + 0.05);
+  }
+
+  /**
+   * Knuckles landing. The gut is a dull, deep thump with a slap of shirt on
+   * top; the side of the head is the kill, so it cracks — a short bright
+   * smack and a bony click over a harder low end.
+   */
+  punchImpact(head: boolean): void {
+    if (head) {
+      this.noise(0.05, 'bandpass', 1900, 0.34, true, 1.2);
+      this.noise(0.02, 'highpass', 3200, 0.24);
+      this.noise(0.1, 'lowpass', 520, 0.36);
+      this.tone('sine', 190, 58, 0.14, 0.34);
+    } else {
+      this.noise(0.07, 'lowpass', 280, 0.55);
+      this.tone('sine', 115, 42, 0.16, 0.42);
+      this.noise(0.05, 'bandpass', 1300, 0.16, true, 1.4); // shirt
+    }
   }
 
   /**

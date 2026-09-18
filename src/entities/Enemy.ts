@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { HitmanVisual, type HandGoal, type HitmanDrive } from './HitmanVisual';
 
 const AMERICAN_NAMES = [
   'Chuck', 'Randy', 'Brad', 'Kyle', 'Dale', 'Hank', 'Wayne', 'Earl', 'Gary', 'Todd', 'Bubba', 'Cody'
@@ -106,6 +107,24 @@ export class Enemy {
   /** Where the support hand takes the weapon, in the weapon's own space. */
   private handguard = new THREE.Vector3(0, 0.02, -0.19);
 
+  /**
+   * The modelled man in the suit, worn over this rig — agents only; staff
+   * and the boss keep the primitive build. Null until built (or if the model
+   * never loaded, in which case the primitive build stays on show).
+   */
+  private hitman: HitmanVisual | null = null;
+  private drive: HitmanDrive | null = null;
+  /** Holding the pistol from equipPistol() rather than the rifle. */
+  private pistolOn = false;
+  /**
+   * Where the model's fists close on the weapon, in the weapon's own space.
+   * The stand-in rifle is a bare box, so its right hand goes under the back
+   * of it and its left under the front; a real model (equipWeapon) says
+   * where its grip and handguard are.
+   */
+  private gripAt = new THREE.Vector3(0, -0.07, 0.125);
+  private guardAt = new THREE.Vector3(0, -0.035, -0.19);
+
   constructor(
     spawn: THREE.Vector3,
     yaw: number,
@@ -124,7 +143,52 @@ export class Enemy {
     this.yaw = yaw;
     this.root.rotation.y = yaw;
     this.buildBody();
+    if (!this.civilian && !this.boss && HitmanVisual.ready) this.wearHitman();
+  }
 
+  private static unseen = new THREE.MeshBasicMaterial({ visible: false });
+
+  /**
+   * Dress an agent as the hitman: the primitive build stays as the skeleton
+   * everything animates, but stops drawing, and the model is posed off it
+   * every frame. Bullets go to the model's own hitboxes instead, so what gets
+   * hit is what is drawn.
+   */
+  private wearHitman(): void {
+    // The primitive parts stop drawing by their material, not by being made
+    // invisible: an invisible object hides its children too, and things get
+    // hung on these — the rifle, slung, rides the chest.
+    const keep = new Set<THREE.Object3D>();
+    this.rifle.traverse((o) => keep.add(o));
+    this.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && !keep.has(o)) (o as THREE.Mesh).material = Enemy.unseen;
+    });
+    const h = new HitmanVisual(HitmanVisual.lookFor(this.variant));
+    this.hitman = h;
+    this.root.add(h.model);
+    this.parts.length = 0;
+    for (const box of h.hitboxes) {
+      box.userData.enemy = this;
+      box.userData.surface = 'flesh';
+      this.parts.push(box);
+    }
+    const hand = (): HandGoal => ({ w: 0, at: new THREE.Vector3(), thumb: null, palm: null, curl: 0 });
+    this.drive = {
+      pelvis: this.pelvis,
+      torso: this.torso,
+      head: this.head,
+      armL: this.armL,
+      armR: this.armR,
+      foreL: this.foreL,
+      foreR: this.foreR,
+      legL: this.legL,
+      legR: this.legR,
+      shinL: this.shinL,
+      shinR: this.shinR,
+      kneel: 0,
+      handL: hand(),
+      handR: hand()
+    };
   }
 
   /**
@@ -1018,6 +1082,7 @@ export class Enemy {
     gun.add(guard);
     gun.position.set(0, -0.31, 0);
     this.foreR.add(gun);
+    this.pistolOn = true;
   }
 
   /**
@@ -1035,6 +1100,9 @@ export class Enemy {
     this.rifle.add(model);
     this.handguard.copy(handguard).add(at);
     this.muzzle.position.copy(muzzle).add(at);
+    // A real gun has a grip and a handguard to hold, right where it says
+    this.gripAt.copy(Enemy.RIFLE_GRIP);
+    this.guardAt.copy(this.handguard);
   }
 
   /** Stop drawing whatever is in his hands — it has gone to somebody else. */
@@ -1592,6 +1660,13 @@ export class Enemy {
     this.root.updateMatrixWorld(true);
     const parent = this.root.parent ?? this.root;
     const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+    // The model goes where the limbs are about to go: out from under the root
+    // and into the scene, stood where he fell. A scene hiding the root after
+    // this hides nothing of the old corpse either.
+    if (this.hitman) {
+      this.rememberHolds();
+      parent.attach(this.hitman.model);
+    }
 
     // Each limb: visual node, its local centre (root space), body half-extents, mass.
     type Limb = { visual: THREE.Object3D; center: THREE.Vector3; half: THREE.Vector3; mass: number; sphere?: number };
@@ -1867,6 +1942,142 @@ export class Enemy {
   }
 
   update(dt: number): void {
+    this.animate(dt);
+    // The model is posed off the rig once the rig is done for the frame,
+    // takedown and cutscene poses included. Dead, updateDead does it.
+    if (this.alive && this.hitman) this.poseHitman(dt);
+  }
+
+  private curlL = 0.1;
+  private curlR = 0.1;
+  private static _hq = new THREE.Quaternion();
+  /** Each hand's thumb and palm directions, this enemy's own: [thumbR, palmR, thumbL, palmL]. */
+  private handDirs = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  /** What each hand was holding when he died, in its forearm's frame — let go of over a moment. */
+  private lastHolds: { w: number; at: THREE.Vector3; thumb: THREE.Vector3 | null; palm: THREE.Vector3 | null }[] = [];
+
+  /**
+   * Called as he dies, before the limbs are handed to the ragdoll: whatever
+   * his hands were closed on is written down relative to the forearm, so the
+   * grip can ease off as he falls instead of the arms snapping to hang.
+   */
+  private rememberHolds(): void {
+    const d = this.drive!;
+    this.lastHolds = ([[d.handR, this.foreR], [d.handL, this.foreL]] as const).map(([g, fore]) => {
+      fore.updateWorldMatrix(true, false);
+      const inv = fore.getWorldQuaternion(new THREE.Quaternion()).invert();
+      return {
+        w: g.w,
+        at: fore.worldToLocal(g.at.clone()),
+        thumb: g.thumb ? g.thumb.clone().applyQuaternion(inv) : null,
+        palm: g.palm ? g.palm.clone().applyQuaternion(inv) : null
+      };
+    });
+  }
+
+  /**
+   * What the model's hands are doing this frame, then the model posed to
+   * the rig. Wherever the rig's hands hold something — the weapon's grip and
+   * handguard, the turret's spades, a knot, Ravi's arm — the model's arms are
+   * solved onto it; anywhere else they just take the rig's joint angles.
+   */
+  private poseHitman(dt: number): void {
+    const d = this.drive!;
+    const R = d.handR;
+    const L = d.handL;
+    const [thumbR, palmR, thumbL, palmL] = this.handDirs;
+    const at = this.animTime + this.animPhase;
+    R.w = L.w = 0;
+    R.thumb = R.palm = L.thumb = L.palm = null;
+    let curlR = 0;
+    let curlL = 0;
+    // The rig was posed this frame; its world matrices are from the last one
+    this.foreR.updateWorldMatrix(true, false);
+    this.foreL.updateWorldMatrix(true, false);
+    const onRig = (g: HandGoal, fore: THREE.Object3D) => {
+      g.w = 1;
+      g.thumb = g.palm = null;
+      fore.localToWorld(g.at.set(0, -0.31, 0));
+    };
+
+    if (!this.alive) {
+      curlR = curlL = 0.35; // gone slack
+      const hold = Math.max(0, 1 - this.deadTimer / 0.35);
+      if (hold > 0) {
+        this.lastHolds.forEach((h, i) => {
+          if (h.w <= 0) return;
+          const g = i === 0 ? R : L;
+          const fore = i === 0 ? this.foreR : this.foreL;
+          const q = fore.getWorldQuaternion(Enemy._hq);
+          g.w = h.w * hold;
+          fore.localToWorld(g.at.copy(h.at));
+          g.thumb = h.thumb ? this.handDirs[i * 2].copy(h.thumb).applyQuaternion(q) : null;
+          g.palm = h.palm ? this.handDirs[i * 2 + 1].copy(h.palm).applyQuaternion(q) : null;
+        });
+      }
+    } else if (this.beingExecuted) {
+      if (this.hasHold) {
+        // Hands on the arm that has him
+        onRig(R, this.foreR);
+        onRig(L, this.foreL);
+        curlR = curlL = 0.75;
+      } else {
+        curlR = 0.3 + 0.35 * Math.abs(Math.sin(at * 15));
+        curlL = 0.3 + 0.35 * Math.abs(Math.sin(at * 13 + 1));
+      }
+    } else if (this.turret) {
+      onRig(R, this.foreR);
+      onRig(L, this.foreL);
+      curlR = curlL = 1;
+    } else {
+      const hq = Enemy._hq;
+      if (this.pistolOn) {
+        // The pistol runs on down the forearm's -Y, slide on the back of the fist (-Z)
+        R.w = 1;
+        this.foreR.localToWorld(R.at.set(0, -0.29, 0.02));
+        this.foreR.getWorldQuaternion(hq);
+        R.thumb = thumbR.set(0, 0, -1).applyQuaternion(hq);
+        R.palm = palmR.set(-1, 0, 0).applyQuaternion(hq);
+        curlR = 1;
+      } else if (!this.rifleDropped && !this.slung && this.rifle.visible) {
+        // Right fist round the grip, thumb up it (it rakes back a little)
+        this.rifle.updateWorldMatrix(true, false);
+        this.rifle.getWorldQuaternion(hq);
+        R.w = 1;
+        this.rifle.localToWorld(R.at.copy(this.gripAt));
+        R.thumb = thumbR.set(0, 1, -0.3).normalize().applyQuaternion(hq);
+        R.palm = palmR.set(-1, 0, 0).applyQuaternion(hq);
+        curlR = 1;
+        // Left palm-up under the handguard whenever the rig has it there
+        const g = Math.max(this.aimBlend, this.restBlend);
+        if (g > 0.001) {
+          L.w = g;
+          this.rifle.localToWorld(L.at.copy(this.guardAt));
+          L.thumb = thumbL.set(0, 0, -1).applyQuaternion(hq);
+          L.palm = palmL.set(0, 1, 0).applyQuaternion(hq);
+          curlL = 0.85 * g;
+        }
+      }
+      // A cutscene's hand target (working a knot, say) goes where it asked
+      if (this.pose?.handR) {
+        onRig(R, this.foreR);
+        curlR = 0.45 + 0.2 * Math.sin(at * 11);
+      }
+      if (this.pose?.handL) {
+        onRig(L, this.foreL);
+        curlL = 0.45 + 0.2 * Math.sin(at * 9 + 1);
+      }
+    }
+    const k = Math.min(1, dt * 12);
+    this.curlR += (curlR - this.curlR) * k;
+    this.curlL += (curlL - this.curlL) * k;
+    R.curl = this.curlR;
+    L.curl = this.curlL;
+    d.kneel = this.kneelBlend;
+    this.hitman!.sync(d);
+  }
+
+  private animate(dt: number): void {
     if (this.flashTime > 0) this.flashTime -= dt;
 
     if (!this.alive) {
@@ -2185,6 +2396,7 @@ export class Enemy {
       this.rifle.position.set(g.position.x, g.position.y, g.position.z);
       this.rifle.quaternion.set(g.quaternion.x, g.quaternion.y, g.quaternion.z, g.quaternion.w);
     }
+    if (this.hitman) this.poseHitman(dt);
 
     // Settle once the whole body has stopped moving (or after a hard cap)
     if ((this.deadTimer > 2.5 && speed < 0.3) || this.deadTimer > 11) this.settle();
@@ -2222,8 +2434,12 @@ export class Enemy {
 
   /** Bullet hole + blood stuck to a limb at the hit point, riding with it. */
   private addWound(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, body: CANNON.Body): void {
-    const entry = this.ragdoll.find((r) => r.body === body);
-    if (!entry || !Enemy.woundMat) return;
+    // On the model, the hole rides the bone under the hitbox that was hit;
+    // the rig's limb it would otherwise go on is a hand's width away
+    const carrier = this.hitman
+      ? this.hitman.boneNear(hitPoint)
+      : this.ragdoll.find((r) => r.body === body)?.container;
+    if (!carrier || !Enemy.woundMat) return;
     const wound = new THREE.Mesh(
       new THREE.PlaneGeometry(0.14 + Math.random() * 0.08, 0.14 + Math.random() * 0.08),
       Enemy.woundMat
@@ -2232,8 +2448,8 @@ export class Enemy {
     wound.position.copy(hitPoint).addScaledVector(inward, -0.012);
     wound.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), inward.clone().negate());
     wound.rotateZ(Math.random() * Math.PI * 2);
-    entry.container.updateWorldMatrix(true, false);
-    entry.container.attach(wound); // keeps its world pose, now rides with the limb
+    carrier.updateWorldMatrix(true, false);
+    carrier.attach(wound); // keeps its world pose, now rides with the limb
     wound.renderOrder = 3;
   }
 

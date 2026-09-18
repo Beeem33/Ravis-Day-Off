@@ -11,6 +11,7 @@ import { Level3Scene } from './scenes/Level3Scene';
 import { Level4Scene } from './scenes/Level4Scene';
 import { Level5Scene } from './scenes/Level5Scene';
 import { Level6Scene } from './scenes/Level6Scene';
+import { HitmanVisual } from './entities/HitmanVisual';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -106,6 +107,9 @@ bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
 
 engine.uiRoot = uiRoot;
 engine.setScene(new MainMenuScene(ctx));
+// The agents' model loads behind the menu; a level asked for before it has
+// arrived waits for it under its loading card
+engine.holdScenesUntil(HitmanVisual.load(`${import.meta.env.BASE_URL}models/hitman.glb`));
 engine.start();
 
 // Dev-only handles for poking at the running game from the console. Stripped

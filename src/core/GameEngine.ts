@@ -78,6 +78,7 @@ export class GameEngine {
     // the card goes up, the loop paints it, and the build happens next.
     this.pendingScene = scene;
     this.pendingFrames = 2;
+    this.pendingHeld = this.holding;
     // A backgrounded tab never fires requestAnimationFrame, so the loop
     // would never pick this up and the card would hang there forever. The
     // timer still runs when hidden, so it finishes the job off-screen.
@@ -85,10 +86,32 @@ export class GameEngine {
     this.pendingTimer = window.setTimeout(() => this.buildPending(), 150);
   }
 
+  private holding = false;
+  private pendingHeld = false;
+
+  /**
+   * Scenes queued from now on wait under their loading card until `p`
+   * settles — for assets a level is built out of, like the agents' model,
+   * which would otherwise arrive after the level had been built without it.
+   * Whatever is already queued (the menu, at startup) goes ahead.
+   */
+  holdScenesUntil(p: Promise<unknown>): void {
+    this.holding = true;
+    void p.finally(() => {
+      this.holding = false;
+    });
+  }
+
   /** Swap in the scene that setScene queued, and start its warm-up. */
   private buildPending(): void {
     if (!this.pendingScene) return;
     window.clearTimeout(this.pendingTimer);
+    if (this.pendingHeld && this.holding) {
+      // Still loading: keep the card up and look again shortly (the timer,
+      // for a backgrounded tab; the loop tries every frame otherwise)
+      this.pendingTimer = window.setTimeout(() => this.buildPending(), 100);
+      return;
+    }
     this.scene?.exit();
     this.scene = this.pendingScene;
     this.pendingScene = null;

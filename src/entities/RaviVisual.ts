@@ -904,6 +904,20 @@ export class FirstPersonLegs extends FirstPersonLimbs {
     super(parent, camera, 'legs');
   }
 
+  private reach = 1;
+
+  /**
+   * Draw the legs longer than his own. In first person the hips sit just
+   * under the camera rather than most of a metre below it, and legs of his
+   * real length look stubby. The knee is set further down the thigh and the
+   * ankle further down the shin, so the trousers stretch lengthways; scaling
+   * the bones instead fattened the thighs as much as it lengthened them.
+   */
+  lengthen(k: number): this {
+    this.reach = k;
+    return this;
+  }
+
   /** Dark trousers vanish on a dark floor; give this copy its own lifted materials. */
   protected built(rig: RaviRig): void {
     if (!this.glow) return;
@@ -945,6 +959,11 @@ export class FirstPersonLegs extends FirstPersonLimbs {
       const front = new THREE.Vector3(0, 1, 0).applyQuaternion(hq);
       const shin = new THREE.Vector3(0, -Math.sin(k), -Math.cos(k)).applyQuaternion(hq);
       rig.leg(side, hip, thigh, shin, front);
+      if (this.reach !== 1) {
+        const x = this.reach - 1;
+        rig.move(`calf_${side}`, thigh.clone().multiplyScalar(x * RaviRig.len(`thigh_${side}`, `calf_${side}`)));
+        rig.move(`foot_${side}`, shin.clone().multiplyScalar(x * RaviRig.len(`calf_${side}`, `foot_${side}`)));
+      }
     }
     rig.apply();
   }

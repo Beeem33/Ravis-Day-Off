@@ -102,10 +102,13 @@ export class DropKickViewmodel {
     });
 
     // Ravi's real legs (his trousers and derbies) ride the box hips and knees,
-    // with the same faint lift so they read on a dark floor
+    // with the same faint lift so they read on a dark floor — and drawn 20%
+    // longer than his own, because hips just under the camera left legs of
+    // his true length looking stubby
     this.legs = new FirstPersonLegs(this.root, camera, 0x0a0e16)
       .set('l', this.legL, () => this.kneeL.rotation.x)
-      .set('r', this.legR, () => this.kneeR.rotation.x);
+      .set('r', this.legR, () => this.kneeR.rotation.x)
+      .lengthen(1.2);
     this.legs.replaces(denim, boot, sole);
   }
 

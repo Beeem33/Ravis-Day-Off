@@ -12,6 +12,7 @@ import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
+import type { TakedownViewmodel } from '../entities/TakedownViewmodel';
 
 /** The parts of a level's data that the shared combat code touches. */
 export interface CombatLevel {
@@ -321,6 +322,22 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
   protected knifeWound(victim: Enemy): THREE.Vector3 {
     const f = this.player.forwardDir();
     return victim.position.clone().add(new THREE.Vector3(-f.z * 0.13, 1.1, f.x * 0.13));
+  }
+
+  private static _holdA = new THREE.Vector3();
+  private static _holdB = new THREE.Vector3();
+  private static _holdK = new THREE.Vector3();
+
+  /**
+   * Give the man in a takedown Ravi's arms to hold on to — the forearm across
+   * his chest, and the wrist once the knife is in him. Call after
+   * player.update(): the arms ride the camera, and the camera only settles
+   * for the frame there.
+   */
+  protected holdOn(vm: TakedownViewmodel, victim: Enemy): void {
+    const { _holdA: a, _holdB: b, _holdK: k } = CombatScene;
+    vm.holdPoints(a, b, k);
+    victim.clutch(a, b, k);
   }
 
   // ------------------------------------------------------------- drop kick

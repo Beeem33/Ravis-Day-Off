@@ -81,9 +81,21 @@ export class Enemy {
   private headPitch = 0;
   /** Manning a vehicle turret: no personal weapon, hands on the spades. */
   private turret = false;
-  /** In Ravi's grip for a knife takedown: rifle gone, arms clawing, body writhing. */
+  /** In Ravi's grip for a knife takedown: rifle gone, fighting the hold, then the knife. */
   beingExecuted = false;
   private struggleTime = 0;
+  // ---- Takedown reaction, reset by beginExecution
+  /** Ravi's arms this frame in the body's own frame: two points along the forearm that has him, and the knife wrist. */
+  private holdA = new THREE.Vector3();
+  private holdB = new THREE.Vector3();
+  private holdKnife = new THREE.Vector3();
+  private hasHold = false;
+  private stabCount = 0;
+  private sinceStab = 0;
+  /** struggleTime of the first stab, -1 before it. */
+  private firstStab = -1;
+  /** 0 upright … 1 doubled over; eased toward wherever the last stab left him. */
+  private fold = 0;
   private rifleDropped = false;
   private flashTime = 0;
   /** The boss: heavier build, beard, cap, no weapon. */
@@ -144,6 +156,59 @@ export class Enemy {
   private static faceCalm: THREE.MeshStandardMaterial | null = null;
   private static faceShaken: THREE.MeshStandardMaterial | null = null;
   private static faceConcerned: THREE.MeshStandardMaterial | null = null;
+  private static faceScream: THREE.MeshStandardMaterial | null = null;
+
+  /**
+   * Stabbed. Brows knotted up in the middle — pain, not anger, which slants
+   * them the other way — eyes screwed shut, and the mouth as wide as the face
+   * allows with a band of top teeth. Same skin and stubble as the angry face
+   * it replaces, so the swap reads as his expression changing and not as a
+   * different head.
+   */
+  private static drawScreamFace(): THREE.MeshStandardMaterial {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#c59a76';
+    g.fillRect(0, 0, 64, 64);
+    g.fillStyle = 'rgba(60,40,30,0.25)';
+    for (let i = 0; i < 90; i++) g.fillRect(10 + Math.random() * 44, 36 + Math.random() * 22, 1, 1);
+    g.strokeStyle = '#2a1d15';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(11, 23);
+    g.lineTo(27, 17);
+    g.moveTo(53, 23);
+    g.lineTo(37, 17);
+    g.stroke();
+    // Screwed shut: a chevron each, pointing in at the nose
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(14, 26);
+    g.lineTo(25, 30);
+    g.lineTo(14, 34);
+    g.moveTo(50, 26);
+    g.lineTo(39, 30);
+    g.lineTo(50, 34);
+    g.stroke();
+    // The scream
+    g.fillStyle = '#3a0f0e';
+    g.beginPath();
+    g.ellipse(32, 50, 11, 10, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#ece6da';
+    g.fillRect(24, 41, 16, 4);
+    g.fillStyle = '#8c2f2a'; // tongue
+    g.beginPath();
+    g.ellipse(32, 57, 6, 3, 0, 0, Math.PI * 2);
+    g.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+  }
 
   /** The civilian at rest: level brows, normal eyes, a slight smile. */
   private static drawCalmFace(): THREE.MeshStandardMaterial {
@@ -721,6 +786,7 @@ export class Enemy {
     if (!Enemy.faceCalm) Enemy.faceCalm = Enemy.drawCalmFace();
     if (!Enemy.faceShaken) Enemy.faceShaken = Enemy.drawShakenFace();
     if (!Enemy.faceConcerned) Enemy.faceConcerned = Enemy.drawConcernedFace();
+    if (!Enemy.faceScream) Enemy.faceScream = Enemy.drawScreamFace();
     // Staff start calm; the scared face is switched in when they panic
     const faceMat = this.civilian ? Enemy.faceCalm : Enemy.faceAngry;
     this.head = this.addPart(
@@ -1254,15 +1320,153 @@ export class Enemy {
     world.addBody(this.gunBody);
   }
 
-  /** Grabbed for a knife takedown: gun hits the floor, hands come up to claw. */
+  /** Grabbed for a knife takedown: gun hits the floor, hands go for the arm that has him. */
   beginExecution(world: CANNON.World): void {
     if (!this.alive || this.beingExecuted) return;
     this.beingExecuted = true;
     this.struggleTime = 0;
+    this.stabCount = 0;
+    this.sinceStab = 0;
+    this.firstStab = -1;
+    this.fold = 0;
+    this.hasHold = false;
     this.aimTarget = 0;
     this.walkSpeed = 0;
     // The gun tumbles out ahead of them, roughly toward their attacker
     this.dropRifle(world, this.forwardDir(new THREE.Vector3()).multiplyScalar(0.6));
+  }
+
+  /**
+   * Where Ravi's arms are this frame, in world space: the wrist and the back
+   * of the hand that has him, and the knife wrist. The scene pushes these
+   * every frame of a takedown and the held pose reaches for them, so his
+   * hands stay on Ravi's arms however either of them moves.
+   */
+  clutch(a: THREE.Vector3, b: THREE.Vector3, knife: THREE.Vector3): void {
+    const toBody = (w: THREE.Vector3, out: THREE.Vector3) =>
+      out.copy(w).sub(this.root.position).applyAxisAngle(Enemy._up, -this.yaw);
+    toBody(a, this.holdA);
+    toBody(b, this.holdB);
+    toBody(knife, this.holdKnife);
+    this.hasHold = true;
+  }
+
+  /** The blade has gone in (again): the scream, and the jolt that folds him. */
+  stabbed(): void {
+    if (!this.alive) return;
+    this.stabCount++;
+    this.sinceStab = 0;
+    if (this.firstStab < 0) this.firstStab = this.struggleTime;
+    const mats = this.head.material;
+    if (Array.isArray(mats) && Enemy.faceScream) mats[5] = Enemy.faceScream;
+  }
+
+  // Scratch for the held pose, which runs every frame someone is held
+  private static _up = new THREE.Vector3(0, 1, 0);
+  private static _qa = new THREE.Quaternion();
+  private static _qb = new THREE.Quaternion();
+  private static _qc = new THREE.Quaternion();
+  private static _qd = new THREE.Quaternion();
+  private static _eu = new THREE.Euler();
+  private static _hc = new THREE.Vector3();
+  private static _wp = new THREE.Vector3();
+  private static _ha = new THREE.Vector3();
+  private static _hb = new THREE.Vector3();
+
+  /**
+   * Held for a knife takedown.
+   *
+   * Before the blade he fights the arm across his chest: both hands on it,
+   * prising, leaning away and bucking, feet scrabbling. Each stab is a jolt:
+   * he screams, folds forward at the hips and the waist and curls round
+   * toward the wound, his knees give, and the hand on that side lets go of
+   * the grab and clamps onto the wrist doing it.
+   *
+   * The upper body is posed as one rigid bend about the ragdoll's own hip
+   * and waist joints and kept inside their cones (hips 0.6, waist 0.45,
+   * knees 0.55). That is what lets die() take the pose over at the release
+   * instead of snapping him upright for a frame first.
+   */
+  private poseExecution(dt: number): void {
+    this.struggleTime += dt;
+    this.sinceStab += dt;
+    const s = this.struggleTime;
+    const hurt = this.stabCount > 0;
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    const ease = (x: number) => x * x * (3 - 2 * x);
+
+    // Two incommensurate sines so it reads as fighting, not vibrating. Once
+    // the knife is in, the fight goes out of him and it's a shudder.
+    const buck = (Math.sin(s * 12.5) * 0.1 + Math.sin(s * 7.3 + 1.2) * 0.06) * (hurt ? 0.3 : 1);
+    const goal = hurt ? (this.stabCount >= 2 ? 1 : 0.72) : 0;
+    this.fold += (goal - this.fold) * Math.min(1, dt * (hurt ? 11 : 4));
+    const f = this.fold;
+    const jolt = hurt ? Math.exp(-this.sinceStab * 10) : 0; // the instant the blade lands
+
+    // Most of the fold is at the waist, with the seat pushed well back. Put it
+    // in the hips instead and his head swings a quarter of a metre toward the
+    // camera, filling the shot; this way it comes about 13cm.
+    const hipFlex = 0.08 * f;
+    const waist = -0.12 * (1 - f) + 0.36 * f + 0.1 * jolt + buck * 0.35; // negative leans away from the grab
+    const curl = 0.2 * f + Math.sin(s * 5.1) * 0.03 * f; // round toward his left, where the blade is
+    const knees = 0.26 * f;
+    const sag = 0.82 * (1 - Math.cos(knees)); // exactly what bent knees take off his height
+    const hipsBack = 0.1 * f;
+
+    // Pelvis tips forward about the hip line and drops with the knees
+    const hc = Enemy._hc.set(0, 0.82 - sag, hipsBack);
+    const qp = Enemy._qa.setFromEuler(Enemy._eu.set(-hipFlex, 0, 0));
+    this.pelvis.position.set(0, 0.14, 0).applyQuaternion(qp).add(hc);
+    this.pelvis.quaternion.copy(qp);
+    // Everything above the waist turns as one about the waist joint. The
+    // shoulders and head hang off the root, not the chest, so they are
+    // carried round by hand rather than riding along.
+    const wp = Enemy._wp.set(0, 0.28, 0).applyQuaternion(qp).add(hc);
+    const qu = Enemy._qb.copy(qp).multiply(Enemy._qc.setFromEuler(Enemy._eu.set(-waist, 0, curl)));
+    const above = (x: number, y: number, out: THREE.Vector3) => out.set(x, y - 1.1, 0).applyQuaternion(qu).add(wp);
+    above(0, 1.27, this.torso.position);
+    this.torso.quaternion.copy(qu);
+    above(-this.shoulderX, 1.4, this.armL.position);
+    above(this.shoulderX, 1.4, this.armR.position);
+    above(0, 1.585, this.head.position);
+    // Head thrown back with the scream, then down to look at what's in him
+    const scream = hurt ? Math.exp(-this.sinceStab * 3.5) : 0;
+    const tilt = hurt ? 0.34 * scream - 0.34 * f * (1 - scream) : 0.3 + buck * 0.35;
+    const roll = Math.sin(s * 9) * 0.08 * (hurt ? 0.4 : 1);
+    this.head.quaternion.copy(qu).multiply(Enemy._qd.setFromEuler(Enemy._eu.set(tilt, 0, roll)));
+
+    // Legs: scrabbling for purchase, then the knees going
+    this.legL.position.set(-this.hipX, 0.82 - sag, hipsBack);
+    this.legR.position.set(this.hipX, 0.82 - sag, hipsBack);
+    const scrabL = hurt ? Math.sin(s * 14) * 0.02 : 0.12 + Math.sin(s * 10.5) * 0.16;
+    const scrabR = hurt ? Math.sin(s * 13 + 1) * 0.02 : 0.1 - Math.sin(s * 10.5 + 0.9) * 0.16;
+    this.legL.rotation.set(knees + scrabL, 0, 0);
+    this.legR.rotation.set(knees + scrabR, 0, 0);
+    this.shinL.rotation.set(-2 * knees - (hurt ? 0 : Math.max(0, Math.sin(s * 10.5)) * 0.3), 0, 0);
+    this.shinR.rotation.set(-2 * knees - (hurt ? 0 : Math.max(0, -Math.sin(s * 10.5 + 0.9)) * 0.3), 0, 0);
+
+    if (!this.hasHold) {
+      // No arms to hold on to (nothing pushed them this frame): claw at the air
+      const claw = Math.sin(s * 15) * 0.14;
+      this.armR.rotation.set(2.1 + claw, 0, -0.25 + buck * 0.5);
+      this.armL.rotation.set(2.15 - claw * 0.8, 0, 0.3 - buck * 0.4);
+      this.foreR.rotation.set(0.55, 0, 0);
+      this.foreL.rotation.set(0.6, 0, 0);
+      return;
+    }
+    // His right hand stays on Ravi's wrist the whole way. His left starts on
+    // the hand gripping his chest, prising at it — then goes for the knife
+    // wrist the moment the blade is in, because that's the side it went in on.
+    const pry = hurt ? 0.006 : 0.022;
+    const a = Enemy._ha.copy(this.holdA);
+    a.x += Math.sin(s * 13) * pry;
+    a.y += Math.sin(s * 11 + 1) * pry;
+    const toKnife = hurt ? ease(c01((s - this.firstStab) / 0.16)) : 0;
+    const b = Enemy._hb.copy(this.holdB).lerp(this.holdKnife, toKnife);
+    b.x += Math.sin(s * 12 + 2) * pry;
+    b.y += Math.sin(s * 9.7) * pry;
+    this.reachArm(this.armR, this.foreR, a, 1);
+    this.reachArm(this.armL, this.foreL, b, -1);
   }
 
   // Scratch vectors — gripRifle runs every frame for every live enemy.
@@ -1405,8 +1609,30 @@ export class Enemy {
       shinR: { visual: this.shinR, center: new THREE.Vector3(0.115, 0.205, 0), half: new THREE.Vector3(0.08, 0.205, 0.09), mass: 4 }
     };
 
+    // A man killed mid-takedown dies in the shape he's in — folded over the
+    // blade, hands on Ravi's arms. Everyone else starts from the standing
+    // layout, as they always have: sitting, kneeling and slumped poses are
+    // outside what the joints allow, and the solver would wrench them straight.
+    //
+    // Read off matrixWorld up front, for every limb, before any of them is
+    // re-parented below: a forearm is a child of its upper arm, and once the
+    // upper arm has been reset and moved into its container, anything that
+    // recomputed the forearm's world transform would get the wrong answer.
+    const posed = new Map<string, { c: THREE.Vector3; q: THREE.Quaternion }>();
+    if (this.beingExecuted) {
+      for (const [name, limb] of Object.entries(limbs)) {
+        // Arm and leg groups pivot at the joint; their bodies sit below it
+        const below = name.startsWith('arm') || name.startsWith('fore') ? 0.145 : name.startsWith('leg') || name.startsWith('shin') ? 0.205 : 0;
+        const c = new THREE.Vector3(0, -below, 0).applyMatrix4(limb.visual.matrixWorld);
+        const q = new THREE.Quaternion();
+        limb.visual.matrixWorld.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+        posed.set(name, { c, q });
+      }
+    }
+
     for (const [name, limb] of Object.entries(limbs)) {
-      const worldCenter = this.root.localToWorld(limb.center.clone());
+      const worldCenter = posed.get(name)?.c ?? this.root.localToWorld(limb.center.clone());
+      const worldQuat = posed.get(name)?.q ?? yawQ;
       const body = new CANNON.Body({
         mass: limb.mass,
         shape: limb.sphere
@@ -1428,13 +1654,13 @@ export class Enemy {
         collisionFilterGroup: 2,
         collisionFilterMask: 1
       });
-      body.quaternion.set(yawQ.x, yawQ.y, yawQ.z, yawQ.w);
+      body.quaternion.set(worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w);
       world.addBody(body);
 
       // Re-home the visual under a container that will track this body.
       const container = new THREE.Group();
       container.position.copy(worldCenter);
-      container.quaternion.copy(yawQ);
+      container.quaternion.copy(worldQuat);
       parent.add(container);
       this.root.remove(limb.visual);
       limb.visual.position.set(0, 0, 0);
@@ -1767,29 +1993,9 @@ export class Enemy {
       );
     }
 
-    // Held for execution — panic overrides everything: both hands come up to
-    // claw at the grip on their face, head wrenched back, body bucking
+    // Held for execution: panic overrides everything
     if (this.beingExecuted) {
-      this.struggleTime += dt;
-      const s = this.struggleTime;
-      const buck = Math.sin(s * 12.5) * 0.1 + Math.sin(s * 7.3 + 1.2) * 0.06;
-      const claw = Math.sin(s * 15) * 0.14;
-      this.armR.rotation.x = 2.1 + claw;
-      this.armL.rotation.x = 2.15 - claw * 0.8;
-      this.armR.rotation.z = -0.25 + buck * 0.5;
-      this.armL.rotation.z = 0.3 - buck * 0.4;
-      this.foreR.rotation.x = 0.55 + Math.sin(s * 13.7) * 0.18;
-      this.foreL.rotation.x = 0.6 - Math.sin(s * 11.1 + 0.6) * 0.18;
-      this.head.rotation.x = 0.38 + buck * 0.35; // wrenched back by the grip
-      this.head.rotation.z = Math.sin(s * 9) * 0.08;
-      this.torso.position.set(0, 1.27, 0);
-      this.torso.rotation.x = -0.1 + buck * 0.4; // leaning away, bucking
-      this.torso.rotation.z = buck * 0.3;
-      // Feet scrabbling for purchase
-      this.legL.rotation.x = 0.12 + Math.sin(s * 10.5) * 0.16;
-      this.legR.rotation.x = 0.1 - Math.sin(s * 10.5 + 0.9) * 0.16;
-      this.shinL.rotation.x = Math.max(0, Math.sin(s * 10.5)) * 0.3;
-      this.shinR.rotation.x = Math.max(0, -Math.sin(s * 10.5 + 0.9)) * 0.3;
+      this.poseExecution(dt);
       return; // the walk/idle chest pose below must not overwrite the struggle
     }
 

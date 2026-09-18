@@ -513,6 +513,82 @@ export class AudioManager {
     osc.stop(t + 0.35);
   }
 
+  /**
+   * A man screaming with a knife in him, from half a metre away.
+   *
+   * A single sawtooth is a buzzer; two a few cents apart start to beat like
+   * a throat. They wobble with vibrato plus a slower random-ish drift, and
+   * go through three formant bands tuned to an open "AAH" — that shaping is
+   * what turns an oscillator into a voice. The pitch leaps as the scream
+   * catches, holds, then cracks and falls away, with breath noise riding on
+   * top. `strength` below 1 is the second stab: shorter, lower, choked off.
+   */
+  enemyScream(strength = 1): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const D = 0.35 + 0.6 * strength;
+    const base = 165 + Math.random() * 30;
+    const peak = base * (1.7 + 0.55 * strength);
+    const level = 0.1 + 0.28 * strength;
+
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(level, t + 0.035);
+    out.gain.setValueAtTime(level, t + D * 0.6);
+    out.gain.exponentialRampToValueAtTime(0.0001, t + D);
+    out.connect(this.sfxBus);
+
+    // "AAH": F1 ~800, F2 ~1150, F3 ~2600, each a fairly narrow band
+    const voice = ctx.createGain();
+    for (const [f, q, g] of [[800, 5, 1.0], [1150, 6, 0.75], [2600, 8, 0.4]] as const) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f * (0.96 + Math.random() * 0.08);
+      bp.Q.value = q;
+      const gg = ctx.createGain();
+      gg.gain.value = g;
+      voice.connect(bp).connect(gg).connect(out);
+    }
+
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 6 + Math.random() * 1.5;
+    const vibDepth = ctx.createGain();
+    vibDepth.gain.value = peak * 0.035;
+    vib.connect(vibDepth);
+    for (const detune of [-6, 6]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.detune.value = detune;
+      osc.frequency.setValueAtTime(base, t);
+      osc.frequency.exponentialRampToValueAtTime(peak, t + 0.09);
+      osc.frequency.exponentialRampToValueAtTime(peak * 0.9, t + D * 0.6);
+      // The crack: the voice gives out and drops most of an octave
+      osc.frequency.exponentialRampToValueAtTime(base * 0.62, t + D);
+      vibDepth.connect(osc.frequency);
+      osc.connect(voice);
+      osc.start(t);
+      osc.stop(t + D + 0.05);
+    }
+    vib.start(t);
+    vib.stop(t + D + 0.05);
+
+    // Breath through the scream, hoarser as it goes
+    const air = ctx.createBufferSource();
+    air.buffer = this.noiseBuffer;
+    const airF = ctx.createBiquadFilter();
+    airF.type = 'bandpass';
+    airF.frequency.value = 1700;
+    airF.Q.value = 0.9;
+    const airG = ctx.createGain();
+    airG.gain.setValueAtTime(0.0001, t);
+    airG.gain.exponentialRampToValueAtTime(0.09 * strength + 0.03, t + 0.05);
+    airG.gain.exponentialRampToValueAtTime(0.0001, t + D);
+    air.connect(airF).connect(airG).connect(this.sfxBus);
+    air.start(t, Math.random());
+    air.stop(t + D + 0.05);
+  }
+
   radioChirp(distance: number): void {
     const a = this.atten(distance, 25) * 0.6 + 0.05;
     this.tone('square', 1800, 1400, 0.05, 0.04 * a);

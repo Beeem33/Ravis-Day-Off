@@ -5,7 +5,8 @@ import * as THREE from 'three';
  * camera like the weapon viewmodels. The left hand reaches in and takes hold
  * of him while the right pulls a bowie knife from the hip and, after a
  * struggle, drives it into his side — the side on Ravi's right, so each arm
- * stays on its own half of the frame and neither ever reaches across.
+ * stays on its own half of the frame and neither ever reaches across. Half
+ * the time it comes out and goes in again.
  *
  * The scene owns the choreography (locking the camera on the target); this
  * class only animates the arms and reports timeline events.
@@ -21,17 +22,26 @@ export class TakedownViewmodel {
   active = false;
   private t = 0;
   private fired = new Set<string>();
-  /** 'grab' | 'draw' | 'stab' (blade in, held) | 'release' (the kill) | 'done' */
-  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'release' | 'done') => void) | null = null;
+  /** How many times the blade goes in this time — rolled by start(). */
+  stabs: 1 | 2 = 1;
+  private releaseT = TakedownViewmodel.RELEASE_T;
+  private totalT = TakedownViewmodel.RELEASE_T + TakedownViewmodel.TAIL;
+  /** 'stab' fires once per thrust with `index` 0 or 1; 'release' is the kill. */
+  onEvent: ((e: 'grab' | 'draw' | 'stab' | 'release' | 'done', index: number) => void) | null = null;
 
   static readonly GRAB_T = 0.35;
   static readonly DRAW_T = 0.5;
   static readonly RAISE_T = 1.0; // knife drawn back at the hip, ready
-  static readonly STAB_T = 1.25; // the straight thrust lands in the stomach
-  static readonly RELEASE_T = 1.75; // he lets go — and only now do they fall
-
-  static readonly DIE_T = 1.85;
-  static readonly TOTAL_T = 2.45;
+  static readonly STAB_T = 1.25; // the first thrust starts…
+  static readonly THRUST = 0.13; // …and lands this much later
+  // A double only: the blade comes most of the way back out, and goes in again
+  static readonly PULL_T = 1.6;
+  static readonly STAB2_T = 1.74;
+  // He lets go — and only now do they fall. Later when there are two.
+  static readonly RELEASE_T = 1.75;
+  static readonly RELEASE2_T = 2.25;
+  /** Release to both arms out of frame. */
+  static readonly TAIL = 0.7;
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -103,7 +113,16 @@ export class TakedownViewmodel {
     this.root.add(this.armL);
   }
 
-  start(): void {
+  /**
+   * Begin. Half the time he goes in twice — the only chance in the move, and
+   * enough that it doesn't play out identically every time. Pass `stabs` to
+   * pin it (tests, anything scripted).
+   */
+  start(stabs: 1 | 2 = Math.random() < 0.5 ? 2 : 1): void {
+    const T = TakedownViewmodel;
+    this.stabs = stabs;
+    this.releaseT = stabs === 2 ? T.RELEASE2_T : T.RELEASE_T;
+    this.totalT = this.releaseT + T.TAIL;
     this.active = true;
     this.t = 0;
     this.fired.clear();
@@ -116,19 +135,48 @@ export class TakedownViewmodel {
     this.root.visible = false;
   }
 
-  private event(name: 'grab' | 'draw' | 'stab' | 'release' | 'done'): void {
-    if (this.fired.has(name)) return;
-    this.fired.add(name);
-    this.onEvent?.(name);
+  private event(name: 'grab' | 'draw' | 'stab' | 'release' | 'done', index = 0): void {
+    const key = name + index;
+    if (this.fired.has(key)) return;
+    this.fired.add(key);
+    this.onEvent?.(name, index);
   }
 
-  /** 0..1 how violently the pair is struggling right now (for camera shake). */
+  /** 0..1 how violently the pair is struggling right now (drives the arm jitter). */
   get struggle(): number {
     if (!this.active) return 0;
     const T = TakedownViewmodel;
-    if (this.t < T.GRAB_T || this.t > T.RELEASE_T + 0.2) return 0;
+    if (this.t < T.GRAB_T || this.t > this.releaseT + 0.2) return 0;
     if (this.t > T.STAB_T) return 1.4; // the stabs kick hardest
     return Math.min(1, (this.t - T.GRAB_T) / 0.4);
+  }
+
+  /**
+   * 0..1 how far into "cutscene" the frame should be — the letterbox, the
+   * tighter lens, the grade. Up over the first third of a second; down over
+   * the last half, so the bars are already opening as the arms drop away.
+   */
+  get cinema(): number {
+    if (!this.active) return 0;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    return ease(c01(this.t / 0.35)) * (1 - ease(c01((this.t - (this.totalT - 0.5)) / 0.5)));
+  }
+
+  /**
+   * Where the victim can take hold of Ravi, in world space: the wrist of the
+   * hand that has him, the back of that hand, and the knife wrist. Call
+   * after the camera has moved for the frame.
+   *
+   * The second point is the hand itself because it is on his chest, inside
+   * his reach from either shoulder. A point further up Ravi's forearm was
+   * 13cm beyond what his left arm could reach across his own body.
+   */
+  holdPoints(a: THREE.Vector3, b: THREE.Vector3, knife: THREE.Vector3): void {
+    this.root.updateWorldMatrix(true, true);
+    this.armL.localToWorld(a.set(0, -0.02, 0.06));
+    this.armL.localToWorld(b.set(0, 0.03, 0));
+    this.armR.localToWorld(knife.set(0, -0.01, 0.1));
   }
 
   update(dt: number): void {
@@ -153,9 +201,9 @@ export class TakedownViewmodel {
     const gFrom = new THREE.Vector3(-0.42, -0.5, -0.25);
     const gGrab = new THREE.Vector3(-0.055, -0.03, -0.56);
     // The grab hand holds them up the whole time — and LETS GO at the release
-    const reach = ease(c01(t / T.GRAB_T)) * (1 - ease(c01((t - T.RELEASE_T) / 0.3)));
+    const reach = ease(c01(t / T.GRAB_T)) * (1 - ease(c01((t - this.releaseT) / 0.3)));
     // After the release: drop back out of frame
-    const out = ease(c01((t - (T.TOTAL_T - 0.55)) / 0.5));
+    const out = ease(c01((t - (this.totalT - 0.55)) / 0.5));
     this.armL.position.lerpVectors(gFrom, gGrab, reach);
     this.armL.position.x += jx;
     this.armL.position.y += jy;
@@ -180,6 +228,25 @@ export class TakedownViewmodel {
     const kReady = new THREE.Vector3(0.3, -0.24, -0.42); // low and wide, blade forward
     const kCock = new THREE.Vector3(0.34, -0.29, -0.32); // a short pull-back before the thrust
     const kStab = new THREE.Vector3(0.19, -0.2, -0.58); // buried in his side
+    const kPull = new THREE.Vector3(0.25, -0.24, -0.44); // a double: most of the way back out
+    const kStab2 = new THREE.Vector3(0.18, -0.212, -0.61); // and in again, a touch deeper
+    // One thrust and the hold after it. The wrist turns out as it drives,
+    // against the arm's inward yaw, so the blade goes into his side rather
+    // than angling across to his navel — the forearm still reads as coming
+    // from the right shoulder.
+    const drive = (from: THREE.Vector3, to: THREE.Vector3, t0: number, wrist0: number, index: number): void => {
+      const k = ease(c01((t - t0) / T.THRUST));
+      this.armR.position.lerpVectors(from, to, k);
+      this.armR.position.x += jx;
+      this.armR.position.y += jy;
+      const held = t > t0 + T.THRUST;
+      const grind = held ? Math.sin(t * 9) * 0.05 + Math.sin(t * 14.7) * 0.025 : 0;
+      // Leaning his weight onto the buried knife
+      this.armR.position.z += held ? Math.sin((t - t0) * 2.1) * 0.02 : 0;
+      this.armR.rotation.set(0.2 + 0.1 * k + grind, 0.3 + 0.08 * k, -0.08 - grind * 0.5);
+      this.knife.rotation.set(-0.1 - 0.15 * k + grind * 0.7, wrist0 + (-0.22 - wrist0) * k, 0);
+      if (k >= 1) this.event('stab', index);
+    };
     if (t < T.DRAW_T) {
       this.armR.position.copy(kPocket);
       this.armR.rotation.set(0.1, 0.3, 0);
@@ -203,31 +270,26 @@ export class TakedownViewmodel {
       this.armR.position.y += jy * 0.7;
       this.armR.rotation.set(0.2 + jy * 2, 0.3, -0.08);
       this.knife.rotation.set(-0.1, 0.1, 0);
-    } else if (t < T.RELEASE_T) {
-      // The thrust: straight in at stomach height — then it STAYS there,
-      // hand grinding on the handle while he holds them up.
-      const k = ease(c01((t - T.STAB_T) / 0.13));
-      this.armR.position.lerpVectors(kCock, kStab, k);
-      this.armR.position.x += jx;
-      this.armR.position.y += jy;
-      const held = t > T.STAB_T + 0.13;
-      const grind = held ? Math.sin(t * 9) * 0.05 + Math.sin(t * 14.7) * 0.025 : 0;
-      // Leaning his weight onto the buried knife
-      const lean = held ? Math.sin((t - T.STAB_T) * 2.1) * 0.02 : 0;
-      this.armR.position.z += lean;
-      this.armR.rotation.set(0.2 + 0.1 * k + grind, 0.3 + 0.08 * k, -0.08 - grind * 0.5);
-      // Blade level, nose dipped a touch — driving INTO the gut
-      // The wrist turns out as it drives, against the arm's inward yaw, so the
-      // blade goes into his side rather than angling across to his navel —
-      // the forearm still reads as coming from the right shoulder.
-      this.knife.rotation.set(-0.1 - 0.15 * k + grind * 0.7, 0.1 - 0.32 * k, 0);
-      if (k >= 1) this.event('stab');
+    } else if (t < this.releaseT) {
+      if (this.stabs === 1 || t < T.PULL_T) {
+        drive(kCock, kStab, T.STAB_T, 0.1, 0);
+      } else if (t < T.STAB2_T) {
+        // Most of the way back out — quick, and with his hands on the wrist
+        const k = ease(c01((t - T.PULL_T) / (T.STAB2_T - T.PULL_T)));
+        this.armR.position.lerpVectors(kStab, kPull, k);
+        this.armR.position.x += jx;
+        this.armR.position.y += jy;
+        this.armR.rotation.set(0.3 - 0.1 * k, 0.38 - 0.08 * k, -0.08);
+        this.knife.rotation.set(-0.25 + 0.15 * k, -0.22 + 0.12 * k, 0);
+      } else {
+        drive(kPull, kStab2, T.STAB2_T, -0.1, 1);
+      }
     } else {
       // Let go: the left hand releases, the knife is wrenched back out —
       // and THAT is when they drop.
-      const k = ease(c01((t - T.RELEASE_T) / 0.3));
+      const k = ease(c01((t - this.releaseT) / 0.3));
       this.event('release');
-      this.armR.position.lerpVectors(kStab, new THREE.Vector3(0.3, -0.36, -0.34), k);
+      this.armR.position.lerpVectors(this.stabs === 2 ? kStab2 : kStab, new THREE.Vector3(0.3, -0.36, -0.34), k);
       this.armR.rotation.set(0.3 - 0.5 * k, 0.38, -0.1);
       this.knife.rotation.set(-0.05 - 0.45 * k, -0.22 * (1 - k), -0.1 * k);
     }
@@ -241,7 +303,7 @@ export class TakedownViewmodel {
       this.root.rotation.x = 0;
     }
 
-    if (t >= T.TOTAL_T) {
+    if (t >= this.totalT) {
       this.active = false;
       this.root.visible = false;
       this.event('done');

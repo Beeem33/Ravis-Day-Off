@@ -206,7 +206,7 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
         this.endKickRun();
       }
     };
-    this.takedownVm.onEvent = (e) => {
+    this.takedownVm.onEvent = (e, i) => {
       const victim = this.takedown;
       if (e === 'grab') {
         if (victim) audio.enemyShout(1);
@@ -224,6 +224,10 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
             .add(new THREE.Vector3(0, 0.9, 0))
             .normalize();
           audio.knifeStab();
+          // He screams and folds round it, hands going for the wrist. The
+          // second time there's less left in him to scream with.
+          victim.stabbed();
+          audio.enemyScream(i === 0 ? 1 : 0.6);
           this.spatter(wound, spray, true);
         }
       } else if (e === 'release') {
@@ -582,13 +586,18 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
+    if (this.takedown) this.holdOn(this.takedownVm, this.takedown);
     this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
     this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
     this.rifle.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'rifle');
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
     // FOV zoom while aiming (the shotgun's bead zooms less than the irons)
-    const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend - 20 * this.rifle.aimBlend;
+    // …and a longer lens for the takedown, which the HUD letterboxes to match
+    const targetFov =
+      74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend - 20 * this.rifle.aimBlend - 10 * this.takedownVm.cinema;
+    // Halfway, so the bars' own slide lands in step with the lens
+    this.hud.setCinematic(this.takedownVm.cinema > 0.5);
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();

@@ -168,6 +168,46 @@ export class FPSHUD {
   destroy(): void {
     for (const u of this.unsubs) u();
     this.hud.remove();
+    // The bars live beside the HUD, and the grade is on the game canvas —
+    // neither goes with it, and a level quit mid-takedown would otherwise
+    // hand the menu a letterboxed, desaturated picture.
+    for (const bar of this.cineBars) bar.remove();
+    this.gradeCanvas(false);
+  }
+
+  private cineBars: HTMLElement[] = [];
+  private cinematic = false;
+
+  /**
+   * Cutscene framing for the knife takedown: black bars closing in from the
+   * top and bottom, the rest of the HUD faded out, and the picture graded a
+   * little colder and harder. All CSS transitions, so the scene only has to
+   * say on or off, every frame, and this does nothing until it changes.
+   */
+  setCinematic(on: boolean): void {
+    if (on === this.cinematic) return;
+    this.cinematic = on;
+    if (!this.cineBars.length) {
+      for (const edge of ['top', 'bottom']) {
+        const bar = document.createElement('div');
+        bar.style.cssText =
+          `position:absolute;left:0;right:0;${edge}:0;height:11.5vh;background:#000;pointer-events:none;` +
+          `transform:scaleY(0);transform-origin:${edge};transition:transform .35s cubic-bezier(.3,0,.2,1);`;
+        this.root.appendChild(bar);
+        this.cineBars.push(bar);
+      }
+    }
+    for (const bar of this.cineBars) bar.style.transform = on ? 'scaleY(1)' : 'scaleY(0)';
+    this.hud.style.transition = 'opacity .3s';
+    this.hud.style.opacity = on ? '0' : '1';
+    this.gradeCanvas(on);
+  }
+
+  private gradeCanvas(on: boolean): void {
+    const canvas = document.querySelector<HTMLCanvasElement>('#app canvas');
+    if (!canvas) return;
+    canvas.style.transition = 'filter .4s';
+    canvas.style.filter = on ? 'saturate(0.75) contrast(1.12) brightness(0.95)' : '';
   }
 
   private flashHitmarker(): void {

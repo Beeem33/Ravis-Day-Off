@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level5Builder, Level5Data, ElevatorCar } from '../environment/Level5Builder';
+import { Level5Builder, Level5Data, ElevatorCar, LIFT_FLOORS } from '../environment/Level5Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -29,9 +29,17 @@ const TUBE_SIZE = 6;
  */
 const TORCH_ON = 16;
 
-/** How long the doors take to run, and how long the car is on the move. */
+/** How long the doors take to run. */
 const DOOR_TIME = 1.2;
-const RIDE_TIME = 2.2;
+/**
+ * The ride down, floor 5 to -1, about eleven seconds with the fade: the car
+ * pulls away showing ↓5, passes a floor every 1.5s on the display, settles
+ * at -1 and sits there a moment before the screen goes.
+ */
+const FIRST_FLOOR_T = 1.3;
+const FLOOR_EVERY = 1.5;
+const ARRIVE_T = FIRST_FLOOR_T + (LIFT_FLOORS.length - 2) * FLOOR_EVERY + 0.9;
+const RIDE_TIME = ARRIVE_T + 0.7;
 const FADE_TIME = 0.55;
 /** How long the load card holds on black before the basement fades up. */
 const CARD_TIME = 1.1;
@@ -871,20 +879,19 @@ export class Level5Scene extends CombatScene<Level5Data> {
         this.setDoors(carA, this.openA);
         carA.doorCollider.disabled = false;
         if (this.openA <= 0) {
-          this.ctx.audio.elevatorRide(RIDE_TIME + FADE_TIME + 0.4);
-          carA.buttons.get('2')!.emissiveIntensity = 0;
-          carA.indicator.map = carA.indicatorFaces.down;
-          carA.indicator.needsUpdate = true;
+          this.ctx.audio.elevatorRide(ARRIVE_T + 0.3);
+          carA.buttons.get('5')!.emissiveIntensity = 0;
+          this.showFloor(carA, '↓5');
           this.go('ride');
         }
         break;
       }
 
       case 'ride': {
-        if (this.stageT > RIDE_TIME * 0.45 && carA.indicator.map !== carA.indicatorFaces['1']) {
-          carA.indicator.map = carA.indicatorFaces['1'];
-          carA.indicator.needsUpdate = true;
-        }
+        // Counting down the floors as it passes them, then standing at -1
+        const passed = Math.floor((this.stageT - FIRST_FLOOR_T) / FLOOR_EVERY) + 1;
+        const i = Math.max(0, Math.min(LIFT_FLOORS.length - 1, passed));
+        this.showFloor(carA, this.stageT >= ARRIVE_T ? LIFT_FLOORS[i] : '↓' + LIFT_FLOORS[i]);
         if (this.stageT >= RIDE_TIME) this.go('fadeOut');
         break;
       }
@@ -934,6 +941,14 @@ export class Level5Scene extends CombatScene<Level5Data> {
       case 'room':
         break;
     }
+  }
+
+  /** Put a face on a car's floor display, if it isn't showing it already. */
+  private showFloor(car: ElevatorCar, face: string): void {
+    const tex = car.indicatorFaces[face];
+    if (!tex || car.indicator.map === tex) return;
+    car.indicator.map = tex;
+    car.indicator.needsUpdate = true;
   }
 
   private go(stage: Stage): void {
@@ -1065,7 +1080,7 @@ export class Level5Scene extends CombatScene<Level5Data> {
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
     // A little of the motor through the floor while the car is moving
-    if (this.stage === 'ride' || this.stage === 'fadeOut') {
+    if (this.stage === 'ride' && this.stageT < ARRIVE_T) {
       this.player.camera.position.y += (Math.random() - 0.5) * 0.008;
     }
 

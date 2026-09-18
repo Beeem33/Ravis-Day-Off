@@ -21,12 +21,18 @@ export interface ElevatorCar {
   panel: THREE.Object3D;
   /** Each button's lamp, by label: '5' … '1', and 'MR'. */
   buttons: Map<string, THREE.MeshStandardMaterial>;
-  /** The floor display above the door, and the faces it can show. */
+  /**
+   * The floor display above the door, and the faces it can show: each of
+   * LIFT_FLOORS standing ('5'), and on the move with the arrow ('↓5').
+   */
   indicator: THREE.MeshBasicMaterial;
-  indicatorFaces: Record<'2' | '1' | 'MR' | 'down', THREE.Texture>;
+  indicatorFaces: Record<string, THREE.Texture>;
   /** Inside the car, for "has he stepped in yet". */
   interior: THREE.Box3;
 }
+
+/** The floors the lift passes, top to bottom: from Ravi's floor down to the mechanical room. */
+export const LIFT_FLOORS = ['5', '4', '3', '2', '1', '0', '-1'] as const;
 
 export interface Level5Data {
   group: THREE.Group;
@@ -291,9 +297,9 @@ export class Level5Builder {
   build(): Level5Data {
     this.makeMaterials();
     this.buildHallway();
-    const carA = this.buildCar(HALL_X1, '2');
+    const carA = this.buildCar(HALL_X1, '5', '5');
     this.buildBasement();
-    const carB = this.buildCar(HALL_X1 + OFFSET.x, 'MR');
+    const carB = this.buildCar(HALL_X1 + OFFSET.x, 'MR', '-1');
     this.buildLighting();
     this.shootables = mergeStatic(this.group, this.dressing, this.shootables);
 
@@ -1016,7 +1022,7 @@ export class Level5Builder {
    * right-hand (south) wall just inside, the emergency-power sign faces you
    * on the back wall, and the floor display is over the door.
    */
-  private buildCar(doorX: number, litFloor: '2' | 'MR'): ElevatorCar {
+  private buildCar(doorX: number, litButton: '5' | 'MR', shown: (typeof LIFT_FLOORS)[number]): ElevatorCar {
     const x0 = doorX + T / 2; // inside face of the front wall
     const x1 = doorX + CAR_D;
     const cx = (x0 + x1) / 2;
@@ -1082,7 +1088,7 @@ export class Level5Builder {
     const { panel, buttons } = this.controlPanel();
     panel.position.set(x0 + 0.42, 1.28, -CAR_HW + T / 2 + 0.012);
     this.group.add(panel);
-    buttons.get(litFloor)!.emissiveIntensity = 2.2;
+    buttons.get(litButton)!.emissiveIntensity = 2.2;
 
     // Emergency power sign and its green lamp, on the back wall
     const sign = this.emergencySign();
@@ -1091,13 +1097,8 @@ export class Level5Builder {
     this.group.add(sign);
 
     // Floor display over the door, facing into the car
-    const faces = {
-      '2': this.indicatorFace('2'),
-      '1': this.indicatorFace('1'),
-      MR: this.indicatorFace('MR'),
-      down: this.indicatorFace('↓')
-    };
-    const indicator = new THREE.MeshBasicMaterial({ map: faces[litFloor] });
+    const faces = this.indicatorFaces();
+    const indicator = new THREE.MeshBasicMaterial({ map: faces[shown] });
     const housing = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.42), this.darkMetalMat);
     housing.position.set(x0 + 0.025, DOOR_H + 0.17, 0);
     this.group.add(housing);
@@ -1229,6 +1230,21 @@ export class Level5Builder {
     bezel.position.set(0, 0.2, 0.004);
     g.add(bezel);
     return g;
+  }
+
+  private faces: Record<string, THREE.Texture> | null = null;
+
+  /** Every face the floor display can show, drawn once and shared by both cars. */
+  private indicatorFaces(): Record<string, THREE.Texture> {
+    if (!this.faces) {
+      const faces: Record<string, THREE.Texture> = {};
+      for (const f of LIFT_FLOORS) {
+        faces[f] = this.indicatorFace(f);
+        faces['↓' + f] = this.indicatorFace('↓' + f);
+      }
+      this.faces = faces;
+    }
+    return this.faces;
   }
 
   /** One face of the floor display: amber digits on black. */

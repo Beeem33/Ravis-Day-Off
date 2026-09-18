@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
-import { FirstPersonArms, grip } from './RaviVisual';
+import { FirstPersonArms, grip, mixGrip, reframe, type Grip } from './RaviVisual';
 
 /**
  * RifleViewmodel — the AK-47, loaded from models/ak47.glb and parented to
@@ -37,6 +37,22 @@ const GRIP_R = grip([0.03, -0.012, 0.065], [-0.12, 0.28, -0.95], [-1, 0, -0.1], 
 const GRIP_L = grip([-0.054, 0.008, 0.037], [0.8, 0, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
   fingers: [[60, 70, 30], [62, 70, 30], [64, 70, 32], [66, 70, 34]],
   thumb: [0.2, 0.15, 0.1]
+});
+/**
+ * The left hand through the reload. Round the fresh magazine, in the
+ * magazine's own frame (glb units: X forward, Y up to the lug, Z right):
+ * palm flat on its left side, fingers round the front edge, thumb up toward
+ * the lug. Then on the charging handle, in gun-local metres: flat along the
+ * gun's left flank behind the knob, fingers hooked round its front, thumb
+ * over the top, so the pull draws it straight back.
+ */
+const GRIP_MAG = grip([-0.096, -0.042, -0.035], [1, -0.3, 0], [0, 0, 1], [-0.6, -0.6, -0.5], {
+  fingers: [[80, 70, 30], [82, 70, 30], [84, 72, 32], [86, 74, 34]],
+  thumb: [0.1, 0.1, 0.1]
+});
+const GRIP_RACK = grip([-0.048, -0.004, 0.09], [0, 0.1, -1], [1, 0, 0], [-0.5, -0.4, 0.75], {
+  fingers: [[55, 70, 35], [60, 70, 35], [70, 70, 35], [75, 70, 35]],
+  thumb: [0.2, 0.1, 0.1]
 });
 
 export class RifleViewmodel {
@@ -575,6 +591,30 @@ export class RifleViewmodel {
     pivot.rotation.set(c.side, 0, c.swing);
   }
 
+  /**
+   * Where the left hand's grip is, in the support hand's frame: on the
+   * handguard, then round the fresh mag it carries in, then on the charging
+   * handle for the rack, easing across between them as it travels.
+   */
+  private leftGrip(): Grip {
+    if (!this.reloading) return GRIP_L;
+    const t = this.reloadT;
+    const ease = (x: number) => x * x * (3 - 2 * x);
+    const c01 = (x: number) => Math.min(1, Math.max(0, x));
+    this.supportHand.updateMatrix();
+    let onMag = GRIP_L;
+    if (this.handMag) {
+      this.handMag.updateMatrix();
+      onMag = reframe(GRIP_MAG, this.handMag.matrix);
+    }
+    const onHandle = reframe(GRIP_RACK, this.supportHand.matrix.clone().invert());
+    if (t < 0.34) return mixGrip(GRIP_L, onMag, ease(c01((t - 0.1) / 0.24)));
+    if (t < 1.46) return onMag;
+    if (t < 1.76) return mixGrip(onMag, onHandle, ease(c01((t - 1.46) / 0.3)));
+    if (t < 2.12) return onHandle;
+    return mixGrip(onHandle, GRIP_L, ease(c01((t - 2.12) / 0.23)));
+  }
+
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
     this.supportHand.visible = !this.hideSupportHand;
     const sprinting = player.sprinting && player.currentSpeed > 4.5;
@@ -631,6 +671,7 @@ export class RifleViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.set('l', this.supportHand, this.leftGrip());
     this.arms.update();
 
     this.updateCharm(dt);

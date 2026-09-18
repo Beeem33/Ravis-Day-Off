@@ -711,6 +711,23 @@ export function mixGrip(a: Grip, b: Grip, k: number): Grip {
   };
 }
 
+/**
+ * A grip written in one frame, carried into another by `m` (that frame's
+ * matrix in the other's space). Scale in `m` moves the wrist; directions
+ * only turn.
+ */
+export function reframe(g: Grip, m: THREE.Matrix4): Grip {
+  const q = new THREE.Quaternion();
+  m.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+  return {
+    wrist: g.wrist.clone().applyMatrix4(m),
+    along: g.along.clone().applyQuaternion(q),
+    palm: g.palm.clone().applyQuaternion(q),
+    toward: g.toward.clone().applyQuaternion(q),
+    shape: g.shape
+  };
+}
+
 /** Where his shoulders are from his eyes (camera space: x right, y up, z back). */
 const SHOULDER: Record<Side, THREE.Vector3> = {
   r: new THREE.Vector3(0.172, -0.22, 0.08),

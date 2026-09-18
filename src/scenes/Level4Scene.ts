@@ -201,8 +201,9 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.player.camera.add(this.torch);
     this.player.camera.add(this.torch.target);
 
-    this.particles = new ParticleManager(this.scene);
-    this.decals = new BloodDecalSystem(this.scene);
+    // Lit, so blood and debris only show where the torch or a flash falls
+    this.particles = new ParticleManager(this.scene, { lit: true });
+    this.decals = new BloodDecalSystem(this.scene, { lit: true });
     this.flashPool = new MuzzleFlashPool(this.scene);
     Enemy.flashPool = this.flashPool;
 

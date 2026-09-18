@@ -47,6 +47,66 @@ const POINT_FRAG = /* glsl */ `
 `;
 
 /**
+ * The same droplet, but taking the scene's lights (the renderer fills in
+ * three's light uniforms when a material asks for them). A droplet has no
+ * facing to speak of, so it takes a bit over half of each light, as a round
+ * drop does on average; the colour is its albedo, not a glow. In the dark,
+ * spray is only seen in the torch.
+ */
+const LIT_POINT_VERT = /* glsl */ `
+  #include <common>
+  #include <lights_pars_begin>
+  attribute float aSize;
+  attribute vec3 aColor;
+  attribute float aAlpha;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vAlpha = aAlpha;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vec3 ambient = ambientLightColor;
+    vec3 direct = vec3(0.0);
+    IncidentLight l;
+    #if NUM_POINT_LIGHTS > 0
+    for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+      getPointLightInfo(pointLights[i], mv.xyz, l);
+      direct += l.color;
+    }
+    #endif
+    #if NUM_SPOT_LIGHTS > 0
+    for (int i = 0; i < NUM_SPOT_LIGHTS; i++) {
+      getSpotLightInfo(spotLights[i], mv.xyz, l);
+      direct += l.color;
+    }
+    #endif
+    #if NUM_DIR_LIGHTS > 0
+    for (int i = 0; i < NUM_DIR_LIGHTS; i++) direct += directionalLights[i].color;
+    #endif
+    #if NUM_HEMI_LIGHTS > 0
+    for (int i = 0; i < NUM_HEMI_LIGHTS; i++) ambient += 0.5 * (hemisphereLights[i].skyColor + hemisphereLights[i].groundColor);
+    #endif
+    vec3 light = ambient + 0.6 * direct;
+    vColor = pow(aColor, vec3(2.2)) * light * RECIPROCAL_PI;
+    gl_PointSize = aSize * (240.0 / max(0.1, -mv.z));
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const LIT_POINT_FRAG = /* glsl */ `
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec2 c = gl_PointCoord - 0.5;
+    float d = length(c);
+    if (d > 0.5) discard;
+    float soft = smoothstep(0.5, 0.15, d);
+    gl_FragColor = vec4(vColor, vAlpha * soft);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+/**
  * One CPU-simulated particle pool rendered as a THREE.Points cloud.
  */
 class ParticlePool {
@@ -58,7 +118,7 @@ class ParticlePool {
   private alphas: Float32Array;
   private geo: THREE.BufferGeometry;
 
-  constructor(scene: THREE.Scene, private max: number, additive: boolean) {
+  constructor(scene: THREE.Scene, private max: number, additive: boolean, lit = false) {
     for (let i = 0; i < max; i++) {
       this.particles.push({
         alive: false,
@@ -84,8 +144,10 @@ class ParticlePool {
     this.geo.setAttribute('aAlpha', new THREE.BufferAttribute(this.alphas, 1));
 
     const mat = new THREE.ShaderMaterial({
-      vertexShader: POINT_VERT,
-      fragmentShader: POINT_FRAG,
+      vertexShader: lit ? LIT_POINT_VERT : POINT_VERT,
+      fragmentShader: lit ? LIT_POINT_FRAG : POINT_FRAG,
+      uniforms: lit ? THREE.UniformsUtils.clone(THREE.UniformsLib.lights) : {},
+      lights: lit,
       transparent: true,
       depthWrite: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending
@@ -173,9 +235,10 @@ export class ParticleManager {
   private static tmpV = new THREE.Vector3();
   private static UP = new THREE.Vector3(0, 1, 0);
 
-  constructor(scene: THREE.Scene) {
+  /** `lit`: blood, chips and smoke take the scene's lighting (dark levels). */
+  constructor(scene: THREE.Scene, opts: { lit?: boolean } = {}) {
     this.scene = scene;
-    this.solid = new ParticlePool(scene, 1600, false);
+    this.solid = new ParticlePool(scene, 1600, false, opts.lit ?? false);
     this.glow = new ParticlePool(scene, 400, true);
     this.tracerGeo = new THREE.CylinderGeometry(0.008, 0.008, 1, 5, 1, true);
   }

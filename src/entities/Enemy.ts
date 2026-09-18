@@ -37,7 +37,7 @@ export class Enemy {
   /** Forearm groups, pivoted at the elbows. */
   private foreL!: THREE.Group;
   private foreR!: THREE.Group;
-  private static woundMat: THREE.MeshBasicMaterial | null = null;
+  private static woundMat: THREE.MeshStandardMaterial | null = null;
   private head!: THREE.Mesh;
   private torso!: THREE.Mesh; // chest
   private pelvis!: THREE.Mesh;
@@ -1964,38 +1964,6 @@ export class Enemy {
     }
     // The wound itself: a bullet hole with blood, stuck to whichever limb was
     // hit, facing back along the bullet — it rides with the ragdoll.
-    if (!Enemy.woundMat) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 64;
-      const g = c.getContext('2d')!;
-      g.clearRect(0, 0, 64, 64);
-      for (let i = 0; i < 16; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const d = Math.random() * 22;
-        const rr = 3 + Math.random() * 8;
-        g.fillStyle = `rgba(${100 + Math.random() * 60},6,8,${0.5 + Math.random() * 0.4})`;
-        g.beginPath();
-        g.ellipse(32 + Math.cos(a) * d, 32 + Math.sin(a) * d, rr, rr * 0.6, a, 0, Math.PI * 2);
-        g.fill();
-      }
-      const grad = g.createRadialGradient(32, 32, 1, 32, 32, 9);
-      grad.addColorStop(0, 'rgba(8,3,3,1)');
-      grad.addColorStop(0.6, 'rgba(40,6,6,0.95)');
-      grad.addColorStop(1, 'rgba(90,10,10,0)');
-      g.fillStyle = grad;
-      g.fillRect(0, 0, 64, 64);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      Enemy.woundMat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -4,
-        polygonOffsetUnits: -4,
-        side: THREE.DoubleSide
-      });
-    }
     if (opts.wound !== false) this.addWound(hitPoint, bulletDir, struck);
 
     // The rifle leaves their hands: it becomes its own body and clatters away
@@ -2526,6 +2494,47 @@ export class Enemy {
     return p;
   }
 
+  /**
+   * The bullet-hole-and-blood patch stuck on a hit limb. Lit like the body it
+   * sits on — unlit, it glowed in the dark floor with no torch on it.
+   */
+  static woundMaterial(): THREE.Material {
+    if (Enemy.woundMat) return Enemy.woundMat;
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, 64, 64);
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * 22;
+      const rr = 3 + Math.random() * 8;
+      g.fillStyle = `rgba(${100 + Math.random() * 60},6,8,${0.5 + Math.random() * 0.4})`;
+      g.beginPath();
+      g.ellipse(32 + Math.cos(a) * d, 32 + Math.sin(a) * d, rr, rr * 0.6, a, 0, Math.PI * 2);
+      g.fill();
+    }
+    const grad = g.createRadialGradient(32, 32, 1, 32, 32, 9);
+    grad.addColorStop(0, 'rgba(8,3,3,1)');
+    grad.addColorStop(0.6, 'rgba(40,6,6,0.95)');
+    grad.addColorStop(1, 'rgba(90,10,10,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    Enemy.woundMat = new THREE.MeshStandardMaterial({
+      roughness: 0.85,
+      metalness: 0,
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+      side: THREE.DoubleSide
+    });
+    return Enemy.woundMat;
+  }
+
   /** Bullet hole + blood stuck to a limb at the hit point, riding with it. */
   private addWound(hitPoint: THREE.Vector3, bulletDir: THREE.Vector3, body: CANNON.Body): void {
     // On the model, the hole rides the bone under the hitbox that was hit;
@@ -2533,10 +2542,10 @@ export class Enemy {
     const carrier = this.hitman
       ? this.hitman.boneNear(hitPoint)
       : this.ragdoll.find((r) => r.body === body)?.container;
-    if (!carrier || !Enemy.woundMat) return;
+    if (!carrier) return;
     const wound = new THREE.Mesh(
       new THREE.PlaneGeometry(0.14 + Math.random() * 0.08, 0.14 + Math.random() * 0.08),
-      Enemy.woundMat
+      Enemy.woundMaterial()
     );
     const inward = bulletDir.clone().normalize();
     wound.position.copy(hitPoint).addScaledVector(inward, -0.012);

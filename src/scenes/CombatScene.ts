@@ -6,7 +6,7 @@ import { Events } from '../core/EventBus';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import type { BreakableGlass } from '../environment/BreakableGlass';
 import type { FPSPlayer } from '../entities/FPSPlayer';
-import type { Enemy } from '../entities/Enemy';
+import { Enemy } from '../entities/Enemy';
 import type { ParticleManager } from '../fx/ParticleManager';
 import type { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -135,6 +135,9 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       this.decals.place('pool', far, up);
       this.decals.place('bullethole', far, up);
     }
+    const wound = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), Enemy.woundMaterial());
+    wound.position.copy(far);
+    this.scene.add(wound);
 
     // compile() covers materials already in the graph; the throwaway draw
     // catches anything it misses and forces the texture uploads.
@@ -145,6 +148,8 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     if (this.decals) this.decals.trimTo(nDecals);
     if (this.particles) this.particles.clear();
     if (probe) this.scene.remove(probe.model);
+    this.scene.remove(wound);
+    wound.geometry.dispose();
   }
 
   // ------------------------------------------------------------- world setup

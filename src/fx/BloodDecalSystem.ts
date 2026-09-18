@@ -24,12 +24,18 @@ interface Growing {
  * and the oldest are recycled once the cap is reached. Decals are clipped
  * to the face they land on (no overhang into doorways), wall splatter
  * grows slow drips, and pools spread out over a few seconds.
+ *
+ * In a dark level the decals are `lit`: shaded by the scene's lights like
+ * the surface under them, so blood is only seen where a light (the torch,
+ * a muzzle flash) actually falls. Unlit, they show at full strength
+ * whatever the lighting — right for the bright floors, a glow in the dark.
  */
 export class BloodDecalSystem {
-  private bloodMats: THREE.MeshBasicMaterial[] = [];
-  private poolMats: THREE.MeshBasicMaterial[] = [];
-  private holeMat!: THREE.MeshBasicMaterial;
-  private dripMat: THREE.MeshBasicMaterial;
+  private bloodMats: THREE.Material[] = [];
+  private poolMats: THREE.Material[] = [];
+  private holeMat!: THREE.Material;
+  private dripMat: THREE.Material;
+  private lit: boolean;
   private decals: THREE.Mesh[] = [];
   private drips: Drip[] = [];
   private growing: Growing[] = [];
@@ -38,11 +44,15 @@ export class BloodDecalSystem {
   private max = 900; // blood stays for the whole shift; only the very oldest is recycled past this
   private maxDrips = 300;
 
-  constructor(private scene: THREE.Scene) {
-    for (let i = 0; i < 4; i++) this.bloodMats.push(this.makeMaterial(this.drawSplatter(i * 7 + 1, false)));
-    for (let i = 0; i < 2; i++) this.poolMats.push(this.makeMaterial(this.drawSplatter(i * 13 + 3, true)));
-    this.holeMat = this.makeMaterial(this.drawBulletHole());
-    this.dripMat = new THREE.MeshBasicMaterial({
+  constructor(
+    private scene: THREE.Scene,
+    opts: { lit?: boolean } = {}
+  ) {
+    this.lit = opts.lit ?? false;
+    for (let i = 0; i < 4; i++) this.bloodMats.push(this.makeMaterial(this.drawSplatter(i * 7 + 1, false), 0.65));
+    for (let i = 0; i < 2; i++) this.poolMats.push(this.makeMaterial(this.drawSplatter(i * 13 + 3, true), 0.58));
+    this.holeMat = this.makeMaterial(this.drawBulletHole(), 0.9);
+    this.dripMat = this.material(0.65, {
       color: 0x5a0a0c,
       transparent: true,
       opacity: 0.85,
@@ -57,10 +67,17 @@ export class BloodDecalSystem {
     this.dripGeo.translate(0, -0.5, 0);
   }
 
-  private makeMaterial(canvas: HTMLCanvasElement): THREE.MeshBasicMaterial {
+  /** Lit: wet blood gets a soft sheen from its roughness. Unlit: flat colour. */
+  private material(roughness: number, params: THREE.MeshBasicMaterialParameters): THREE.Material {
+    return this.lit
+      ? new THREE.MeshStandardMaterial({ ...params, roughness, metalness: 0 })
+      : new THREE.MeshBasicMaterial(params);
+  }
+
+  private makeMaterial(canvas: HTMLCanvasElement, roughness: number): THREE.Material {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
-    return new THREE.MeshBasicMaterial({
+    return this.material(roughness, {
       map: tex,
       transparent: true,
       depthWrite: false,
@@ -209,7 +226,7 @@ export class BloodDecalSystem {
     stretch = 1,
     surface?: THREE.Object3D
   ): void {
-    let mat: THREE.MeshBasicMaterial;
+    let mat: THREE.Material;
     let scale: number;
     if (kind === 'blood') {
       mat = this.bloodMats[Math.floor(Math.random() * this.bloodMats.length)];

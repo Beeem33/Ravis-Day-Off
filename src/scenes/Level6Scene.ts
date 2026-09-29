@@ -341,8 +341,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
       handL: new THREE.Vector3(-0.05, 0.965 + nod * 0.3, -0.2),
       elbow: new THREE.Vector3(0.35, -1, -0.25),
       head: new THREE.Euler(0.1 - turn * 0.1 + nod, turn * 0.85, 0),
-      // Negative is forward: a positive tilt takes the top of the chest back
-      lean: -0.15
+      // Negative is forward: a positive tilt takes the top of the chest
+      // back. Far enough over that his elbows are on the desk
+      lean: -0.4
     };
   }
 

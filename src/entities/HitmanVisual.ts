@@ -31,6 +31,12 @@ export interface HandGoal {
   palm: THREE.Vector3 | null;
   /** 0 open and relaxed .. 1 closed round a grip. */
   curl: number;
+  /**
+   * A point in the model's rest frame on his own head — under the chin,
+   * say. When set, `at` is worked out from where his head is this frame,
+   * so a hand can be put against his face whatever the rig's proportions.
+   */
+  onHead?: THREE.Vector3 | null;
 }
 
 /** The rig this model follows, and what its hands are doing. */
@@ -52,12 +58,21 @@ export interface HitmanDrive {
   handR: HandGoal;
 }
 
+/**
+ * What he is wearing. The agents are the man as modelled: suit, gloves,
+ * sunglasses, an earpiece. The call-centre staff are the same man in the
+ * floor's uniform — white shirt, blue trousers, a navy cap, bare hands — and
+ * the boss is him built heavy, bearded, in a red cap and a striped tie.
+ */
+export type Outfit = 'agent' | 'staff' | 'boss';
+
 export interface HitmanLook {
   /** A Hair_* mesh in the model, or null for a shaved head. */
   hair: string | null;
   hairColor: number;
   skin: number;
   tie: number;
+  outfit?: Outfit;
 }
 
 /** The rig's pelvis, at rest, in its root's frame. */
@@ -169,6 +184,9 @@ const STYLE_ORDER: (string | null)[] = [
   'Bun',
   'Mohawk'
 ];
+
+/** The short styles, for the staff: anything taller comes up through the cap. */
+const STAFF_STYLES: (string | null)[] = ['Crew', 'Buzz', 'SidePart', null, 'Slick', 'Undercut', 'Horseshoe'];
 
 /** Fair to deep. */
 export const SKIN_TONES = [0xe6bf9f, 0xd4a27c, 0xbf8a62, 0xa8744e, 0x8a5a3b, 0x6c4229, 0x52301d, 0x3a2114];
@@ -303,6 +321,10 @@ export class HitmanVisual {
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
+      const sm = o as THREE.SkinnedMesh;
+      if (sm.isSkinnedMesh && HitmanVisual.boneNames.length === 0) {
+        HitmanVisual.boneNames = sm.skeleton.bones.map((b) => b.name);
+      }
       m.castShadow = false;
       m.receiveShadow = false;
       const src = m.material as THREE.MeshStandardMaterial;
@@ -392,16 +414,25 @@ export class HitmanVisual {
   }
 
   /** The look for the agent built with this index: every one a little different. */
-  static lookFor(index: number): HitmanLook {
+  static lookFor(index: number, outfit: Outfit = 'agent'): HitmanLook {
     const i = Math.abs(Math.floor(index));
-    const hair = STYLE_ORDER[(i * 5 + 3) % STYLE_ORDER.length];
     const tone = (i * 3 + 1) % SKIN_TONES.length;
     const colours = HAIR_FOR_SKIN[tone];
+    const hairColor = colours[(i * 7 + 2) % colours.length];
+    if (outfit === 'boss') {
+      // What shows of his hair under the cap: the sides, going grey
+      return { hair: 'Horseshoe', hairColor: HAIR.darkBrown, skin: 0xc08b66, tie: 0, outfit };
+    }
+    if (outfit === 'staff') {
+      // Only what fits under a cap
+      return { hair: STAFF_STYLES[(i * 3 + 1) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
+    }
     return {
-      hair,
+      hair: STYLE_ORDER[(i * 5 + 3) % STYLE_ORDER.length],
       skin: SKIN_TONES[tone],
-      hairColor: colours[(i * 7 + 2) % colours.length],
-      tie: TIE_COLOURS[(i * 4 + 1) % TIE_COLOURS.length]
+      hairColor,
+      tie: TIE_COLOURS[(i * 4 + 1) % TIE_COLOURS.length],
+      outfit
     };
   }
 
@@ -541,7 +572,492 @@ export class HitmanVisual {
       }
     });
 
+    if (look.outfit === 'staff' || look.outfit === 'boss') this.restyle(look, look.outfit);
     this.buildHitboxes();
+  }
+
+  // -------------------------------------------------------------- outfits
+
+  /** Bone names in skin-index order — every part of the body is skinned to the same list. */
+  private static boneNames: string[] = [];
+  private static outfitGeos = new Map<string, THREE.BufferGeometry>();
+  private static outfitMats = new Map<string, THREE.Material>();
+
+  private static outfitMat(key: string, make: () => THREE.Material): THREE.Material {
+    let m = HitmanVisual.outfitMats.get(key);
+    if (!m) {
+      m = make();
+      HitmanVisual.outfitMats.set(key, m);
+    }
+    return m;
+  }
+
+  private static outfitGeo(key: string, make: () => THREE.BufferGeometry): THREE.BufferGeometry {
+    let g = HitmanVisual.outfitGeos.get(key);
+    if (!g) {
+      g = make();
+      HitmanVisual.outfitGeos.set(key, g);
+    }
+    return g;
+  }
+
+  /** Bare hands in a skin tone, for anyone not in the agents' gloves. */
+  private static handMat(tone: number): THREE.Material {
+    return HitmanVisual.outfitMat(`hand:${tone}`, () => new THREE.MeshStandardMaterial({ name: 'HM_Hand', color: tone, roughness: 0.6 }));
+  }
+
+  /** A geometry with the same attributes as `src` and its own index and groups. */
+  private static reindexed(src: THREE.BufferGeometry, groups: number[][]): THREE.BufferGeometry {
+    const g = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(src.attributes)) g.setAttribute(k, a);
+    g.morphAttributes = src.morphAttributes;
+    g.morphTargetsRelative = src.morphTargetsRelative;
+    const all: number[] = [];
+    groups.forEach((tris, i) => {
+      g.addGroup(all.length, tris.length, i);
+      for (const v of tris) all.push(v);
+    });
+    g.setIndex(all);
+    if (src.boundingBox) g.boundingBox = src.boundingBox.clone();
+    if (src.boundingSphere) g.boundingSphere = src.boundingSphere.clone();
+    return g;
+  }
+
+  /**
+   * The suit as the staff's clothes. It is one mesh of separate pieces — the
+   * jacket, its sleeves, the lapels, the pocket flaps, the trouser legs and
+   * their seams — so the pieces are found by what joins to what: everything
+   * below the waist is trousers; the lapels and pockets, the pieces lying
+   * wholly on the front of the chest, go, and what is left of the jacket is
+   * a shirt. Material 0 is the shirt, 1 the trousers.
+   */
+  private static staffSuit(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const pos = src.attributes.position;
+    const idx = src.index!.array;
+    const n = pos.count;
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    const find = (a: number): number => {
+      while (parent[a] !== a) {
+        parent[a] = parent[parent[a]];
+        a = parent[a];
+      }
+      return a;
+    };
+    for (let i = 0; i < idx.length; i += 3) {
+      const a = find(idx[i]);
+      parent[find(idx[i + 1])] = a;
+      parent[find(idx[i + 2])] = a;
+    }
+    const top = new Map<number, number>();
+    const bottom = new Map<number, number>();
+    const front = new Map<number, number>();
+    for (let v = 0; v < n; v++) {
+      const r = find(v);
+      top.set(r, Math.max(top.get(r) ?? -9, pos.getY(v)));
+      bottom.set(r, Math.min(bottom.get(r) ?? 9, pos.getY(v)));
+      front.set(r, Math.max(front.get(r) ?? -9, pos.getZ(v)));
+    }
+    const shirt: number[] = [];
+    const trousers: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const r = find(idx[i]);
+      // The jacket's notched collar goes too (the pieces wholly above the
+      // shoulders): the shirt's own collar is under it
+      const trim = front.get(r)! < -0.06 || bottom.get(r)! > 1.46;
+      const out = top.get(r)! < 1.035 ? trousers : trim ? null : shirt;
+      if (out) out.push(idx[i], idx[i + 1], idx[i + 2]);
+    }
+    return HitmanVisual.reindexed(src, [shirt, trousers]);
+  }
+
+  /** Each vertex's weight on each of a set of bones. */
+  private static weightOn(g: THREE.BufferGeometry, v: number, names: string[]): number {
+    const si = g.attributes.skinIndex;
+    const sw = g.attributes.skinWeight;
+    let w = 0;
+    for (let k = 0; k < 4; k++) {
+      if (names.includes(HitmanVisual.boneNames[si.getComponent(v, k)])) w += sw.getComponent(v, k);
+    }
+    return w;
+  }
+
+  /**
+   * The boss's build, pushed into the bind pose of one of the model's meshes
+   * so it rides every pose the skin does: a belly out in front and wide at
+   * the sides, a broad chest, thick arms and thighs, a thick neck, and under
+   * the chin a second one.
+   */
+  private static fattened(src: THREE.BufferGeometry, face: boolean): THREE.BufferGeometry {
+    const g = src.clone();
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const R = HitmanVisual.rest;
+    const P = (n: string) => R.get(n)!.modelP;
+    const TORSO = ['Hips', 'Spine', 'Chest', 'UpperChest'];
+    const p = new THREE.Vector3();
+    const q = new THREE.Vector3();
+    const gauss = (x: number, c: number, s: number) => Math.exp(-(((x - c) / s) ** 2));
+    const smooth = (a: number, b: number, x: number) => {
+      const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1);
+      return t * t * (3 - 2 * t);
+    };
+    /** Thicken round the segment a–b by `k`, as far as the vertex belongs to it. */
+    const swell = (a: THREE.Vector3, b: THREE.Vector3, k: number, w: number) => {
+      if (w <= 0) return;
+      const ab = q.copy(b).sub(a);
+      const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1);
+      const on = a.clone().addScaledVector(ab, t);
+      p.sub(on).multiplyScalar(1 + k * w).add(on);
+    };
+    for (let v = 0; v < pos.count; v++) {
+      p.fromBufferAttribute(pos, v);
+      const tw = HitmanVisual.weightOn(g, v, TORSO);
+      if (tw > 0) {
+        // Belly: forward, wide, and hanging a little
+        const belly = gauss(p.y, 1.06, 0.15) * tw;
+        const chest = gauss(p.y, 1.3, 0.12) * tw;
+        const fwd = smooth(0.03, -0.09, p.z);
+        p.x *= 1 + 0.3 * belly + 0.1 * chest;
+        p.z += -0.08 * belly * fwd + 0.025 * belly * (1 - fwd);
+        p.y -= 0.018 * belly * fwd;
+      }
+      for (const sd of ['L', 'R']) {
+        swell(P(`UpperArm_${sd}`), P(`LowerArm_${sd}`), 0.28, HitmanVisual.weightOn(g, v, [`UpperArm_${sd}`]));
+        swell(P(`LowerArm_${sd}`), P(`Hand_${sd}`), 0.14, HitmanVisual.weightOn(g, v, [`LowerArm_${sd}`]));
+        swell(P(`UpperLeg_${sd}`), P(`LowerLeg_${sd}`), 0.34, HitmanVisual.weightOn(g, v, [`UpperLeg_${sd}`]));
+        swell(P(`LowerLeg_${sd}`), P(`Foot_${sd}`), 0.12, HitmanVisual.weightOn(g, v, [`LowerLeg_${sd}`]));
+      }
+      // The neck, and the collars round it, let out
+      const nw = HitmanVisual.weightOn(g, v, ['Neck']) + (p.y > 1.44 ? tw * smooth(1.44, 1.47, p.y) : 0);
+      if (nw > 0 && p.y < 1.53) {
+        const c = new THREE.Vector3(0, p.y, 0.008);
+        p.sub(c).multiplyScalar(1 + 0.22 * Math.min(1, nw)).add(c);
+      }
+      if (face) {
+        // The second chin: the throat under the jaw rolled forward and down
+        const roll = gauss(p.y, 1.478, 0.022) * gauss(p.x, 0, 0.05) * smooth(0.0, -0.035, p.z);
+        p.z -= 0.024 * roll;
+        p.y -= 0.006 * roll;
+        // And heavy jowls
+        const jowl = gauss(p.y, 1.52, 0.03) * smooth(0.03, 0.06, Math.abs(p.x)) * smooth(0.04, -0.02, p.z);
+        p.x *= 1 + 0.16 * jowl;
+      }
+      pos.setXYZ(v, p.x, p.y, p.z);
+    }
+    pos.needsUpdate = true;
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /**
+   * A beard grown out of the face: the triangles of the jaw, the chin, the
+   * cheeks and the lip, lifted off the skin along their normals — so it fits
+   * the face exactly and is skinned to the head as the face is. The lips stay
+   * bare, and it stops at the ears: nothing round the back.
+   */
+  private static beardFrom(face: THREE.BufferGeometry): THREE.BufferGeometry {
+    const pos = face.attributes.position;
+    const nor = face.attributes.normal;
+    const idx = face.index!.array;
+    const inBeard = (v: number): boolean => {
+      const x = Math.abs(pos.getX(v));
+      const y = pos.getY(v);
+      const z = pos.getZ(v);
+      if (z > 0.022) return false; // not behind the ears
+      if (z < -0.09 && y > 1.55) return false; // the nose
+      // The lips, bare
+      if (x < 0.035 && y > 1.506 && y < 1.551 && z < -0.05) return false;
+      // Up to the cheek line: under the nose in the middle, higher at the sides
+      const topY = 1.566 + 0.024 * THREE.MathUtils.clamp((x - 0.03) / 0.03, 0, 1);
+      if (y > topY) return false;
+      // Down to the jaw, and no further: the throat below is the second chin
+      const lowY = x < 0.035 ? 1.494 : 1.49 + 0.02 * THREE.MathUtils.clamp((x - 0.035) / 0.03, 0, 1);
+      return y >= lowY;
+    };
+    const tris: number[] = [];
+    const used = new Map<number, number>();
+    const touched = new Set<number>();
+    for (let i = 0; i < idx.length; i += 3) {
+      const a = idx[i];
+      const b = idx[i + 1];
+      const c = idx[i + 2];
+      if (inBeard(a) && inBeard(b) && inBeard(c)) tris.push(a, b, c);
+      else {
+        touched.add(a);
+        touched.add(b);
+        touched.add(c);
+      }
+    }
+    // Pack the vertices the beard uses into a geometry of its own
+    const out = new THREE.BufferGeometry();
+    const order: number[] = [];
+    const newIdx = tris.map((v) => {
+      let k = used.get(v);
+      if (k === undefined) {
+        k = order.length;
+        used.set(v, k);
+        order.push(v);
+      }
+      return k;
+    });
+    const P = new Float32Array(order.length * 3);
+    const N = new Float32Array(order.length * 3);
+    const SI = new Uint16Array(order.length * 4);
+    const SW = new Float32Array(order.length * 4);
+    const si = face.attributes.skinIndex;
+    const sw = face.attributes.skinWeight;
+    order.forEach((v, k) => {
+      // Thick over the jaw, thinning to nothing at its edge so it grows out
+      // of the skin rather than standing off it
+      const lift = touched.has(v) ? 0.0012 : 0.0055;
+      P[k * 3] = pos.getX(v) + nor.getX(v) * lift;
+      P[k * 3 + 1] = pos.getY(v) + nor.getY(v) * lift;
+      P[k * 3 + 2] = pos.getZ(v) + nor.getZ(v) * lift;
+      N[k * 3] = nor.getX(v);
+      N[k * 3 + 1] = nor.getY(v);
+      N[k * 3 + 2] = nor.getZ(v);
+      for (let j = 0; j < 4; j++) {
+        SI[k * 4 + j] = si.getComponent(v, j);
+        SW[k * 4 + j] = sw.getComponent(v, j);
+      }
+    });
+    out.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+    out.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4));
+    out.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+    out.setIndex(newIdx);
+    out.computeBoundingSphere();
+    return out;
+  }
+
+  /** Coarse dark hair, flecked lighter and darker by where on the face it is. */
+  private static beardMat(): THREE.Material {
+    return HitmanVisual.outfitMat('beard', () => {
+      const m = new THREE.MeshStandardMaterial({ name: 'HM_Beard', color: 0x2a1d15, roughness: 0.95 });
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+            float fleck = fract(sin(dot(floor(vBind * vec3(900.0, 420.0, 900.0)), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+            diffuseColor.rgb *= fleck < 0.45 ? 0.55 : fleck < 0.85 ? 1.15 : 1.9;`
+          );
+      };
+      m.customProgramCacheKey = () => 'hitman-beard';
+      return m;
+    });
+  }
+
+  /** His tie: broad gold and red stripes on the diagonal, with fine dark rules. */
+  private static stripedTieMat(): THREE.Material {
+    return HitmanVisual.outfitMat('tie:striped', () => {
+      const m = new THREE.MeshStandardMaterial({ name: 'HM_Tie', color: 0xffffff, roughness: 0.45 });
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+            float s = fract((vBind.y - vBind.x) * 38.0);
+            vec3 red = vec3(0.36, 0.012, 0.018);
+            vec3 gold = vec3(0.68, 0.40, 0.03);
+            vec3 rule = vec3(0.045, 0.004, 0.006);
+            diffuseColor.rgb = s < 0.36 ? gold : (s < 0.42 || s > 0.96) ? rule : red;`
+          );
+      };
+      m.customProgramCacheKey = () => 'hitman-tie-stripes';
+      return m;
+    });
+  }
+
+  /** The eyes: white, with a dark iris — the agents' are behind sunglasses and never modelled. */
+  private eyes: THREE.Object3D[] = [];
+  private eyeOpen = 1;
+
+  /** 0 shut .. 1 open .. 1.4 wide with fright. */
+  setEyes(open: number): void {
+    const v = THREE.MathUtils.clamp(open, 0.05, 1.6);
+    if (Math.abs(v - this.eyeOpen) < 0.01) return;
+    this.eyeOpen = v;
+    for (const e of this.eyes) e.scale.y = v;
+  }
+
+  /**
+   * Put `o`, placed in the model's rest frame, on bone `name` so it moves
+   * with it. Worked from the template's bones, which never leave the rest
+   * pose — this copy's may already have been posed.
+   */
+  private hang(o: THREE.Object3D, name: string): void {
+    const rest = HitmanVisual.template!.getObjectByName(name)!;
+    rest.updateWorldMatrix(true, false);
+    o.updateMatrix();
+    HitmanVisual._m.copy(rest.matrixWorld).invert().multiply(o.matrix).decompose(o.position, o.quaternion, o.scale);
+    this.byName.get(name)!.bone.add(o);
+  }
+
+  /**
+   * Out of the agents' kit and into `outfit`: the suit, the gloves and the
+   * sunglasses swapped for the staff's uniform or the boss's, eyes where the
+   * glasses were, and a cap.
+   */
+  private restyle(look: HitmanLook, outfit: 'staff' | 'boss'): void {
+    const H = HitmanVisual;
+    const staff = outfit === 'staff';
+    const shirtMat = H.outfitMat('staff:shirt', () => new THREE.MeshStandardMaterial({ name: 'HM_StaffShirt', color: 0xeeebe3, roughness: 0.85 }));
+    const trouserMat = H.outfitMat('staff:trousers', () => new THREE.MeshStandardMaterial({ name: 'HM_Chinos', color: 0x2f4a7a, roughness: 0.9 }));
+    let face: THREE.SkinnedMesh | null = null;
+    this.model.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (!m.isMesh) return;
+      const mat = (m.material as THREE.Material).name;
+      if (mat === 'HM_Lens' || mat === 'HM_Metal' || mat === 'HM_Wire') {
+        m.visible = false;
+        return;
+      }
+      if (mat === 'HM_Glove') m.material = H.handMat(look.skin);
+      if (staff) {
+        if (m.name === 'HitmanBody_1') {
+          m.geometry = H.outfitGeo('staff:suit', () => H.staffSuit(m.geometry));
+          m.material = [shirtMat, trouserMat];
+        } else if (mat === 'HM_Shirt') m.material = shirtMat;
+        else if (mat === 'HM_Tie') m.visible = false;
+        return;
+      }
+      // The boss: built heavy, the tie in his stripes
+      if (m.name === 'HitmanBody_1' || mat === 'HM_Shirt' || mat === 'HM_Tie' || mat === 'HM_Skin') {
+        m.geometry = H.outfitGeo(`boss:${m.name}`, () => H.fattened(m.geometry, mat === 'HM_Skin'));
+      }
+      if (mat === 'HM_Tie') m.material = H.stripedTieMat();
+      if (m.name === 'HitmanFace_1') face = m;
+    });
+
+    // Eyes, set into the face where the lenses were
+    const white = H.outfitMat('eye:white', () => new THREE.MeshStandardMaterial({ name: 'HM_EyeWhite', color: 0xf0ece4, roughness: 0.35 }));
+    const iris = H.outfitMat('eye:iris', () => new THREE.MeshStandardMaterial({ name: 'HM_Iris', color: 0x1f140d, roughness: 0.3 }));
+    const ball = H.outfitGeo('eye:ball', () => new THREE.SphereGeometry(1, 14, 10));
+    for (const sd of [-1, 1]) {
+      const eye = new THREE.Group();
+      eye.position.set(sd * 0.032, 1.6335, -0.0745);
+      const w = new THREE.Mesh(ball, white);
+      w.scale.set(0.0125, 0.0082, 0.0055);
+      const pupil = new THREE.Mesh(ball, iris);
+      pupil.scale.set(0.0052, 0.0056, 0.0022);
+      pupil.position.set(0, 0, -0.0048);
+      eye.add(w, pupil);
+      // The boss: small and narrowed, heavy-lidded
+      if (!staff) eye.scale.set(0.9, 0.72, 1);
+      this.hang(eye, 'Head');
+      this.eyes.push(eye);
+    }
+
+    // A cap. The staff wear the floor's navy one; his is red with a gold band
+    const capMat = staff
+      ? H.outfitMat('cap:navy', () => new THREE.MeshStandardMaterial({ name: 'HM_Cap', color: 0x1d3f6e, roughness: 0.85, side: THREE.DoubleSide }))
+      : H.outfitMat('cap:red', () => new THREE.MeshStandardMaterial({ name: 'HM_Cap', color: 0xa3161c, roughness: 0.7, side: THREE.DoubleSide }));
+    const cap = new THREE.Group();
+    const crown = new THREE.Mesh(
+      H.outfitGeo('cap:crown', () => new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2)),
+      capMat
+    );
+    crown.scale.set(0.088, staff ? 0.078 : 0.058, 0.096);
+    cap.add(crown);
+    const peak = new THREE.Mesh(
+      H.outfitGeo('cap:peak', () => new THREE.CylinderGeometry(1, 1, 1, 20, 1, false, Math.PI / 2, Math.PI)),
+      capMat
+    );
+    peak.scale.set(0.082, 0.007, 0.075);
+    peak.position.set(0, 0.002, -0.066);
+    // Its front edge down a touch
+    peak.rotation.x = -0.12;
+    cap.add(peak);
+    if (!staff) {
+      const gold = H.outfitMat('cap:gold', () => new THREE.MeshStandardMaterial({ name: 'HM_Gold', color: 0xd4a52a, roughness: 0.35, metalness: 0.55 }));
+      const band = new THREE.Mesh(H.outfitGeo('cap:band', () => new THREE.CylinderGeometry(1, 1, 1, 28, 1, true)), gold);
+      band.scale.set(0.0895, 0.017, 0.0975);
+      band.position.y = 0.008;
+      cap.add(band);
+      const btn = new THREE.Mesh(ball, gold);
+      btn.scale.setScalar(0.009);
+      btn.position.y = 0.058;
+      cap.add(btn);
+    }
+    cap.position.set(0, 1.672, 0.004);
+    cap.rotation.x = -0.05;
+    this.hang(cap, 'Head');
+
+    // His beard, grown out of his (heavier) face
+    if (!staff && face) {
+      const f = face as THREE.SkinnedMesh;
+      const beard = new THREE.SkinnedMesh(H.outfitGeo('boss:beard', () => H.beardFrom(f.geometry)), H.beardMat());
+      beard.name = 'HitmanBeard';
+      f.parent!.add(beard);
+      beard.position.copy(f.position);
+      beard.quaternion.copy(f.quaternion);
+      beard.scale.copy(f.scale);
+      beard.bind(f.skeleton, f.bindMatrix);
+      beard.boundingSphere = this.cull;
+    }
+  }
+
+  /** Stains soaked into the front of his shirt: centre x, y and half width, height, in the rest frame. */
+  private stains = [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()];
+  private stainCount = 0;
+  private stainColor = new THREE.Color();
+
+  /**
+   * Soak a stain into the front of his shirt, centred on (x, y) in the
+   * model's rest frame and about w by h. It is painted into the cloth rather
+   * than stuck on it, so it follows the curve of his chest and every fold
+   * the pose puts in it. His shirt gets a material of its own for it.
+   */
+  addStain(x: number, y: number, w: number, h: number, color: THREE.Color): void {
+    if (this.stainCount >= this.stains.length) return;
+    this.stains[this.stainCount++].set(x, y, w / 2, h / 2);
+    this.stainColor.copy(color);
+    if (this.stainCount > 1) return;
+    const uniforms = { uStains: { value: this.stains }, uStainColor: { value: this.stainColor } };
+    const stained = (src: THREE.Material): THREE.Material => {
+      const m = (src as THREE.MeshStandardMaterial).clone();
+      m.onBeforeCompile = (sh) => {
+        Object.assign(sh.uniforms, uniforms);
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;\nuniform vec4 uStains[4];\nuniform vec3 uStainColor;')
+          .replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+            float soak = 0.0;
+            for (int i = 0; i < 4; i++) {
+              vec4 r = uStains[i];
+              if (r.z <= 0.0) continue;
+              vec2 d = (vBind.xy - r.xy) / r.zw;
+              float ragged = 0.1 * sin(vBind.x * 95.0 + vBind.y * 41.0) + 0.08 * sin(vBind.y * 137.0 - vBind.x * 53.0);
+              soak = max(soak, 1.0 - smoothstep(0.82, 1.0, length(d) + ragged));
+            }
+            // The front of him only
+            soak *= smoothstep(0.0, -0.03, vBind.z);
+            diffuseColor.rgb = mix(diffuseColor.rgb, uStainColor, soak);`
+          );
+      };
+      m.customProgramCacheKey = () => 'hitman-stain';
+      return m;
+    };
+    this.model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      if (Array.isArray(m.material)) m.material = [stained(m.material[0]), m.material[1]];
+      else if (m.name === 'HitmanBody_1' || m.name === 'HitmanBody_2') m.material = stained(m.material);
+    });
   }
 
   // ------------------------------------------------------------- hitboxes
@@ -703,6 +1219,19 @@ export class HitmanVisual {
       }
       if (par) j.p.copy(j.rest.localP).applyQuaternion(par.q).add(par.p);
       else j.p.copy(j.rest.modelP);
+    }
+
+    // A hand to his own face: where that is, now the head has been placed
+    const hj = this.byName.get('Head')!;
+    for (const g of [d.handL, d.handR]) {
+      if (!g.onHead) continue;
+      g.at
+        .copy(g.onHead)
+        .sub(hj.rest.modelP)
+        .applyQuaternion(H._q.copy(hj.rest.modelQ).invert())
+        .applyQuaternion(hj.q)
+        .add(hj.p)
+        .applyMatrix4(this.model.matrixWorld);
     }
 
     // Hands back onto whatever the rig's hands hold

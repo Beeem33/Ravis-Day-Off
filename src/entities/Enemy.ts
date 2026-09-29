@@ -114,9 +114,10 @@ export class Enemy {
   private handguard = new THREE.Vector3(0, 0.02, -0.19);
 
   /**
-   * The modelled man in the suit, worn over this rig — agents only; staff
-   * and the boss keep the primitive build. Null until built (or if the model
-   * never loaded, in which case the primitive build stays on show).
+   * The modelled man, worn over this rig: the agents in his suit, the staff
+   * in the floor's uniform, the boss built heavy and bearded. Null until
+   * built (or if the model never loaded, in which case the primitive build
+   * stays on show).
    */
   private hitman: HitmanVisual | null = null;
   private drive: HitmanDrive | null = null;
@@ -149,7 +150,7 @@ export class Enemy {
     this.yaw = yaw;
     this.root.rotation.y = yaw;
     this.buildBody();
-    if (!this.civilian && !this.boss && HitmanVisual.ready) this.wearHitman();
+    if (HitmanVisual.ready) this.wearHitman();
   }
 
   private static unseen = new THREE.MeshBasicMaterial({ visible: false });
@@ -169,7 +170,7 @@ export class Enemy {
     this.root.traverse((o) => {
       if ((o as THREE.Mesh).isMesh && !keep.has(o)) (o as THREE.Mesh).material = Enemy.unseen;
     });
-    const h = new HitmanVisual(HitmanVisual.lookFor(this.variant));
+    const h = new HitmanVisual(HitmanVisual.lookFor(this.variant, this.boss ? 'boss' : this.civilian ? 'staff' : 'agent'));
     this.hitman = h;
     this.root.add(h.model);
     this.parts.length = 0;
@@ -1235,6 +1236,18 @@ export class Enemy {
   }
 
   /**
+   * How the modelled face sits for a civilian's mood: how far the mouth is
+   * open and the brows up (the model's scream, a little of it), and how wide
+   * the eyes are.
+   */
+  private mood = 0;
+  private moodEyes = 1;
+  private setMood(open: number, eyes: number): void {
+    this.mood = open;
+    this.moodEyes = eyes;
+  }
+
+  /**
    * Back to the resting face.
    *
    * Putting the hands up swapped the face and nothing ever swapped it back,
@@ -1244,6 +1257,7 @@ export class Enemy {
    */
   setCalm(): void {
     if (!this.civilian || !Enemy.faceCalm) return;
+    this.setMood(0, 1);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceCalm;
   }
@@ -1251,6 +1265,7 @@ export class Enemy {
   /** Not frightened, but aware something is going on. */
   setConcerned(): void {
     if (!this.civilian || !Enemy.faceConcerned) return;
+    this.setMood(0.1, 1.12);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceConcerned;
   }
@@ -1258,6 +1273,7 @@ export class Enemy {
   /** Swap the calm face for the frightened one. */
   setScared(): void {
     if (!this.civilian || !Enemy.faceWorried) return;
+    this.setMood(0.42, 1.38);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceWorried;
   }
@@ -1316,12 +1332,23 @@ export class Enemy {
    * so it rides every pose and the walk cycle without further thought.
    */
   addChestPatch(mesh: THREE.Object3D): void {
+    const m = mesh as THREE.Mesh;
+    if (this.hitman && m.isMesh) {
+      // Soaked into the model's shirt instead, the same size and in the
+      // same place on the chest
+      const box = new THREE.Box3().setFromBufferAttribute(m.geometry.attributes.position as THREE.BufferAttribute);
+      const size = box.getSize(new THREE.Vector3()).multiply(m.scale);
+      const color = (m.material as THREE.MeshStandardMaterial).color ?? new THREE.Color(0x8a1010);
+      this.hitman.addStain(m.position.x, 1.27 + m.position.y, size.x, size.y, color);
+      return;
+    }
     this.torso.add(mesh);
   }
 
   /** Shaken but back on their feet — the face for after the shooting stops. */
   setShaken(): void {
     if (!this.civilian || !Enemy.faceShaken) return;
+    this.setMood(0.14, 0.85);
     const mats = (this.head as THREE.Mesh).material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceShaken;
   }
@@ -2035,6 +2062,7 @@ export class Enemy {
     const at = this.animTime + this.animPhase;
     R.w = L.w = 0;
     R.thumb = R.palm = L.thumb = L.palm = null;
+    R.onHead = L.onHead = null;
     let curlR = 0;
     let curlL = 0;
     // The rig was posed this frame; its world matrices are from the last one
@@ -2105,13 +2133,29 @@ export class Enemy {
         }
       }
       // A cutscene's hand target (working a knot, say) goes where it asked
-      if (this.pose?.handR) {
-        onRig(R, this.foreR);
-        curlR = 0.45 + 0.2 * Math.sin(at * 11);
-      }
-      if (this.pose?.handL) {
-        onRig(L, this.foreL);
-        curlL = 0.45 + 0.2 * Math.sin(at * 9 + 1);
+      if (this.boss && this.pose?.handR && this.pose?.handL) {
+        // His chin on his fists: under his own chin, wherever the model
+        // has put it — the rig's head is not where the model's is
+        R.w = L.w = 1;
+        R.onHead = Enemy.BOSS_FIST_R;
+        L.onHead = Enemy.BOSS_FIST_L;
+        // Fists, knuckles out to the room, the chin on them (palms to him,
+        // fingers up: the thumbs are then the outside of each hand)
+        const q = this.root.quaternion;
+        R.thumb = thumbR.set(1, 0.3, 0).normalize().applyQuaternion(q);
+        R.palm = palmR.set(0, 0, 1).applyQuaternion(q);
+        L.thumb = thumbL.set(-1, 0.3, 0).normalize().applyQuaternion(q);
+        L.palm = palmL.set(0, 0, 1).applyQuaternion(q);
+        curlR = curlL = 1;
+      } else {
+        if (this.pose?.handR) {
+          onRig(R, this.foreR);
+          curlR = 0.45 + 0.2 * Math.sin(at * 11);
+        }
+        if (this.pose?.handL) {
+          onRig(L, this.foreL);
+          curlL = 0.45 + 0.2 * Math.sin(at * 9 + 1);
+        }
       }
     }
     const k = Math.min(1, dt * 12);
@@ -2126,9 +2170,11 @@ export class Enemy {
     // a scream the instant the knife goes in or the punch lands, easing to a
     // pained open mouth while it lasts; teeth set while he fights the grip or
     // hangs on to the knife arm; and slack once he is dead.
-    let face = 0;
+    let face = this.mood;
+    let eyes = this.moodEyes;
     if (!this.alive) {
       face = 0.3;
+      eyes = 0.35;
     } else if (this.beingExecuted) {
       if (this.stabCount + this.punchCount > 0) face = Math.max(0.5, Math.exp(-this.sinceHit * 1.6));
       else face = (this.caughtAt >= 0 ? 0.28 : 0.16) + 0.08 * Math.abs(Math.sin(at * 7));
@@ -2136,8 +2182,12 @@ export class Enemy {
     // Opens in a snap, closes slowly
     this.faceOpen += (face - this.faceOpen) * Math.min(1, dt * (face > this.faceOpen ? 28 : 5));
     this.hitman!.setScream(this.faceOpen);
+    this.hitman!.setEyes(eyes);
   }
   private faceOpen = 0;
+  /** The boss's fists, just under his chin either side of it, in the model's rest frame. */
+  private static BOSS_FIST_R = new THREE.Vector3(0.04, 1.438, -0.1);
+  private static BOSS_FIST_L = new THREE.Vector3(-0.04, 1.438, -0.1);
 
   private animate(dt: number): void {
     if (this.flashTime > 0) this.flashTime -= dt;

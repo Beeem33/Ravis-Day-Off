@@ -330,7 +330,120 @@ export class HitmanVisual {
       const src = m.material as THREE.MeshStandardMaterial;
       if (!HitmanVisual.shared.has(src.name)) HitmanVisual.shared.set(src.name, HitmanVisual.plain(src));
     });
+    HitmanVisual.faceOnHead(scene);
+    HitmanVisual.addMouthShapes(scene);
     HitmanVisual.template = scene;
+  }
+
+  private static smoothstep(a: number, b: number, x: number): number {
+    const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  /**
+   * The face, all of it, on the head bone. As it came from the file a third
+   * to a half of the nose, mouth and chin was skinned to the upper chest, so
+   * whenever a head turned the lower face stayed behind with the body and
+   * the whole face smeared round after it. Above the jaw line every vertex
+   * now follows the head alone; the neck below keeps its blend, so it still
+   * twists like a neck. The jaw line runs from under the chin up to the base
+   * of the skull at the back.
+   */
+  private static faceOnHead(scene: THREE.Object3D): void {
+    const head = HitmanVisual.boneNames.indexOf('Head');
+    if (head < 0) return;
+    scene.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (!m.isSkinnedMesh || !m.name.startsWith('HitmanFace')) return;
+      const g = m.geometry;
+      const pos = g.attributes.position;
+      const si = g.attributes.skinIndex as THREE.BufferAttribute;
+      const sw = g.attributes.skinWeight as THREE.BufferAttribute;
+      for (let v = 0; v < pos.count; v++) {
+        const jaw = 1.49 + THREE.MathUtils.clamp((pos.getZ(v) + 0.05) / 0.13, 0, 1) * 0.07;
+        const t = HitmanVisual.smoothstep(jaw - 0.03, jaw + 0.01, pos.getY(v));
+        if (t <= 0) continue;
+        let slot = -1;
+        for (let k = 0; k < 4; k++) if (si.getComponent(v, k) === head && sw.getComponent(v, k) > 0) slot = k;
+        if (slot < 0) {
+          // No head influence yet: the lightest slot becomes the head's
+          let least = 2;
+          for (let k = 0; k < 4; k++) {
+            const w = sw.getComponent(v, k);
+            if (w < least) {
+              least = w;
+              slot = k;
+            }
+          }
+          si.setComponent(v, slot, head);
+        }
+        let moved = 0;
+        for (let k = 0; k < 4; k++) {
+          if (k === slot) continue;
+          const w = sw.getComponent(v, k);
+          sw.setComponent(v, k, w * (1 - t));
+          moved += w * t;
+        }
+        sw.setComponent(v, slot, sw.getComponent(v, slot) + moved);
+      }
+      si.needsUpdate = true;
+      sw.needsUpdate = true;
+    });
+  }
+
+  /**
+   * Two more shape keys for the mouth, which the model only has a scream
+   * for: a smile (the corners out, up and back into the cheeks) and a frown
+   * (the corners pulled down). Worked out from where the lips are, onto the
+   * skin, the lips and the mouth inside them.
+   */
+  private static addMouthShapes(scene: THREE.Object3D): void {
+    const lips = scene.getObjectByName('HitmanFace_3') as THREE.Mesh | undefined;
+    if (!lips) return;
+    lips.geometry.computeBoundingBox();
+    const lb = lips.geometry.boundingBox!;
+    const cy = (lb.min.y + lb.max.y) / 2;
+    const corner = lb.max.x;
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.name.startsWith('HitmanFace')) return;
+      const g = m.geometry;
+      const pos = g.attributes.position;
+      const smile = new Float32Array(pos.count * 3);
+      const frown = new Float32Array(pos.count * 3);
+      for (let v = 0; v < pos.count; v++) {
+        const x = pos.getX(v);
+        const y = pos.getY(v);
+        const z = pos.getZ(v);
+        if (z > -0.02) continue;
+        const ax = Math.abs(x);
+        const sx = Math.sign(x);
+        // Most at the corners, some all along the lips (more towards the sides)
+        const atCorner = Math.exp(-((ax - corner) ** 2 + (y - cy) ** 2) / 0.018 ** 2);
+        const alongLips = Math.exp(-((y - cy) ** 2) / 0.012 ** 2) * HitmanVisual.smoothstep(0, corner, ax) ** 2 * 0.8;
+        const k = Math.max(atCorner, alongLips) * HitmanVisual.smoothstep(-0.02, -0.05, z);
+        smile[v * 3] = sx * 0.0065 * k;
+        smile[v * 3 + 1] = 0.0115 * k;
+        smile[v * 3 + 2] = 0.004 * k;
+        frown[v * 3] = -sx * 0.0012 * k;
+        frown[v * 3 + 1] = -0.0085 * k;
+        frown[v * 3 + 2] = 0.0012 * k;
+      }
+      const add = (name: string, d: Float32Array) => {
+        const a = new THREE.BufferAttribute(d, 3);
+        a.name = name;
+        (g.morphAttributes.position ??= []).push(a);
+        if (g.morphAttributes.normal) g.morphAttributes.normal.push(new THREE.BufferAttribute(new Float32Array(d.length), 3));
+      };
+      // Rebuilding the dictionary names targets by their attributes, and the
+      // file's own ("Scream") may only be named in the dictionary
+      const had = { ...(m.morphTargetDictionary ?? {}) };
+      g.morphTargetsRelative = true;
+      add('Smile', smile);
+      add('Frown', frown);
+      m.updateMorphTargets();
+      Object.assign(m.morphTargetDictionary!, had);
+    });
   }
 
   private static plain(src: THREE.MeshStandardMaterial): THREE.Material {
@@ -493,6 +606,24 @@ export class HitmanVisual {
     for (const m of this.screamMorphs) m.inf[m.k] = v;
   }
 
+  /** The smile and frown shape keys, on each of the face's meshes. */
+  private mouthMorphs: { inf: number[]; smile: number; frown: number }[] = [];
+  private smileNow = 0;
+  private frownNow = 0;
+
+  /** The corners of the mouth: 0..1 up into a smile, 0..1 down into a frown. */
+  setMouth(smile: number, frown: number): void {
+    const s = THREE.MathUtils.clamp(smile, 0, 1);
+    const f = THREE.MathUtils.clamp(frown, 0, 1);
+    if (Math.abs(s - this.smileNow) < 0.002 && Math.abs(f - this.frownNow) < 0.002) return;
+    this.smileNow = s;
+    this.frownNow = f;
+    for (const m of this.mouthMorphs) {
+      m.inf[m.smile] = s;
+      m.inf[m.frown] = f;
+    }
+  }
+
   constructor(look: HitmanLook) {
     const template = HitmanVisual.template;
     if (!template) throw new Error('HitmanVisual used before load()');
@@ -516,6 +647,11 @@ export class HitmanVisual {
         // Closed, whatever weight the file came with
         sm.morphTargetInfluences[k] = 0;
         this.screamMorphs.push({ inf: sm.morphTargetInfluences, k });
+      }
+      const ks = sm.morphTargetDictionary?.Smile;
+      const kf = sm.morphTargetDictionary?.Frown;
+      if (ks !== undefined && kf !== undefined && sm.morphTargetInfluences) {
+        this.mouthMorphs.push({ inf: sm.morphTargetInfluences, smile: ks, frown: kf });
       }
     });
 
@@ -623,17 +759,15 @@ export class HitmanVisual {
     return g;
   }
 
-  /**
-   * The suit as the staff's clothes. It is one mesh of separate pieces — the
-   * jacket, its sleeves, the lapels, the pocket flaps, the trouser legs and
-   * their seams — so the pieces are found by what joins to what: everything
-   * below the waist is trousers; the lapels and pockets, the pieces lying
-   * wholly on the front of the chest, go, and what is left of the jacket is
-   * a shirt. Material 0 is the shirt, 1 the trousers.
-   */
-  private static staffSuit(src: THREE.BufferGeometry): THREE.BufferGeometry {
-    const pos = src.attributes.position;
-    const idx = src.index!.array;
+  /** Each vertex's connected piece of the mesh, and each piece's extent. */
+  private static pieces(g: THREE.BufferGeometry): {
+    of: Int32Array;
+    top: Map<number, number>;
+    bottom: Map<number, number>;
+    front: Map<number, number>;
+  } {
+    const pos = g.attributes.position;
+    const idx = g.index!.array;
     const n = pos.count;
     const parent = new Int32Array(n);
     for (let i = 0; i < n; i++) parent[i] = i;
@@ -649,26 +783,178 @@ export class HitmanVisual {
       parent[find(idx[i + 1])] = a;
       parent[find(idx[i + 2])] = a;
     }
+    const of = new Int32Array(n);
     const top = new Map<number, number>();
     const bottom = new Map<number, number>();
     const front = new Map<number, number>();
     for (let v = 0; v < n; v++) {
       const r = find(v);
+      of[v] = r;
       top.set(r, Math.max(top.get(r) ?? -9, pos.getY(v)));
       bottom.set(r, Math.min(bottom.get(r) ?? 9, pos.getY(v)));
       front.set(r, Math.max(front.get(r) ?? -9, pos.getZ(v)));
     }
+    return { of, top, bottom, front };
+  }
+
+  /**
+   * Which triangles of the suit are the staff's shirt and which their
+   * trousers. Everything below the waist is trousers; the lapels and pocket
+   * flaps (pieces lying wholly on the front of the chest) and the jacket's
+   * notched collar (wholly above the shoulders) go; the rest is the shirt.
+   */
+  private static suitParts(src: THREE.BufferGeometry): { shirt: number[]; trousers: number[] } {
+    const { of, top, bottom, front } = HitmanVisual.pieces(src);
+    const idx = src.index!.array;
     const shirt: number[] = [];
     const trousers: number[] = [];
     for (let i = 0; i < idx.length; i += 3) {
-      const r = find(idx[i]);
-      // The jacket's notched collar goes too (the pieces wholly above the
-      // shoulders): the shirt's own collar is under it
+      const r = of[idx[i]];
       const trim = front.get(r)! < -0.06 || bottom.get(r)! > 1.46;
       const out = top.get(r)! < 1.035 ? trousers : trim ? null : shirt;
       if (out) out.push(idx[i], idx[i + 1], idx[i + 2]);
     }
-    return HitmanVisual.reindexed(src, [shirt, trousers]);
+    return { shirt, trousers };
+  }
+
+  /**
+   * Where the front of a plain shirt would be across the jacket's V: for
+   * each height (1 cm apart from 1.14 m), how far out from the middle the
+   * jacket's front is, and how far forward. Taken off the jacket at rest by
+   * looking straight at it: across the V the front-most point is on its
+   * edge, and a plain shirt's front runs straight on across at that depth.
+   */
+  private static vTable: { xe: number[]; ze: number[] } | null = null;
+  private static readonly V_Y0 = 1.14;
+
+  private static frontTable(): { xe: number[]; ze: number[] } {
+    if (HitmanVisual.vTable) return HitmanVisual.vTable;
+    const src = (HitmanVisual.template!.getObjectByName('HitmanBody_1') as THREE.Mesh).geometry;
+    const { shirt } = HitmanVisual.suitParts(src);
+    const pos = src.attributes.position;
+    // Only the front of the chest, near the middle
+    const tris: THREE.Triangle[] = [];
+    for (let i = 0; i < shirt.length; i += 3) {
+      const t = new THREE.Triangle(
+        new THREE.Vector3().fromBufferAttribute(pos, shirt[i]),
+        new THREE.Vector3().fromBufferAttribute(pos, shirt[i + 1]),
+        new THREE.Vector3().fromBufferAttribute(pos, shirt[i + 2])
+      );
+      const ok = [t.a, t.b, t.c].every((p) => Math.abs(p.x) < 0.16 && p.z < -0.02 && p.y > 1.08 && p.y < 1.5);
+      if (ok) tris.push(t);
+    }
+    const ray = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, 0, 1));
+    const hit = new THREE.Vector3();
+    const xe: number[] = [];
+    const ze: number[] = [];
+    for (let y = HitmanVisual.V_Y0; y <= 1.465; y += 0.01) {
+      let bx = 0;
+      let bz = 0;
+      for (let x = 0; x <= 0.12; x += 0.004) {
+        ray.origin.set(x, y, -1);
+        let z = Infinity;
+        for (const t of tris) {
+          if (ray.intersectTriangle(t.a, t.b, t.c, false, hit) && hit.z < z) z = hit.z;
+        }
+        if (z < bz) {
+          bz = z;
+          bx = x;
+        }
+      }
+      xe.push(bx);
+      ze.push(bz);
+    }
+    HitmanVisual.vTable = { xe, ze };
+    return HitmanVisual.vTable;
+  }
+
+  /**
+   * Lay a vertex on the front of the plain shirt, if it is in the V: `p`
+   * and `n` are changed in place. `behind` sets it that much back from the
+   * shirt's front — the shirt front under the jacket stays just behind it.
+   */
+  private static onShirtFront(p: THREE.Vector3, n: THREE.Vector3, behind: number): void {
+    const S = HitmanVisual.smoothstep;
+    const wy = S(1.13, 1.17, p.y) * (1 - S(1.475, 1.49, p.y));
+    if (wy <= 0 || p.z > -0.02) return;
+    const { xe, ze } = HitmanVisual.frontTable();
+    const f = THREE.MathUtils.clamp((p.y - HitmanVisual.V_Y0) / 0.01, 0, xe.length - 1.001);
+    const i = Math.floor(f);
+    const u = f - i;
+    // Up at the neck the jacket curves back from the shirt's front, which
+    // stood proud of it as a square plate under the chin: there the jacket
+    // is ramped forward, over a wider band, to just behind the shirt's
+    // front, and the edges of that tuck back to meet it
+    const neck = S(1.435, 1.46, p.y);
+    if (behind > 0 && neck > 0) {
+      const e = neck * S(0.045, 0.072, Math.abs(p.x));
+      p.z += (-0.0905 - p.z) * e;
+    }
+    const x0 = THREE.MathUtils.lerp(xe[i] + (xe[i + 1] - xe[i]) * u, 0.075, neck);
+    const z0 = THREE.MathUtils.lerp(ze[i] + (ze[i + 1] - ze[i]) * u, -0.09, neck);
+    const band = 0.008 + 0.034 * neck;
+    const w = wy * (1 - S(x0, x0 + band, Math.abs(p.x)));
+    // Only ever brought forward: up by the collar the shirt's front is
+    // already out in front of where the jacket's curves back to the neck
+    if (w <= 0 || z0 + behind >= p.z) return;
+    p.z += (z0 + behind - p.z) * w;
+    // Facing straight out of the chest, tilted as the chest slopes
+    const slope = (ze[i + 1] - ze[i]) / 0.01;
+    const flat = new THREE.Vector3(0, slope, -1).normalize();
+    n.lerp(flat, w).normalize();
+  }
+
+  /** Reshape the vertices `tris` uses, in positions and normals of the geometry's own. */
+  private static reshaped(g: THREE.BufferGeometry, tris: number[], behind: number): void {
+    const pos = g.attributes.position.clone() as THREE.BufferAttribute;
+    const nor = g.attributes.normal.clone() as THREE.BufferAttribute;
+    g.setAttribute('position', pos);
+    g.setAttribute('normal', nor);
+    const p = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const done = new Set<number>();
+    for (const v of tris) {
+      if (done.has(v)) continue;
+      done.add(v);
+      p.fromBufferAttribute(pos, v);
+      n.fromBufferAttribute(nor, v);
+      HitmanVisual.onShirtFront(p, n, behind);
+      pos.setXYZ(v, p.x, p.y, p.z);
+      nor.setXYZ(v, n.x, n.y, n.z);
+    }
+  }
+
+  /**
+   * The suit as the staff's clothes: the jacket pieces that stay are a
+   * plain white shirt, and the V down its front where the lapels crossed is
+   * closed — the edges of it laid flat across the chest — so there is no
+   * jacket left in it. Material 0 is the shirt, 1 the trousers.
+   */
+  private static staffSuit(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const { shirt, trousers } = HitmanVisual.suitParts(src);
+    const g = HitmanVisual.reindexed(src, [shirt, trousers]);
+    HitmanVisual.reshaped(g, shirt, 0);
+    return g;
+  }
+
+  /**
+   * The model's shirt for the staff: its collar and cuffs, and the front of
+   * it brought forward to sit just behind the closed-up V so the two read as
+   * one shirt. The pocket square goes.
+   */
+  private static staffShirt(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const { of, top, bottom } = HitmanVisual.pieces(src);
+    const idx = src.index!.array;
+    const keep: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const r = of[idx[i]];
+      const square = bottom.get(r)! > 1.3 && top.get(r)! < 1.36;
+      if (!square) keep.push(idx[i], idx[i + 1], idx[i + 2]);
+    }
+    const g = HitmanVisual.reindexed(src, [keep]);
+    g.clearGroups();
+    HitmanVisual.reshaped(g, keep, 0.0015);
+    return g;
   }
 
   /** Each vertex's weight on each of a set of bones. */
@@ -927,7 +1213,10 @@ export class HitmanVisual {
         if (m.name === 'HitmanBody_1') {
           m.geometry = H.outfitGeo('staff:suit', () => H.staffSuit(m.geometry));
           m.material = [shirtMat, trouserMat];
-        } else if (mat === 'HM_Shirt') m.material = shirtMat;
+        } else if (mat === 'HM_Shirt') {
+          m.geometry = H.outfitGeo('staff:shirt', () => H.staffShirt(m.geometry));
+          m.material = shirtMat;
+        }
         else if (mat === 'HM_Tie') m.visible = false;
         return;
       }

@@ -171,6 +171,7 @@ export class Enemy {
       if ((o as THREE.Mesh).isMesh && !keep.has(o)) (o as THREE.Mesh).material = Enemy.unseen;
     });
     const h = new HitmanVisual(HitmanVisual.lookFor(this.variant, this.boss ? 'boss' : this.civilian ? 'staff' : 'agent'));
+    if (this.civilian) this.setMood(0, 1, 0.75, 0);
     this.hitman = h;
     this.root.add(h.model);
     this.parts.length = 0;
@@ -1242,10 +1243,16 @@ export class Enemy {
    */
   private mood = 0;
   private moodEyes = 1;
-  private setMood(open: number, eyes: number): void {
+  private moodSmile = 0;
+  private moodFrown = 0;
+  private setMood(open: number, eyes: number, smile = 0, frown = 0): void {
     this.mood = open;
     this.moodEyes = eyes;
+    this.moodSmile = smile;
+    this.moodFrown = frown;
   }
+  private smileNow = 0;
+  private frownNow = 0;
 
   /**
    * Back to the resting face.
@@ -1257,7 +1264,7 @@ export class Enemy {
    */
   setCalm(): void {
     if (!this.civilian || !Enemy.faceCalm) return;
-    this.setMood(0, 1);
+    this.setMood(0, 1, 0.75, 0);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceCalm;
   }
@@ -1265,7 +1272,7 @@ export class Enemy {
   /** Not frightened, but aware something is going on. */
   setConcerned(): void {
     if (!this.civilian || !Enemy.faceConcerned) return;
-    this.setMood(0.1, 1.12);
+    this.setMood(0.14, 1.18, 0, 0.6);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceConcerned;
   }
@@ -1273,7 +1280,7 @@ export class Enemy {
   /** Swap the calm face for the frightened one. */
   setScared(): void {
     if (!this.civilian || !Enemy.faceWorried) return;
-    this.setMood(0.42, 1.38);
+    this.setMood(0.82, 1.5, 0, 0.45);
     const mats = this.head.material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceWorried;
   }
@@ -1348,7 +1355,7 @@ export class Enemy {
   /** Shaken but back on their feet — the face for after the shooting stops. */
   setShaken(): void {
     if (!this.civilian || !Enemy.faceShaken) return;
-    this.setMood(0.14, 0.85);
+    this.setMood(0.2, 0.88, 0, 0.8);
     const mats = (this.head as THREE.Mesh).material;
     if (Array.isArray(mats)) mats[5] = Enemy.faceShaken;
   }
@@ -2113,7 +2120,7 @@ export class Enemy {
         R.thumb = thumbR.set(0, 0, -1).applyQuaternion(hq);
         R.palm = palmR.set(-1, 0, 0).applyQuaternion(hq);
         curlR = 1;
-      } else if (!this.rifleDropped && !this.slung && this.rifle.visible) {
+      } else if (!this.civilian && !this.boss && !this.rifleDropped && !this.slung && this.rifle.visible) {
         // Right fist round the grip, thumb up it (it rakes back a little)
         this.rifle.updateWorldMatrix(true, false);
         this.rifle.getWorldQuaternion(hq);
@@ -2172,9 +2179,15 @@ export class Enemy {
     // hangs on to the knife arm; and slack once he is dead.
     let face = this.mood;
     let eyes = this.moodEyes;
+    let smile = this.moodSmile;
+    let frown = this.moodFrown;
+    // Frightened, the jaw trembles
+    if (this.mood > 0.5) face += 0.07 * Math.sin(at * 11) + 0.04 * Math.sin(at * 17.3);
     if (!this.alive) {
       face = 0.3;
       eyes = 0.35;
+      smile = 0;
+      frown = 0.25;
     } else if (this.beingExecuted) {
       if (this.stabCount + this.punchCount > 0) face = Math.max(0.5, Math.exp(-this.sinceHit * 1.6));
       else face = (this.caughtAt >= 0 ? 0.28 : 0.16) + 0.08 * Math.abs(Math.sin(at * 7));
@@ -2183,6 +2196,10 @@ export class Enemy {
     this.faceOpen += (face - this.faceOpen) * Math.min(1, dt * (face > this.faceOpen ? 28 : 5));
     this.hitman!.setScream(this.faceOpen);
     this.hitman!.setEyes(eyes);
+    const km = Math.min(1, dt * 6);
+    this.smileNow += (smile - this.smileNow) * km;
+    this.frownNow += (frown - this.frownNow) * km;
+    this.hitman!.setMouth(this.smileNow, this.frownNow);
   }
   private faceOpen = 0;
   /** The boss's fists, just under his chin either side of it, in the model's rest frame. */

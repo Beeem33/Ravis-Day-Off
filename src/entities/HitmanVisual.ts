@@ -214,6 +214,7 @@ export class HitmanVisual {
   private static shared = new Map<string, THREE.Material>();
   private static skinMats = new Map<number, THREE.MeshStandardMaterial>();
   private static browMats = new Map<number, THREE.MeshStandardMaterial>();
+  private static lipMats = new Map<number, THREE.MeshStandardMaterial>();
   private static hairMats = new Map<string, THREE.MeshStandardMaterial>();
   private static tieMats = new Map<number, THREE.MeshStandardMaterial>();
 
@@ -340,6 +341,18 @@ export class HitmanVisual {
     if (!m) {
       m = new THREE.MeshStandardMaterial({ name: 'HM_Skin', color: tone, roughness: 0.55, vertexColors: true });
       HitmanVisual.skinMats.set(tone, m);
+    }
+    return m;
+  }
+
+  /** Lips: a darker, redder step off whatever skin tone this one has. */
+  private static lipMat(tone: number): THREE.MeshStandardMaterial {
+    let m = HitmanVisual.lipMats.get(tone);
+    if (!m) {
+      const c = new THREE.Color(tone).multiplyScalar(0.62);
+      c.offsetHSL(-0.012, 0.07, 0);
+      m = new THREE.MeshStandardMaterial({ name: 'HM_Lip', color: c, roughness: 0.5 });
+      HitmanVisual.lipMats.set(tone, m);
     }
     return m;
   }
@@ -515,6 +528,7 @@ export class HitmanVisual {
         return;
       }
       if (name === 'HM_Skin') m.material = HitmanVisual.skinMat(look.skin);
+      else if (name === 'HM_Lip') m.material = HitmanVisual.lipMat(look.skin);
       else if (name === 'HM_Brow') m.material = HitmanVisual.browMat(look.hairColor);
       else if (name === 'HM_Tie') m.material = HitmanVisual.tieMat(look.tie);
       else m.material = HitmanVisual.shared.get(name) ?? m.material;

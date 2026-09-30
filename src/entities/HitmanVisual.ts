@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
  * HitmanVisual — the modelled man in the suit (models/hitman.glb), worn over
@@ -331,6 +332,7 @@ export class HitmanVisual {
       if (!HitmanVisual.shared.has(src.name)) HitmanVisual.shared.set(src.name, HitmanVisual.plain(src));
     });
     HitmanVisual.faceOnHead(scene);
+    HitmanVisual.openMouth(scene);
     HitmanVisual.addMouthShapes(scene);
     HitmanVisual.template = scene;
   }
@@ -392,6 +394,92 @@ export class HitmanVisual {
   }
 
   /**
+   * Let the lips be the mouth. As modelled the face's skin runs straight on
+   * across the mouth a millimetre or two in front of the lips, so only the
+   * crest of each lip came through it: two bumps, with skin between them
+   * where the mouth should be. The skin the lips cover is cut away — every
+   * triangle of it lying wholly within their outline, seen from the front —
+   * so the whole of each lip shows and between them there is the dark of
+   * the mouth behind. And each lip is marked where it turns in towards the
+   * other, for its material to darken: the line where the lips meet.
+   */
+  private static openMouth(scene: THREE.Object3D): void {
+    const skin = scene.getObjectByName('HitmanFace_1') as THREE.Mesh | undefined;
+    const lips = scene.getObjectByName('HitmanFace_3') as THREE.Mesh | undefined;
+    if (!skin || !lips) return;
+    const lg = lips.geometry;
+    const lp = lg.attributes.position;
+    const li = lg.index!.array;
+    const tris: THREE.Triangle[] = [];
+    for (let i = 0; i < li.length; i += 3) {
+      tris.push(
+        new THREE.Triangle(
+          new THREE.Vector3().fromBufferAttribute(lp, li[i]),
+          new THREE.Vector3().fromBufferAttribute(lp, li[i + 1]),
+          new THREE.Vector3().fromBufferAttribute(lp, li[i + 2])
+        )
+      );
+    }
+    const ray = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, 0, 1));
+    const hit = new THREE.Vector3();
+    /** Is there lip at (x, y), no more than a few millimetres behind skin at depth z? */
+    const lipAt = (x: number, y: number, z: number): boolean => {
+      ray.origin.set(x, y, -1);
+      for (const t of tris) {
+        if (ray.intersectTriangle(t.a, t.b, t.c, false, hit) && z > hit.z - 0.004) return true;
+      }
+      return false;
+    };
+    /**
+     * Is the skin at this point lying over a lip? On one, or in the thin gap
+     * where the two meet (lip just above it and just below): the edges of
+     * the lips' outline have to be really inside it, or the cut shows
+     * through past them.
+     */
+    const covered = (x: number, y: number, z: number): boolean =>
+      lipAt(x, y, z) || (lipAt(x, y + 0.0015, z) && lipAt(x, y - 0.0015, z));
+    const sg = skin.geometry;
+    const sp = sg.attributes.position;
+    const si = sg.index!.array;
+    const cache = new Map<number, boolean>();
+    const isCovered = (v: number): boolean => {
+      let c = cache.get(v);
+      if (c === undefined) {
+        const z = sp.getZ(v);
+        c = z < -0.05 && covered(sp.getX(v), sp.getY(v), z);
+        cache.set(v, c);
+      }
+      return c;
+    };
+    const keep: number[] = [];
+    for (let i = 0; i < si.length; i += 3) {
+      if (!(isCovered(si[i]) && isCovered(si[i + 1]) && isCovered(si[i + 2]))) keep.push(si[i], si[i + 1], si[i + 2]);
+    }
+    sg.setIndex(keep);
+
+    // The lips' inner faces: the underside of the upper lip, the top of the lower
+    const { of } = HitmanVisual.pieces(lg);
+    const mean = new Map<number, [number, number]>();
+    for (let v = 0; v < lp.count; v++) {
+      const m = mean.get(of[v]) ?? [0, 0];
+      m[0] += lp.getY(v);
+      m[1]++;
+      mean.set(of[v], m);
+    }
+    const all = [...mean.values()].map(([sum, n]) => sum / n);
+    const middle = (Math.max(...all) + Math.min(...all)) / 2;
+    const ln = lg.attributes.normal;
+    const inner = new Float32Array(lp.count);
+    for (let v = 0; v < lp.count; v++) {
+      const [sum, n] = mean.get(of[v])!;
+      const upper = sum / n > middle;
+      const facing = upper ? -ln.getY(v) : ln.getY(v);
+      inner[v] = HitmanVisual.smoothstep(0.05, 0.75, facing);
+    }
+    lg.setAttribute('lipInner', new THREE.BufferAttribute(inner, 1));
+  }
+
+  /**
    * Two more shape keys for the mouth, which the model only has a scream
    * for: a smile (the corners out, up and back into the cheeks) and a frown
    * (the corners pulled down). Worked out from where the lips are, onto the
@@ -400,8 +488,7 @@ export class HitmanVisual {
   private static addMouthShapes(scene: THREE.Object3D): void {
     const lips = scene.getObjectByName('HitmanFace_3') as THREE.Mesh | undefined;
     if (!lips) return;
-    lips.geometry.computeBoundingBox();
-    const lb = lips.geometry.boundingBox!;
+    const lb = new THREE.Box3().setFromBufferAttribute(lips.geometry.attributes.position as THREE.BufferAttribute);
     const cy = (lb.min.y + lb.max.y) / 2;
     const corner = lb.max.x;
     scene.traverse((o) => {
@@ -474,7 +561,10 @@ export class HitmanVisual {
   private static skinMat(tone: number): THREE.MeshStandardMaterial {
     let m = HitmanVisual.skinMats.get(tone);
     if (!m) {
-      m = new THREE.MeshStandardMaterial({ name: 'HM_Skin', color: tone, roughness: 0.55, vertexColors: true });
+      // Both sides: the mouth is cut out of the skin (see openMouth), and a
+      // sliver of the cut past a lip's edge shows the inside of the head
+      // as skin rather than the room behind it
+      m = new THREE.MeshStandardMaterial({ name: 'HM_Skin', color: tone, roughness: 0.55, vertexColors: true, side: THREE.DoubleSide });
       HitmanVisual.skinMats.set(tone, m);
     }
     return m;
@@ -484,9 +574,20 @@ export class HitmanVisual {
   private static lipMat(tone: number): THREE.MeshStandardMaterial {
     let m = HitmanVisual.lipMats.get(tone);
     if (!m) {
-      const c = new THREE.Color(tone).multiplyScalar(0.62);
-      c.offsetHSL(-0.012, 0.07, 0);
-      m = new THREE.MeshStandardMaterial({ name: 'HM_Lip', color: c, roughness: 0.5 });
+      const c = new THREE.Color(tone).multiplyScalar(0.74);
+      c.offsetHSL(-0.012, 0.06, 0);
+      const mat = new THREE.MeshStandardMaterial({ name: 'HM_Lip', color: c, roughness: 0.5 });
+      // Darkest where each lip turns in to meet the other: the mouth's line
+      mat.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute float lipInner;\nvarying float vInner;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvInner = lipInner;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vInner;')
+          .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= 1.0 - 0.82 * vInner;');
+      };
+      mat.customProgramCacheKey = () => 'hitman-lip';
+      m = mat;
       HitmanVisual.lipMats.set(tone, m);
     }
     return m;
@@ -938,6 +1039,78 @@ export class HitmanVisual {
   }
 
   /**
+   * Six small black buttons down the middle of the shirt's front, from the
+   * collar to the waist, each sitting on the cloth (found by looking
+   * straight at the shirt at rest) and facing out of it. They are skinned
+   * like the cloth under them — each takes the weights of the nearest
+   * vertex of the shirt — so they ride every pose and every fall with it.
+   */
+  private static buttonsFor(suit: THREE.BufferGeometry, shirt: THREE.BufferGeometry): THREE.BufferGeometry {
+    const tris: THREE.Triangle[] = [];
+    const collect = (g: THREE.BufferGeometry, count: number) => {
+      const p = g.attributes.position;
+      const idx = g.index!.array;
+      for (let i = 0; i < count; i += 3) {
+        const t = new THREE.Triangle(
+          new THREE.Vector3().fromBufferAttribute(p, idx[i]),
+          new THREE.Vector3().fromBufferAttribute(p, idx[i + 1]),
+          new THREE.Vector3().fromBufferAttribute(p, idx[i + 2])
+        );
+        if ([t.a, t.b, t.c].every((q) => q.z < -0.02 && Math.abs(q.x) < 0.06 && q.y > 1.0 && q.y < 1.5)) tris.push(t);
+      }
+    };
+    collect(suit, suit.groups.length ? suit.groups[0].count : suit.index!.count);
+    collect(shirt, shirt.index!.count);
+    const sp = suit.attributes.position;
+    const ski = suit.attributes.skinIndex;
+    const skw = suit.attributes.skinWeight;
+    const ray = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, 0, 1));
+    const hit = new THREE.Vector3();
+    const parts: THREE.BufferGeometry[] = [];
+    for (const y of [1.43, 1.36, 1.29, 1.22, 1.15, 1.08]) {
+      ray.origin.set(0, y, -1);
+      let at: THREE.Vector3 | null = null;
+      let normal = new THREE.Vector3(0, 0, -1);
+      for (const t of tris) {
+        if (ray.intersectTriangle(t.a, t.b, t.c, false, hit) && (!at || hit.z < at.z)) {
+          at = hit.clone();
+          normal = t.getNormal(new THREE.Vector3());
+          if (normal.z > 0) normal.negate();
+        }
+      }
+      if (!at) continue;
+      const b = new THREE.CylinderGeometry(0.0058, 0.0062, 0.0024, 14);
+      b.rotateX(Math.PI / 2);
+      b.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), normal));
+      b.translate(at.x + normal.x * 0.0012, at.y + normal.y * 0.0012, at.z + normal.z * 0.0012);
+      // The weights of the cloth nearest it
+      let near = 0;
+      let best = Infinity;
+      for (let v = 0; v < sp.count; v++) {
+        const d = (sp.getX(v) - at.x) ** 2 + (sp.getY(v) - at.y) ** 2 + (sp.getZ(v) - at.z) ** 2;
+        if (d < best) {
+          best = d;
+          near = v;
+        }
+      }
+      const n = b.attributes.position.count;
+      const SI = new Uint16Array(n * 4);
+      const SW = new Float32Array(n * 4);
+      for (let v = 0; v < n; v++) {
+        for (let k = 0; k < 4; k++) {
+          SI[v * 4 + k] = ski.getComponent(near, k);
+          SW[v * 4 + k] = skw.getComponent(near, k);
+        }
+      }
+      b.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4));
+      b.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+      b.deleteAttribute('uv');
+      parts.push(b);
+    }
+    return mergeGeometries(parts) ?? new THREE.BufferGeometry();
+  }
+
+  /**
    * The model's shirt for the staff: its collar and cuffs, and the front of
    * it brought forward to sit just behind the closed-up V so the two read as
    * one shirt. The pocket square goes.
@@ -1200,6 +1373,7 @@ export class HitmanVisual {
     const shirtMat = H.outfitMat('staff:shirt', () => new THREE.MeshStandardMaterial({ name: 'HM_StaffShirt', color: 0xeeebe3, roughness: 0.85 }));
     const trouserMat = H.outfitMat('staff:trousers', () => new THREE.MeshStandardMaterial({ name: 'HM_Chinos', color: 0x2f4a7a, roughness: 0.9 }));
     let face: THREE.SkinnedMesh | null = null;
+    let suit: THREE.SkinnedMesh | null = null;
     this.model.traverse((o) => {
       const m = o as THREE.SkinnedMesh;
       if (!m.isMesh) return;
@@ -1211,6 +1385,7 @@ export class HitmanVisual {
       if (mat === 'HM_Glove') m.material = H.handMat(look.skin);
       if (staff) {
         if (m.name === 'HitmanBody_1') {
+          suit = m;
           m.geometry = H.outfitGeo('staff:suit', () => H.staffSuit(m.geometry));
           m.material = [shirtMat, trouserMat];
         } else if (mat === 'HM_Shirt') {
@@ -1281,6 +1456,23 @@ export class HitmanVisual {
     cap.position.set(0, 1.672, 0.004);
     cap.rotation.x = -0.05;
     this.hang(cap, 'Head');
+
+    // A plain button-up: a row of black buttons down the front
+    if (staff && suit) {
+      const body = suit as THREE.SkinnedMesh;
+      const shirtMesh = this.model.getObjectByName('HitmanBody_2') as THREE.Mesh;
+      const buttons = new THREE.SkinnedMesh(
+        H.outfitGeo('staff:buttons', () => H.buttonsFor(body.geometry, shirtMesh.geometry)),
+        H.outfitMat('staff:button', () => new THREE.MeshStandardMaterial({ name: 'HM_Button', color: 0x0d0d0f, roughness: 0.35 }))
+      );
+      buttons.name = 'HitmanButtons';
+      body.parent!.add(buttons);
+      buttons.position.copy(body.position);
+      buttons.quaternion.copy(body.quaternion);
+      buttons.scale.copy(body.scale);
+      buttons.bind(body.skeleton, body.bindMatrix);
+      buttons.boundingSphere = this.cull;
+    }
 
     // His beard, grown out of his (heavier) face
     if (!staff && face) {

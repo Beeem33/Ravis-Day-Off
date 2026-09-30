@@ -254,9 +254,16 @@ export class MainMenuScene implements GameScene {
     grip.position.set(0, -0.05, 0.075);
     grip.rotation.x = 0.25;
     pistol.add(grip);
-    // Muzzle down-forward, like the reference
+    // Muzzle forward and down along his forearm, past the knee, the slide
+    // canted out a little. Tipped back towards him, as it was, the modelled
+    // hand had to bend nearly square at the wrist to keep hold of the grip.
     pistol.position.set(-0.005, 0.015, 0.02);
-    pistol.rotation.set(-0.85, 0.12, 0);
+    {
+      const back = V3(0.15, -0.42, 1).normalize().negate(); // the gun's +Z: the muzzle runs down −Z
+      const up = V3(Math.sin(-0.35), Math.cos(-0.35), 0);
+      up.addScaledVector(back, -up.dot(back)).normalize();
+      pistol.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(up, back), up, back));
+    }
     this.hands.add(pistol);
     this.pistol = pistol;
     this.ravi.add(this.hands);

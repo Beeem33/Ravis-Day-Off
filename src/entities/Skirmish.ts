@@ -171,6 +171,9 @@ export class Brawl {
       this.wait = Math.random() < 0.3 ? SWING * 0.9 : 0.5 + Math.random() * 0.9;
     }
     this.animate(this.fa, this.fs, dt);
+    // A punch can end it: the scene calls the fight off from inside the
+    // hook, and the other man must not then be posed back into it
+    if (this.done) return;
     this.animate(this.fs, this.fa, dt);
   }
 
@@ -229,6 +232,8 @@ export class Brawl {
         o.reactSide = sw.hand === 'R' ? 1 : -1;
         o.push.addScaledVector(dir, sw.head ? 0.12 : 0.08);
         this.hooks.landed(e, o.e, at, dir, sw.head, 1);
+        // That one finished it: the fight is off and both men are free of it
+        if (this.done) return;
       }
       if (u >= 1) f.swing = null;
     }
@@ -324,6 +329,10 @@ export class GroundPound {
     if (this.staff.alive) {
       this.staff.setKneeling(false);
       this.staff.setShaken();
+      // Up off his knees, and a step back from him
+      const s = this.staff;
+      s.position.x += Math.sin(s.yaw) * 0.35;
+      s.position.z += Math.cos(s.yaw) * 0.35;
     }
     if (this.agent.alive) {
       // Out cold: arms down on the carpet either side of him
@@ -373,6 +382,8 @@ export class GroundPound {
       this.side = -this.side;
       const at = this.agent.headWorld(new THREE.Vector3());
       this.hooks.landed(s, this.agent, at, new THREE.Vector3(0, -1, 0), true, this.finish ? 100 : 0.35);
+      // The last of him: end() has let the man doing it go — leave him be
+      if (this.done) return;
     } else if (u > 0.5 && u < 0.53) {
       this.hooks.thrown(s);
     }
@@ -445,15 +456,25 @@ export class CoverGunner {
     return this.state === 'aim' || this.state === 'rise';
   }
 
-  /** Done fighting: on his feet, gun down at his side. */
-  stand(): void {
+  /**
+   * Done fighting: sat where he was, back against the desk, the gun down on
+   * his thigh. Stood up, he would be stood in among the legs of the desk he
+   * was behind.
+   */
+  rest(): void {
     if (this.state === 'off') return;
     this.state = 'off';
-    this.e.pose = null;
-    this.e.poseCurl = null;
-    this.e.setSlumped(false);
-    this.e.setKneeling(false);
-    this.e.setShaken();
+    const e = this.e;
+    e.setKneeling(false);
+    e.setSlumped(true);
+    e.setShaken();
+    e.position.copy(this.hide);
+    e.yaw = this.facing + Math.PI;
+    e.root.rotation.y = e.yaw;
+    this.armQ.setFromUnitVectors(DOWN, _b.set(0.18, -0.6, -0.78).normalize());
+    this.pose.foreR = 0.25;
+    this.pose.handL!.set(-0.13, 0.4, -0.34);
+    e.pose = this.pose;
   }
 
   update(dt: number): void {

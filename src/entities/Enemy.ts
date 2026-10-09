@@ -1144,6 +1144,21 @@ export class Enemy {
     this.guardAt.copy(this.handguard);
   }
 
+  /** In a plate carrier and a helmet: a man who will take a lot more stopping, and looks it. */
+  armoured = false;
+
+  wearArmour(): void {
+    if (this.armoured) return;
+    this.armoured = true;
+    if (this.hitman) {
+      this.hitman.addArmour();
+      return;
+    }
+    // The block build: a dark slab over the front and back of the chest
+    const vest = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.34, 0.3), this.mat(0x262b33));
+    this.torso.add(vest);
+  }
+
   /** Stop drawing whatever is in his hands — it has gone to somebody else. */
   hideWeapon(): void {
     this.rifle.visible = false;

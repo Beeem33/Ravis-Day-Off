@@ -254,10 +254,11 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
         return point;
       }
 
-      // ---- Lethal hit on an intruder
+      // ---- A hit on somebody alive: usually the end of him
       if (enemyRef) {
-        const headshot = obj.userData.part === 'head';
-        this.killEnemy(enemyRef, point, dir, shooter === null, headshot, (obj.userData.part as string) ?? 'torso');
+        const part = (obj.userData.part as string) ?? 'torso';
+        if (this.absorbHit(enemyRef, point, dir, shooter, part)) return point;
+        this.killEnemy(enemyRef, point, dir, shooter === null, part === 'head', part);
         return point;
       }
 
@@ -334,6 +335,21 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       // Misses are audible only — no screen flash, that reads as being hit
       if (player.alive) audio.bulletWhiz();
     }
+  }
+
+  /**
+   * A round has hit a living man. Everywhere so far one was the end of him;
+   * a level where people take more than one says so here — true when this
+   * one did not kill, and the level has dealt with what it did instead.
+   */
+  protected absorbHit(
+    _enemy: Enemy,
+    _point: THREE.Vector3,
+    _dir: THREE.Vector3,
+    _shooter: Enemy | null,
+    _part: string
+  ): boolean {
+    return false;
   }
 
   // -------------------------------------------------------------- takedown

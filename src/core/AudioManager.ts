@@ -393,6 +393,14 @@ export class AudioManager {
     this.tone('square', 120, 35, 0.16, 0.3 * a);
   }
 
+  /** A round off body armour: a hard flat smack with a ring of metal in it. */
+  armourHit(distance: number): void {
+    const a = this.atten(distance, 30) * 0.8 + 0.12;
+    this.noise(0.035, 'highpass', 3200, 0.32 * a);
+    this.noise(0.07, 'bandpass', 1100, 0.3 * a, true, 2);
+    this.tone('triangle', 2300 + Math.random() * 500, 1500, 0.09, 0.09 * a);
+  }
+
   /** Someone else's pistol, across the room: lighter and sharper than a rifle. */
   npcPistol(distance: number): void {
     const a = this.atten(distance, 40) * 0.85 + 0.06;

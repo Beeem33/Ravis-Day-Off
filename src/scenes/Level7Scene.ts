@@ -3,7 +3,7 @@ import * as CANNON from 'cannon-es';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level7Builder, drawStairwellFeed, type Level7Data } from '../environment/Level7Builder';
+import { Level7Builder, drawStatic, type Level7Data } from '../environment/Level7Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -18,25 +18,34 @@ import { EnemyAI } from '../entities/EnemyAI';
 import { Brawl, CoverGunner, CoverShooter, GroundPound, coweringPose, type FightHooks } from '../entities/Skirmish';
 import { armWithAK, droppedAK } from '../entities/AkModel';
 import { FPSHUD } from '../ui/FPSHUD';
-import { DialogueBox, type DialogueLine } from '../ui/DialogueBox';
 import { dataDrive } from '../environment/OfficeProps';
 
 const RIFLE_COOLDOWN = 0.1;
 const RIFLE_MAG = 30;
-const RAVI_PITCH = 1.0;
 
 /**
- * The fights between them run on hit points. Ravi's rounds ignore all of
- * this and kill outright, as everywhere else: the numbers are only for the
- * staff and the agents doing it to each other, and they are set so that
- * nobody wins quickly. Left alone the floor takes minutes to settle — the
- * deciding is meant to be Ravi's.
+ * What it takes to put one of them down. With an AK in his hands a single
+ * round was always the end of a man, and the floor went down too easily:
+ * here it is four in the body, one in the head — and the ones in plate
+ * carriers and helmets take a good deal more.
  */
 const AGENT_HP = 100;
+const ARMOURED_HP = 140;
+/** One of Ravi's rounds, by where it lands. */
+const AK_DAMAGE: Record<string, number> = { torso: 25, arm: 18, leg: 18, head: 100 };
+/** How much of a round gets through a plate, or a helmet. */
+const ARMOUR_LETS = { torso: 0.6, head: 0.5 };
+
+/**
+ * The staff's fights with the agents run on the same hit points, but slowly:
+ * left alone, a fist fight goes on two minutes or more and the beating longer.
+ * The deciding is meant to be Ravi's.
+ */
 const STAFF_HP = 100;
 const PINNED_HP = 150;
-/** Left alone, a fist fight goes on two minutes or more, and the beating longer. */
 const DAMAGE = { rifle: 9, pistol: 10, punch: 1.4, pound: 2.5 };
+/** An agent's round gone wide, into one of the staff: it hurts, it does not always kill. */
+const STRAY_DAMAGE = 30;
 /** Chance a round finds the man it was fired at — when he can be seen at all. */
 const HIT_CHANCE = { rifle: 0.12, pistol: 0.08 };
 /** The most bullet holes the staff and agents leave between them: each one is a draw. */
@@ -46,16 +55,19 @@ const GUNNER_NAMES = ['MARCUS', 'KEVIN', 'DOUG', 'RAJ'];
 const BRAWLER_NAMES = ['TONY', 'GREG'];
 const POUNDER_NAME = 'BIG STEVE';
 const COWER_NAMES = ['NEIL', 'PAUL', 'DEV'];
-/** How Ravi says each name. */
-const CALLED: Record<string, string> = { 'BIG STEVE': 'Steve' };
 
-type AgentRole = 'shooter' | 'brawler' | 'pinned' | 'guard';
+/** The squad that comes in when the floor is going badly for them, and how many of it are in armour. */
+const SQUAD = 4;
+const SQUAD_ARMOURED = 2;
+
+type AgentRole = 'shooter' | 'brawler' | 'pinned' | 'guard' | 'squad';
 
 /** One of the police force on this floor, and what he is busy with. */
 interface Agent {
   e: Enemy;
   role: AgentRole;
   hp: number;
+  armoured: boolean;
   /** Fighting Ravi: null while he is still busy with the staff, or not yet woken. */
   ai: EnemyAI | null;
   shooter: CoverShooter | null;
@@ -66,6 +78,8 @@ interface Agent {
   post: { pos: THREE.Vector3; radius: number } | null;
   /** Counts toward INTRUDERS REMAINING. The man on his back does not: he is out of the fight. */
   counted: boolean;
+  /** On the floor. The squad is built at the start, out of sight, and only arrives later. */
+  here: boolean;
 }
 
 /** One of the staff, fighting back. */
@@ -78,7 +92,7 @@ interface Staff {
   shield: THREE.Vector3 | null;
 }
 
-type Stage = 'find' | 'fight' | 'cleared' | 'cameras' | 'stairwell';
+type Stage = 'find' | 'fight' | 'cleared';
 
 /**
  * Water: the burst sprinkler over the hole in the office ceiling dripping on
@@ -163,10 +177,10 @@ class WaterFx {
  * agents are dug in along the north side of the office and the staff along
  * the south, shooting at each other over the top, with two fist fights and
  * a beating going on in the ground between. None of them are winning fast —
- * that is Ravi's job. With the floor clear, one of the staff tells him the
- * cameras in the security room see every floor; the stairwell camera has
- * the boss on it, going down with the drive, and the console releases the
- * stairwell door.
+ * that is Ravi's job, and it is not a quick one: the agents take several
+ * rounds each, some are in armour, and once the floor starts going against
+ * them more come up out of the lifts. With every one of them down, the
+ * stairwell door's lock lets go, and the boss went down those stairs.
  */
 export class Level7Scene extends CombatScene<Level7Data> {
   private rifle!: RifleViewmodel;
@@ -175,7 +189,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private dropKick!: DropKickViewmodel;
   private kickVictim: Enemy | null = null;
   private hud!: FPSHUD;
-  private dialogue!: DialogueBox;
   private water!: WaterFx;
 
   private agents: Agent[] = [];
@@ -197,17 +210,18 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private t = 0;
   /** Any agent on the office floor has turned on Ravi: the rest look for him too. */
   private floorAlert = false;
+  /** Seconds since the floor turned on him. */
+  private alertT = 0;
+  /** The squad: called (and seconds until it arrives), and the ! CONTACT ! banner for it. */
+  private squadCalled = false;
+  private squadT = -1;
+  private bannerT = 0;
   /** Seconds since the last agent on the office floor went down, or -1. */
   private clearT = -1;
   private senseT = 0;
   private sparkT = 1;
+  private snowAcc = 0;
   private npcHoles = 0;
-  /** The line on screen has finished typing, this long ago: lines move on by themselves. */
-  private lineHeld = 0;
-  /** The stairwell camera, up on the big screen. */
-  private feedOn = false;
-  private feedT = 0;
-  private feedAcc = 0;
   private released = false;
   private lockedTold = false;
   private leaving = false;
@@ -216,7 +230,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   private ui!: HTMLElement;
   private objective!: HTMLElement;
-  private prompt!: HTMLElement;
   private fadeEl!: HTMLElement;
   private endCard!: HTMLElement;
   /** The boss, sat for his portrait on the first frame and gone after it. */
@@ -231,6 +244,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private static tmpB = new THREE.Vector3();
   private static tmpC = new THREE.Vector3();
   private static tmpD = new THREE.Vector3();
+  private static tmpE = new THREE.Vector3();
   private static tmpN = new THREE.Vector3();
 
   constructor(ctx: GameContext) {
@@ -318,7 +332,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.hud.show();
     this.hud.setAmmo(this.rifleAmmo, RIFLE_MAG, false);
     this.buildUI();
-    this.dialogue = new DialogueBox(this.ctx.uiRoot, audio);
 
     this.unsubs.push(
       bus.on(Events.Resize, () => {
@@ -328,7 +341,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
       bus.on(Events.PlayerDied, () => {
         this.dead = true;
         this.over = true;
-        this.dialogue.close();
       })
     );
     document.addEventListener('click', this.clickHandler);
@@ -342,7 +354,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);
     this.hud.destroy();
-    this.dialogue.destroy();
     this.flashPool.dispose();
     this.ui.remove();
     Enemy.flashPool = null;
@@ -353,9 +364,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
     el.id = 'intro-ui';
     el.innerHTML = `
       <div class="intro-objective"></div>
-      <div class="l7-prompt" style="position:absolute;left:50%;top:58%;transform:translateX(-50%);
-        font:bold 13px monospace;letter-spacing:3px;color:#ffd27a;text-shadow:0 0 6px #000;
-        display:none;pointer-events:none"></div>
       <div class="intro-fade" style="opacity:1"></div>
       <div class="l7-end" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
         color:#e8f4ec;font-size:22px;letter-spacing:9px;opacity:0;pointer-events:none;transition:opacity 1.2s">TO BE CONTINUED</div>
@@ -363,7 +371,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
     this.objective = el.querySelector('.intro-objective')!;
-    this.prompt = el.querySelector('.l7-prompt')!;
     this.fadeEl = el.querySelector('.intro-fade')!;
     this.endCard = el.querySelector('.l7-end')!;
   }
@@ -378,21 +385,25 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   // ------------------------------------------------------------- the cast
 
-  private addAgent(pos: THREE.Vector3, yaw: number, index: number, role: AgentRole): Agent {
+  private addAgent(pos: THREE.Vector3, yaw: number, index: number, role: AgentRole, armour = false): Agent {
     const e = new Enemy(pos, yaw, index, { name: 'POLICE FORCE AGENT' });
     if (role !== 'pinned') armWithAK(e);
+    if (armour) e.wearArmour();
     this.scene.add(e.root);
-    for (const p of e.parts) this.level.shootables.push(p);
+    const here = role !== 'squad';
+    if (here) for (const p of e.parts) this.level.shootables.push(p);
     const a: Agent = {
       e,
       role,
-      hp: role === 'pinned' ? PINNED_HP : AGENT_HP,
+      hp: role === 'pinned' ? PINNED_HP : armour ? ARMOURED_HP : AGENT_HP,
+      armoured: armour,
       ai: null,
       shooter: null,
       brawl: null,
       wake: -1,
       post: null,
-      counted: role !== 'pinned'
+      counted: role !== 'pinned',
+      here
     };
     this.agents.push(a);
     this.agentOf.set(e, a);
@@ -413,12 +424,14 @@ export class Level7Scene extends CombatScene<Level7Data> {
   /**
    * Everyone on the floor, in the middle of it: agents shooting from their
    * line, staff shooting from theirs, two fist fights, a man on his back
-   * taking a beating, staff hiding, and guards posted round the rest.
+   * taking a beating, staff hiding, guards posted round the rest — and a
+   * squad, built now so nothing about them costs a frame later, held out of
+   * sight under the floor until they are sent in.
    */
   private castFight(): void {
     const L = this.level;
     L.shooters.forEach((sp, i) => {
-      const a = this.addAgent(sp.pos, sp.yaw, 20 + i, 'shooter');
+      const a = this.addAgent(sp.pos, sp.yaw, 20 + i, 'shooter', sp.armour);
       a.shooter = new CoverShooter(a.e, (from) => this.staffTarget(from), this.hooks, sp.kneel);
     });
     L.brawls.forEach((b, i) => {
@@ -452,10 +465,14 @@ export class Level7Scene extends CombatScene<Level7Data> {
       s.e.poseCurl = 0.25;
     });
     L.guards.forEach((g, i) => {
-      const a = this.addAgent(g.spot.pos, g.spot.yaw, 50 + i, 'guard');
+      const a = this.addAgent(g.spot.pos, g.spot.yaw, 50 + i, 'guard', g.armour);
       a.e.setRestCarry(true, true);
       a.post = { pos: g.spot.pos.clone(), radius: g.radius };
     });
+    for (let i = 0; i < SQUAD; i++) {
+      const a = this.addAgent(new THREE.Vector3(i * 2, -60, 0), 0, 60 + i, 'squad', i < SQUAD_ARMOURED);
+      a.e.root.visible = false;
+    }
   }
 
   /**
@@ -583,7 +600,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
     this.updateAmbience(dt);
     this.hud.setHealth(this.player.health, this.player.regenProgress);
-    this.dialogue.update(dt);
     this.updateDebris(dt);
     this.decals.update(dt);
     this.particles.update(dt);
@@ -594,7 +610,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   /** Everyone's animation, and the bodies settling: a body is pooled and stops being a target once it lies still. */
   private updateCast(dt: number): void {
-    for (const a of this.agents) this.tick(a.e, dt);
+    for (const a of this.agents) if (a.here) this.tick(a.e, dt);
     for (const s of this.staff) this.tick(s.e, dt);
     for (const e of this.corpses) e.update(dt);
   }
@@ -611,40 +627,28 @@ export class Level7Scene extends CombatScene<Level7Data> {
     }
   }
 
-  // -------------------------------------------------------------- the story
+  // -------------------------------------------------------------- the floor
 
   private updateStory(dt: number): void {
-    const { input, audio } = this.ctx;
+    const { audio } = this.ctx;
     const L = this.level;
     const p = this.player.position;
 
-    // In from black, and a word from Ravi about where he is going
+    // In from black
     if (this.t < 1.4) this.fadeEl.style.opacity = String(Math.max(0, 1 - this.t / 1.2));
     else if (!this.leaving && this.fadeEl.style.opacity !== '0') this.fadeEl.style.opacity = '0';
-    if (this.t >= 1.0 && this.t - dt < 1.0) {
-      this.dialogue.play(
-        [
-          { speaker: 'RAVI', text: 'Through the vent, with the drive.', pitch: RAVI_PITCH },
-          { speaker: 'RAVI', text: "If that drive gets to the police, every one of us goes down with it. I have to find him.", pitch: RAVI_PITCH }
-        ],
-        () => {
-          if (this.stage === 'find') this.setObjective('FIND THE BOSS');
-        }
-      );
-    }
-    this.autoAdvance(dt);
+    if (this.t >= 1.2 && this.t - dt < 1.2 && this.stage === 'find') this.setObjective('FIND THE BOSS');
 
     // Into the office: the fight is the first thing in the way
     if (this.stage === 'find' && L.officeBox.containsPoint(p)) {
       this.stage = 'fight';
-      this.setObjective('THE STAFF ARE FIGHTING BACK — CLEAR THE FLOOR');
+      this.setObjective('CLEAR THE FLOOR');
     }
 
-    // The office floor gone quiet
-    if ((this.stage === 'find' || this.stage === 'fight') && this.officeAgentsLeft() === 0) {
+    // The office gone quiet: everyone on it down, the squad that came in for them too
+    if (this.stage !== 'cleared' && this.officeLeft(true) === 0) {
       this.stage = 'cleared';
       this.clearT = 0;
-      this.setObjective('FLOOR CLEAR');
       // The guards in the corridors hear it stop, and start moving about
       for (const a of this.agents) if (a.role === 'guard' && a.e.alive && !a.ai) this.postGuard(a);
       if (this.pound && !this.pound.done) this.pound.finish = true;
@@ -653,14 +657,10 @@ export class Level7Scene extends CombatScene<Level7Data> {
       const was = this.clearT;
       this.clearT += dt;
       if (was < 1.2 && this.clearT >= 1.2) this.standDown();
-      if (was < 2.2 && this.clearT >= 2.2) this.staffTalk();
     }
 
-    // The console in the security room
-    const atConsole = this.stage === 'cameras' && this.player.alive && L.consoleTrigger.containsPoint(p) && !this.dialogue.isActive;
-    this.prompt.style.display = atConsole ? 'block' : 'none';
-    if (atConsole) this.prompt.textContent = '[ E ]  CAMERAS';
-    if (atConsole && input.wasPressed('KeyE')) this.useConsole();
+    // Every one of them down: the stairwell's lock lets go
+    if (!this.released && this.remaining === 0) this.release();
 
     // The stairwell door
     const atDoor = this.player.alive && L.exitTrigger.containsPoint(Level7Scene.tmpA.set(p.x, p.y + 0.9, p.z));
@@ -669,7 +669,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
       else if (!this.lockedTold) {
         this.lockedTold = true;
         audio.uiBeep(false);
-        this.setObjective('STAIRWELL B IS MAG-LOCKED');
+        this.setObjective('LOCKED — CLEAR THE FLOOR FIRST');
       }
     } else if (!atDoor) {
       this.lockedTold = false;
@@ -677,100 +677,23 @@ export class Level7Scene extends CombatScene<Level7Data> {
     if (this.leaving) this.updateLeaving(dt);
   }
 
-  /** Lines move on by themselves once they are up and have been on screen a moment. */
-  private autoAdvance(dt: number): void {
-    if (!this.dialogue.isActive || this.dialogue.typing) {
-      this.lineHeld = 0;
-      return;
-    }
-    this.lineHeld += dt;
-    if (this.lineHeld > 2.3) {
-      this.lineHeld = 0;
-      this.dialogue.advance();
-    }
-  }
-
-  private officeAgentsLeft(): number {
+  /** Agents still fighting on the office floor; with `squad`, the squad that comes in for them counts too. */
+  private officeLeft(squad: boolean): number {
     let n = 0;
-    for (const a of this.agents) if (a.counted && a.role !== 'guard' && a.e.alive) n++;
+    for (const a of this.agents) {
+      if (!a.e.alive) continue;
+      if (a.role === 'shooter' || a.role === 'brawler' || (squad && a.role === 'squad')) n++;
+    }
     return n;
   }
 
-  /** The shooting has stopped: up from behind the desks, guns down. */
+  /** The shooting has stopped: the staff stay down where they were, guns lowered, and look round at Ravi. */
   private standDown(): void {
     for (const s of this.staff) {
       if (!s.e.alive) continue;
-      s.gunner?.stand();
+      s.gunner?.rest();
       if (s.gunner || s.brawl) s.e.setHeadLook(this.player.camera.position);
     }
-  }
-
-  /** Whoever is nearest Kevin's way of putting it: the first of them still alive. */
-  private speaker(): Staff | null {
-    const order = [this.staff.find((s) => s.e.name === 'KEVIN'), ...this.staff];
-    for (const s of order) if (s && s.e.alive && s.e.name !== 'DEV') return s;
-    return null;
-  }
-
-  /**
-   * One of the staff, to Ravi: they thought he was gone; he wants the boss.
-   * The drive comes up — the wipe they all watched run did not run on that —
-   * and the cameras in the security room are where to look.
-   */
-  private staffTalk(): void {
-    const s = this.speaker();
-    const ravi = (text: string): DialogueLine => ({ speaker: 'RAVI', text, pitch: RAVI_PITCH });
-    let lines: DialogueLine[];
-    if (s) {
-      const name = s.e.name;
-      const call = CALLED[name] ?? name.charAt(0) + name.slice(1).toLowerCase();
-      const them = (text: string): DialogueLine => ({ speaker: name, text, pitch: 1.18 });
-      s.e.setHeadLook(this.player.camera.position);
-      this.talker = s.e;
-      lines = [
-        them('Ravi?! Man, we thought they took you!'),
-        ravi('Where is the boss?'),
-        them("The boss? Nobody's seen him since the raid started. Why?"),
-        ravi("He's got the killswitch drive. Every client, every call, every one of our records. He's selling it to the police."),
-        them('No way. The deletion protocol wiped everything. We all watched it run.'),
-        ravi(`He pulled the drive before it could. Our names are on it, ${call}. All of them.`),
-        them('Then find him. The cameras in the security room cover every floor.')
-      ];
-    } else {
-      lines = [
-        ravi('Nobody left to ask.'),
-        ravi("The security room. If he's still in the building, the cameras have him.")
-      ];
-    }
-    this.dialogue.play(lines, () => {
-      this.talker = null;
-      this.stage = 'cameras';
-      this.setObjective('CHECK THE SECURITY CAMERAS');
-    });
-  }
-  /** Whoever is talking to Ravi, for the jaw to work while their line types out. */
-  private talker: Enemy | null = null;
-
-  /** The stairwell camera on the big screen: him, going down with it. And the door's lock, released from here. */
-  private useConsole(): void {
-    const { audio } = this.ctx;
-    this.stage = 'stairwell';
-    this.feedOn = true;
-    this.feedT = 0;
-    this.feedAcc = 1;
-    audio.uiBeep(true);
-    const ravi = (text: string): DialogueLine => ({ speaker: 'RAVI', text, pitch: RAVI_PITCH });
-    this.dialogue.play(
-      [
-        ravi('There you are.'),
-        ravi('Stairwell B, heading down to the garage. With the drive.'),
-        ravi("And the stairwell's mag-locked. Was.")
-      ],
-      () => {
-        this.release();
-        this.setObjective('GET TO STAIRWELL B');
-      }
-    );
   }
 
   /** The stairwell door's lock lets go: red to green. */
@@ -781,13 +704,13 @@ export class Level7Scene extends CombatScene<Level7Data> {
     L.exitPanel.color.setHex(0x0a2a12);
     L.exitLight.color.setHex(0x2bff6a);
     this.ctx.audio.uiBeep(true);
+    this.setObjective('STAIRWELL B IS OPEN');
   }
 
   private leave(): void {
     this.leaving = true;
     this.leaveT = 0;
     this.setObjective('');
-    this.prompt.style.display = 'none';
     this.ctx.audio.doorOpen();
     this.ctx.input.exitPointerLock();
   }
@@ -814,7 +737,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
     const sense = this.senseT <= 0;
     if (sense) this.senseT = 0.15;
     for (const a of this.agents) {
-      if (!a.e.alive) continue;
+      if (!a.e.alive || !a.here) continue;
       if (a.ai) {
         a.ai.update(dt);
         continue;
@@ -828,8 +751,62 @@ export class Level7Scene extends CombatScene<Level7Data> {
       }
     }
 
-    // Whoever is talking to Ravi works his jaw while his line types
-    if (this.talker) this.talker.speaking = this.dialogue.typing && this.dialogue.speaker === this.talker.name;
+    // More of them, once the floor is going against them — or has been going on too long
+    if (this.floorAlert) this.alertT += dt;
+    if (!this.squadCalled && (this.officeLeft(false) <= 3 || this.alertT > 45)) {
+      this.squadCalled = true;
+      this.squadT = 3;
+      this.ctx.audio.radioChirp(8);
+    }
+    if (this.squadT > 0) {
+      this.squadT -= dt;
+      if (this.squadT <= 0 && !this.bringSquad()) this.squadT = 1;
+    }
+    if (this.bannerT > 0) {
+      this.bannerT -= dt;
+      if (this.bannerT <= 0) this.hud.setAlert(false);
+    }
+  }
+
+  /**
+   * The squad, in: at whichever way in Ravi cannot see and is not stood
+   * next to — out of a lift, or up the stairs — straight at him.
+   */
+  private bringSquad(): boolean {
+    const L = this.level;
+    const p = this.player.position;
+    const eye = this.player.eyePosition(Level7Scene.tmpE);
+    let at: THREE.Vector3 | null = null;
+    let lift = false;
+    L.squad.forEach((s, i) => {
+      if (at) return;
+      if (Math.hypot(s.x - p.x, s.z - p.z) < 7) return;
+      if (this.clearLine(eye, Level7Scene.tmpD.set(s.x, 1.6, s.z))) return;
+      at = s;
+      lift = i < 2;
+    });
+    if (!at) return false;
+    const from = at as THREE.Vector3;
+    const offsets = [[-0.45, -0.35], [0.45, -0.35], [-0.45, 0.4], [0.45, 0.4]];
+    let k = 0;
+    for (const a of this.agents) {
+      if (a.role !== 'squad' || a.here || !a.e.alive) continue;
+      const [ox, oz] = offsets[k++ % offsets.length];
+      a.e.position.set(from.x + ox, 0, from.z + oz);
+      a.e.root.visible = true;
+      a.here = true;
+      for (const part of a.e.parts) this.level.shootables.push(part);
+      a.ai = this.makeAI(a.e);
+      a.ai.alert(this.player.position);
+    }
+    const { audio } = this.ctx;
+    if (lift) audio.elevatorDing();
+    else audio.doorOpen();
+    audio.enemyShout(from.distanceTo(p));
+    this.floorAlert = true;
+    this.hud.setAlert(true);
+    this.bannerT = 2.2;
+    return true;
   }
 
   /** Is Ravi where this agent would notice him? Then he will turn on him, after a moment. */
@@ -847,22 +824,17 @@ export class Level7Scene extends CombatScene<Level7Data> {
       d < range && this.inCone(e, p, halfAngle) && this.clearLine(eye, this.player.eyePosition(Level7Scene.tmpC));
     switch (a.role) {
       case 'shooter':
-        // Facing the staff, and so the way he comes in — but busy with them.
-        // Close enough, and he is the one they turn on. Further off, or once
-        // one of them already has, they come round one at a time: the staff
-        // are still shooting at them, and four rifles turning on Ravi the
-        // moment he steps through the door was a death on arrival.
-        if (sees(11, 1.3)) this.wake(a, 0.5 + Math.random() * 0.8);
-        else if (sees(this.floorAlert ? 24 : 16, this.floorAlert ? Math.PI : 1.3) && Math.random() < 0.05) {
-          this.wake(a, 0.6 + Math.random() * 1.2);
-        }
+        // Facing the staff, and so the way he comes in. And once one of them
+        // has turned round, the rest are looking for him too.
+        if (sees(16, 1.3)) this.wake(a, 0.35 + Math.random() * 0.7);
+        else if (this.floorAlert && sees(26, Math.PI)) this.wake(a, 0.6 + Math.random() * 1.0);
         break;
       case 'brawler':
         // Busy: only right next to them
-        if (sees(5.5, Math.PI)) this.wake(a, 0.3);
+        if (sees(6, Math.PI)) this.wake(a, 0.3);
         break;
       case 'guard':
-        if (sees(11, 1.2) || d < 4) this.wake(a, 0.4);
+        if (sees(12, 1.2) || d < 4) this.wake(a, 0.35);
         break;
       default:
         break;
@@ -879,7 +851,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
   }
 
   private wake(a: Agent, delay: number): void {
-    if (a.ai || a.wake >= 0 || !a.e.alive || a.role === 'pinned') return;
+    if (a.ai || a.wake >= 0 || !a.e.alive || a.role === 'pinned' || !a.here) return;
     a.wake = delay;
   }
 
@@ -967,7 +939,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
     let best: Enemy | null = null;
     let bestD = 22;
     for (const a of this.agents) {
-      if (!a.e.alive || a.brawl || a.role === 'pinned' || a.role === 'guard') continue;
+      if (!a.e.alive || !a.here || a.brawl || a.role === 'pinned' || a.role === 'guard') continue;
       if (!this.level.officeBox.containsPoint(a.e.position)) continue;
       const d = a.e.position.distanceTo(from.position) + (Math.random() - 0.5) * 3;
       if (d < bestD) {
@@ -998,11 +970,10 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   /**
    * Somebody else's round, staff at agent or agent at staff. It never goes
-   * through castBullet — that kills whoever it touches, which is right for
-   * Ravi's and for the agents' at Ravi but would end this fight in seconds.
-   * Whether it finds its man is a roll; where a miss goes is a ray against
-   * the level's own boxes, which is all a stray round needs and costs next
-   * to nothing.
+   * through castBullet — the fight between them runs on its own, slower
+   * terms. Whether it finds its man is a roll; where a miss goes is a ray
+   * against the level's own boxes, which is all a stray round needs and
+   * costs next to nothing.
    */
   private npcFire(shooter: Enemy, target: Enemy): void {
     if (!shooter.alive || !target.alive || this.over) return;
@@ -1052,6 +1023,60 @@ export class Level7Scene extends CombatScene<Level7Data> {
       this.decals.place('bullethole', hit, n.clone());
     }
     if (near < 2.5 && this.player.alive) audio.bulletWhiz();
+  }
+
+  /**
+   * An agent fires at Ravi. As everywhere else, whether it connects is a
+   * roll on distance and how fast he is moving — a little steadier hands on
+   * this floor — but here the desks are cover: with one between the rifle
+   * and his chest, most of what is aimed at him goes into that instead, and
+   * crouched behind it, nearly all of it.
+   */
+  protected enemyFire(enemy: Enemy): void {
+    const { audio, bus } = this.ctx;
+    const player = this.player;
+    const dist = player.position.distanceTo(enemy.position);
+    audio.enemyGunshot(dist);
+    enemy.flashMuzzle();
+    bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 25, kind: 'gunshot' });
+
+    const muzzle = enemy.muzzleWorld();
+    const speed = Math.min(1, player.currentSpeed / 6.6);
+    let chance = 0.74 - dist * 0.026 - speed * 0.26 - (player.crouching ? 0.1 : 0);
+    const chest = player.eyePosition();
+    chest.y -= player.crouching ? 0.3 : 0.45;
+    const toChest = chest.clone().sub(muzzle);
+    const len = toChest.length();
+    toChest.divideScalar(len);
+    const cover = this.rayBoxes(muzzle, toChest, len - 0.35);
+    const coverN = Level7Scene.tmpN.clone();
+    if (cover) chance *= player.crouching ? 0.12 : 0.35;
+    chance = THREE.MathUtils.clamp(chance, 0.04, 0.92);
+
+    if (Math.random() < chance && player.alive) {
+      const target = player.eyePosition().add(
+        new THREE.Vector3((Math.random() - 0.5) * 0.2, -0.2 - Math.random() * 0.4, (Math.random() - 0.5) * 0.2)
+      );
+      this.particles.tracer(muzzle, target, 0xffe0b0);
+      player.hit(enemy.name);
+      return;
+    }
+    if (cover) {
+      // Into whatever he is behind: chips off it, inches from him
+      this.particles.tracer(muzzle, cover, 0xffe0b0);
+      this.particles.concreteChips(cover, coverN, 0x9a8f80);
+      const near = cover.distanceTo(player.position);
+      if (near < 3 && player.alive) audio.ricochet(near);
+      return;
+    }
+    // Wide: past him, and into whatever is behind him
+    const target = player.eyePosition();
+    const off = 0.35 + Math.random() * 0.7;
+    target.add(new THREE.Vector3((Math.random() - 0.5) * off * 2, (Math.random() - 0.5) * off, (Math.random() - 0.5) * off * 2));
+    const dir = target.sub(muzzle).normalize();
+    const end = this.castBullet(muzzle, dir, enemy);
+    this.particles.tracer(muzzle, end, 0xffe0b0);
+    if (player.alive) audio.bulletWhiz();
   }
 
   /**
@@ -1118,6 +1143,62 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.afterDeath(victim, by.name, false);
   }
 
+  /**
+   * A round into a living man. An agent takes it out of his hit points —
+   * less of it through a plate or a helmet — and goes on, unless that was
+   * the last of him. One of the staff, hit by an agent's stray, likewise.
+   * Ravi's own rounds into the staff are as final as ever.
+   */
+  protected absorbHit(enemy: Enemy, point: THREE.Vector3, dir: THREE.Vector3, shooter: Enemy | null, part: string): boolean {
+    const byRavi = shooter === null;
+    const a = this.agentOf.get(enemy);
+    if (a) {
+      const head = part === 'head';
+      const plated = a.armoured && (head || part === 'torso');
+      let dmg = AK_DAMAGE[part] ?? AK_DAMAGE.torso;
+      if (plated) dmg *= head ? ARMOUR_LETS.head : ARMOUR_LETS.torso;
+      a.hp -= dmg;
+      if (a.hp <= 0) return false;
+      this.hurt(enemy, point, dir, plated, byRavi);
+      if (byRavi) this.shotAt(a);
+      return true;
+    }
+    const s = this.staffOf.get(enemy);
+    if (s && !byRavi) {
+      s.hp -= STRAY_DAMAGE;
+      if (s.hp <= 0) return false;
+      this.hurt(enemy, point, dir, false, false);
+      return true;
+    }
+    return false;
+  }
+
+  /** A round that did not drop him: blood, or sparks off the plate — and he feels it. */
+  private hurt(e: Enemy, at: THREE.Vector3, dir: THREE.Vector3, plated: boolean, byRavi: boolean): void {
+    const { audio, bus } = this.ctx;
+    const d = at.distanceTo(this.player.position);
+    if (plated) {
+      this.particles.concreteChips(at, Level7Scene.tmpE.copy(dir).negate(), 0x6e747c);
+      this.particles.electricSparks(at, 3);
+      audio.armourHit(d);
+    } else {
+      this.particles.bloodSpray(at, dir, false, 0.02);
+      if (byRavi) audio.fleshHit();
+    }
+    if (byRavi) bus.emit(Events.HitMarker, { lethal: false });
+    e.flinch(1);
+    // It knocks him back a little
+    e.position.x += dir.x * 0.05;
+    e.position.z += dir.z * 0.05;
+  }
+
+  /** Shot at by Ravi: whatever he was busy with, he is busy with Ravi now. */
+  private shotAt(a: Agent): void {
+    if (!a.e.alive || !a.here || a.role === 'pinned') return;
+    if (a.ai) a.ai.alert(this.player.position);
+    else this.turnOnRavi(a);
+  }
+
   /** Whatever a death means to the fight, whoever did it. */
   private afterDeath(victim: Enemy, by: string, headshot: boolean): void {
     const { bus } = this.ctx;
@@ -1131,13 +1212,18 @@ export class Level7Scene extends CombatScene<Level7Data> {
       if (this.pound && victim === this.pound.agent) this.pound.end();
       if (a.counted) this.remaining = Math.max(0, this.remaining - 1);
       bus.emit(Events.EnemyKilled, { name: victim.name, remaining: this.remaining, headshot, by });
+      // The ones near him hear it
+      if (by === 'RAVI') {
+        for (const o of this.agents) {
+          if (o !== a && !o.ai && o.e.alive && o.here && o.e.position.distanceTo(victim.position) < 12) this.wake(o, 0.3 + Math.random() * 0.5);
+        }
+      }
       return;
     }
     const s = this.staffOf.get(victim);
     if (s) {
       if (s.brawl) this.endBrawl(s.brawl);
       if (this.pound && victim === this.pound.staff) this.pound.end();
-      if (this.talker === victim) this.talker = null;
       bus.emit(Events.EnemyKilled, { name: victim.name, remaining: this.remaining, headshot, by });
     }
   }
@@ -1154,6 +1240,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
   ): void {
     if (!enemy.alive) return;
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
+    if (byPlayer) this.ctx.bus.emit(Events.HitMarker, { lethal: true });
     this.afterDeath(enemy, byPlayer ? 'RAVI' : 'POLICE FORCE AGENT', headshot);
   }
 
@@ -1161,7 +1248,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private kickTarget(): Enemy | null {
     if (!this.playable) return null;
     const list: Enemy[] = [];
-    for (const a of this.agents) if (a.e.alive && a.role !== 'pinned') list.push(a.e);
+    for (const a of this.agents) if (a.e.alive && a.here && a.role !== 'pinned') list.push(a.e);
     return this.kickTargetFrom(list);
   }
 
@@ -1221,12 +1308,11 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private heardShot(): void {
     const p = this.player.position;
     for (const a of this.agents) {
-      if (!a.e.alive || a.ai || a.wake >= 0) continue;
+      if (!a.e.alive || !a.here || a.ai || a.wake >= 0) continue;
       const d = a.e.position.distanceTo(p);
-      // A shot is one more gun going off in a gunfight: it turns some of them, not all
-      if (a.role === 'shooter' && d < 26 && Math.random() < 0.12) this.wake(a, 0.4 + Math.random() * 1.2);
-      else if (a.role === 'brawler' && d < 9) this.wake(a, 0.25);
-      else if (a.role === 'guard' && d < 13) this.wake(a, 0.5);
+      if (a.role === 'shooter' && d < 26 && Math.random() < 0.5) this.wake(a, 0.3 + Math.random() * 0.7);
+      else if (a.role === 'brawler' && d < 10) this.wake(a, 0.25);
+      else if (a.role === 'guard' && d < 14) this.wake(a, 0.45);
     }
   }
 
@@ -1263,7 +1349,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   // ------------------------------------------------------------ the floor
 
-  /** The alarm going round, the lights that are failing, the cut cables, the water, and the stairwell camera. */
+  /** The alarm going round, the lights that are failing, the cut cables, the water, and the dead CCTV feeds. */
   private updateAmbience(dt: number): void {
     const L = this.level;
     const k = Math.max(0, Math.sin(this.t * 5.2));
@@ -1278,15 +1364,12 @@ export class Level7Scene extends CombatScene<Level7Data> {
       this.ctx.audio.electricCrackle(at.distanceTo(this.player.position));
     }
     this.water.update(dt);
-    if (this.feedOn) {
-      // A dozen frames a second is plenty for a CCTV feed, and only while he is near enough to see it
-      this.feedT += dt;
-      this.feedAcc += dt;
-      if (this.feedAcc > 1 / 12 && this.player.position.distanceTo(L.consoleAt) < 9) {
-        this.feedAcc = 0;
-        drawStairwellFeed(L.feed.canvas, this.feedT);
-        L.feed.texture.needsUpdate = true;
-      }
+    // Snow on the dead feeds: a dozen frames a second, and only while he is near enough to see it
+    this.snowAcc += dt;
+    if (this.snowAcc > 1 / 12 && this.player.position.distanceTo(L.screens.at) < 9) {
+      this.snowAcc = 0;
+      drawStatic(L.screens.snow.canvas);
+      L.screens.snow.texture.needsUpdate = true;
     }
   }
 
@@ -1336,24 +1419,15 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
   // ---------------------------------------------------------------- input
 
-  /**
-   * A click is the rifle's here — lines move on by themselves, or on E —
-   * except once he is dead, when it is the restart.
-   */
+  /** A click is the rifle's — except once he is dead, when it is the restart. */
   private onClick(): void {
     if (this.dead) this.ctx.bus.emit(Events.RestartLevel7);
   }
 
   private onKey(e: KeyboardEvent): void {
-    if (this.dead) {
-      if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
-      else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') this.ctx.bus.emit(Events.RestartLevel7);
-      return;
-    }
-    if (this.dialogue.isActive && (e.code === 'Enter' || e.code === 'KeyE')) {
-      e.preventDefault();
-      this.dialogue.advance();
-    }
+    if (!this.dead) return;
+    if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
+    else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') this.ctx.bus.emit(Events.RestartLevel7);
   }
 
   // ---------------------------------------------------------------- render

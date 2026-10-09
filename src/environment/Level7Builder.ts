@@ -88,8 +88,8 @@ export interface Level7Data {
   droppedRifle: Spot;
 
   // ---- The fight on the office floor
-  /** Agents firing from behind the north barricade, at the staff: some knelt behind it, some stood. */
-  shooters: (Spot & { kneel: boolean })[];
+  /** Agents firing from behind the north barricade, at the staff: some knelt behind it, some stood, some in armour. */
+  shooters: (Spot & { kneel: boolean; armour: boolean })[];
   /**
    * Staff behind the south barricade with pistols: where each kneels to
    * shoot, where he sits with his back to the desk top, the top edge of it
@@ -104,16 +104,15 @@ export interface Level7Data {
   /** Staff sat behind cover, hands over their ears. */
   cowering: Spot[];
   /** Agents posted round the rest of the floor: one in the top corridor, one in the restroom, one at the stairwell. */
-  guards: { spot: Spot; radius: number }[];
+  guards: { spot: Spot; radius: number; armour: boolean }[];
+  /** Where more of them come in once the floor is going badly: out of the lifts, or up the stairs. */
+  squad: THREE.Vector3[];
   /** Already dead when Ravi gets here. */
   corpses: { spot: Spot; civilian: boolean }[];
 
   // ---- The way on
-  /** The CCTV desk: stand here and press E. */
-  consoleTrigger: THREE.Box3;
-  consoleAt: THREE.Vector3;
-  /** The big screen in the middle of the wall, and the canvas it draws from. */
-  feed: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
+  /** The CCTV wall: where it is, and the dead feeds on it, drawn by the scene. */
+  screens: { at: THREE.Vector3; snow: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture } };
   exitTrigger: THREE.Box3;
   exitPanel: THREE.MeshStandardMaterial;
   exitLight: THREE.PointLight;
@@ -176,7 +175,7 @@ export class Level7Builder {
   private exitLight!: THREE.PointLight;
   private alarm!: THREE.PointLight;
   private alarmMat!: THREE.MeshStandardMaterial;
-  private feed!: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
+  private snow!: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
 
   build(): Level7Data {
     this.makeMaterials();
@@ -207,12 +206,16 @@ export class Level7Builder {
       playerSpawn: fromBossRoom(0.75, 1.55),
       playerSpawnYaw: Math.PI / 2,
       ...boss,
-      // Just behind each barricade's legs: clear of it, rifles over the top
-      shooters: this.agentLine.map(([x, z], i) => ({
-        pos: new THREE.Vector3(x - 0.1, 0, z - 0.5),
-        yaw: Math.PI,
-        kneel: i % 2 === 0
-      })),
+      // Just behind each barricade's legs (and the cabinet on its back): clear
+      // of them, rifles over the top. Two of them in armour.
+      shooters: [
+        { pos: new THREE.Vector3(2.7, 0, 6.7), yaw: Math.PI, kneel: true, armour: false },
+        { pos: new THREE.Vector3(5.1, 0, 6.55), yaw: Math.PI, kneel: false, armour: true },
+        { pos: new THREE.Vector3(7.0, 0, 6.15), yaw: Math.PI, kneel: true, armour: false },
+        { pos: new THREE.Vector3(10.55, 0, 6.95), yaw: Math.PI, kneel: false, armour: false },
+        { pos: new THREE.Vector3(11.5, 0, 6.95), yaw: Math.PI, kneel: true, armour: false },
+        { pos: new THREE.Vector3(14.7, 0, 6.3), yaw: Math.PI, kneel: false, armour: true }
+      ],
       gunners: this.staffLine.map(([x, z]) => {
         const shield = z - 0.72;
         const gx = x - 0.19;
@@ -242,18 +245,19 @@ export class Level7Builder {
         { pos: new THREE.Vector3(17.85, 0, 17.0), yaw: -Math.PI / 2 }
       ],
       guards: [
-        { spot: { pos: new THREE.Vector3(24.2, 0, 2.1), yaw: Math.PI / 2 }, radius: 5.5 },
-        { spot: { pos: new THREE.Vector3(21.5, 0, -2.0), yaw: -Math.PI / 2 }, radius: 4 },
-        { spot: { pos: new THREE.Vector3(29.9, 0, 12.4), yaw: 0 }, radius: 4 }
+        { spot: { pos: new THREE.Vector3(24.2, 0, 2.1), yaw: Math.PI / 2 }, radius: 5.5, armour: false },
+        { spot: { pos: new THREE.Vector3(21.5, 0, -2.0), yaw: -Math.PI / 2 }, radius: 4, armour: false },
+        // The stairwell door is the way out: its man is in armour
+        { spot: { pos: new THREE.Vector3(29.9, 0, 12.4), yaw: 0 }, radius: 4, armour: true }
       ],
+      // In front of each lift, and at the top of the stairs
+      squad: [new THREE.Vector3(21.6, 0, 2.9), new THREE.Vector3(24.6, 0, 2.9), new THREE.Vector3(29.9, 0, 14.2)],
       corpses: [
         { spot: { pos: new THREE.Vector3(6.1, 0, 18.9), yaw: 2.4 }, civilian: true },
         { spot: { pos: new THREE.Vector3(9.6, 0, 8.9), yaw: -0.8 }, civilian: false },
         { spot: { pos: new THREE.Vector3(15.6, 0, 22.2), yaw: 1.1 }, civilian: true }
       ],
-      consoleTrigger: new THREE.Box3(new THREE.Vector3(21.6, 0, 18.2), new THREE.Vector3(23.6, 2, 21.0)),
-      consoleAt: new THREE.Vector3(23.2, 1.1, 19.6),
-      feed: this.feed,
+      screens: { at: new THREE.Vector3(L7.security.x1 - 0.2, 1.8, 19.6), snow: this.snow },
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(L7.exitDoor.x - 0.8, 0, L7.eastCorridor.z1 - 1.25),
         new THREE.Vector3(L7.exitDoor.x + 0.8, 2.2, L7.eastCorridor.z1 - 0.05)
@@ -890,7 +894,8 @@ export class Level7Builder {
     this.put(new THREE.Group().add(hinge), L7.restroomDoor.x - 0.62, -0.02, 0);
     this.put(roomSign('RESTROOM'), L7.restroomDoor.x + 1.1, T / 2 + 0.02, 0, 1.75);
     const vm = vendingMachine();
-    this.put(vm, 30.9, 1.4, -Math.PI / 2);
+    // Its front (−z) out to the corridor, not to the wall behind it
+    this.put(vm, 30.9, 1.4, Math.PI / 2);
     this.blk(30.9, 1.4, 0.8, 1.0, 1.95);
     this.put(flowerPot('bushy'), 18.6, 3.5);
     this.put(scatteredPaper(5, 0.9), 26.5, 2.0, 0.3);
@@ -992,16 +997,34 @@ export class Level7Builder {
     this.blk(wallX - 0.42, 19.6, 0.82, 4.4, 0.8);
     this.put(officeChair(0.48), wallX - 1.2, 19.9, -Math.PI / 2 + 0.4);
 
-    // The screens: a 3 x 3 wall, the middle one big
-    const feeds = ['CAM 01  LOBBY', 'CAM 02  GARAGE L1', 'CAM 03  FLOOR 8 WEST', 'CAM 04  FLOOR 8 EAST', '', 'CAM 05  LIFTS', 'CAM 06  LOADING', 'CAM 08  ROOF', 'CAM 09  FLOOR 7'];
+    // The screens: a 3 x 3 wall of the building's floors and corridors. Two
+    // of the feeds are dead — the middle one, big, among them — and show
+    // only snow, which the scene keeps moving.
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 80;
+    const snowTex = new THREE.CanvasTexture(c);
+    snowTex.colorSpace = THREE.SRGBColorSpace;
+    this.snow = { canvas: c, texture: snowTex };
+    drawStatic(c);
+    snowTex.needsUpdate = true;
+    const snowMat = new THREE.MeshBasicMaterial({ map: snowTex });
+    const feeds: [string, 'office' | 'corridor' | 'snow'][] = [
+      ['CAM 01  FLOOR 9 WEST', 'office'], ['CAM 02  FLOOR 9 EAST', 'office'], ['CAM 03  CORRIDOR 9', 'corridor'],
+      ['CAM 04  FLOOR 8 WEST', 'office'], ['', 'snow'], ['CAM 05  FLOOR 8 EAST', 'office'],
+      ['CAM 06  CORRIDOR 8', 'corridor'], ['CAM 08', 'snow'], ['CAM 09  FLOOR 7', 'office']
+    ];
     let k = 0;
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < 3; col++) {
-        const label = feeds[k++];
+        const [label, kind] = feeds[k++];
         const zc = 19.6 + (col - 1) * 0.92;
         const y = 1.25 + (2 - row) * 0.56;
         if (row === 1 && col === 1) continue;
-        const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.84, 0.5), new THREE.MeshBasicMaterial({ map: cctvTexture(label, k) }));
+        const scr = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.84, 0.5),
+          kind === 'snow' ? snowMat : new THREE.MeshBasicMaterial({ map: cctvTexture(label, k, kind) })
+        );
         scr.position.set(wallX - 0.05, y, zc);
         scr.rotation.y = -Math.PI / 2;
         this.group.add(scr);
@@ -1010,16 +1033,8 @@ export class Level7Builder {
         this.put(new THREE.Group().add(bezel), 0, 0);
       }
     }
-    // The big one, centre: NO SIGNAL until the console brings the stairwell up
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 320;
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    this.feed = { canvas: c, texture: tex };
-    drawNoSignal(c);
-    tex.needsUpdate = true;
-    const big = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.56), new THREE.MeshBasicMaterial({ map: tex }));
+    // The big one in the middle: dead too
+    const big = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.56), snowMat);
     big.position.set(wallX - 0.05, 1.81, 19.6);
     big.rotation.y = -Math.PI / 2;
     this.group.add(big);
@@ -1339,34 +1354,106 @@ function tileCanvas(floor: boolean): HTMLCanvasElement {
   return c;
 }
 
-/** A CCTV feed: a grey, grainy view of somewhere, with its label and the time. */
-function cctvTexture(label: string, seed: number): THREE.CanvasTexture {
+/**
+ * A CCTV feed of somewhere in the building, high in a corner looking down
+ * its length: an office floor with its rows of desks and screens (some of
+ * them over on their sides), or a corridor with its doors. Grey and grainy,
+ * with the camera's name and the time burned in.
+ */
+function cctvTexture(label: string, seed: number, kind: 'office' | 'corridor'): THREE.CanvasTexture {
+  const W = 256;
+  const Hh = 160;
   const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 160;
+  c.width = W;
+  c.height = Hh;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#1c2124';
-  g.fillRect(0, 0, 256, 160);
-  // Somewhere: a floor, a wall, a doorway, shapes
-  g.fillStyle = '#2d3438';
+  let s = seed * 7919 + 13;
+  const rnd = (): number => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+  g.fillStyle = '#15191b';
+  g.fillRect(0, 0, W, Hh);
+  // Where it all runs away to
+  const vx = 128 + (rnd() - 0.5) * 70;
+  const vy = kind === 'office' ? 44 : 52;
+  const half = kind === 'office' ? 78 : 26;
+  // Back wall, side walls, floor
+  g.fillStyle = '#3b4346';
+  g.fillRect(vx - half, 8, half * 2, vy - 8);
+  g.fillStyle = '#2f3639';
   g.beginPath();
-  g.moveTo(0, 160);
-  g.lineTo(70 + seed * 7, 70);
-  g.lineTo(190 - seed * 5, 70);
-  g.lineTo(256, 160);
+  g.moveTo(0, 0);
+  g.lineTo(vx - half, 8);
+  g.lineTo(vx - half, vy);
+  g.lineTo(0, Hh);
   g.fill();
-  g.fillStyle = '#3a4246';
-  g.fillRect(90 + seed * 3, 40, 40, 30);
-  g.fillStyle = '#272c30';
-  for (let i = 0; i < 3; i++) g.fillRect(30 + i * 70 + seed * 2, 90 + (i % 2) * 18, 26, 40);
+  g.beginPath();
+  g.moveTo(W, 0);
+  g.lineTo(vx + half, 8);
+  g.lineTo(vx + half, vy);
+  g.lineTo(W, Hh);
+  g.fill();
+  g.fillStyle = '#272d30';
+  g.beginPath();
+  g.moveTo(0, Hh);
+  g.lineTo(W, Hh);
+  g.lineTo(vx + half, vy);
+  g.lineTo(vx - half, vy);
+  g.fill();
+  // Ceiling lights, getting smaller towards the back
+  g.fillStyle = '#9aa6a8';
+  for (const d of [0.15, 0.4, 0.75]) {
+    const w = 10 + d * 50;
+    g.fillRect(vx - w / 2, 8 - d * 6, w, 2 + d * 3);
+  }
+  if (kind === 'office') {
+    // Rows of desks, near ones bigger; now and then one on its side
+    for (const d of [0.12, 0.3, 0.52, 0.78]) {
+      const y = vy + (Hh - vy) * d;
+      const sc = 0.3 + d * 1.1;
+      for (let col = -2; col <= 2; col++) {
+        const x = vx + col * 52 * sc;
+        if (x < -30 || x > W + 30) continue;
+        if (rnd() < 0.22) {
+          // Over on its side
+          g.fillStyle = '#3f4649';
+          g.fillRect(x - 16 * sc, y - 10 * sc, 32 * sc, 12 * sc);
+          continue;
+        }
+        g.fillStyle = '#4d5558';
+        g.fillRect(x - 19 * sc, y, 38 * sc, 7 * sc);
+        g.fillStyle = rnd() < 0.7 ? '#7b959e' : '#2a3133';
+        g.fillRect(x - 5 * sc, y - 9 * sc, 10 * sc, 8 * sc);
+        g.fillStyle = '#1d2224';
+        g.beginPath();
+        g.arc(x + 4 * sc, y + 12 * sc, 4.5 * sc, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    // Paper on the floor
+    g.fillStyle = 'rgba(200,205,205,0.45)';
+    for (let i = 0; i < 14; i++) g.fillRect(rnd() * W, vy + 20 + rnd() * (Hh - vy - 20), 4, 3);
+  } else {
+    // Doors down both sides
+    g.fillStyle = '#1e2325';
+    for (const d of [0.2, 0.45, 0.75]) {
+      const y = vy + (Hh - vy) * d;
+      const xL = vx - half - (vx - half) * d;
+      const xR = vx + half + (W - vx - half) * d;
+      const hgt = 26 + d * 70;
+      g.fillRect(xL + 4, y - hgt, 10 + d * 14, hgt);
+      g.fillRect(xR - 14 - d * 14, y - hgt, 10 + d * 14, hgt);
+    }
+  }
   // Grain and scanlines
-  for (let i = 0; i < 900; i++) {
-    const v = 30 + Math.random() * 60;
-    g.fillStyle = `rgba(${v},${v + 6},${v + 8},0.35)`;
-    g.fillRect(Math.random() * 256, Math.random() * 160, 1, 1);
+  for (let i = 0; i < 1100; i++) {
+    const v = 30 + Math.random() * 70;
+    g.fillStyle = 'rgba(' + v + ',' + (v + 6) + ',' + (v + 8) + ',0.32)';
+    g.fillRect(Math.random() * W, Math.random() * Hh, 1, 1);
   }
   g.fillStyle = 'rgba(0,0,0,0.22)';
-  for (let y = 0; y < 160; y += 3) g.fillRect(0, y, 256, 1);
+  for (let y = 0; y < Hh; y += 3) g.fillRect(0, y, W, 1);
   g.fillStyle = '#d8e0e4';
   g.font = 'bold 13px monospace';
   g.fillText(label, 8, 18);
@@ -1376,109 +1463,29 @@ function cctvTexture(label: string, seed: number): THREE.CanvasTexture {
   return t;
 }
 
-/** The big screen with nothing on it yet. */
-export function drawNoSignal(c: HTMLCanvasElement): void {
-  const g = c.getContext('2d')!;
-  g.fillStyle = '#0d1a2e';
-  g.fillRect(0, 0, c.width, c.height);
-  for (let i = 0; i < 2200; i++) {
-    const v = Math.random() * 90;
-    g.fillStyle = `rgba(${v},${v},${v + 20},0.5)`;
-    g.fillRect(Math.random() * c.width, Math.random() * c.height, 2, 2);
-  }
-  g.fillStyle = '#9fb6d8';
-  g.font = 'bold 34px monospace';
-  g.textAlign = 'center';
-  g.fillText('SELECT CAMERA', c.width / 2, c.height / 2);
-  g.font = '18px monospace';
-  g.fillText('[ CONSOLE ]', c.width / 2, c.height / 2 + 34);
-  g.textAlign = 'left';
-}
-
 /**
- * CAM 07, the stairwell: concrete flights going down, and on the half
- * landing a heavy man in a red cap, looking back up at the camera, with
- * something small and bright in his fist.
+ * Static: a dead feed, snow and the odd tear across it. Drawn into a small
+ * canvas and stretched — at a few frames a second it reads as the real thing.
  */
-export function drawStairwellFeed(c: HTMLCanvasElement, t: number): void {
+export function drawStatic(c: HTMLCanvasElement): void {
   const g = c.getContext('2d')!;
-  const W = c.width;
-  const Hh = c.height;
-  g.fillStyle = '#1e2326';
-  g.fillRect(0, 0, W, Hh);
-  // The flights: stepped diagonals down to the right
-  g.fillStyle = '#353c40';
-  for (let i = 0; i < 9; i++) {
-    g.fillRect(40 + i * 34, 60 + i * 26, 220, 26);
+  const img = g.createImageData(c.width, c.height);
+  const d = img.data;
+  let tear = Math.random() < 0.3 ? Math.floor(Math.random() * c.height) : -1;
+  for (let y = 0; y < c.height; y++) {
+    const band = y === tear || y === tear + 1 ? 70 : 0;
+    const roll = 0.75 + 0.25 * Math.sin((y / c.height) * 9 + Math.random());
+    for (let x = 0; x < c.width; x++) {
+      const v = Math.min(255, (Math.random() * 190 + band) * roll);
+      const i = (y * c.width + x) * 4;
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = Math.min(255, v * 1.05);
+      d[i + 3] = 255;
+    }
+    if (y === tear + 1 && Math.random() < 0.5) tear = Math.floor(Math.random() * c.height);
   }
-  g.fillStyle = '#4a5256';
-  for (let i = 0; i < 9; i++) g.fillRect(40 + i * 34, 60 + i * 26, 220, 4);
-  // The handrail
-  g.strokeStyle = '#7b8287';
-  g.lineWidth = 4;
-  g.beginPath();
-  g.moveTo(30, 40);
-  g.lineTo(380, 300);
-  g.stroke();
-  // Him, on the landing
-  const x = 300;
-  const y = 150;
-  g.fillStyle = '#121214';
-  g.beginPath();
-  g.ellipse(x, y + 62, 42, 58, 0, 0, Math.PI * 2);
-  g.fill();
-  g.fillRect(x - 30, y + 100, 22, 60);
-  g.fillRect(x + 8, y + 100, 22, 60);
-  g.fillStyle = '#b07a58';
-  g.beginPath();
-  g.ellipse(x, y, 20, 23, 0, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#2a1d15';
-  g.beginPath();
-  g.ellipse(x, y + 12, 21, 13, 0, 0, Math.PI);
-  g.fill();
-  g.fillStyle = '#c0151c';
-  g.fillRect(x - 22, y - 26, 44, 13);
-  g.fillRect(x - 28, y - 15, 52, 5);
-  g.fillStyle = '#d4a52a';
-  g.fillRect(x - 22, y - 16, 44, 3);
-  // His arm up, the drive in his fist
-  g.strokeStyle = '#121214';
-  g.lineWidth = 16;
-  g.beginPath();
-  g.moveTo(x - 30, y + 40);
-  g.lineTo(x - 58, y + 6);
-  g.stroke();
-  g.fillStyle = '#b07a58';
-  g.beginPath();
-  g.arc(x - 60, y + 2, 9, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#d6dadf';
-  g.fillRect(x - 64, y - 16, 8, 16);
-  g.fillStyle = '#c0151c';
-  g.fillRect(x - 64, y - 8, 8, 4);
-  // Grain, scanlines and a roll bar
-  for (let i = 0; i < 1600; i++) {
-    const v = 30 + Math.random() * 70;
-    g.fillStyle = `rgba(${v},${v + 4},${v + 6},0.3)`;
-    g.fillRect(Math.random() * W, Math.random() * Hh, 2, 2);
-  }
-  g.fillStyle = 'rgba(0,0,0,0.25)';
-  for (let yy = 0; yy < Hh; yy += 3) g.fillRect(0, yy, W, 1);
-  const roll = ((t * 60) % (Hh + 40)) - 20;
-  g.fillStyle = 'rgba(255,255,255,0.05)';
-  g.fillRect(0, roll, W, 18);
-  g.fillStyle = '#e8eef2';
-  g.font = 'bold 22px monospace';
-  g.fillText('CAM 07  STAIRWELL B  ▼ L2', 14, 30);
-  g.fillStyle = Math.floor(t * 2) % 2 === 0 ? '#ff2a1a' : '#5a0a06';
-  g.beginPath();
-  g.arc(W - 70, 24, 7, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#e8eef2';
-  g.fillText('REC', W - 58, 31);
-  g.font = '16px monospace';
-  g.fillText('06:51:' + String(Math.floor(t) % 60).padStart(2, '0'), W - 104, Hh - 14);
+  g.putImageData(img, 0, 0);
 }
 
 /** The sky: a pale late-afternoon blue going warm towards the horizon. */

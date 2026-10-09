@@ -1517,6 +1517,97 @@ export class HitmanVisual {
 
   /** Stains soaked into the front of his shirt: centre x, y and half width, height, in the rest frame. */
   private stains = [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()];
+  /**
+   * Body armour over the suit — a plate carrier: front and back plates,
+   * shoulder straps, a cummerbund round the sides and pouches across the
+   * front, POLICE across the chest and the back — and a helmet over his
+   * hair. Whoever wears it takes a good deal more stopping, and it has to
+   * show from across a room.
+   */
+  addArmour(): void {
+    const H = HitmanVisual;
+    const kit = H.outfitMat('armour:kit', () => new THREE.MeshStandardMaterial({ name: 'HM_Armour', color: 0x262b33, roughness: 0.82 }));
+    const vest = new THREE.Mesh(H.outfitGeo('armour:vest', () => H.vestGeometry()), kit);
+    this.hang(vest, 'UpperChest');
+    const patch = new THREE.Mesh(
+      H.outfitGeo('armour:patch', () => H.patchGeometry()),
+      H.outfitMat('armour:patch', () => new THREE.MeshStandardMaterial({ name: 'HM_Patch', map: H.policeTexture(), roughness: 0.75 }))
+    );
+    this.hang(patch, 'UpperChest');
+    const helmet = new THREE.Mesh(
+      H.outfitGeo('armour:helmet', () => H.helmetGeometry()),
+      H.outfitMat('armour:helmet', () => new THREE.MeshStandardMaterial({ name: 'HM_Helmet', color: 0x1f2329, roughness: 0.55, metalness: 0.15, side: THREE.DoubleSide }))
+    );
+    this.hang(helmet, 'Head');
+    // Under it, no hair to speak of
+    this.model.traverse((o) => {
+      if (o.name.startsWith('Hair_')) o.visible = false;
+    });
+  }
+
+  /** The carrier, in the rest frame: plates front and back, straps, sides and pouches. */
+  private static vestGeometry(): THREE.BufferGeometry {
+    const parts: THREE.BufferGeometry[] = [];
+    const box = (w: number, h: number, d: number, x: number, y: number, z: number, tilt = 0): void => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      if (tilt) g.rotateX(tilt);
+      g.translate(x, y, z);
+      parts.push(g);
+    };
+    // Plates: the front leans back a touch with the chest
+    box(0.31, 0.34, 0.036, 0, 1.275, -0.163, -0.07);
+    box(0.33, 0.37, 0.036, 0, 1.29, 0.16);
+    // Cummerbund, round the sides under the arms
+    for (const sx of [-1, 1]) box(0.034, 0.15, 0.3, sx * 0.196, 1.17, -0.002);
+    // Shoulder straps, front to back over the top
+    for (const sx of [-1, 1]) box(0.062, 0.028, 0.33, sx * 0.1, 1.488, -0.003);
+    // Magazine pouches across the bottom of the front
+    for (const px of [-0.09, 0, 0.09]) box(0.074, 0.09, 0.042, px, 1.16, -0.2);
+    const g = mergeGeometries(parts, false)!;
+    for (const p of parts) p.dispose();
+    return g;
+  }
+
+  /** POLICE, across the chest and bigger across the back. */
+  private static patchGeometry(): THREE.BufferGeometry {
+    const front = new THREE.PlaneGeometry(0.2, 0.052);
+    front.rotateY(Math.PI);
+    front.rotateX(0.07);
+    front.translate(0, 1.37, -0.184);
+    const back = new THREE.PlaneGeometry(0.27, 0.07);
+    back.translate(0, 1.36, 0.1785);
+    const g = mergeGeometries([front, back], false)!;
+    front.dispose();
+    back.dispose();
+    return g;
+  }
+
+  private static policeTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#20252c';
+    g.fillRect(0, 0, 256, 64);
+    g.fillStyle = '#f2f0e8';
+    g.font = 'bold 50px Arial, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('POLICE', 128, 34);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  /** A ballistic helmet: a shell a little bigger than his skull, tipped back so the front clears his eyes. */
+  private static helmetGeometry(): THREE.BufferGeometry {
+    const g = new THREE.SphereGeometry(1, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2 + 0.14);
+    g.scale(0.112, 0.104, 0.124);
+    g.rotateX(0.14);
+    g.translate(0, 1.657, 0.006);
+    return g;
+  }
+
   private stainCount = 0;
   private stainColor = new THREE.Color();
 

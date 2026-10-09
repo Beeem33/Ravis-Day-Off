@@ -664,6 +664,14 @@ export class HitmanVisual {
    * The bone carrying whichever hitbox `p` (world) lies on or nearest — a
    * wound goes there, so it rides the limb that was actually shot.
    */
+  /** Where one of the model's bones is in the world, as of its last pose. */
+  boneWorld(name: string, out = new THREE.Vector3()): THREE.Vector3 {
+    const j = this.byName.get(name);
+    if (!j) return out.set(0, 0, 0);
+    j.bone.updateWorldMatrix(true, false);
+    return j.bone.getWorldPosition(out);
+  }
+
   boneNear(p: THREE.Vector3): THREE.Object3D {
     const H = HitmanVisual;
     let best: THREE.Object3D = this.byName.get('UpperChest')!.bone;
@@ -1347,6 +1355,25 @@ export class HitmanVisual {
     if (Math.abs(v - this.eyeOpen) < 0.01) return;
     this.eyeOpen = v;
     for (const e of this.eyes) e.scale.y = v;
+  }
+
+  /**
+   * Close one fist round `o`: it is set in the hand's grip with its +X
+   * running along the knuckles towards the thumb, pushed `out` that way so
+   * most of it shows past the thumb, and from then on rides the hand bone.
+   * Its +Y faces out of the back of the hand.
+   */
+  holdInHand(sd: 'L' | 'R', o: THREE.Object3D, out = 0.03): void {
+    const H = HitmanVisual;
+    const rest = H.handRest![sd];
+    const wrist = H.rest.get(`Hand_${sd}`)!.modelP;
+    o.position.copy(wrist).add(rest.grip).addScaledVector(rest.thumb, out);
+    const x = rest.thumb.clone();
+    const y = rest.palm.clone().negate();
+    y.addScaledVector(x, -y.dot(x)).normalize();
+    const z = new THREE.Vector3().crossVectors(x, y);
+    o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    this.hang(o, `Hand_${sd}`);
   }
 
   /**

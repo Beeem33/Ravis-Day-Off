@@ -1072,6 +1072,7 @@ export class Enemy {
     const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.0085, 0.0085, 0.006, 12), bore);
     muzzle.position.set(0, -0.166, -0.052);
     gun.add(muzzle);
+    this.pistolMuzzle = muzzle;
     const front = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.01, 0.012), metal);
     front.position.set(0, -0.155, -0.076);
     gun.add(front);
@@ -1091,6 +1092,36 @@ export class Enemy {
     gun.position.set(0, -0.31, 0);
     this.foreR.add(gun);
     this.pistolOn = true;
+  }
+
+  private pistolMuzzle: THREE.Object3D | null = null;
+
+  /** The end of the pistol's barrel, once equipPistol() has given him one; the rifle's otherwise. */
+  pistolMuzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    if (!this.pistolMuzzle) return this.muzzleWorld(out);
+    this.pistolMuzzle.updateWorldMatrix(true, false);
+    return this.pistolMuzzle.getWorldPosition(out);
+  }
+
+  /** Where his right hand is: the model's, if he wears it. */
+  rightHandWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    if (this.hitman) return this.hitman.boneWorld('Hand_R', out);
+    this.foreR.updateWorldMatrix(true, false);
+    return this.foreR.localToWorld(out.set(0, -0.31, 0));
+  }
+
+  /**
+   * Something small held in the right fist — a phone, a drive. On the
+   * model it is closed in the hand and rides it; on the block build it
+   * hangs where the rig's hand is.
+   */
+  holdProp(o: THREE.Object3D, out = 0.03): void {
+    if (this.hitman) {
+      this.hitman.holdInHand('R', o, out);
+      return;
+    }
+    o.position.set(0, -0.31, 0);
+    this.foreR.add(o);
   }
 
   /**
@@ -1806,7 +1837,7 @@ export class Enemy {
     // upper arm has been reset and moved into its container, anything that
     // recomputed the forearm's world transform would get the wrong answer.
     const posed = new Map<string, { c: THREE.Vector3; q: THREE.Quaternion }>();
-    if (this.beingExecuted) {
+    if (this.beingExecuted || this.ragdollFromPose) {
       for (const [name, limb] of Object.entries(limbs)) {
         // Arm and leg groups pivot at the joint; their bodies sit below it
         const below = name.startsWith('arm') || name.startsWith('fore') ? 0.145 : name.startsWith('leg') || name.startsWith('shin') ? 0.205 : 0;
@@ -2144,24 +2175,33 @@ export class Enemy {
         // His chin on his fists: under his own chin, wherever the model
         // has put it — the rig's head is not where the model's is
         R.w = L.w = 1;
-        R.onHead = Enemy.BOSS_FIST_R;
+        const show = THREE.MathUtils.clamp(this.bossShow, 0, 1);
+        R.onHead = this.showAt.lerpVectors(Enemy.BOSS_FIST_R, Enemy.BOSS_SHOW_R, show);
         L.onHead = Enemy.BOSS_FIST_L;
         // Fists, knuckles out to the room, the chin on them (palms to him,
         // fingers up: the thumbs are then the outside of each hand)
         const q = this.root.quaternion;
-        R.thumb = thumbR.set(1, 0.3, 0).normalize().applyQuaternion(q);
-        R.palm = palmR.set(0, 0, 1).applyQuaternion(q);
+        // Shown, the fist stands up — thumb to the ceiling, knuckles to the
+        // room — so whatever is in it pokes up out of the top for Ravi
+        R.thumb = thumbR
+          .lerpVectors(Enemy._showThumb.set(1, 0.3, 0).normalize(), Enemy._showPalm.set(0.15, 1, -0.1).normalize(), show)
+          .normalize()
+          .applyQuaternion(q);
+        R.palm = palmR
+          .lerpVectors(Enemy._showThumb.set(0, 0, 1), Enemy._showPalm.set(-1, 0, 0.25).normalize(), show)
+          .normalize()
+          .applyQuaternion(q);
         L.thumb = thumbL.set(-1, 0.3, 0).normalize().applyQuaternion(q);
         L.palm = palmL.set(0, 0, 1).applyQuaternion(q);
         curlR = curlL = 1;
       } else {
         if (this.pose?.handR) {
           onRig(R, this.foreR);
-          curlR = 0.45 + 0.2 * Math.sin(at * 11);
+          curlR = this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 11);
         }
         if (this.pose?.handL) {
           onRig(L, this.foreL);
-          curlL = 0.45 + 0.2 * Math.sin(at * 9 + 1);
+          curlL = this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 9 + 1);
         }
       }
     }
@@ -2183,6 +2223,14 @@ export class Enemy {
     let frown = this.moodFrown;
     // Frightened, the jaw trembles
     if (this.mood > 0.5) face += 0.07 * Math.sin(at * 11) + 0.04 * Math.sin(at * 17.3);
+    // Talking
+    if (this.speaking) face = Math.max(face, 0.05 + 0.16 * Math.abs(Math.sin(at * 12.5)) * (0.6 + 0.4 * Math.sin(at * 3.1)));
+    // Hit
+    if (this.flinchT > 0) {
+      this.flinchT -= dt;
+      face = Math.max(face, 0.62 * this.flinchK * Math.min(1, this.flinchT / 0.25));
+      eyes = Math.min(eyes, 0.45);
+    }
     if (!this.alive) {
       face = 0.3;
       eyes = 0.35;
@@ -2202,9 +2250,46 @@ export class Enemy {
     this.hitman!.setMouth(this.smileNow, this.frownNow);
   }
   private faceOpen = 0;
+  /** Talking: the jaw works while it is set. */
+  speaking = false;
+  /**
+   * 0..1: the boss lifts his right fist off his chin and holds what is in
+   * it out in front of his face, for whoever is sat opposite to see.
+   */
+  bossShow = 0;
+  private showAt = new THREE.Vector3();
+  /**
+   * How closed the hands are when a scene poses them: 1 fists (a fight),
+   * 0.2 open (over the ears). Null is working at something — a knot.
+   */
+  poseCurl: number | null = null;
+  /**
+   * Die in the shape he is in, rather than from the standing layout: for a
+   * man already lying on the floor, who would otherwise be stood back up
+   * by the ragdoll on the frame he died.
+   */
+  ragdollFromPose = false;
+  private flinchT = 0;
+  private flinchK = 0;
+
+  /** Hit, but not hard enough to drop him: a pained face for a moment. */
+  flinch(strength = 1): void {
+    this.flinchT = 0.4;
+    this.flinchK = THREE.MathUtils.clamp(strength, 0, 1);
+  }
+
+  /** Staff only: teeth bared, brows down — fighting back, not running. */
+  setFurious(): void {
+    if (!this.civilian) return;
+    this.setMood(0.3, 0.95, 0, 0.95);
+  }
   /** The boss's fists, just under his chin either side of it, in the model's rest frame. */
   private static BOSS_FIST_R = new THREE.Vector3(0.04, 1.438, -0.1);
   private static BOSS_FIST_L = new THREE.Vector3(-0.04, 1.438, -0.1);
+  /** Where he holds it up to be seen: out in front of his face, a little to his right. */
+  private static BOSS_SHOW_R = new THREE.Vector3(0.09, 1.5, -0.37);
+  private static _showThumb = new THREE.Vector3();
+  private static _showPalm = new THREE.Vector3();
 
   private animate(dt: number): void {
     if (this.flashTime > 0) this.flashTime -= dt;

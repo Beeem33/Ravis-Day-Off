@@ -393,6 +393,45 @@ export class AudioManager {
     this.tone('square', 120, 35, 0.16, 0.3 * a);
   }
 
+  /** Someone else's pistol, across the room: lighter and sharper than a rifle. */
+  npcPistol(distance: number): void {
+    const a = this.atten(distance, 40) * 0.85 + 0.06;
+    this.noise(0.06, 'highpass', 2200, 0.32 * a);
+    this.noise(0.14, 'lowpass', 900, 0.42 * a);
+    this.tone('square', 160, 50, 0.1, 0.2 * a);
+  }
+
+  /** A punch landing in somebody else's fight. */
+  distantPunch(distance: number, head: boolean): void {
+    const a = this.atten(distance, 22);
+    if (a <= 0.02) return;
+    if (head) {
+      this.noise(0.05, 'bandpass', 1700, 0.3 * a, true, 1.2);
+      this.noise(0.09, 'lowpass', 520, 0.32 * a);
+      this.tone('sine', 180, 60, 0.12, 0.28 * a);
+    } else {
+      this.noise(0.07, 'lowpass', 300, 0.45 * a);
+      this.tone('sine', 115, 42, 0.14, 0.32 * a);
+    }
+  }
+
+  /** The grunt of whoever took it. */
+  distantGrunt(distance: number): void {
+    const a = this.atten(distance, 20);
+    if (a <= 0.05) return;
+    const base = 105 + Math.random() * 40;
+    this.voice({
+      D: 0.18,
+      base: base * 1.3,
+      peak: base * 1.5,
+      end: base * 0.8,
+      attack: 0.02,
+      level: 0.24 * a,
+      breath: 0.12 * a,
+      formants: [[500, 5, 1.0], [850, 6, 0.7], [2500, 8, 0.3]]
+    });
+  }
+
   bulletWhiz(): void {
     this.noise(0.09, 'bandpass', 3800, 0.22, true, 3);
   }

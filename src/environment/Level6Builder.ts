@@ -72,7 +72,20 @@ const VENT = { cx: 0, w: 0.62, h: 0.44, y0: 0.05 };
  * it with its back to the wall, and behind that, low in the wall and hidden
  * from the front by the chair and the desk, is the vent he leaves by.
  */
+export interface Level6BuildOptions {
+  /**
+   * An open doorway through the front wall (behind Ravi's chair), centred
+   * at this x with this width — for when the office is part of a bigger
+   * floor and has to be walked out of. Level six keeps it shut.
+   */
+  doorway?: { x: number; w: number };
+  /** Leave out the room's own ambient and sky fill: the floor it sits in has its own. */
+  ambient?: boolean;
+}
+
 export class Level6Builder {
+  constructor(private opts: Level6BuildOptions = {}) {}
+
   private group = new THREE.Group();
   private colliders: Collider[] = [];
   private shootables: THREE.Object3D[] = [];
@@ -214,7 +227,26 @@ export class Level6Builder {
     this.solid(W, 0.3, D, 0, h, (z0 + z1) / 2, this.ceilMat);
     this.solid(T, h, D, x0 - T / 2, 0, (z0 + z1) / 2, this.wallMat, { occlude: true });
     this.solid(T, h, D, x1 + T / 2, 0, (z0 + z1) / 2, this.wallMat, { occlude: true });
-    this.solid(W, h, T, 0, 0, z1 + T / 2, this.wallMat, { occlude: true });
+    const dw = this.opts.doorway;
+    if (dw) {
+      // Through the front wall: a pier either side and a header over the gap
+      const a = dw.x - dw.w / 2;
+      const b = dw.x + dw.w / 2;
+      const left = x0 - T;
+      const right = x1 + T;
+      const DH = 2.15;
+      this.solid(a - left, h, T, (left + a) / 2, 0, z1 + T / 2, this.wallMat, { occlude: true });
+      this.solid(right - b, h, T, (b + right) / 2, 0, z1 + T / 2, this.wallMat, { occlude: true });
+      this.solid(dw.w, h - DH, T, dw.x, DH, z1 + T / 2, this.wallMat, { occlude: true });
+      // A steel frame round it
+      const frame = new THREE.Group();
+      frame.add(this.box(0.06, DH, T + 0.04, this.steel, a - 0.03, DH / 2, 0));
+      frame.add(this.box(0.06, DH, T + 0.04, this.steel, b + 0.03, DH / 2, 0));
+      frame.add(this.box(dw.w + 0.12, 0.06, T + 0.04, this.steel, dw.x, DH + 0.03, 0));
+      this.put(frame, 0, z1 + T / 2);
+    } else {
+      this.solid(W, h, T, 0, 0, z1 + T / 2, this.wallMat, { occlude: true });
+    }
     // The back wall is built round the vent's mouth
     const vx0 = VENT.cx - VENT.w / 2;
     const vx1 = VENT.cx + VENT.w / 2;
@@ -602,6 +634,7 @@ export class Level6Builder {
   }
 
   private buildLighting(): void {
+    if (this.opts.ambient === false) return;
     this.group.add(new THREE.AmbientLight(0x3a2a1e, 0.34));
     this.group.add(new THREE.HemisphereLight(0x4a3a2a, 0x0e0a08, 0.14));
   }

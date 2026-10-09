@@ -73,6 +73,9 @@ export const Events = {
   RestartLevel6: 'restart-level6',
   /** The boss's office cleared and the vent found. */
   Level6Complete: 'level6-complete',
+  RestartLevel7: 'restart-level7',
+  /** The office floor held, the cameras checked, and the stairwell door reached. */
+  Level7Complete: 'level7-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -87,7 +90,8 @@ export const LEVELS = [
   { id: 'level3', n: '3', name: 'THE OTHER FLOOR', blurb: 'Upstairs, and whoever is still up there' },
   { id: 'level4', n: '4', name: 'LIGHTS OUT', blurb: 'The dark floor, by torchlight' },
   { id: 'level5', n: '5', name: 'THE SERVICE LIFT', blurb: 'Down to the basement' },
-  { id: 'level6', n: '6', name: 'THE BOSS', blurb: 'Tied to a chair in his office' }
+  { id: 'level6', n: '6', name: 'THE BOSS', blurb: 'Tied to a chair in his office' },
+  { id: 'level7', n: '7', name: 'THE TOP FLOOR', blurb: 'The staff are fighting back' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

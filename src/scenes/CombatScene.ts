@@ -107,7 +107,17 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     }
 
     const hidden: THREE.Object3D[] = [];
+    // And everything drawn, wherever it is. The throwaway frame used to be
+    // culled to the spawn view, so whatever was behind the player at the
+    // start — a whole office, on level seven — had its geometry and its
+    // textures sent to the GPU on the frame he first turned to look at it:
+    // fifty milliseconds, the first time round every corner.
+    const culled: THREE.Object3D[] = [];
     this.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        culled.push(o);
+        o.frustumCulled = false;
+      }
       // Lights are deliberately left alone: the number of VISIBLE lights is
       // part of every material's program key, so switching one on here would
       // compile the wrong variant and the real one would still cost a full
@@ -145,6 +155,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     renderer.render(this.scene, camera);
 
     for (const o of hidden) o.visible = false;
+    for (const o of culled) o.frustumCulled = true;
     if (this.decals) this.decals.trimTo(nDecals);
     if (this.particles) this.particles.clear();
     if (probe) this.scene.remove(probe.model);

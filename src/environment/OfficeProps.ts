@@ -2582,6 +2582,36 @@ export function deskMonitor(): THREE.Group {
   return g;
 }
 
+/**
+ * The killswitch: a brushed-metal USB drive with a black end cap, a red
+ * band and a lit LED, every record the company ever kept on it. Metal, so
+ * it catches the light against a dark suit. Long axis along +X, the plug at +X.
+ */
+export function dataDrive(): THREE.Group {
+  const g = new THREE.Group();
+  const shell = new THREE.MeshStandardMaterial({ color: 0xc9ced4, roughness: 0.3, metalness: 0.55 });
+  const cap = new THREE.MeshStandardMaterial({ color: 0x141518, roughness: 0.4 });
+  const red = new THREE.MeshStandardMaterial({ color: 0xc0151c, roughness: 0.45, emissive: 0x3a0000, emissiveIntensity: 1 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.25, metalness: 0.85 });
+  const led = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff2a1a, emissiveIntensity: 3 });
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.02, 0.009), shell));
+  const end = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.0204, 0.0094), cap);
+  end.position.x = -0.027;
+  g.add(end);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.0206, 0.0096), red);
+  band.position.x = -0.008;
+  g.add(band);
+  const plug = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.012, 0.0046), steel);
+  plug.position.x = 0.039;
+  g.add(plug);
+  const dot = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.005, 0.0099), led);
+  dot.position.set(0.014, 0.004, 0);
+  g.add(dot);
+  // A size up on a real one, so it reads from across a desk
+  g.scale.setScalar(1.3);
+  return g;
+}
+
 const plateMats = new Map<string, THREE.MeshLambertMaterial>();
 
 /** The little angled wedge with somebody's name on it, for a desk. */

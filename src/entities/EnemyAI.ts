@@ -85,6 +85,17 @@ export class EnemyAI {
     this.unsub();
   }
 
+  /**
+   * Straight into the fight with the player, last seen at `at` — for an
+   * agent who was busy with somebody else until now and has just been
+   * shown where the real problem is.
+   */
+  alert(at: THREE.Vector3): void {
+    this.lastKnownPlayerPos.copy(at);
+    this.awareness = 1;
+    this.enterAttack();
+  }
+
   // ---------------------------------------------------------------- senses
 
   private nearestWaypoint(): number {
@@ -560,9 +571,21 @@ export class EnemyAI {
       let d = Math.hypot(dx, dz);
       if (d >= MARGIN) continue;
       if (d < 1e-4) {
-        dx = 1;
-        dz = 0;
-        d = 1e-4;
+        // Inside it: straight out, away from its middle, at full strength.
+        // Dividing by the near-zero distance here made the push ten thousand
+        // times too strong, and threw a man stood inside a box clean out of
+        // the building in one frame.
+        dx = p.x - (b.min.x + b.max.x) / 2;
+        dz = p.z - (b.min.z + b.max.z) / 2;
+        d = Math.hypot(dx, dz);
+        if (d < 1e-4) {
+          dx = 1;
+          dz = 0;
+          d = 1;
+        }
+        out.x += dx / d;
+        out.z += dz / d;
+        continue;
       }
       const w = (MARGIN - d) / MARGIN;
       out.x += (dx / d) * w;

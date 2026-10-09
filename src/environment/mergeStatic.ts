@@ -2,6 +2,31 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
+ * What a material looks like, as a string: two materials with the same key
+ * draw the same, so their meshes can share a bucket. Most props make their
+ * own materials as they are built — every desk its own copy of the same
+ * wood — and keyed on the instance, a floor of forty desks folded into forty
+ * meshes instead of one. Anything with shader hooks of its own is only ever
+ * itself.
+ */
+function materialKey(m: THREE.Material): string {
+  if (m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile || (m as THREE.ShaderMaterial).isShaderMaterial) {
+    return m.uuid;
+  }
+  const a = m as THREE.MeshStandardMaterial & THREE.MeshPhongMaterial;
+  const col = (c?: THREE.Color): string => (c ? c.getHexString() : '-');
+  const tex = (t?: THREE.Texture | null): string => (t ? t.uuid : '-');
+  return [
+    m.type, col(a.color), col(a.emissive), a.emissiveIntensity, col(a.specular), a.shininess, a.roughness, a.metalness,
+    tex(a.map), tex(a.emissiveMap), tex(a.normalMap), tex(a.roughnessMap), tex(a.metalnessMap), tex(a.alphaMap),
+    tex(a.aoMap), tex(a.envMap), tex(a.lightMap), tex(a.bumpMap), tex(a.specularMap),
+    m.opacity, m.transparent, m.side, m.blending, m.depthWrite, m.depthTest, m.alphaTest, m.polygonOffset,
+    m.polygonOffsetFactor, m.polygonOffsetUnits, m.vertexColors, a.flatShading, a.wireframe, a.fog, m.toneMapped,
+    m.colorWrite, m.visible
+  ].join('|');
+}
+
+/**
  * Fold static dressing into one mesh per material, in place.
  *
  * Every prop is a group of ten-odd little meshes, and a room full of them is
@@ -27,6 +52,7 @@ export function mergeStatic(
 ): THREE.Object3D[] {
   group.updateMatrixWorld(true);
   const buckets = new Map<THREE.Material, { geo: THREE.BufferGeometry; src: THREE.Mesh }[]>();
+  const same = new Map<string, THREE.Material>();
   const salvage: { obj: THREE.Object3D; world: THREE.Matrix4 }[] = [];
 
   for (const root of roots) {
@@ -37,7 +63,12 @@ export function mergeStatic(
         return;
       }
       const geo = m.geometry.clone().applyMatrix4(m.matrixWorld);
-      const mat = m.material as THREE.Material;
+      const key = materialKey(m.material as THREE.Material);
+      let mat = same.get(key);
+      if (!mat) {
+        mat = m.material as THREE.Material;
+        same.set(key, mat);
+      }
       const list = buckets.get(mat);
       if (list) list.push({ geo, src: m });
       else buckets.set(mat, [{ geo, src: m }]);

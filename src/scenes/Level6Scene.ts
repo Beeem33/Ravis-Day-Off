@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level6Builder, Level6Data } from '../environment/Level6Builder';
@@ -18,6 +17,8 @@ import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
+import { dataDrive } from '../environment/OfficeProps';
+import { armWithAK } from '../entities/AkModel';
 
 const RIFLE_COOLDOWN = 0.1;
 const RIFLE_MAG = 30;
@@ -25,11 +26,6 @@ const RIFLE_MAG = 30;
 const SEATED_EYE = 1.18;
 /** How long it takes him to come round. */
 const WAKE_TIME = 5.6;
-/** The AK in the agents' hands: real size, and its landmarks in the glb's frame (muzzle down +X). */
-const AK_SCALE = 0.95;
-const AK_GRIP = [-0.08, -0.05] as const;
-const AK_GUARD = [0.255, -0.035] as const;
-const AK_MUZZLE = [0.58, 0.022] as const;
 const BOSS_PITCH = 0.72;
 /**
  * How far forward of the chair he ends up standing — clear of its collider,
@@ -132,7 +128,6 @@ export class Level6Scene extends CombatScene<Level6Data> {
   private lids!: { top: HTMLElement; bot: HTMLElement };
   private photoTaken = false;
   private needsCompile = false;
-  private akTemplate: THREE.Object3D | null = null;
   private unsubs: (() => void)[] = [];
   private clickHandler = (): void => this.onClick();
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
@@ -230,6 +225,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.boss = new Enemy(L.bossAt, Math.PI, 7, { name: 'THE BOSS', boss: true });
     this.boss.setSitting(true, true);
     this.scene.add(this.boss.root);
+    // The killswitch, in his right fist from the start
+    this.boss.holdProp(dataDrive(), 0.045);
     this.poseBoss(0);
     // And the two either side of him, rifles held at rest — Ravi is tied up
     L.agentAt.forEach((at, i) => {
@@ -309,21 +306,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
    * next frame rather than on the frame someone first looks at one.
    */
   private loadAK(): void {
-    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/ak47.glb`, (gltf) => {
-      this.akTemplate = gltf.scene;
-      const S = AK_SCALE;
-      // glb (x, y, z) → weapon space: muzzle down −Z, as RifleViewmodel maps it
-      const at = (p: readonly [number, number]): THREE.Vector3 => new THREE.Vector3(0, p[1] * S, -p[0] * S);
-      for (const e of this.agents) {
-        const wrap = new THREE.Group();
-        const copy = gltf.scene.clone(true);
-        copy.rotation.y = Math.PI / 2;
-        copy.scale.setScalar(S);
-        wrap.add(copy);
-        e.equipWeapon(wrap, at(AK_GRIP), at(AK_GUARD), at(AK_MUZZLE));
-      }
-      this.needsCompile = true;
-    });
+    for (const e of this.agents) armWithAK(e, true);
+    this.needsCompile = true;
   }
 
   // ------------------------------------------------------------- the boss
@@ -414,7 +398,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
     if (this.phase === 'wake') this.updateWake();
     if (this.phase === 'untie') this.updateUntie(dt);
     const fillTo = this.phase === 'untie' ? 2.4 : this.phase === 'talk' ? 0.7 : 0;
-    this.fill.intensity += (fillTo - this.fill.intensity) * Math.min(1, dt * 2);
+    this.fill.intensity += (fillTo + 2.2 * this.zoom - this.fill.intensity) * Math.min(1, dt * 2);
+    // Reaching across the desk to him while the camera is in on the drive
+    this.fill.distance = 3.4 + 2.6 * this.zoom;
     this.updateBoss(dt);
     this.updateArms();
 
@@ -453,7 +439,10 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.rifle.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - 20 * this.rifle.aimBlend;
+    // The push-in on the drive: from Ravi's chair it is a few centimetres
+    // of plastic four metres off, so the lens goes long enough to fill the
+    // frame with the hand that is holding it up
+    const targetFov = 74 - 20 * this.rifle.aimBlend - 60 * this.zoom;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
@@ -488,9 +477,22 @@ export class Level6Scene extends CombatScene<Level6Data> {
       pitch = track([[0, -0.75], [2.9, -0.72], [3.8, -0.45], [4.6, -0.2], [WAKE_TIME, -0.03]], t);
       rate = 20;
     } else if (this.phase === 'talk') {
-      // On the boss; a breath of movement so it is not a still
-      yaw = Math.sin(this.t * 0.4) * 0.012;
-      pitch = -0.02 + Math.sin(this.t * 0.55) * 0.008;
+      // On the boss; a breath of movement so it is not a still. Pushed in,
+      // onto the drive he holds up — just over his fist, beside his face
+      yaw = Math.sin(this.t * 0.4) * 0.012 * (1 - this.zoom);
+      pitch = -0.02 + Math.sin(this.t * 0.55) * 0.008 * (1 - this.zoom);
+      if (this.zoom > 0.001) {
+        const eye = Level6Scene.tmpA.set(this.level.chairAt.x, SEATED_EYE, this.level.chairAt.z);
+        const at = this.boss.rightHandWorld(Level6Scene.tmpB);
+        at.y += 0.07;
+        // Frame the drive and his face together: aim between them
+        at.x = at.x * 0.6 + this.level.bossAt.x * 0.4;
+        const d = at.sub(eye);
+        const ay = Math.atan2(-d.x, -d.z);
+        const ap = Math.atan2(d.y, Math.hypot(d.x, d.z));
+        yaw += (ay - yaw) * this.zoom;
+        pitch += (ap - pitch) * this.zoom;
+      }
     } else if (this.phase === 'untie') {
       const [ty, tp] = this.untieLook();
       yaw = ty;
@@ -554,25 +556,80 @@ export class Level6Scene extends CombatScene<Level6Data> {
    * The boss explains. Split where it has to be: his six lines, Ravi's one,
    * and then the order to the agent, said with his head turned to him.
    */
+  /**
+   * The boss explains, and makes his offer. He sold the floor to the police
+   * force — and he has the killswitch: the drive with every client, every
+   * call and every employee's record on it, which the company's emergency
+   * wipe should have destroyed the moment the raid began, and which he is
+   * selling to them with the rest of the company's data. It is locked, and
+   * Ravi built the lock: that is why he wants a partner, and why Ravi's
+   * hands come untied — he cannot type the key into anything tied to a chair.
+   *
+   * Played a beat at a time so the drive can come up off his chin for the
+   * part where he shows it off, with the camera pushing in on it.
+   */
   private startTalk(): void {
     this.phase = 'talk';
     const boss = (text: string) => ({ speaker: 'BOSS', text, pitch: BOSS_PITCH });
-    this.dialogue.play(
-      [
-        boss('You really thought I was on your side, huh Ravi?'),
-        boss('Scammers get scammed.'),
-        boss('I sold you all out to the police force, Ravi.'),
-        boss("They gave me an offer I couldn't resist."),
-        boss('I always thought you were the best employee, Ravi.'),
-        boss('So, how about we become partners, Ravi?')
-      ],
-      () =>
-        this.dialogue.play([{ speaker: 'RAVI', text: 'I guess bro', pitch: 1.0 }], () => {
+    const ravi = (text: string) => ({ speaker: 'RAVI', text, pitch: 1.0 });
+    const beats: { lines: { speaker: string; text: string; pitch: number }[]; then?: () => void }[] = [
+      {
+        lines: [
+          boss('You really thought I was on your side, huh Ravi?'),
+          boss('Scammers get scammed.'),
+          boss('I sold you all out to the police force, Ravi.'),
+          boss("They gave me an offer I couldn't resist.")
+        ],
+        // Up comes the drive
+        then: () => {
+          this.showTarget = 1;
+          this.zoomTarget = 1;
+        }
+      },
+      {
+        lines: [
+          boss('See this? The killswitch.'),
+          boss('Every client we ever hit. Every call. Every employee record. All of it, right here.'),
+          ravi("That's not possible. The emergency deletion protocol wiped everything the second the raid started."),
+          boss('It would have. I pulled the drive before it could run.'),
+          boss("Tonight it goes to the police force — along with every byte of data this company ever kept.")
+        ],
+        then: () => {
+          this.showTarget = 0;
+          this.zoomTarget = 0;
+        }
+      },
+      {
+        lines: [
+          boss("There's just one problem. It's locked. And you're the one who built the lock."),
+          boss('I always thought you were the best employee, Ravi.'),
+          boss('So, how about we become partners, Ravi? Unlock it, and you walk away with a cut.'),
+          ravi('I guess bro.'),
+          boss('You guess?'),
+          ravi("Fine. Deal. But I can't type the key in with my hands tied to a chair.")
+        ],
+        // He turns to the agent on his left for the order
+        then: () => {
           this.bossTurn = 1;
-          this.dialogue.play([boss('Untie him.')], () => this.startUntie());
-        })
-    );
+        }
+      },
+      { lines: [boss('Untie him.')], then: () => this.startUntie() }
+    ];
+    const run = (i: number): void => {
+      const b = beats[i];
+      this.dialogue.play(b.lines, () => {
+        b.then?.();
+        if (i + 1 < beats.length) run(i + 1);
+      });
+    };
+    run(0);
   }
+
+  /** How far the drive is held up (0 on his chin .. 1 out in front), and where it is heading. */
+  private showTarget = 0;
+  /** The camera's push-in on the drive while he shows it off. */
+  private zoom = 0;
+  private zoomTarget = 0;
 
   /** 0 facing Ravi, 1 turned to the agent on his left. */
   private bossTurn = 0;
@@ -591,6 +648,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.bossTurnNow += ((this.phase === 'untie' && this.step !== 'walkR' ? 0 : this.bossTurn) - this.bossTurnNow) * Math.min(1, dt * 4);
     const talking = this.dialogue.speaker === 'BOSS' && this.dialogue.typing;
     this.poseBoss(this.t, talking, this.bossTurnNow);
+    b.speaking = talking;
+    b.bossShow += (this.showTarget - b.bossShow) * Math.min(1, dt * 3.2);
+    this.zoom += (this.zoomTarget - this.zoom) * Math.min(1, dt * 2.2);
     b.update(dt);
   }
 
@@ -1183,7 +1243,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
       if (this.level.behindDesk.containsPoint(new THREE.Vector3(p.x, p.y + 0.9, p.z))) {
         this.phase = 'done';
         this.searchT = 0;
-        this.setObjective('THE BOSS IS GONE — HE ESCAPED THROUGH THE VENT');
+        this.setObjective('THE BOSS IS GONE — HE TOOK THE DRIVE THROUGH THE VENT');
       }
     } else if (this.phase === 'done') {
       const was = this.searchT;

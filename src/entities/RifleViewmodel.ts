@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { withAK } from './AkModel';
 import type { FPSPlayer } from './FPSPlayer';
 import { FirstPersonArms, grip, mixGrip, reframe, type Grip } from './RaviVisual';
 
@@ -186,8 +186,7 @@ export class RifleViewmodel {
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 5, 1.9);
     this.muzzle.add(this.flashLight);
 
-    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/ak47.glb`, (gltf) => {
-      const scene = gltf.scene;
+    withAK((scene) => {
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh) {

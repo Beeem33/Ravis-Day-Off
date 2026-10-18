@@ -220,6 +220,10 @@ export class Level8Scene extends CombatScene<Level8Data> {
     }
 
     this.player = new FPSPlayer(L.playerSpawn, L.playerSpawnYaw, input, audio, bus);
+
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     this.player.camera.far = 700;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
@@ -970,7 +974,8 @@ export class Level8Scene extends CombatScene<Level8Data> {
     if (!p.alive) return;
     const per = p.damagePerHit;
     p.damagePerHit = n;
-    p.hit('THE GENERAL');
+    // From where he stands, so a stomp that kills throws Ravi away from him
+    p.hit('THE GENERAL', this.general.enemy.position);
     p.damagePerHit = per;
   }
 
@@ -979,7 +984,8 @@ export class Level8Scene extends CombatScene<Level8Data> {
     if (!this.player.alive || (this.phase !== 'fight' && this.phase !== 'won')) return;
     if (lethal) {
       this.addShake(1.6);
-      this.player.kill('THE GENERAL');
+      // Flung the way the car was going
+      this.player.kill('THE GENERAL', this.player.position.clone().sub(push));
       return;
     }
     this.addShake(1.0);

@@ -14,6 +14,7 @@ import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { HitmanVisual } from '../entities/HitmanVisual';
 import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import type { TakedownViewmodel } from '../entities/TakedownViewmodel';
+import { RaviRagdoll, type GunKind } from '../entities/RaviRagdoll';
 
 /** The parts of a level's data that the shared combat code touches. */
 export interface CombatLevel {
@@ -72,6 +73,38 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     opts?: { wound?: boolean; keepWeapon?: boolean }
   ): void;
 
+  // ------------------------------------------------------- Ravi's death
+
+  /** His ragdoll, once the level has asked for one. */
+  protected raviRagdoll: RaviRagdoll | null = null;
+
+  /**
+   * When Ravi dies, he falls as a ragdoll and drops whatever he was holding,
+   * seen from a camera that rises out of his head to look down on him. One
+   * line in enter(), once `this.level`, `this.world` and `this.player` exist:
+   *
+   *   this.ragdollOnDeath(() => 'pistol');
+   *
+   * `gunInHand` is asked at the moment he dies (null: nothing in his hand —
+   * mid-drink, say). Nothing else is needed: FPSPlayer.update() drives the
+   * body and the camera itself while he is dead, and the scene keeps
+   * stepping `this.world` as it always does. The body and the guns are built
+   * now and parked out of sight, so warmUp() compiles their shaders behind
+   * the loading fade.
+   */
+  protected ragdollOnDeath(gunInHand: () => GunKind | null): void {
+    const rd = new RaviRagdoll({
+      scene: this.scene,
+      world: this.world,
+      player: this.player,
+      audio: this.ctx.audio,
+      gunInHand,
+      blockers: () => ({ colliders: this.level.colliders, meshes: this.level.shootables })
+    });
+    this.raviRagdoll = rd;
+    this.player.deathHandler = rd;
+  }
+
   // ------------------------------------------------------------- warm-up
 
   /** Set once the shader warm-up has run for this scene. */
@@ -107,6 +140,11 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
     }
 
     const hidden: THREE.Object3D[] = [];
+    // Ravi's own ragdoll body and the guns he can drop (ragdollOnDeath) sit
+    // in the scene hidden, parked under the floor: the pass below shows them
+    // for the throwaway frame like everything else hidden, so his first death
+    // compiles nothing. The full body has materials the first-person arms
+    // and legs never draw (hair, eyes, shoes).
     // And everything drawn, wherever it is. The throwaway frame used to be
     // culled to the spawn view, so whatever was behind the player at the
     // start — a whole office, on level seven — had its geometry and its
@@ -332,7 +370,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
         new THREE.Vector3((Math.random() - 0.5) * 0.2, -0.2 - Math.random() * 0.4, (Math.random() - 0.5) * 0.2)
       );
       this.particles.tracer(muzzle, target, 0xffe0b0);
-      player.hit(enemy.name);
+      player.hit(enemy.name, muzzle);
     } else {
       // Miss: bullet streaks past and lands somewhere behind the player
       const target = player.eyePosition();

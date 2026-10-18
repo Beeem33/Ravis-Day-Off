@@ -119,6 +119,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.player.pitch = this.level.introPitch; // aimed at the news on his screen
     this.scene.add(this.player.camera);
     this.player.onVaultGlass = (c) => this.vaultGlass(c);
+    // Dies as a ragdoll; the pistol goes with him unless it's still in the drawer or stowed for a drink
+    this.ragdollOnDeath(() => (this.weapon.stow < 0.5 ? 'pistol' : null));
 
     this.weapon = new WeaponViewmodel(this.player.camera);
     this.weapon.stow = 1; // still in the drawer

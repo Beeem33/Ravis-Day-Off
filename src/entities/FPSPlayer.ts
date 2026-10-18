@@ -20,6 +20,18 @@ const MAX_HEALTH = 5;
 const REGEN_SECONDS = 30; // seconds of being hurt before you claw back 1 HP
 
 /**
+ * Takes over his death from the moment he dies (see RaviRagdoll, wired by
+ * CombatScene.ragdollOnDeath). `begin` runs inside kill(); return false and
+ * the old floor-roll plays instead. `update` then runs in place of it from
+ * update() every frame he is dead, and owns the camera.
+ */
+export interface DeathHandler {
+  /** `from`: where the round that killed him came from, if known. */
+  begin(from: THREE.Vector3 | null): boolean;
+  update(dt: number): void;
+}
+
+/**
  * FPSPlayer — pointer-lock mouse look, WASD + sprint/jump/crouch movement,
  * swept AABB collision with auto-stepping (stairs), head bob, and health
  * with slow regeneration. Position is at the FEET.
@@ -143,7 +155,8 @@ export class FPSPlayer {
 
   update(dt: number, colliders: Collider[]): void {
     if (!this.alive) {
-      this.updateDeath(dt);
+      if (this.deathHandled && this.deathHandler) this.deathHandler.update(dt);
+      else this.updateDeath(dt);
       return;
     }
     const input = this.input;
@@ -408,12 +421,12 @@ export class FPSPlayer {
    */
   damagePerHit = 1;
 
-  /** Take a hit from `killerName`; dies once health runs out. */
-  hit(killerName: string): void {
+  /** Take a hit from `killerName` (fired from `from`, if known); dies once health runs out. */
+  hit(killerName: string, from?: THREE.Vector3): void {
     if (!this.alive) return;
     this.health = Math.max(0, this.health - this.damagePerHit);
     this.bus.emit(Events.PlayerDamaged, { health: this.health, maxHealth: this.maxHealth });
-    if (this.health <= 0) this.kill(killerName);
+    if (this.health <= 0) this.kill(killerName, from);
   }
 
   /**
@@ -427,10 +440,16 @@ export class FPSPlayer {
     this.regenTimer = 0;
   }
 
-  kill(killerName: string): void {
+  /** Set by the scene: plays his death instead of the floor-roll (a ragdoll, seen from outside). */
+  deathHandler: DeathHandler | null = null;
+  private deathHandled = false;
+
+  kill(killerName: string, from?: THREE.Vector3): void {
     if (!this.alive) return;
     this.alive = false;
     this.deathAnim = 0;
+    this.aiming = false;
+    this.deathHandled = this.deathHandler?.begin(from ?? null) ?? false;
     this.bus.emit(Events.PlayerDied, { killer: killerName });
   }
 

@@ -152,6 +152,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
 
     const L = this.level;
     this.player = new FPSPlayer(L.chairAt, 0, input, audio, bus);
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     this.player.cinematic = true;
     this.scene.add(this.player.camera);
 

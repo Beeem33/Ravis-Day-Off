@@ -114,6 +114,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
+
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     // One round is the whole bar here. In the dark, against twelve of them,
     // being seen at all should be the mistake — not the start of a trade.
     this.player.damagePerHit = this.player.maxHealth;

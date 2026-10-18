@@ -265,6 +265,10 @@ export class Level7Scene extends CombatScene<Level7Data> {
     const L = this.level;
 
     this.player = new FPSPlayer(L.playerSpawn, L.playerSpawnYaw, input, audio, bus);
+
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     // Far enough to see the car park and the sky round it
     this.player.camera.far = 600;
     this.player.camera.updateProjectionMatrix();
@@ -1059,7 +1063,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
         new THREE.Vector3((Math.random() - 0.5) * 0.2, -0.2 - Math.random() * 0.4, (Math.random() - 0.5) * 0.2)
       );
       this.particles.tracer(muzzle, target, 0xffe0b0);
-      player.hit(enemy.name);
+      player.hit(enemy.name, muzzle);
       return;
     }
     if (cover) {

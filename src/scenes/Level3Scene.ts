@@ -122,6 +122,10 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
+
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     this.scene.add(this.player.camera);
     this.player.onVaultGlass = (c) => this.vaultGlass(c);
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)

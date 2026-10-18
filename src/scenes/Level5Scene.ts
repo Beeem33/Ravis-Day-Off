@@ -225,6 +225,10 @@ export class Level5Scene extends CombatScene<Level5Data> {
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
+
+    // Dead: he goes over as a ragdoll and the gun in his hands drops
+
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
     this.scene.add(this.player.camera);
 
     this.emote = new EmoteViewmodel(this.player.camera);

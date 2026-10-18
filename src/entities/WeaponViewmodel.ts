@@ -51,6 +51,7 @@ export class WeaponViewmodel {
   private muzzle = new THREE.Object3D();
   private flashSprite: THREE.Sprite;
   private flashLight: THREE.PointLight;
+  private flashCam: THREE.Camera;
 
   private swayX = 0;
   private swayY = 0;
@@ -329,7 +330,10 @@ export class WeaponViewmodel {
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 4.5, 2.0);
     // Stays in the scene for good: switching a light off changes the
     // scene's visible light count, which recompiles every material in it.
-    this.muzzle.add(this.flashLight);
+    // On the camera, not the gun, so stowing the gun (which hides it) does
+    // not take the light with it; it is moved to the muzzle while it flashes.
+    camera.add(this.flashLight);
+    this.flashCam = camera;
 
     new GLTFLoader().load(`${import.meta.env.BASE_URL}models/glock.glb`, (gltf) => {
       const scene = gltf.scene;
@@ -392,6 +396,8 @@ export class WeaponViewmodel {
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
     this.flashLight.intensity = 3.5;
+    this.root.updateMatrixWorld(true);
+    this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
   }
 
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
@@ -470,6 +476,8 @@ export class WeaponViewmodel {
 
     // ---- Muzzle flash decay
     if (this.flashTimer > 0) {
+      this.root.updateMatrixWorld(true);
+      this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
       this.flashTimer -= dt;
       this.flashLight.intensity *= 0.6;
       if (this.flashTimer <= 0) {

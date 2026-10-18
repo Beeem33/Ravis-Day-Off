@@ -9,7 +9,7 @@ import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
-import { RifleViewmodel } from '../entities/RifleViewmodel';
+import { Arsenal, loadoutFor, type Gun } from '../entities/Arsenal';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { DropKickViewmodel } from '../entities/DropKickViewmodel';
@@ -23,8 +23,6 @@ import { dataDrive, swatTruck } from '../environment/OfficeProps';
 import type { CarRig, CivicRig, GeneralEvent, GeneralWorld, Level8Data } from './Level8Contracts';
 import { track, clamp01, smooth, yawPitchTo, wrapAngle, alongPath, pathLength } from './cutscene';
 
-const RIFLE_COOLDOWN = 0.1;
-const RIFLE_MAG = 30;
 /** The cannon world's gravity (CombatScene.createPhysicsWorld): the thrown cars fly under it. */
 const GRAVITY = 19;
 
@@ -34,6 +32,13 @@ const GRAVITY = 19;
  */
 const AK_DAMAGE: Record<string, number> = { head: 55, torso: 22, arm: 14, leg: 14 };
 /**
+ * The other two against him, as a share of an AK round: the pistol's single
+ * heavier round hits a little harder but comes slower and ten to a mag; a
+ * shotgun pellet is a fraction of one, eight to a shell, and only up close.
+ * The AK stays the tool for this fight.
+ */
+const GUN_DAMAGE: Record<Gun, number> = { rifle: 1, pistol: 1.2, shotgun: 0.4 };
+/**
  * Rounds lose their bite with range — full within 14 m, half at 27, a tenth
  * past 38 — which is the whole shape of the fight: he can only be hurt by
  * someone who has crossed the lot to him under the cars, and hurt properly
@@ -42,6 +47,12 @@ const AK_DAMAGE: Record<string, number> = { head: 55, torso: 22, arm: 14, leg: 1
 const rangeFactor = (d: number): number => Math.min(1, Math.max(0.1, (40 - d) / 26));
 /** Past this the rounds spark off his kit instead of drawing blood. */
 const SPARK_RANGE = 26;
+/**
+ * Buckshot falls off far faster: full within 5 m, half at about 9, next to
+ * nothing past 13 — where it sparks off him like the rest do from afar.
+ */
+const pelletFactor = (d: number): number => Math.min(1, Math.max(0.04, (13.5 - d) / 8.5));
+const PELLET_SPARK_RANGE = 13;
 
 /** A glancing blow from a car: this many hit points, and a shove this far. */
 const GLANCE_DAMAGE = 2;
@@ -78,7 +89,8 @@ type Phase = 'opening' | 'reveal' | 'fight' | 'won' | 'outro';
  * the corner. It does not start the first time.
  */
 export class Level8Scene extends CombatScene<Level8Data> {
-  private rifle!: RifleViewmodel;
+  /** Pistol, shotgun and AK: everything he has picked up on the way here. */
+  private arsenal!: Arsenal;
   private emote!: EmoteViewmodel;
   private drink!: DrinkViewmodel;
   private dropKick!: DropKickViewmodel;
@@ -98,8 +110,6 @@ export class Level8Scene extends CombatScene<Level8Data> {
   private dead = false;
   /** Seconds since he died: the restart waits until the death screen has been up a moment. */
   private deadT = 0;
-  private rifleAmmo = RIFLE_MAG;
-  private fireCooldown = 0;
   private toldTooFar = false;
   private wonT = 0;
   private escapeT = 0;
@@ -214,19 +224,6 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
 
-    this.rifle = new RifleViewmodel(this.player.camera);
-    // Out of shot but not hidden: hiding it would take its muzzle light out
-    // of the scene's light count and recompile everything when it came back
-    this.rifle.stow = 0.99;
-    this.rifle.onReloadEvent = (e) => {
-      if (e === 'strike') audio.magStrike();
-      else if (e === 'magOut') audio.magOut();
-      else if (e === 'magDrop') this.dropRifleMagazine();
-      else if (e === 'magIn') audio.magIn();
-      else if (e === 'rackBack') audio.boltBack();
-      else if (e === 'rack') audio.boltForward();
-      else if (e === 'done') this.rifleAmmo = RIFLE_MAG;
-    };
     this.emote = new EmoteViewmodel(this.player.camera);
     this.drink = new DrinkViewmodel(this.player.camera);
     this.drink.onEvent = (e, i) => {
@@ -256,6 +253,31 @@ export class Level8Scene extends CombatScene<Level8Data> {
     Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
 
+    // All three guns, the AK in hand. Out of shot but not hidden: hiding it
+    // would take its muzzle light out of the scene's light count and
+    // recompile everything when it came back
+    this.arsenal = new Arsenal(
+      {
+        player: this.player,
+        audio,
+        bus,
+        world: this.world,
+        particles: this.particles,
+        castBullet: (o, d) => {
+          // He moves every frame: his hitboxes have to be where he is now
+          this.general.enemy.root.updateMatrixWorld(true);
+          return this.castBullet(o, d, null);
+        },
+        addDebris: (m, b) => this.addDebris(m, b),
+        dropMagazine: (p) => this.dropMagazine(p)
+      },
+      loadoutFor('level8'),
+      'rifle'
+    );
+    this.arsenal.equip('rifle', 0.99);
+    // The AK came up slowly in this fight before there were three; keep its pace
+    this.arsenal.drawRate = 3;
+
     // Every car on the lot
     this.cars = new CarSystem({
       scene: this.scene,
@@ -281,7 +303,7 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.buildDriver();
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 1, this.player.maxHealth);
-    this.hud.setAmmo(this.rifleAmmo, RIFLE_MAG, false);
+    this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.dialogue = new DialogueBox(this.ctx.uiRoot, audio);
     this.buildUI();
 
@@ -875,7 +897,7 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.skipEl.classList.add('gone');
     this.titleEl.style.opacity = '0';
     this.hud.show();
-    this.hud.setAmmo(this.rifleAmmo, RIFLE_MAG, false);
+    this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.general.mode = 'fight';
     this.general.paused = false;
     this.level.gate.collider.disabled = false;
@@ -989,9 +1011,11 @@ export class Level8Scene extends CombatScene<Level8Data> {
     if (shooter !== null || g.dead || g.hp <= 0) return true;
     const { audio, bus } = this.ctx;
     const d = this.player.eyePosition(Level8Scene.tmpA).distanceTo(point);
-    const dmg = (AK_DAMAGE[part] ?? AK_DAMAGE.torso) * rangeFactor(d);
+    const gun = this.arsenal.firing;
+    const falloff = gun === 'shotgun' ? Math.min(rangeFactor(d), pelletFactor(d)) : rangeFactor(d);
+    const dmg = (AK_DAMAGE[part] ?? AK_DAMAGE.torso) * GUN_DAMAGE[gun] * falloff;
     g.damage(dmg, part, point);
-    if (d > SPARK_RANGE) {
+    if (d > (gun === 'shotgun' ? PELLET_SPARK_RANGE : SPARK_RANGE)) {
       this.particles.sparks(point, Level8Scene.tmpB.copy(dir).negate(), 6);
       audio.armourHit(d);
       if (!this.toldTooFar && this.phase === 'fight') {
@@ -1248,11 +1272,11 @@ export class Level8Scene extends CombatScene<Level8Data> {
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
     // ---- Deadbull (G) and the drop kick (Q)
-    if (input.wasPressed('KeyG') && playable && input.pointerLocked && !this.rifle.reloading && !this.dropKick.engaged) {
+    if (input.wasPressed('KeyG') && playable && input.pointerLocked && !this.arsenal.reloading && !this.dropKick.engaged) {
       this.drink.start();
     }
     if (!this.player.alive) this.drink.abort();
-    if (input.wasPressed('KeyQ') && playable && input.pointerLocked && !this.rifle.reloading && !this.drink.engaged && this.player.grounded) {
+    if (input.wasPressed('KeyQ') && playable && input.pointerLocked && !this.arsenal.reloading && !this.drink.engaged && this.player.grounded) {
       if (this.dropKick.start()) {
         this.emote.cancel();
         this.player.cinematic = true;
@@ -1269,7 +1293,17 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.dropKick.update(dt);
     const busy = this.drink.engaged || this.dropKick.engaged;
 
-    const aiming = !busy && input.rightHeld && input.pointerLocked && playable && !this.rifle.reloading;
+    // ---- The guns: 1/2/3 and the stow. In a cutscene the one in hand sits
+    // just out of shot (0.99, never hidden) and the other two are away
+    const hideGun = this.cutscene;
+    if (hideGun) {
+      const held = this.arsenal.held;
+      for (const v of this.arsenal.all) if (v !== held) v.stow = 1;
+      held.stow = Math.min(0.99, held.stow + dt * 6);
+    }
+    this.arsenal.preUpdate(dt, input, { canSwitch: playable && input.pointerLocked, busy, hold: hideGun });
+
+    const aiming = !busy && input.rightHeld && input.pointerLocked && playable && !this.arsenal.reloading;
     this.player.aiming = aiming;
 
     // ---- Where the camera is, before the player's update writes it
@@ -1291,24 +1325,21 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.applyShake(dt);
 
     // ---- The gun
-    const hideGun = this.cutscene;
-    if (hideGun) this.rifle.stow = Math.min(0.99, this.rifle.stow + dt * 6);
-    else if (busy) this.rifle.stow = Math.min(1, this.rifle.stow + dt * 6);
-    else this.rifle.stow = Math.max(0, this.rifle.stow - dt * 3);
-    if (input.wasPressed('KeyT') && playable && input.pointerLocked && !this.rifle.reloading) this.emote.toggle();
-    if (this.rifle.reloading || !this.player.alive || this.cutscene) this.emote.cancel();
-    this.rifle.hideSupportHand = this.emote.engaged;
-    this.rifle.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
+    if (input.wasPressed('KeyT') && playable && input.pointerLocked && !this.arsenal.reloading) this.emote.toggle();
+    if (this.arsenal.reloading || !this.player.alive || this.cutscene) this.emote.cancel();
+    this.arsenal.hideSupportHand = this.emote.engaged;
+    this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = this.cutscene ? this.camFov : 74 - 20 * this.rifle.aimBlend;
+    const targetFov = this.cutscene ? this.camFov : 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
     }
-    this.hud.setAiming(this.rifle.aimBlend > 0.5);
-    if (playable) this.updateShooting(dt, busy);
-    else input.consumeClick();
+    this.hud.setAiming(this.arsenal.aimBlend > 0.5);
+    if (playable) {
+      this.arsenal.updateFire(dt, input, input.pointerLocked && !busy, (r, m, reloading) => this.hud.setAmmo(r, m, reloading));
+    } else input.consumeClick();
 
     this.hud.setHealth(this.player.health, this.player.regenProgress);
     this.dialogue.update(dt);
@@ -1350,93 +1381,9 @@ export class Level8Scene extends CombatScene<Level8Data> {
     cam.updateMatrixWorld();
   }
 
-  // ------------------------------------------------------------- his rifle
-
-  private updateShooting(dt: number, busy: boolean): void {
-    const { input, audio } = this.ctx;
-    this.fireCooldown -= dt;
-    const switching = this.rifle.stow > 0.1;
-    const canFire =
-      this.playable && this.fireCooldown <= 0 && input.pointerLocked &&
-      !this.player.sprinting && !this.rifle.reloading && !switching && !busy;
-    const clicked = input.consumeClick();
-    if (input.mouseHeld && canFire) {
-      if (this.rifleAmmo > 0) {
-        this.fireCooldown = RIFLE_COOLDOWN;
-        this.rifleAmmo--;
-        this.playerShootRifle();
-      } else if (clicked) {
-        audio.dryFire();
-        this.startRifleReload();
-      }
-    }
-    if (input.wasPressed('KeyR') && this.playable && !this.player.sprinting && !switching && !busy && this.rifleAmmo < RIFLE_MAG) {
-      this.startRifleReload();
-    }
-    this.hud.setAmmo(this.rifleAmmo, RIFLE_MAG, this.rifle.reloading);
-  }
-
-  private startRifleReload(): void {
-    if (this.rifle.startReload()) this.player.aiming = false;
-  }
-
-  private playerShootRifle(): void {
-    const { audio, bus } = this.ctx;
-    audio.rifleShot();
-    this.rifle.fire();
-    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 36, kind: 'gunshot' });
-    const speedFactor = this.player.currentSpeed / 6.6;
-    let spread = 0.012 + speedFactor * 0.03 + (this.player.crouching ? -0.003 : 0);
-    spread *= 1 - 0.7 * this.rifle.aimBlend;
-    this.player.pitch += 0.006 + Math.random() * 0.004;
-    this.player.yaw += (Math.random() - 0.5) * 0.006;
-    const eye = this.player.eyePosition();
-    const dir = new THREE.Vector3();
-    this.player.camera.getWorldDirection(dir);
-    dir.x += (Math.random() - 0.5) * spread * 2;
-    dir.y += (Math.random() - 0.5) * spread * 2;
-    dir.z += (Math.random() - 0.5) * spread * 2;
-    dir.normalize();
-    // He moves every frame: his hitboxes have to be where he is now
-    this.general.enemy.root.updateMatrixWorld(true);
-    const end = this.castBullet(eye, dir, null);
-    this.particles.tracer(this.rifle.muzzleWorld(), end);
-  }
-
-  private magMat: CANNON.Material | null = null;
-  private magMaterial(): CANNON.Material {
-    if (!this.magMat) {
-      this.magMat = new CANNON.Material('rifleMag');
-      this.world.addContactMaterial(
-        new CANNON.ContactMaterial(this.magMat, this.world.defaultMaterial, { restitution: 0.45, friction: 0.22 })
-      );
-    }
-    return this.magMat;
-  }
-
-  private dropRifleMagazine(): void {
-    const mesh = this.rifle.makeDroppedMag();
-    if (!mesh) return;
-    const { position, quaternion, velocity, angularVelocity } = this.rifle.ejectedMagPose();
-    mesh.position.copy(position);
-    mesh.quaternion.copy(quaternion);
-    const body = new CANNON.Body({
-      mass: 0.4,
-      shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.075, 0.014)),
-      position: new CANNON.Vec3(position.x, position.y, position.z),
-      linearDamping: 0.02,
-      angularDamping: 0.12,
-      material: this.magMaterial()
-    });
-    body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
-    body.velocity.set(velocity.x, velocity.y, velocity.z);
-    body.angularVelocity.set(angularVelocity.x, angularVelocity.y, angularVelocity.z);
-    this.addDebris(mesh, body);
-  }
-
   // ---------------------------------------------------------------- input
 
-  /** A click is the rifle's — except once he is dead, when it is the restart (after a beat, so the trigger finger doesn't do it). */
+  /** A click is the gun's — except once he is dead, when it is the restart (after a beat, so the trigger finger doesn't do it). */
   private onClick(): void {
     if (this.dead && this.deadT > 1.0) this.ctx.bus.emit(Events.RestartLevel8);
   }

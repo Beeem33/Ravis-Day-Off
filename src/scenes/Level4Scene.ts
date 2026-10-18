@@ -8,9 +8,8 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { GunBeamPool } from '../fx/GunBeam';
 import { FPSPlayer } from '../entities/FPSPlayer';
-import { WeaponViewmodel } from '../entities/WeaponViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
-import { ShotgunViewmodel } from '../entities/ShotgunViewmodel';
+import { Arsenal, loadoutFor, TUBE_SIZE } from '../entities/Arsenal';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
@@ -18,9 +17,6 @@ import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
 
-const FIRE_COOLDOWN = 0.17;
-const MAG_SIZE = 10;
-const TUBE_SIZE = 6;
 /**
  * Torch strength when on. Physical units: at the old 2.1 the beam reaching a
  * floor six metres off in a big room delivered next to nothing, which Level
@@ -32,17 +28,18 @@ const TORCH_ON = 16;
  * Level4Scene — the dark floor.
  *
  * Opens on the approach corridor, where a man Ravi knows is sat against the
- * wall with a hole in him, entirely unbothered by it. He hands over the
- * shotgun, tells Ravi to find the boss, and then gets up and walks off as
+ * wall with a hole in him, entirely unbothered by it. He hands over his
+ * shotgun (Ravi has carried one since the office; this one comes with a full
+ * tube and goes straight into his hands), tells Ravi to find the boss, and then gets up and walks off as
  * though nothing has happened. The power goes as he leaves.
  *
  * Layout pass: no enemies and no props in the maze yet.
  */
 export class Level4Scene extends CombatScene<Level4Data> {
-  private weapon!: WeaponViewmodel;
+  /** Pistol and shotgun, both carried from the start: 1 and 2. */
+  private arsenal!: Arsenal;
   /** Middle-finger emote on T; the left hand goes back to work on reload. */
   private emote!: EmoteViewmodel;
-  private shotgun!: ShotgunViewmodel;
   /** Deadbull on G: three seconds with no gun, and he's back on full health. */
   private drink!: DrinkViewmodel;
   /** Drop kick on Q. */
@@ -60,13 +57,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
   private wounded!: Enemy;
   private propGun!: THREE.Group;
   private phase: 'walk' | 'talk' | 'leaving' | 'play' | 'dead' = 'walk';
-  /** He only has the pistol until the hand-over. */
-  private hasShotgun = false;
-  private active: 'pistol' | 'shotgun' = 'pistol';
-  private wanted: 'pistol' | 'shotgun' = 'pistol';
-  private ammo = MAG_SIZE;
-  private shells = TUBE_SIZE;
-  private fireCooldown = 0;
   private blackout = false;
   /** Full brightness of every fixture, kept so the flicker can put them back. */
   private lightBase: number[] = [];
@@ -129,28 +119,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.player.damagePerHit = this.player.maxHealth;
     this.scene.add(this.player.camera);
 
-    this.weapon = new WeaponViewmodel(this.player.camera);
-    this.weapon.onReloadEvent = (e) => {
-      if (e === 'magOut') audio.magOut();
-      else if (e === 'magDrop') this.dropMagazine(this.weapon.ejectedMagPose());
-      else if (e === 'magIn') audio.magIn();
-      else if (e === 'rack') audio.slideRack();
-      else if (e === 'done') this.ammo = MAG_SIZE;
-    };
-    this.shotgun = new ShotgunViewmodel(this.player.camera);
-    this.shotgun.onPumpEvent = (e) => {
-      if (e === 'back') audio.pumpBack();
-      else if (e === 'forward') audio.pumpForward();
-    };
-    this.shotgun.onReloadEvent = (e) => {
-      if (e === 'shellIn') {
-        audio.shellIn();
-        this.shells = Math.min(TUBE_SIZE, this.shells + 1);
-      }
-    };
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)
     this.emote = new EmoteViewmodel(this.player.camera);
-    this.shotgun.stow = 1; // stowed, and not even carried yet
     // Deadbull (G) and the drop kick (Q)
     this.drink = new DrinkViewmodel(this.player.camera);
     this.drink.onEvent = (e, i) => {
@@ -206,6 +176,26 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.decals = new BloodDecalSystem(this.scene, { lit: true });
     this.flashPool = new MuzzleFlashPool(this.scene);
     Enemy.flashPool = this.flashPool;
+
+    // Both guns he has carried since the office. Pistol in hand on the walk
+    // in; the shotgun on 2 until Sanjay's comes up in its place.
+    this.arsenal = new Arsenal(
+      {
+        player: this.player,
+        audio,
+        bus,
+        world: this.world,
+        particles: this.particles,
+        castBullet: (o, d) => this.castBullet(o, d, null),
+        addDebris: (m, b) => this.addDebris(m, b),
+        dropMagazine: (p) => this.dropMagazine(p)
+      },
+      loadoutFor('level4'),
+      'pistol'
+    );
+    // This floor has always swapped a touch quicker than the office
+    this.arsenal.stowRate = 6;
+    this.arsenal.drawRate = 6;
 
     // ---- The man on the floor
     this.wounded = new Enemy(this.level.woundedSpot, this.level.woundedYaw, 6, {
@@ -334,13 +324,10 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.propGun.visible = false;
     this.leaveWalk = -1;
 
-    // The shotgun is his now
-    this.hasShotgun = true;
-    this.wanted = 'shotgun';
-    this.active = 'shotgun';
-    this.weapon.stow = 1;
-    this.shotgun.stow = 0;
-    this.hud.setAmmo(this.shells, TUBE_SIZE, false);
+    // Sanjay's shotgun is the one in his hands now
+    this.arsenal.equip('shotgun');
+    this.arsenal.shells = TUBE_SIZE;
+    this.hud.setAmmo(...this.arsenal.ammoReadout());
 
     // The board already dropped: skip the flicker beat straight to the dark
     this.flickerStep = Level4Scene.FLICKER.length;
@@ -459,16 +446,17 @@ export class Level4Scene extends CombatScene<Level4Data> {
     );
   }
 
-  /** He passes it up, and it comes straight into Ravi's hands. */
+  /**
+   * He passes it up, and it comes straight into Ravi's hands. Ravi already
+   * carries a shotgun, so this is a fresh, full one in place of his own
+   * rather than a new slot.
+   */
   private handOverShotgun(): void {
-    this.hasShotgun = true;
     this.propGun.visible = false; // it is in Ravi's hands now
-    this.wanted = 'shotgun';
-    this.active = 'shotgun';
-    this.weapon.stow = 1;
-    this.shotgun.stow = 0;
+    this.arsenal.equip('shotgun');
+    this.arsenal.shells = TUBE_SIZE;
     this.ctx.audio.slideRack();
-    this.hud.setAmmo(this.shells, TUBE_SIZE, false);
+    this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.dialogue.play(
       [{ speaker: 'SANJAY', text: 'I probably should be on my way now. Need to wash this ketchup stain off.', pitch: 0.88 }],
       () => this.startLeaving()
@@ -663,7 +651,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
-    const held = this.active === 'pistol' ? this.weapon : this.shotgun;
     // Anything where the scene, and not Ravi, is driving: the hand-over, the
     // dialogue, the walk out through the back door, or being dead. Neither
     // move starts in one of those, and one already running ends.
@@ -677,7 +664,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.player.alive &&
       input.pointerLocked &&
       !scripted &&
-      !held.reloading &&
+      !this.arsenal.reloading &&
       !this.dropKick.engaged
     ) {
       // The finger stays up if it was up: that is the left hand and this is
@@ -694,7 +681,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       this.player.alive &&
       input.pointerLocked &&
       !scripted &&
-      !held.reloading &&
+      !this.arsenal.reloading &&
       !this.drink.engaged &&
       this.player.grounded
     ) {
@@ -712,7 +699,18 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // Both hands are busy — or holding a drink — so nothing else can happen
     const busy = this.drink.engaged || this.dropKick.engaged;
 
-    const aiming = playable && input.rightHeld && input.pointerLocked && this.player.alive && !held.reloading && !busy;
+    // ---- Weapon slots, 1 and 2. Whatever was held drops out of frame while
+    // both hands are on a can or he is on his back on the floor.
+    this.arsenal.preUpdate(dt, input, { canSwitch: playable && !this.dialogue.isActive, busy });
+
+    const aiming =
+      playable &&
+      input.rightHeld &&
+      input.pointerLocked &&
+      this.player.alive &&
+      !this.arsenal.reloading &&
+      !this.arsenal.switching &&
+      !busy;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     // Layered on after player.update so the leap and the landing ride on top
@@ -728,24 +726,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.updateMazeDoor(dt);
     this.updateExit(dt);
 
-    // ---- Weapon slots. The shotgun is not carried until it is handed over.
-    if (playable && this.hasShotgun && !this.dialogue.isActive && !busy) {
-      if (input.wasPressed('Digit1')) this.wanted = 'pistol';
-      if (input.wasPressed('Digit2')) this.wanted = 'shotgun';
-    }
-    if (busy) {
-      // Both hands are on a can, or he is on his back on the floor — either
-      // way whatever was held drops out of frame
-      this.weapon.stow = Math.min(1, this.weapon.stow + dt * 6);
-      this.shotgun.stow = Math.min(1, this.shotgun.stow + dt * 6);
-    } else if (this.wanted !== this.active) {
-      const cur = this.active === 'pistol' ? this.weapon : this.shotgun;
-      cur.stow = Math.min(1, cur.stow + dt * 6);
-      if (cur.stow >= 1) this.active = this.wanted;
-    } else {
-      held.stow = Math.max(0, held.stow - dt * 6);
-    }
-
     // ---- Middle-finger emote: T raises it and it stays up; T again, a
     // reload, or dying puts the hand back on the gun
     if (
@@ -753,47 +733,28 @@ export class Level4Scene extends CombatScene<Level4Data> {
       input.wasPressed('KeyT') &&
       this.player.alive &&
       input.pointerLocked &&
-      !held.reloading &&
+      !this.arsenal.reloading &&
       !this.dialogue.isActive
     ) {
       this.emote.toggle();
     }
-    if (held.reloading || !this.player.alive) this.emote.cancel();
-    this.weapon.hideSupportHand = this.emote.engaged;
-    this.shotgun.hideSupportHand = this.emote.engaged;
+    if (this.arsenal.reloading || !this.player.alive) this.emote.cancel();
+    this.arsenal.hideSupportHand = this.emote.engaged;
 
-    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'pistol');
-    this.shotgun.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming && this.active === 'shotgun');
+    this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - 22 * this.weapon.aimBlend - 12 * this.shotgun.aimBlend;
+    const targetFov = 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
     }
-    this.hud.setAiming(Math.max(this.weapon.aimBlend, this.shotgun.aimBlend) > 0.5);
+    this.hud.setAiming(this.arsenal.aimBlend > 0.5);
 
-    // ---- Firing. Nothing to shoot at yet, but the ballistics run so the
-    // walls take hits and the pass can be checked with a gun in hand.
-    this.fireCooldown -= dt;
-    const clicked = input.consumeClick();
-    if (clicked && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {
-      // Interrupt the shell loop to get back in the fight
-      this.shotgun.cancelReload();
-    } else if (
-      this.phase === 'play' && this.player.alive && input.pointerLocked &&
-      clicked && this.fireCooldown <= 0 && !held.reloading && !busy
-    ) {
-      if (this.active === 'pistol' && this.ammo > 0) {
-        this.ammo--;
-        this.fireCooldown = FIRE_COOLDOWN;
-        this.playerShoot();
-      } else if (this.active === 'shotgun' && this.shells > 0 && !this.shotgun.pumping) {
-        this.shells--;
-        this.fireCooldown = 0.35;
-        this.playerShootShotgun();
-      }
-    }
+    // ---- Firing and R. Only once the floor is his: not on the walk in, not
+    // mid-move. The arsenal adds the rest (cooldown, pump, reload, mid-swap).
+    const canFire = this.phase === 'play' && this.player.alive && input.pointerLocked && !busy;
+    this.arsenal.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
     if (input.wasPressed('KeyF') && this.player.alive) {
       this.torchOn = !this.torchOn;
       this.torch.intensity = this.torchOn ? TORCH_ON : 0;
@@ -801,16 +762,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
       const h = this.ui.querySelector<HTMLElement>('.torch-hint');
       if (h) h.classList.toggle('on', this.torchOn);
     }
-
-    if (input.wasPressed('KeyR') && this.player.alive && !busy) {
-      if (this.active === 'pistol' && this.ammo < MAG_SIZE) {
-        if (this.weapon.startReload()) this.player.aiming = false;
-      } else if (this.active === 'shotgun' && this.shells < TUBE_SIZE && !this.shotgun.pumping) {
-        if (this.shotgun.startReload(TUBE_SIZE - this.shells)) this.player.aiming = false;
-      }
-    }
-    if (this.active === 'pistol') this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
-    else this.hud.setAmmo(this.shells, TUBE_SIZE, this.shotgun.reloading);
 
     // His body stays anchored against the wall and only his head follows
     // Ravi — until he starts getting up, at which point he looks where he is
@@ -871,39 +822,6 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // Clears the one-shot key edges. Without this, wasPressed('Space') stays
     // true after the first press and the player jumps every frame forever.
     input.endFrame();
-  }
-
-  private playerShoot(): void {
-    const { audio, bus } = this.ctx;
-    audio.playerGunshot();
-    this.weapon.fire();
-    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 30, kind: 'gunshot' });
-    const eye = this.player.eyePosition();
-    const dir = new THREE.Vector3();
-    this.player.camera.getWorldDirection(dir);
-    const end = this.castBullet(eye, dir, null);
-    this.particles.tracer(this.weapon.muzzleWorld(), end);
-  }
-
-  private playerShootShotgun(): void {
-    const { audio, bus } = this.ctx;
-    audio.shotgunBlast();
-    this.shotgun.fire();
-    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 36, kind: 'gunshot' });
-    const eye = this.player.eyePosition();
-    const base = new THREE.Vector3();
-    this.player.camera.getWorldDirection(base);
-    const muzzle = this.shotgun.muzzleWorld();
-    this.particles.barrelSmoke(muzzle, base);
-    for (let i = 0; i < 9; i++) {
-      const dir = base.clone();
-      dir.x += (Math.random() - 0.5) * 0.09;
-      dir.y += (Math.random() - 0.5) * 0.09;
-      dir.z += (Math.random() - 0.5) * 0.09;
-      dir.normalize();
-      const end = this.castBullet(eye, dir, null);
-      if (i % 3 === 0) this.particles.tracer(muzzle, end);
-    }
   }
 
   /**

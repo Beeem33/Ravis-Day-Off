@@ -8,7 +8,7 @@ import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
-import { WeaponViewmodel } from '../entities/WeaponViewmodel';
+import { Arsenal, loadoutFor } from '../entities/Arsenal';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { DropKickViewmodel } from '../entities/DropKickViewmodel';
@@ -17,9 +17,6 @@ import { EnemyAI } from '../entities/EnemyAI';
 import { CivilianAI } from '../entities/CivilianAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
-
-const FIRE_COOLDOWN = 0.17;
-const MAG_SIZE = 10;
 
 /** How close to the office door the player has to get to start the scene. */
 const TRIGGER_X = -15.2;
@@ -47,7 +44,8 @@ const STAFF_FLOOR = 4;
  * the player sees the team arrive rather than being dropped into it.
  */
 export class Level3Scene extends CombatScene<Level3Data> {
-  private weapon!: WeaponViewmodel;
+  /** Pistol and the shotgun he brought from the office (1 / 2). */
+  private arsenal!: Arsenal;
   /** Middle-finger emote on T; the left hand goes back to work on reload. */
   private emote!: EmoteViewmodel;
   /** Deadbull on G: three seconds with no gun, and he's back on full health. */
@@ -69,8 +67,6 @@ export class Level3Scene extends CombatScene<Level3Data> {
   private phase: 'walk' | 'talk' | 'crash' | 'play' | 'dead' = 'walk';
   private t = 0; // seconds since the crash sequence began
   private beats = new Set<string>();
-  private fireCooldown = 0;
-  private ammo = MAG_SIZE;
   private remaining = 0;
   private over = false;
   private gunnerBurst = 0;
@@ -128,16 +124,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);
     this.scene.add(this.player.camera);
     this.player.onVaultGlass = (c) => this.vaultGlass(c);
-    this.weapon = new WeaponViewmodel(this.player.camera);
     // Middle-finger emote (T toggles it; reloading puts the hand back to work)
     this.emote = new EmoteViewmodel(this.player.camera);
-    this.weapon.onReloadEvent = (e) => {
-      if (e === 'magOut') audio.magOut();
-      else if (e === 'magDrop') this.dropMagazine(this.weapon.ejectedMagPose());
-      else if (e === 'magIn') audio.magIn();
-      else if (e === 'rack') audio.slideRack();
-      else if (e === 'done') this.ammo = MAG_SIZE;
-    };
     // Deadbull (G) and the drop kick (Q)
     this.drink = new DrinkViewmodel(this.player.camera);
     this.drink.onEvent = (e, i) => {
@@ -175,6 +163,23 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.flashPool = new MuzzleFlashPool(this.scene);
     Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
+
+    // He walks in with the pistol out; the shotgun from the office is on 2.
+    // Built after the particles, which the arsenal holds on to.
+    this.arsenal = new Arsenal(
+      {
+        player: this.player,
+        audio,
+        bus,
+        world: this.world,
+        particles: this.particles,
+        castBullet: (o, d) => this.castBullet(o, d, null),
+        addDebris: (m, b) => this.addDebris(m, b),
+        dropMagazine: (p) => this.dropMagazine(p)
+      },
+      loadoutFor('level3'),
+      'pistol'
+    );
 
     // ---- Staff, going about their day. None of them know yet.
     this.level.deskWorkers.forEach((s, i) => {
@@ -852,11 +857,11 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
     // ---- Middle-finger emote: T raises it and it stays up; T again, a
     // reload, or dying puts the hand back on the gun
-    if (playable && input.wasPressed('KeyT') && this.player.alive && input.pointerLocked && !this.weapon.reloading) {
+    if (playable && input.wasPressed('KeyT') && this.player.alive && input.pointerLocked && !this.arsenal.reloading) {
       this.emote.toggle();
     }
-    if (this.weapon.reloading || !this.player.alive) this.emote.cancel();
-    this.weapon.hideSupportHand = this.emote.engaged;
+    if (this.arsenal.reloading || !this.player.alive) this.emote.cancel();
+    this.arsenal.hideSupportHand = this.emote.engaged;
 
     // Both moves are for the fight only: the walk up the corridor and the
     // whole crash sequence are scripted, and the scene owns the camera and
@@ -868,7 +873,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // out of frame.
     if (
       input.wasPressed('KeyG') && fighting && this.player.alive && input.pointerLocked &&
-      !this.weapon.reloading && !this.dropKick.engaged
+      !this.arsenal.reloading && !this.dropKick.engaged
     ) {
       // The finger stays up if it was up: that is the left hand and this is
       // the right, and with the gun stowed there is nothing for it to do.
@@ -881,7 +886,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // reads as a broken button.
     if (
       input.wasPressed('KeyQ') && fighting && this.player.alive && input.pointerLocked &&
-      !this.weapon.reloading && !this.drink.engaged && this.player.grounded
+      !this.arsenal.reloading && !this.drink.engaged && this.player.grounded
     ) {
       if (this.dropKick.start()) {
         this.emote.cancel();
@@ -901,26 +906,31 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.dropKick.update(dt);
     // Both hands are busy — or holding a drink — so nothing else can happen
     const busy = this.drink.engaged || this.dropKick.engaged;
-    // Nothing else in this level stows the gun, so the move owns it outright:
-    // down out of frame while it runs, straight back up when it ends.
-    this.weapon.stow = busy ? Math.min(1, this.weapon.stow + dt * 6) : Math.max(0, this.weapon.stow - dt * 5);
+    // The cutscenes leave the gun in his hand, so the only things that stow it
+    // are a move (down out of frame while it runs, straight back up after) and
+    // 1 / 2 swapping between the pistol and the shotgun.
+    this.arsenal.preUpdate(dt, input, {
+      canSwitch: playable && this.player.alive && input.pointerLocked,
+      busy
+    });
 
     const aiming =
-      playable && input.rightHeld && input.pointerLocked && this.player.alive && !this.weapon.reloading && !busy;
+      playable && input.rightHeld && input.pointerLocked && this.player.alive &&
+      !this.arsenal.reloading && !this.arsenal.switching && !busy;
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
-    this.weapon.update(dt, this.player, this.player.lastMouseDX, this.player.lastMouseDY, aiming);
+    this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - 22 * this.weapon.aimBlend;
+    const targetFov = 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
     }
-    this.hud.setAiming(this.weapon.aimBlend > 0.5);
+    this.hud.setAiming(this.arsenal.aimBlend > 0.5);
 
     // Walking the corridor: crossing the threshold starts the scene
     if (this.phase === 'walk' && this.player.position.x > TRIGGER_X) this.beginScene();
@@ -946,27 +956,10 @@ export class Level3Scene extends CombatScene<Level3Data> {
       this.player.camera.position.y += (Math.random() - 0.5) * s;
     }
 
-    // Shooting
-    this.fireCooldown -= dt;
-    const canFire =
-      this.phase === 'play' && this.player.alive && this.fireCooldown <= 0 && input.pointerLocked &&
-      !this.player.sprinting && !this.weapon.reloading && !busy;
-    if (input.consumeClick() && canFire) {
-      if (this.ammo > 0) {
-        this.fireCooldown = FIRE_COOLDOWN;
-        this.ammo--;
-        this.playerShoot();
-      } else {
-        this.ctx.audio.dryFire();
-        this.weapon.startReload();
-      }
-    } else if (!playable) {
-      input.consumeClick(); // don't let a queued click fire on handover
-    }
-    if (input.wasPressed('KeyR') && this.player.alive && this.ammo < MAG_SIZE && !this.player.sprinting && !busy) {
-      this.weapon.startReload();
-    }
-    this.hud.setAmmo(this.ammo, MAG_SIZE, this.weapon.reloading);
+    // Shooting. Only once the fight is on; the arsenal eats every click
+    // either way, so one queued during the cutscene can't fire on handover.
+    const canFire = this.phase === 'play' && this.player.alive && input.pointerLocked && !busy;
+    this.arsenal.updateFire(dt, input, canFire, (rounds, mag, reloading) => this.hud.setAmmo(rounds, mag, reloading));
 
     // Anyone pleading keeps facing the raid — begging at a wall reads as a
     // bug rather than a person.
@@ -1047,25 +1040,6 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // The gunner is welded to the truck roof the whole time he is alive, so
     // the agents on the carpet are the only people a boot can reach.
     return this.kickTargetFrom(this.agents);
-  }
-
-  private playerShoot(): void {
-    const { audio, bus } = this.ctx;
-    audio.playerGunshot();
-    this.weapon.fire();
-    bus.emit(Events.Sound, { position: this.player.position.clone(), radius: 30, kind: 'gunshot' });
-    const speedFactor = this.player.currentSpeed / 6.6;
-    let spread = 0.0045 + speedFactor * 0.028 + (this.player.crouching ? -0.002 : 0);
-    spread *= 1 - 0.8 * this.weapon.aimBlend;
-    const eye = this.player.eyePosition();
-    const dir = new THREE.Vector3();
-    this.player.camera.getWorldDirection(dir);
-    dir.x += (Math.random() - 0.5) * spread * 2;
-    dir.y += (Math.random() - 0.5) * spread * 2;
-    dir.z += (Math.random() - 0.5) * spread * 2;
-    dir.normalize();
-    const end = this.castBullet(eye, dir, null);
-    this.particles.tracer(this.weapon.muzzleWorld(), end);
   }
 
   protected killEnemy(

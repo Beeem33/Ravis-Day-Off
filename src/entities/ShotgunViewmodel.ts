@@ -42,6 +42,7 @@ export class ShotgunViewmodel {
   /** Wider, dimmer second star, spun independently of the core. */
   private flashHalo!: THREE.Sprite;
   private flashLight: THREE.PointLight;
+  private flashCam: THREE.Camera;
 
   /**
    * glb metres → gun-local metres. Picked so the modelled gun lands on the
@@ -200,7 +201,10 @@ export class ShotgunViewmodel {
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 6, 1.8);
     // Stays in the scene for good: switching a light off changes the
     // scene's visible light count, which recompiles every material in it.
-    this.muzzle.add(this.flashLight);
+    // On the camera, not the gun, so stowing the gun (which hides it) does
+    // not take the light with it; it is moved to the muzzle while it flashes.
+    camera.add(this.flashLight);
+    this.flashCam = camera;
 
     new GLTFLoader().load(`${import.meta.env.BASE_URL}models/shotgun.glb`, (gltf) => {
       const scene = gltf.scene;
@@ -309,6 +313,8 @@ export class ShotgunViewmodel {
     this.flashSprite.scale.setScalar(size);
     this.flashHalo.scale.setScalar(size * 1.55);
     this.flashLight.intensity = 9;
+    this.root.updateMatrixWorld(true);
+    this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
     this.pumpT = 0;
     this.pumpFired.clear();
   }
@@ -484,6 +490,8 @@ export class ShotgunViewmodel {
     this.arms.update();
 
     if (this.flashTimer > 0) {
+      this.root.updateMatrixWorld(true);
+      this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
       this.flashTimer -= dt;
       this.flashLight.intensity *= 0.6;
       // The halo collapses faster than the core, so the star shrinks away

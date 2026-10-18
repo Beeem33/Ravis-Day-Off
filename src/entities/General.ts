@@ -1052,7 +1052,7 @@ export class General implements IGeneral {
     // High, so it comes down steeply onto the ring rather than skating in
     // flat and short — and at range that is a long, readable flight; up
     // close a short one
-    const lobT = (x: number, z: number) => THREE.MathUtils.clamp(1.25 + Math.hypot(x - p0.x, z - p0.z) / 32, 1.4, 3.0);
+    const lobT = (x: number, z: number) => THREE.MathUtils.clamp(1.0 + Math.hypot(x - p0.x, z - p0.z) / 38, 1.15, 2.5);
     if (this.scriptedThrow) {
       // The cutscene's: exactly where it was asked to come down
       aim.copy(this.throwAt);

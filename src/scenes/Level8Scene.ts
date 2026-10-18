@@ -434,7 +434,9 @@ export class Level8Scene extends CombatScene<Level8Data> {
       hold: (id, m) => this.cars.hold(id, m),
       launch: (id, vel, spin, kind, aim) => this.cars.launch(id, vel, spin, kind, aim),
       clearLine: (a, b) => this.cars.clearLine(a, b),
-      gravity: GRAVITY
+      gravity: GRAVITY,
+      ram: (pos, dir, speed, radius) => this.cars.ram(pos, dir, speed, radius),
+      arena: L.arena
     };
     this.general = new General(this.scene, world, L.general.hidden, L.general.revealYaw);
     this.general.zone = { ...L.general.zone };
@@ -950,6 +952,42 @@ export class Level8Scene extends CombatScene<Level8Data> {
           const away = Level8Scene.tmpA.copy(me).sub(e.pos).setY(0);
           if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
           this.startShove(away.normalize(), STOMP_SHOVE);
+        }
+        break;
+      }
+      case 'enrage':
+        this.setObjective('HE\'S CHARGING — GET OUT OF HIS WAY');
+        this.addShake(0.6);
+        break;
+      case 'chargeWarn':
+        // Snorting and scraping the ground: the tell
+        audio.giantStep(dist);
+        this.particles.dust(e.pos, 2.2, 0.7);
+        break;
+      case 'charge':
+        audio.giantRoar(0.8, dist);
+        this.addShake(dist < 30 ? 0.35 : 0.15);
+        break;
+      case 'ram': {
+        const d = e.pos.distanceTo(me);
+        if (d < 40) this.addShake(0.9 * (1 - d / 40));
+        break;
+      }
+      case 'trample':
+        if (this.phase !== 'fight' || !this.player.alive) break;
+        audio.punchHit();
+        audio.stomp(0);
+        this.addShake(1.8);
+        // Run down: thrown on ahead of him
+        this.player.kill('THE GENERAL', e.from);
+        break;
+      case 'skid': {
+        const d = e.pos.distanceTo(me);
+        this.particles.dust(e.pos, 3.2, 1.5);
+        audio.carScrape(d);
+        if (e.crashed) {
+          audio.carCrash(d, true);
+          if (d < 40) this.addShake(1.1 * (1 - d / 40));
         }
         break;
       }

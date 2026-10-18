@@ -69,6 +69,21 @@ const STOMP_RADIUS = 11;
 const STOMP_COOLDOWN = 4;
 /** A stagger every time this much of him has gone since the last one. */
 const STAGGER_EVERY = 0.18;
+/** At this much of him left he stops throwing and starts charging. */
+const RAGE_AT = 0.15;
+/** Flat out, m/s (Ravi sprints at 6.6), and how quickly he gets there. */
+const CHARGE_SPEED = 15;
+const CHARGE_ACCEL = 24;
+/** Head down and pawing the ground before each run: the tell. */
+const PAW_TIME = 1.0;
+/** He steers at Ravi for this long after setting off, then he is committed. */
+const CHARGE_STEER = 0.3;
+/** How far past where Ravi was he carries on. */
+const OVERSHOOT = 10;
+/** Ravi this close to him, flat, at speed: run down. */
+const TRAMPLE_R = 1.75;
+/** Cars this close to his front go flying. */
+const RAM_R = 1.3;
 
 /**
  * How he fights in each phase. `pace` speeds his heavy animations up (the
@@ -225,6 +240,9 @@ type Act =
   | 'follow'
   | 'stomp'
   | 'stagger'
+  | 'paw'
+  | 'charge'
+  | 'skid'
   | 'death';
 
 /** What a walk is for: what he does when he gets there. */
@@ -264,7 +282,7 @@ export class General implements IGeneral {
   /** Beating his chest, or staggered, or roaring as a phase goes: hit him now. */
   get vulnerable(): boolean {
     if (this.dying) return false;
-    return this.act === 'pound' || this.act === 'stagger' || (this.act === 'roar' && this.phaseShow);
+    return this.act === 'pound' || this.act === 'stagger' || this.act === 'skid' || (this.act === 'roar' && this.phaseShow);
   }
   get holding(): number {
     return this.carHeld;
@@ -373,6 +391,15 @@ export class General implements IGeneral {
   private prevUL = 0;
   private pounds = 0;
   private sincePound = 9;
+
+  // ---- The charge (his last 15%)
+  private enraged = false;
+  private pendingRage = false;
+  private readonly chargeDir = new THREE.Vector3();
+  private chargeSpeed = 0;
+  private chargeLeft = 0;
+  private trampled = false;
+  private skidCrashed = false;
 
   // ---- Dying
   private dying = false;
@@ -502,6 +529,12 @@ export class General implements IGeneral {
       this.pendingPhase = true;
       this.emit({ type: 'phase', phase: ph });
     }
+    // Nearly done: no more throwing. He gets rid of whatever he has and comes for Ravi himself
+    if (!this.enraged && this.hp <= RAGE_AT * this.maxHp && !this.scriptedThrow) {
+      this.enraged = true;
+      this.pendingRage = true;
+      this.emit({ type: 'enrage' });
+    }
     this.staggerAcc += d;
     // Each eighth or so of him that goes rocks him back on his heels — and
     // whatever he had in his hands comes down. Not while he is already
@@ -512,6 +545,8 @@ export class General implements IGeneral {
       this.act !== 'pound' &&
       this.act !== 'roar' &&
       this.act !== 'stagger' &&
+      this.act !== 'paw' &&
+      this.act !== 'charge' &&
       !this.scriptedThrow
     ) {
       this.staggerAcc = 0;
@@ -601,9 +636,22 @@ export class General implements IGeneral {
     // Ravi down: whatever he was doing, he stops to stand over it and roar
     if (!this.tgtAlive) {
       const a = this.act;
-      if (!this.gloated && a !== 'roar' && a !== 'stagger' && a !== 'stomp') this.decide();
+      if (!this.gloated && a !== 'roar' && a !== 'stagger' && a !== 'stomp' && a !== 'charge' && a !== 'skid') this.decide();
       return;
     }
+    if (this.pendingRage) {
+      // Whatever he is in the middle of, he stops: the car goes down and he roars
+      if (this.act !== 'stagger') {
+        this.pendingRage = false;
+        this.pendingPhase = false;
+        if (this.carHeld >= 0) this.dropCar();
+        this.carId = -1;
+        this.beginRoar(2.2);
+      }
+      return;
+    }
+    // Charging now: decide() picks the next run when each one is done
+    if (this.enraged) return;
     if (this.paused || this.carHeld >= 0) return;
     const a = this.act;
     if (a !== 'idle' && a !== 'walk' && a !== 'reach' && a !== 'follow') return;
@@ -696,6 +744,17 @@ export class General implements IGeneral {
         if (this.actT >= this.actDur) this.endAct();
         break;
       }
+      case 'paw':
+        // Squaring up to him, quickly: this is where the run will go
+        this.turnToward(this.tgtPos.x, this.tgtPos.z, dt, 3.2, 8);
+        if (this.actT >= this.actDur) this.beginCharge();
+        break;
+      case 'charge':
+        this.stepCharge(dt);
+        break;
+      case 'skid':
+        this.stepSkid(dt);
+        break;
       case 'death':
         this.stepDeath();
         break;
@@ -800,6 +859,11 @@ export class General implements IGeneral {
     this.gloated = false;
     if (this.paused) {
       this.beginIdle(0.25);
+      return;
+    }
+    if (this.enraged) {
+      this.pendingPhase = false;
+      this.beginPaw();
       return;
     }
     if (this.pendingPhase) {
@@ -1180,6 +1244,110 @@ export class General implements IGeneral {
     this.enemy.poseCurl = 0.5;
   }
 
+  /** Head down, a hoof scraping the ground: the tell before every run. */
+  private beginPaw(): void {
+    this.begin('paw', PAW_TIME, 0.25);
+    this.enemy.poseCurl = 1;
+    this.emit({ type: 'chargeWarn', pos: this.enemy.position.clone(), at: this.tgtPos.clone() });
+  }
+
+  /** Off, at where Ravi is going to be. */
+  private beginCharge(): void {
+    const p = this.enemy.position;
+    _a.copy(this.tgtPos).addScaledVector(this.tgtVel, 0.3);
+    this.chargeDir.set(_a.x - p.x, 0, _a.z - p.z);
+    const d = this.chargeDir.length();
+    if (d < 0.01) this.enemy.forwardDir(this.chargeDir);
+    this.chargeDir.normalize();
+    this.chargeSpeed = 2;
+    this.chargeLeft = Math.min(70, d + OVERSHOOT);
+    this.trampled = false;
+    this.begin('charge', Infinity, 0.2);
+    this.enemy.poseCurl = 1;
+    this.emit({ type: 'charge', dir: this.chargeDir.clone() });
+  }
+
+  /**
+   * The run: flat out in a straight line, steering at him only for the first
+   * moment. Cars in the way go flying; Ravi in the way goes under him. He
+   * stops a way past where Ravi was, or at the edge of the lot.
+   */
+  private stepCharge(dt: number): void {
+    const e = this.enemy;
+    const p = e.position;
+    if (this.actT < CHARGE_STEER && this.tgtAlive) {
+      // Bend the run toward him, a little
+      const want = Math.atan2(-(this.tgtPos.x - p.x), -(this.tgtPos.z - p.z));
+      const have = Math.atan2(-this.chargeDir.x, -this.chargeDir.z);
+      const turn = THREE.MathUtils.clamp(wrap(want - have), -1.6 * dt, 1.6 * dt);
+      this.chargeDir.applyAxisAngle(UP, turn);
+    }
+    e.yaw = Math.atan2(-this.chargeDir.x, -this.chargeDir.z);
+    e.root.rotation.y = e.yaw;
+    this.chargeSpeed = Math.min(CHARGE_SPEED, this.chargeSpeed + CHARGE_ACCEL * dt);
+    const v = this.chargeSpeed;
+    this.walkW = 1;
+    this.cadence = 2.1 * (0.4 + 0.6 * (v / CHARGE_SPEED));
+    const step = v * dt;
+    p.addScaledVector(this.chargeDir, step);
+    this.chargeLeft -= step;
+
+    // Through the cars: his front, at bumper height
+    if (this.world.ram) {
+      _b.copy(p).addScaledVector(this.chargeDir, 0.9 * S).setY(p.y + 0.8);
+      const n = this.world.ram(_b, this.chargeDir, v, RAM_R);
+      if (n > 0) {
+        this.emit({ type: 'ram', pos: _b.clone(), count: n });
+        // Every car costs him a little speed, never all of it
+        this.chargeSpeed *= Math.pow(0.82, n);
+      }
+    }
+    // Ravi
+    if (!this.trampled && this.tgtAlive && v > 5 && this.flatDist(this.tgtPos) < TRAMPLE_R && this.tgtPos.y < p.y + 2.2) {
+      this.trampled = true;
+      this.emit({ type: 'trample', from: p.clone().addScaledVector(this.chargeDir, -1.2), dir: this.chargeDir.clone() });
+    }
+    // The edge of the lot pulls him up hard; the end of the run, gently
+    const A = this.world.arena ?? this.zone;
+    const m = 1.6;
+    const out = p.x < A.minX + m || p.x > A.maxX - m || p.z < A.minZ + m || p.z > A.maxZ - m;
+    if (out) {
+      p.x = THREE.MathUtils.clamp(p.x, A.minX + m, A.maxX - m);
+      p.z = THREE.MathUtils.clamp(p.z, A.minZ + m, A.maxZ - m);
+      this.beginSkid(v > 8);
+    } else if (this.chargeLeft <= 0) this.beginSkid(false);
+  }
+
+  private beginSkid(crashed: boolean): void {
+    this.skidCrashed = crashed;
+    if (crashed) this.chargeSpeed = Math.min(this.chargeSpeed, 3);
+    this.begin('skid', crashed ? 2.3 : 1.4, 0.15);
+    this.enemy.poseCurl = 0.6;
+    this.emit({ type: 'skid', pos: this.enemy.position.clone(), crashed });
+  }
+
+  /** Digging his heels in, sliding to a stop; then round to face Ravi for the next one. */
+  private stepSkid(dt: number): void {
+    const p = this.enemy.position;
+    if (this.chargeSpeed > 0) {
+      this.chargeSpeed = Math.max(0, this.chargeSpeed - 26 * dt);
+      p.addScaledVector(this.chargeDir, this.chargeSpeed * dt);
+      const A = this.world.arena ?? this.zone;
+      p.x = THREE.MathUtils.clamp(p.x, A.minX + 1.6, A.maxX - 1.6);
+      p.z = THREE.MathUtils.clamp(p.z, A.minZ + 1.6, A.maxZ - 1.6);
+    }
+    // Shaking it off, then coming round
+    const turnFrom = this.skidCrashed ? 1.3 : 0.5;
+    if (this.actT > turnFrom) {
+      const err = this.turnToward(this.tgtPos.x, this.tgtPos.z, dt, 2.2, 5);
+      if (Math.abs(err) > 0.4) {
+        this.walkW = 0.32;
+        this.cadence = this.cadenceFor(this.tune.walk) * 1.4;
+      }
+    }
+    if (this.actT >= this.actDur) this.endAct();
+  }
+
   private beginDeath(): void {
     if (this.carHeld >= 0) this.dropCar();
     this.dying = true;
@@ -1360,6 +1528,15 @@ export class General implements IGeneral {
         break;
       case 'stagger':
         this.staggerShape(o);
+        break;
+      case 'paw':
+        this.pawShape(o);
+        break;
+      case 'charge':
+        this.chargeShape(o);
+        break;
+      case 'skid':
+        this.skidShape(o);
         break;
       case 'death':
         this.deathShape(o);
@@ -1783,6 +1960,68 @@ export class General implements IGeneral {
     o.headY = this.lookY * (1 - hit);
     o.headR = 0;
     o.roar = 0.15 + 0.3 * hit;
+  }
+
+  /**
+   * Like a bull about to go: low, the head down and forward, the fists
+   * balled at his hips, and one foot scraping back at the ground — twice.
+   * Snorting.
+   */
+  private pawShape(o: Shape): void {
+    const t = this.actT;
+    const scrape = Math.max(0, Math.sin(t * 2 * TAU));
+    o.stance = 0.55;
+    o.crouch = 0.3;
+    o.twist = 0;
+    o.liftL = 0;
+    o.liftR = 0.45 * scrape;
+    o.carPitch = 0;
+    o.lean = -0.6;
+    const dn = hipsDown(o.crouch, o.stance);
+    o.arms(0.5, 0.78 - dn, -0.2);
+    o.elbow.set(0.9, -0.2, 0.3);
+    o.headP = 0.2 + 0.4 * this.lookP;
+    o.headY = this.lookY * 0.5;
+    o.headR = 0;
+    o.roar = 0.25 + 0.35 * scrape;
+  }
+
+  /** Flat out like a rhino: bent right over, head down, the arms driving. */
+  private chargeShape(o: Shape): void {
+    const sw = Math.sin(this.phaseW) * this.sb;
+    o.stance = 0;
+    o.crouch = 0;
+    o.liftL = o.liftR = 0;
+    o.carPitch = 0;
+    o.hR.set(0.47, 0.8 + 0.1 * Math.max(0, sw), 0.1 - 0.36 * sw);
+    o.hL.set(-0.47, 0.8 + 0.1 * Math.max(0, -sw), 0.1 + 0.36 * sw);
+    o.elbow.set(0.8, -0.4, 0.3);
+    o.lean = -1.05;
+    o.twist = 0.12 * sw;
+    o.headP = 0.4;
+    o.headY = 0;
+    o.headR = 0;
+    o.roar = 0.75;
+  }
+
+  /** Heels dug in and leaning back against it; dazed if it was the fence that stopped him. */
+  private skidShape(o: Shape): void {
+    const u = clamp01(this.actT / this.actDur);
+    const slide = 1 - seg(u, 0.1, 0.45);
+    const daze = this.skidCrashed ? Math.sin(Math.PI * clamp01(u / 0.8)) : 0;
+    o.stance = 0.9 * slide + 0.5 * (1 - slide);
+    o.crouch = 0.3 * slide + 0.15 * daze;
+    o.twist = 0;
+    o.liftL = o.liftR = 0;
+    o.carPitch = 0;
+    o.lean = 0.25 * slide - 0.05 + 0.2 * daze;
+    const dn = hipsDown(o.crouch, o.stance);
+    o.arms(lerp(0.43, 0.7, slide), lerp(0.9 - dn, 1.15, slide), lerp(-0.06, 0.1, slide));
+    o.elbow.set(0.8, -0.2, 0.5);
+    o.headP = this.lookP * (1 - daze) + 0.3 * daze * Math.sin(this.actT * 7);
+    o.headY = this.lookY * (1 - daze) + 0.25 * daze * Math.sin(this.actT * 4.3);
+    o.headR = 0.15 * daze;
+    o.roar = 0.3 + 0.3 * slide;
   }
 
   // ===================================================================== dying

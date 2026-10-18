@@ -185,7 +185,19 @@ export type GeneralEvent =
   | { type: 'stagger' }
   | { type: 'phase'; phase: 1 | 2 | 3 }
   | { type: 'fall' }
-  | { type: 'fell'; pos: THREE.Vector3 };
+  | { type: 'fell'; pos: THREE.Vector3 }
+  /** Down to his last 15%: he drops the car and roars. From now on he charges. */
+  | { type: 'enrage' }
+  /** Head down, pawing the ground: a charge is coming from `pos` toward `at`. */
+  | { type: 'chargeWarn'; pos: THREE.Vector3; at: THREE.Vector3 }
+  /** Off, flat out. */
+  | { type: 'charge'; dir: THREE.Vector3 }
+  /** Through `count` cars at `pos`. */
+  | { type: 'ram'; pos: THREE.Vector3; count: number }
+  /** Ran Ravi down. `from` is where the General was. */
+  | { type: 'trample'; from: THREE.Vector3; dir: THREE.Vector3 }
+  /** Pulling up at the end of a run; `crashed` if it was the lot's edge that stopped him. */
+  | { type: 'skid'; pos: THREE.Vector3; crashed: boolean };
 
 /** What the General needs from the world. The scene builds this, bridging to the CarSystem. */
 export interface GeneralWorld {
@@ -203,6 +215,10 @@ export interface GeneralWorld {
   clearLine(a: THREE.Vector3, b: THREE.Vector3): boolean;
   /** Physics gravity, m/s² (positive). The cars fly under this. */
   gravity: number;
+  /** Smash every car within `radius` of `pos` out of his way; how many. (The charge.) */
+  ram?(pos: THREE.Vector3, dir: THREE.Vector3, speed: number, radius: number): number;
+  /** The whole lot: where a charge has to stop. Defaults to his zone. */
+  arena?: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
 
 export type GeneralAction =

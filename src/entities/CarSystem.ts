@@ -586,6 +586,60 @@ export class CarSystem implements ICarSystem {
     }
   }
 
+  /** When each car was last rammed, so one charge hits it once. */
+  private readonly rammedAt = new Map<number, number>();
+
+  /**
+   * The General's charge going through the rows: every car within `radius`
+   * of `pos` (his front) is smashed out of his way — on along `dir` at a share
+   * of his speed, flung off to whichever side of him it was on, and up and
+   * over. Returns how many he hit this frame. Not part of ICarSystem.
+   */
+  ram(pos: THREE.Vector3, dir: THREE.Vector3, speed: number, radius: number): number {
+    let n = 0;
+    for (const car of this.cars) {
+      if (car.state === 'held') continue;
+      _v.set(pos.x, THREE.MathUtils.clamp(pos.y, car.aabb.min.y, car.aabb.max.y), pos.z);
+      if (car.aabb.distanceToPoint(_v) > radius) continue;
+      const last = this.rammedAt.get(car.id);
+      if (last !== undefined && this.clock - last < 1.2) continue;
+      this.rammedAt.set(car.id, this.clock);
+      // Off to the side it was on: which side of his line (his right is (−dir.z, dir.x))
+      const ox = car.origin.x - pos.x;
+      const oz = car.origin.z - pos.z;
+      const side = -dir.z * ox + dir.x * oz >= 0 ? 1 : -1;
+      const sx = -dir.z * side;
+      const sz = dir.x * side;
+      const fwd = speed * (0.55 + Math.random() * 0.2);
+      const out = 5 + Math.random() * 3;
+      const b = car.body;
+      b.wakeUp();
+      b.velocity.set(dir.x * fwd + sx * out, 5.5 + Math.random() * 3, dir.z * fwd + sz * out);
+      // Rolled over away from him, about the way he is going
+      const roll = (3 + Math.random() * 3) * side;
+      b.angularVelocity.set(dir.x * roll + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 3, dir.z * roll + (Math.random() - 0.5) * 2);
+      b.aabbNeedsUpdate = true;
+      if (car.state === 'parked' || car.state === 'pile') car.knocked = true;
+      if (car.solid) this.setSolid(car, false);
+      car.lastImpact = this.world.time;
+      const at = _v2.set(pos.x, Math.max(0.6, car.origin.y + 0.7), pos.z);
+      const dist = this.playerDist(at);
+      if (dist < 75) {
+        const ct = this.crashTimes;
+        const now = this.world.time;
+        while (ct.length && now - ct[0] > 0.15) ct.shift();
+        if (ct.length < 3) {
+          ct.push(now);
+          this.audio.carCrash(dist, true);
+        }
+      }
+      this.particles.sparks(at, _v.set(sx, 0.6, sz), 24);
+      this.particles.dust(_v.set(car.origin.x, 0.05, car.origin.z), 2.4, 1.2);
+      n++;
+    }
+    return n;
+  }
+
   // ---------------------------------------------------------------- frame
 
   /**

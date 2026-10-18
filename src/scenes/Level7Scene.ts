@@ -231,7 +231,6 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private ui!: HTMLElement;
   private objective!: HTMLElement;
   private fadeEl!: HTMLElement;
-  private endCard!: HTMLElement;
   /** The boss, sat for his portrait on the first frame and gone after it. */
   private sitter: Enemy | null = null;
   private photoTaken = false;
@@ -365,14 +364,11 @@ export class Level7Scene extends CombatScene<Level7Data> {
     el.innerHTML = `
       <div class="intro-objective"></div>
       <div class="intro-fade" style="opacity:1"></div>
-      <div class="l7-end" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-        color:#e8f4ec;font-size:22px;letter-spacing:9px;opacity:0;pointer-events:none;transition:opacity 1.2s">TO BE CONTINUED</div>
     `;
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
     this.objective = el.querySelector('.intro-objective')!;
     this.fadeEl = el.querySelector('.intro-fade')!;
-    this.endCard = el.querySelector('.l7-end')!;
   }
 
   private setObjective(text: string): void {
@@ -715,12 +711,11 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.ctx.input.exitPointerLock();
   }
 
-  /** To black, the card, and on. */
+  /** To black, and down the stairs after him: the car park is the next level. */
   private updateLeaving(dt: number): void {
     this.leaveT += dt;
     this.fadeEl.style.opacity = String(Math.min(1, this.leaveT / 0.8));
-    if (this.leaveT > 1.0) this.endCard.style.opacity = '1';
-    if (this.leaveT > 5.2 && !this.handedOff) {
+    if (this.leaveT > 1.4 && !this.handedOff) {
       this.handedOff = true;
       this.ctx.bus.emit(Events.Level7Complete);
     }

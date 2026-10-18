@@ -107,6 +107,46 @@ export class Enemy {
   private flashTime = 0;
   /** The boss: heavier build, beard, cap, no weapon. */
   readonly boss: boolean = false;
+  /**
+   * The General: built like a wardrobe, olive dress uniform, peaked cap,
+   * medals, no weapon. Not a boss — the boss's desk pose (chin on his
+   * fists whenever both hands are posed) never touches him.
+   */
+  readonly general: boolean = false;
+  /**
+   * How fast the walk cycle turns over, as a multiple of the usual. A man
+   * scaled up takes strides as many times longer, so at the same cadence his
+   * feet would slide: scaled by S, walk him at about 1/S.
+   */
+  cadence = 1;
+  /**
+   * A foot has just come down, walking: called once per footfall, after the
+   * frame's pose is done, so the foot is where it landed. A foot lands at the
+   * far end of its swing, the moment the body is lowest.
+   */
+  onStep: ((side: 'l' | 'r') => void) | null = null;
+  private stepPending: 'l' | 'r' | null = null;
+  /**
+   * 0..1: the face opened into a roar — the jaw dropped as far as it goes,
+   * the eyes narrowed. Whatever he is wearing; it takes over from any smaller
+   * opening of the mouth (talking, a flinch) while it is the bigger.
+   */
+  roar = 0;
+  /** The face that was on before the roar, on the block build (which paints its faces). */
+  private roarFace: THREE.Material | null = null;
+  /** 0..1: how far the legs are planted this frame (a squat, a wide stance), for the model's feet. */
+  private plantNow = 0;
+  /**
+   * Last frame's pose turned the chest and the arms (twist) or spread and
+   * turned the legs (crouch, stance, a lifted foot). Those go on as whole
+   * rotations, and the quaternion writes its Euler back: the walk only ever
+   * sets X (and Z) on these joints, so the turn left in Y would be kept into
+   * the next frame and compounded by the next twist — the chest wound round
+   * half a turn a second — or kept after the pose let go, legs splayed for
+   * good. Flagged, the next frame starts them from square.
+   */
+  private twisted = false;
+  private legsPlanted = false;
   /** Half the span of the shoulders and of the hips — the boss is wider. */
   private shoulderX = 0.29;
   private hipX = 0.115;
@@ -136,14 +176,20 @@ export class Enemy {
     spawn: THREE.Vector3,
     yaw: number,
     index: number,
-    opts: { name?: string; civilian?: boolean; boss?: boolean } = {}
+    opts: { name?: string; civilian?: boolean; boss?: boolean; general?: boolean } = {}
   ) {
     this.name = opts.name ?? AMERICAN_NAMES[index % AMERICAN_NAMES.length];
     this.civilian = opts.civilian ?? false;
     this.boss = opts.boss ?? false;
+    this.general = !this.boss && (opts.general ?? false);
     if (this.boss) {
       this.shoulderX = 0.34;
       this.hipX = 0.135;
+    }
+    if (this.general) {
+      // Wider again than the boss across the shoulders, and set wide at the hips
+      this.shoulderX = 0.36;
+      this.hipX = 0.14;
     }
     this.variant = index;
     this.root.position.copy(spawn);
@@ -170,7 +216,9 @@ export class Enemy {
     this.root.traverse((o) => {
       if ((o as THREE.Mesh).isMesh && !keep.has(o)) (o as THREE.Mesh).material = Enemy.unseen;
     });
-    const h = new HitmanVisual(HitmanVisual.lookFor(this.variant, this.boss ? 'boss' : this.civilian ? 'staff' : 'agent'));
+    const h = new HitmanVisual(
+      HitmanVisual.lookFor(this.variant, this.general ? 'general' : this.boss ? 'boss' : this.civilian ? 'staff' : 'agent')
+    );
     if (this.civilian) this.setMood(0, 1, 0.75, 0);
     this.hitman = h;
     this.root.add(h.model);
@@ -748,8 +796,118 @@ export class Enemy {
     this.finishBody(suit, shirt, skin, this.mat(0x1a1c20, 0.5), 1.25);
   }
 
+  /**
+   * The General, as the block build has him — only ever seen if the model
+   * fails to load. The same kit as everyone else, built like a wardrobe: a
+   * broad, deep chest and no belly, thick limbs, an olive uniform with a
+   * khaki shirt, gold on the shoulders and ribbons on the chest, dark
+   * glasses and a peaked cap.
+   */
+  private buildGeneral(): void {
+    const olive = this.mat(0x4a5236, 0.8);
+    const oliveDark = this.mat(0x3d4430, 0.82);
+    const khaki = this.mat(0xb8a67b, 0.85);
+    const skin = this.mat(0xb58262);
+    const shoe = this.mat(0x0d0d10, 0.45);
+    const glove = this.mat(0x121214, 0.4);
+    const band = this.mat(0x23271a, 0.85);
+    const gold = new THREE.MeshStandardMaterial({ color: 0xd4a52a, roughness: 0.35, metalness: 0.6 });
+    const black = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.15, metalness: 0.3 });
+    if (!Enemy.faceAngry) Enemy.faceAngry = Enemy.drawFace(false);
+    if (!Enemy.faceDead) Enemy.faceDead = Enemy.drawFace(true);
+    if (!Enemy.faceScream) Enemy.faceScream = Enemy.drawScreamFace();
+
+    const mkLeg = (side: number): [THREE.Group, THREE.Group] => {
+      const hip = new THREE.Group();
+      hip.position.set(side * this.hipX, 0.82, 0);
+      const thigh = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.22, 4, 12), oliveDark), 'leg');
+      thigh.position.set(0, -0.205, 0);
+      hip.add(thigh);
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.41, 0);
+      const shin = this.addPart(new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.27, 4, 12), oliveDark), 'leg');
+      shin.position.set(0, -0.205, 0);
+      knee.add(shin);
+      const s = new THREE.Mesh(new RoundedBoxGeometry(0.17, 0.085, 0.3, 3, 0.035), shoe);
+      s.position.set(0, -0.37, -0.04);
+      knee.add(s);
+      hip.add(knee);
+      this.root.add(hip);
+      return [hip, knee];
+    };
+    [this.legL, this.shinL] = mkLeg(-1);
+    [this.legR, this.shinR] = mkLeg(1);
+
+    // A chest like a barrel of muscle, square at the shoulders, and the
+    // waist under it no wider than the hips
+    const coatGeo = new RoundedBoxGeometry(0.7, 0.54, 0.42, 5, 0.14);
+    coatGeo.translate(0, -0.05, 0);
+    this.torso = this.addPart(new THREE.Mesh(coatGeo, olive), 'torso');
+    this.torso.position.set(0, 1.27, 0);
+    this.root.add(this.torso);
+    this.pelvis = this.addPart(new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.3, 0.34, 4, 0.1), oliveDark), 'torso');
+    this.pelvis.position.set(0, 0.96, 0);
+    this.root.add(this.pelvis);
+    // Flat skins on the flat of the chest, as on the boss: the khaki shirt
+    // and olive tie in the V, a rack of ribbons on his left breast
+    const front = -0.2115;
+    const skinOn = (w: number, h: number, x: number, y: number, m: THREE.Material, out = 0) => {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m);
+      p.rotation.y = Math.PI;
+      p.position.set(x, y, front - out);
+      this.torso.add(p);
+    };
+    skinOn(0.13, 0.2, 0, -0.04, khaki);
+    skinOn(0.05, 0.22, 0, -0.07, this.mat(0x2c3322, 0.6), 0.001);
+    const ribbonCols = [0x8c1a1a, 0xd8a821, 0x1a2d6b, 0x2e6b3a, 0x5a1f6b, 0xc8441a];
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) skinOn(0.036, 0.014, -0.15 + (c - 1) * 0.038, 0.06 + r * 0.016, this.mat(ribbonCols[(r * 3 + c) % ribbonCols.length], 0.6), 0.001);
+    }
+    // Gold boards on the shoulders
+    for (const side of [-1, 1]) {
+      const ep = new THREE.Mesh(new RoundedBoxGeometry(0.16, 0.025, 0.12, 2, 0.01), gold);
+      ep.position.set(side * 0.27, 0.205, 0);
+      this.torso.add(ep);
+    }
+
+    // Head, a size up, on a thick neck; the mean face, behind dark glasses
+    this.head = this.addPart(
+      new THREE.Mesh(new RoundedBoxGeometry(0.26, 0.28, 0.25, 5, 0.08), [skin, skin, skin, skin, skin, Enemy.faceAngry]),
+      'head'
+    );
+    this.head.position.set(0, 1.585, 0);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.08, 12), skin);
+    neck.position.set(0, -0.12, 0);
+    this.head.add(neck);
+    this.root.add(this.head);
+    for (const side of [-1, 1]) {
+      const lens = new THREE.Mesh(new RoundedBoxGeometry(0.085, 0.045, 0.012, 2, 0.006), black);
+      lens.position.set(side * 0.05, 0.02, -0.128);
+      this.head.add(lens);
+    }
+    // The cap: a dark band, the olive crown flaring out over it, a black
+    // visor pitched down and a gold badge
+    const capBand = new THREE.Mesh(new THREE.CylinderGeometry(0.143, 0.143, 0.05, 20), band);
+    capBand.position.set(0, 0.13, 0.005);
+    this.head.add(capBand);
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.143, 0.05, 20), olive);
+    crown.position.set(0, 0.18, 0.005);
+    this.head.add(crown);
+    const visor = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.014, 0.09, 2, 0.006), black);
+    visor.position.set(0, 0.098, -0.165);
+    visor.rotation.x = -0.35;
+    this.head.add(visor);
+    const badge = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), gold);
+    badge.scale.set(1, 1, 0.4);
+    badge.position.set(0, 0.17, -0.16);
+    this.head.add(badge);
+
+    this.finishBody(olive, olive, glove, this.mat(0x1a1c20, 0.5), 1.45);
+  }
+
   private buildBody(): void {
     if (this.boss) return this.buildBoss();
+    if (this.general) return this.buildGeneral();
     // The civilian wears what the floor staff wear: white shirt, blue
     // chinos, ball cap. Agents are in black suits.
     const suit = this.civilian ? this.mat(0x2f4a7a, 0.9) : this.mat(0x15161a, 0.8);
@@ -961,9 +1119,10 @@ export class Enemy {
     [this.armL, this.foreL] = mkArm(-1);
     [this.armR, this.foreR] = mkArm(1);
 
-    // Rifle held by the right arm (the boss leaves the guns to other people)
+    // Rifle held by the right arm (the boss and the General leave the guns
+    // to other people)
     this.rifle = new THREE.Group();
-    if (!this.civilian && !this.boss) {
+    if (!this.civilian && !this.boss && !this.general) {
       const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.62), gunmetal);
       this.rifle.add(receiver);
       const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.08), gunmetal);
@@ -1000,6 +1159,25 @@ export class Enemy {
     shift?: THREE.Vector3;
     /** Head rotation, instead of whatever the head would otherwise be doing. */
     head?: THREE.Euler;
+    /**
+     * 0..1: down into a squat. The hips drop up to 0.42 and sit back a
+     * little, the thighs come up and the shins tip forward over feet that
+     * stay planted where they were; the chest, shoulders and head come down
+     * with the hips. A standing pose: not for use with sitting or kneeling.
+     */
+    crouch?: number;
+    /** 0..1: the feet set wide — each leg turned out 0.2 rad, toes with it — and the hips lowered to keep them on the floor. */
+    stance?: number;
+    /**
+     * Radians: the chest turned about the spine, the shoulders and the head
+     * carried round with it; positive turns him to his left. The arms the
+     * animation hangs off the shoulders go round with the chest; arms the
+     * pose sets (armR/armL, handR/handL) stay in the body's frame as always.
+     */
+    twist?: number;
+    /** 0..1: that knee raised and the foot up off the floor, for a stomp. Rides on top of the stance and the squat. */
+    liftL?: number;
+    liftR?: number;
   } | null = null;
 
   private static _ikW = new THREE.Vector3();
@@ -1108,6 +1286,13 @@ export class Enemy {
     if (this.hitman) return this.hitman.boneWorld('Hand_R', out);
     this.foreR.updateWorldMatrix(true, false);
     return this.foreR.localToWorld(out.set(0, -0.31, 0));
+  }
+
+  /** Where his left hand is: the model's, if he wears it. */
+  leftHandWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    if (this.hitman) return this.hitman.boneWorld('Hand_L', out);
+    this.foreL.updateWorldMatrix(true, false);
+    return this.foreL.localToWorld(out.set(0, -0.31, 0));
   }
 
   /**
@@ -1449,6 +1634,13 @@ export class Enemy {
   private dropRifle(world: CANNON.World, dir: THREE.Vector3): void {
     if (this.rifleDropped) return;
     this.rifleDropped = true;
+    // The General carries nothing, and his hands are a giant's: a body made
+    // of the empty rifle group would be a box nobody can see, knocking about
+    // under him
+    if (this.general) {
+      this.rifle.visible = false;
+      return;
+    }
     const parent = this.root.parent ?? this.root;
     this.rifle.updateWorldMatrix(true, false);
     const gunPos = this.rifle.getWorldPosition(new THREE.Vector3());
@@ -2072,6 +2264,13 @@ export class Enemy {
     // The model is posed off the rig once the rig is done for the frame,
     // takedown and cutscene poses included. Dead, updateDead does it.
     if (this.alive && this.hitman) this.poseHitman(dt);
+    // A footfall from the walk cycle, told once the whole of him is posed:
+    // whoever is listening can ask where the foot is and get where it landed
+    if (this.stepPending) {
+      const side = this.stepPending;
+      this.stepPending = null;
+      if (this.alive) this.onStep?.(side);
+    }
   }
 
   private curlL = 0.1;
@@ -2166,7 +2365,7 @@ export class Enemy {
         R.thumb = thumbR.set(0, 0, -1).applyQuaternion(hq);
         R.palm = palmR.set(-1, 0, 0).applyQuaternion(hq);
         curlR = 1;
-      } else if (!this.civilian && !this.boss && !this.rifleDropped && !this.slung && this.rifle.visible) {
+      } else if (!this.civilian && !this.boss && !this.general && !this.rifleDropped && !this.slung && this.rifle.visible) {
         // Right fist round the grip, thumb up it (it rakes back a little)
         this.rifle.updateWorldMatrix(true, false);
         this.rifle.getWorldQuaternion(hq);
@@ -2226,6 +2425,7 @@ export class Enemy {
     R.curl = this.curlR;
     L.curl = this.curlL;
     d.kneel = this.kneelBlend;
+    d.plant = this.plantNow;
     this.hitman!.sync(d);
 
     // His face, which the block build painted on and the model has to move:
@@ -2245,6 +2445,12 @@ export class Enemy {
       this.flinchT -= dt;
       face = Math.max(face, 0.62 * this.flinchK * Math.min(1, this.flinchT / 0.25));
       eyes = Math.min(eyes, 0.45);
+    }
+    // Roaring: the jaw as wide as it goes, the eyes screwed down to slits
+    if (this.roar > 0) {
+      const r = Math.min(1, this.roar);
+      face = Math.max(face, r);
+      eyes = Math.min(eyes, 1 - 0.6 * r);
     }
     if (!this.alive) {
       face = 0.3;
@@ -2321,10 +2527,27 @@ export class Enemy {
     // Ease the stride in and out so starting and stopping isn't a snap
     this.strideBlend += (this.walkSpeed - this.strideBlend) * Math.min(1, dt * 6);
     const stride = this.strideBlend;
+    this.plantNow = 0;
     if (this.walkSpeed > 0.05 || stride > 0.02) {
-      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed);
+      const was = this.walkPhase;
+      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed) * this.cadence;
+      // A foot comes down at the far end of its swing — the left when the
+      // phase passes π/2 (its thigh furthest forward), the right at 3π/2 —
+      // which is where the bob below has the body lowest, its weight landing.
+      // Not for the last shuffle of a stride easing out to nothing
+      if (this.onStep && stride > 0.25) {
+        const k0 = Math.floor((was - Math.PI / 2) / Math.PI);
+        const k1 = Math.floor((this.walkPhase - Math.PI / 2) / Math.PI);
+        if (k1 !== k0) this.stepPending = ((k1 % 2) + 2) % 2 === 0 ? 'l' : 'r';
+      }
     }
     const swing = Math.sin(this.walkPhase) * 0.55 * stride;
+    if (this.legsPlanted) {
+      // Square again after a planted pose (see legsPlanted)
+      this.legsPlanted = false;
+      this.legL.rotation.set(0, 0, 0);
+      this.legR.rotation.set(0, 0, 0);
+    }
     this.legL.rotation.x = swing;
     this.legR.rotation.x = -swing;
     // Knees bend BACKWARD (negative x — +x swings a limb forward) and only
@@ -2393,6 +2616,13 @@ export class Enemy {
     const armSwing = -swing * 0.7;
     // (+x rotation swings a hanging arm FORWARD — the old negative sign put them behind the back)
     const raise = 1.25 * this.aimBlend;
+    if (this.twisted) {
+      // Square again after a twist (see twisted): X and Z are set below
+      this.twisted = false;
+      this.armR.rotation.y = 0;
+      this.armL.rotation.y = 0;
+      this.torso.rotation.y = 0;
+    }
     this.armR.rotation.x = raise + armSwing * (1 - this.aimBlend);
     this.armL.rotation.x = raise * 0.9 - armSwing * (1 - this.aimBlend);
     this.armL.rotation.z = 0.35 * this.aimBlend;
@@ -2403,6 +2633,12 @@ export class Enemy {
     // right shoulder the handguard is 0.8m from the left shoulder — further
     // than the arm is long — so the support hand could never reach it.
     this.armR.rotation.z = -0.5 * this.aimBlend;
+    // The General's arms can't hang straight down past a chest that size:
+    // they stand off his sides, the way a strongman's do
+    if (this.general) {
+      this.armR.rotation.z += Enemy.GENERAL_FLARE;
+      this.armL.rotation.z -= Enemy.GENERAL_FLARE;
+    }
     // Rifle points forward whatever the arms are doing. Cancelling the arm
     // rotations one Euler axis at a time leaves a yaw behind, so undo the
     // whole parent rotation instead and set the pose we actually want.
@@ -2414,11 +2650,11 @@ export class Enemy {
 
       // Support hand: reach the left arm out to the handguard so it is actually
       // holding the weapon, instead of hanging in the air beside it.
-      if (!this.civilian && this.aimBlend > 0.01) {
+      if (!this.civilian && !this.general && this.aimBlend > 0.01) {
         this.gripRifle(this.aimBlend);
       }
       // Or at rest: held low across the body, the arms solved onto it
-      const restGoal = this.restCarry && this.aimTarget === 0 && !this.civilian ? 1 : 0;
+      const restGoal = this.restCarry && this.aimTarget === 0 && !this.civilian && !this.general ? 1 : 0;
       this.restBlend += (restGoal - this.restBlend) * Math.min(1, dt * 6);
       if (this.restBlend > 0.001) this.holdAtRest(this.restBlend);
       else this.rifle.position.copy(Enemy.RIFLE_HELD);
@@ -2586,10 +2822,38 @@ export class Enemy {
     // A cutscene's held pose goes on last, over everything above
     const p = this.pose;
     if (p) {
+      // Legs first: a squat or a wide stance moves the hips, and everything
+      // above them goes with the hips
+      const crouch = THREE.MathUtils.clamp(p.crouch ?? 0, 0, 1);
+      const stance = THREE.MathUtils.clamp(p.stance ?? 0, 0, 1);
+      const liftL = THREE.MathUtils.clamp(p.liftL ?? 0, 0, 1);
+      const liftR = THREE.MathUtils.clamp(p.liftR ?? 0, 0, 1);
+      if (crouch > 0 || stance > 0 || liftL > 0 || liftR > 0) this.plantLegs(crouch, stance, liftL, liftR);
       if (p.shift) {
         this.armL.position.add(p.shift);
         this.armR.position.add(p.shift);
         this.head.position.add(p.shift);
+      }
+      // The chest turned on the spine carries the shoulders and the head
+      // round with it, and the arms the animation hung off them — before the
+      // pose's own arms, which are solved from wherever the shoulders now are
+      const twist = p.twist ?? 0;
+      const yawQ = Enemy._twistQ.setFromAxisAngle(Enemy._up, twist);
+      if (twist !== 0) {
+        const c = Math.cos(twist);
+        const s = Math.sin(twist);
+        const cx = this.torso.position.x;
+        const cz = this.torso.position.z;
+        for (const o of [this.armL, this.armR, this.head]) {
+          const x = o.position.x - cx;
+          const z = o.position.z - cz;
+          // About +Y: positive takes his front (−Z) round to his left (−X)
+          o.position.x = cx + x * c + z * s;
+          o.position.z = cz - x * s + z * c;
+        }
+        this.armL.quaternion.premultiply(yawQ);
+        this.armR.quaternion.premultiply(yawQ);
+        this.twisted = true;
       }
       if (p.armR) this.armR.quaternion.copy(p.armR);
       if (p.foreR !== undefined) this.foreR.rotation.set(p.foreR, 0, 0);
@@ -2599,6 +2863,96 @@ export class Enemy {
       if (p.handL) this.reachArm(this.armL, this.foreL, p.handL, -1, p.elbow);
       if (p.head) this.head.rotation.copy(p.head);
       if (p.lean !== undefined) this.torso.rotation.x = p.lean;
+      // And the chest itself, last, so the lean above leans him the way his
+      // chest now faces
+      if (twist !== 0) this.torso.quaternion.premultiply(yawQ);
+    }
+
+    // The block build paints its faces on: a roar is the scream's
+    if (!this.hitman && Enemy.faceScream) {
+      const mats = this.head.material;
+      if (Array.isArray(mats)) {
+        if (this.roar > 0.5 && !this.roarFace) {
+          this.roarFace = mats[5];
+          mats[5] = Enemy.faceScream;
+        } else if (this.roar < 0.4 && this.roarFace) {
+          if (mats[5] === Enemy.faceScream) mats[5] = this.roarFace;
+          this.roarFace = null;
+        }
+      }
+    }
+  }
+
+  /** How far the General's arms stand off his sides, radians. */
+  private static GENERAL_FLARE = 0.12;
+  private static _twistQ = new THREE.Quaternion();
+  private static _legQ = new THREE.Quaternion();
+  private static _legQ2 = new THREE.Quaternion();
+  private static _legE = new THREE.Euler();
+
+  /**
+   * Stand with the feet planted, for pose.crouch and pose.stance: the hips
+   * brought down (and, squatting, a little back), the legs solved so the
+   * feet stay where they stood, and everything above the hips — pelvis,
+   * chest, shoulders, head — brought down and back with them, as the sit
+   * and the kneel bring theirs.
+   *
+   * Each leg is spread (about Z) and its toes turned out (about Y) first,
+   * then folded in its own plane: thigh forward, shin back. That way the
+   * knees go out over the toes in a wide squat the way they should, rather
+   * than straight ahead with the feet splayed under them. The fold is the
+   * two-bone solve for a 0.41 thigh and 0.41 shin reaching from the hip to
+   * the foot.
+   *
+   * Planting takes over from the walk over the first 15% of either, so
+   * easing in from a stride doesn't snap. A lifted foot (a stomp) rides on
+   * top: that knee comes up and the shin folds under it.
+   */
+  private plantLegs(crouch: number, stance: number, liftL: number, liftR: number): void {
+    const LEG = 0.41;
+    const k = THREE.MathUtils.clamp(Math.max(crouch, stance) / 0.15, 0, 1);
+    const spread = 0.2 * stance;
+    const toes = 0.22 * stance;
+    // The hips' height for the squat, then lowered by what spreading the
+    // legs costs them; and how far the seat goes back
+    const hipY = (0.82 - 0.42 * crouch) * Math.cos(spread);
+    const lower = (0.82 - hipY) * k;
+    const back = 0.06 * crouch * k;
+    for (const o of [this.legL, this.legR, this.pelvis, this.torso, this.armL, this.armR, this.head]) {
+      o.position.y -= lower;
+      o.position.z += back;
+    }
+    this.plantNow = k;
+    this.legsPlanted = true;
+    // Wherever the hips are now (the walk's bob and anything else included)
+    const hip = Math.max(0.2, this.legL.position.y);
+    for (const [leg, shin, side, lift] of [
+      [this.legL, this.shinL, -1, liftL],
+      [this.legR, this.shinR, 1, liftR]
+    ] as const) {
+      if (k > 0) {
+        const phi = side * spread; // about Z: + takes the right leg out to +X, − the left to −X
+        const psi = -side * toes; // about Y: + turns the toes (−Z) to −X, out for the left
+        // The foot, from the hip, in the leg's own plane before it is spread
+        // and turned: straight down far enough to reach the floor, and
+        // forward or back so that once turned it lands under where the hip
+        // stood
+        const down = hip / Math.cos(phi);
+        const fwd = (-back + down * Math.sin(phi) * Math.sin(psi)) / Math.cos(psi);
+        const m = Math.atan2(-fwd, down);
+        const n = Math.acos(THREE.MathUtils.clamp(Math.hypot(fwd, down) / (2 * LEG), 0, 1));
+        const q = Enemy._legQ
+          .setFromAxisAngle(Enemy._up, psi)
+          .multiply(Enemy._legQ2.setFromEuler(Enemy._legE.set(0, 0, phi)))
+          .multiply(Enemy._legQ2.setFromEuler(Enemy._legE.set(m + n, 0, 0)));
+        leg.quaternion.slerp(q, k);
+        shin.rotation.x = THREE.MathUtils.lerp(shin.rotation.x, -2 * n, k);
+      }
+      if (lift > 0) {
+        // Knee up, shin folded back under it: the foot off the floor
+        leg.quaternion.multiply(Enemy._legQ2.setFromEuler(Enemy._legE.set(1.15 * lift, 0, 0)));
+        shin.rotation.x -= 1.5 * lift;
+      }
     }
   }
 

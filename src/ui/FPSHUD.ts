@@ -2,8 +2,8 @@ import { EventBus, Events } from '../core/EventBus';
 
 /**
  * FPSHUD — crosshair, hit markers, kill feed, intruder counter, damage
- * flash, and the death / shift-complete overlays. Pure DOM on top of the
- * WebGL canvas.
+ * flash, a boss's health bar, interaction prompts, and the death /
+ * shift-complete overlays. Pure DOM on top of the WebGL canvas.
  */
 export class FPSHUD {
   private root: HTMLElement;
@@ -278,6 +278,160 @@ export class FPSHUD {
       this.hud.appendChild(this.takedownEl);
     }
     if (this.takedownEl) this.takedownEl.style.display = show ? '' : 'none';
+  }
+
+  // ------------------------------------------------------------- boss bar
+
+  private bossEl: HTMLElement | null = null;
+  private bossNameEl: HTMLElement | null = null;
+  private bossSubEl: HTMLElement | null = null;
+  private bossFill: HTMLElement | null = null;
+  private bossTrail: HTMLElement | null = null;
+  private bossShown = false;
+  private bossFrac = -1;
+  private bossName = '';
+  private bossSub = '';
+  private bossFlashAt = 0;
+
+  /**
+   * A boss's health across the top of the screen: his name, a line beside it
+   * saying who he is, and a long thin bar. Behind the bar's fill runs a pale
+   * damage trail that holds where the health was while the hits keep coming,
+   * then drains to catch up — so a burst that lands shows as one chunk bitten
+   * out, rather than the fill just creeping down. Faint ticks mark the
+   * thirds (where the General's fight changes gear).
+   *
+   * `frac` is 0..1. `null` for the name fades the bar out. Meant to be called
+   * every frame: nothing touches the page unless something has changed, and
+   * the trail and the fades are CSS, so it doesn't need calling to animate.
+   * It lives inside the HUD, so hide(), setCinematic and destroy() take it too.
+   */
+  setBoss(name: string | null, frac: number, sub?: string): void {
+    if (name === null) {
+      if (this.bossShown && this.bossEl) this.bossEl.classList.remove('show');
+      this.bossShown = false;
+      return;
+    }
+    if (!this.bossEl) this.buildBoss();
+    const el = this.bossEl!;
+    const fill = this.bossFill!;
+    const trail = this.bossTrail!;
+
+    if (name !== this.bossName) {
+      this.bossName = name;
+      this.bossNameEl!.textContent = name;
+    }
+    const s = sub ?? '';
+    if (s !== this.bossSub) {
+      this.bossSub = s;
+      this.bossSubEl!.textContent = s;
+      this.bossSubEl!.style.display = s ? '' : 'none';
+    }
+
+    // Quantised, but finely enough that every round that lands still moves it
+    const f = Math.round(Math.min(1, Math.max(0, Number.isFinite(frac) ? frac : 0)) * 4000) / 4000;
+    const appearing = !this.bossShown;
+    if (!appearing && f === this.bossFrac) return;
+    const hurt = !appearing && f < this.bossFrac;
+    this.bossFrac = f;
+
+    const pct = `${(f * 100).toFixed(3)}%`;
+    el.classList.toggle('low', f > 0 && f <= 0.2);
+
+    if (appearing) {
+      // Jump straight there, with no transitions: one left running from a
+      // previous fight would outrank the sweep below (transitions win the
+      // cascade over animations). A one-off forced layout, only on showing.
+      fill.style.transition = trail.style.transition = 'none';
+      fill.style.width = trail.style.width = pct;
+      void el.offsetWidth;
+      fill.style.transition = trail.style.transition = '';
+      this.bossShown = true;
+      el.classList.add('show');
+      // Fills up as it comes in, as a boss bar should
+      const sweep: Keyframe[] = [{ width: '0%' }, { width: pct }];
+      const timing: KeyframeAnimationOptions = { duration: 1100, easing: 'cubic-bezier(.2,.7,.2,1)' };
+      fill.animate(sweep, timing);
+      trail.animate(sweep, timing);
+      return;
+    }
+
+    fill.style.width = pct;
+    // The trail is sent to the same place, but its transition waits before it
+    // moves — and every new hit restarts the wait, so it holds through a burst
+    // and only drains once the shooting stops. It sits under the fill, so on
+    // the way up (a reset) it is never seen.
+    trail.style.width = pct;
+    if (hurt) {
+      // A flash on the fill as the round lands — at most every few frames, so
+      // full auto doesn't just leave it lit
+      const now = performance.now();
+      if (now - this.bossFlashAt > 80) {
+        this.bossFlashAt = now;
+        fill.animate([{ filter: 'brightness(2.1)' }, { filter: 'brightness(1)' }], { duration: 170, easing: 'ease-out' });
+      }
+    }
+  }
+
+  private buildBoss(): void {
+    const el = document.createElement('div');
+    el.className = 'boss-bar';
+    el.innerHTML = `
+      <div class="bb-head"><span class="bb-name"></span><span class="bb-sub"></span></div>
+      <div class="bb-track">
+        <div class="bb-trail"></div>
+        <div class="bb-fill"></div>
+        <div class="bb-ticks"><i style="left:33.333%"></i><i style="left:66.667%"></i></div>
+      </div>
+    `;
+    // Ahead of the death and win overlays in #hud, so they draw over it —
+    // appended after them, the bar would float on top of "YOU DIED"
+    this.hud.insertBefore(el, this.deathOverlay);
+    this.bossEl = el;
+    this.bossNameEl = el.querySelector('.bb-name');
+    this.bossSubEl = el.querySelector('.bb-sub');
+    this.bossFill = el.querySelector('.bb-fill');
+    this.bossTrail = el.querySelector('.bb-trail');
+    this.bossSubEl!.style.display = 'none';
+  }
+
+  // ------------------------------------------------------------- prompt
+
+  private promptEl: HTMLElement | null = null;
+  private promptText: string | null = null;
+
+  /**
+   * A centred prompt under the crosshair for something he can do right now,
+   * like "[ E ] GET IN". A leading "[ KEY ]" is drawn as a key cap. `null`
+   * fades it out (keeping the words, so they don't vanish mid-fade). Cheap to
+   * call every frame.
+   */
+  setPrompt(text: string | null): void {
+    if (text === this.promptText) return;
+    this.promptText = text;
+    if (text === null) {
+      this.promptEl?.classList.remove('show');
+      return;
+    }
+    if (!this.promptEl) {
+      this.promptEl = document.createElement('div');
+      this.promptEl.className = 'hud-prompt';
+      // Beneath the death / win overlays, like the boss bar
+      this.hud.insertBefore(this.promptEl, this.deathOverlay);
+    }
+    const el = this.promptEl;
+    el.textContent = '';
+    const m = /^\s*\[\s*([^\]]+?)\s*\]\s*(.*)$/.exec(text);
+    if (m) {
+      const key = document.createElement('span');
+      key.className = 'key';
+      key.textContent = m[1];
+      el.append(key);
+      if (m[2]) el.append(document.createTextNode(m[2]));
+    } else {
+      el.textContent = text;
+    }
+    el.classList.add('show');
   }
 
   /** Hide the crosshair while aiming down sights — the iron sights take over. */

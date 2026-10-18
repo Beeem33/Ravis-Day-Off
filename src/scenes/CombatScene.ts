@@ -139,6 +139,18 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       this.particles.bloodSpray(far, up, true, -61);
       this.particles.concreteChips(far, up);
       this.particles.glassShards(far, up, -61);
+      // The car park's: smoke, dust and exhaust share the smoke cards' pool,
+      // the sparks have their own streaks (and borrow the glow pool)
+      this.particles.tyreSmoke(far, up, 8);
+      this.particles.dust(far, 4);
+      this.particles.sparks(far, up, 6, -61);
+      this.particles.exhaust(far, up);
+      // Spawning only fills the CPU side: the smoke cards and the spark
+      // streaks draw nothing (instance count, draw range 0) until a step
+      // uploads them, so without this the throwaway frame never actually draws
+      // either — and the first car landing pays for it. A zero step moves
+      // nothing and ages nothing.
+      this.particles.update(0);
     }
     if (this.decals) {
       this.decals.place('blood', far, up);
@@ -275,7 +287,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       if (obj.userData.pierce && pierces < 1) {
         pierces++;
         this.particles.concreteChips(point, normal, 0x9aa2b0);
-        this.decals.place('bullethole', point, normal);
+        if (!obj.userData.noDecal) this.decals.place('bullethole', point, normal);
         // Exit-side puff
         this.particles.concreteChips(point.clone().addScaledVector(dir, 0.1), dir, 0x9aa2b0);
         remaining -= hit.distance + 0.12;
@@ -287,7 +299,10 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       const surface = (obj.userData.surface as string) ?? 'concrete';
       const tint = surface === 'metal' ? 0x8f979e : surface === 'wood' ? 0x9a7d55 : 0xb9b3a8;
       this.particles.concreteChips(point, normal, tint);
-      this.decals.place('bullethole', point, normal);
+      // Decals live in world space, not on what they hit — so nothing that
+      // moves gets one (`noDecal`: the cars, which get thrown; a hole would be
+      // left hanging in the air where the car had been).
+      if (!obj.userData.noDecal) this.decals.place('bullethole', point, normal);
       audio.ricochet(point.distanceTo(this.player.position));
       return point;
     }
@@ -585,7 +600,9 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       const hit = this.raycaster
         .intersectObjects(this.level.shootables, false)
         .find((h) => !h.object.userData.enemy && !h.object.userData.glass);
-      if (!hit) return;
+      // Blood decals are world-space too: one on a car (`noDecal`) would be
+      // left hanging in the air once he throws it. It hits the car and stops.
+      if (!hit || hit.object.userData.noDecal) return;
       const n = (hit.face?.normal ?? new THREE.Vector3(0, 0, 1)).clone().transformDirection(hit.object.matrixWorld);
       // Farther surfaces get a thinner, longer spray; near ones a fat splash
       const falloff = Math.max(0.35, 1 - hit.distance / maxDist);
@@ -603,7 +620,9 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       castSplat(d, 0.25 + Math.random() * 0.5, 1.3 + Math.random() * 1.2, 6);
     }
     // Drip splash on the surface directly below the wound
-    if (ground) this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
+    if (ground && !ground.object.userData.noDecal) {
+      this.decals.place('blood', ground.point, ground.normal, undefined, undefined, 1, ground.object);
+    }
   }
 
   // ------------------------------------------------------------- debris
@@ -728,6 +747,8 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
   /** Blood pool under a corpse that has come to rest. */
   protected poolUnder(enemy: Enemy): void {
     const under = this.surfaceBelow(enemy.corpseBase(), 3);
-    if (under) this.decals.place('pool', under.point, under.normal, undefined, undefined, 1, under.object);
+    if (under && !under.object.userData.noDecal) {
+      this.decals.place('pool', under.point, under.normal, undefined, undefined, 1, under.object);
+    }
   }
 }

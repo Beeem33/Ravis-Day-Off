@@ -55,6 +55,14 @@ export interface HitmanDrive {
   shinR: THREE.Object3D;
   /** 0..1 — down on the knees. The model's shins are longer than the rig's. */
   kneel: number;
+  /**
+   * 0..1 — stood with his feet planted: squatting, or set wide. The model's
+   * feet are put flat on the floor, turned only as the legs turn them, and
+   * his hips taken up or down to keep the soles on it — its legs are not the
+   * rig's length, so the rig's planted feet leave the model's a little off.
+   * Left out (or 0), the feet ride the shins as they always have.
+   */
+  plant?: number;
   handL: HandGoal;
   handR: HandGoal;
 }
@@ -63,9 +71,11 @@ export interface HitmanDrive {
  * What he is wearing. The agents are the man as modelled: suit, gloves,
  * sunglasses, an earpiece. The call-centre staff are the same man in the
  * floor's uniform — white shirt, blue trousers, a navy cap, bare hands — and
- * the boss is him built heavy, bearded, in a red cap and a striped tie.
+ * the boss is him built heavy, bearded, in a red cap and a striped tie. The
+ * General is him built like a wardrobe, in an olive dress uniform with
+ * everything a dress uniform can carry.
  */
-export type Outfit = 'agent' | 'staff' | 'boss';
+export type Outfit = 'agent' | 'staff' | 'boss' | 'general';
 
 export interface HitmanLook {
   /** A Hair_* mesh in the model, or null for a shaved head. */
@@ -142,6 +152,8 @@ interface Joint {
   parent: Joint | null;
   q: THREE.Quaternion;
   p: THREE.Vector3;
+  /** A foot: put flat on the floor when the drive plants them. */
+  foot: boolean;
 }
 
 /** What a hand looks like at rest, for placing it on things. */
@@ -637,6 +649,11 @@ export class HitmanVisual {
       // What shows of his hair under the cap: the sides, going grey
       return { hair: 'Horseshoe', hairColor: HAIR.darkBrown, skin: 0xc08b66, tie: 0, outfit };
     }
+    if (outfit === 'general') {
+      // Clippered to the scalp and gone to steel under the cap; a face that
+      // has stood in a great deal of weather
+      return { hair: 'Buzz', hairColor: HAIR.grey, skin: 0xb58262, tie: 0x2c3322, outfit };
+    }
     if (outfit === 'staff') {
       // Only what fits under a cap
       return { hair: STAFF_STYLES[(i * 3 + 1) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
@@ -777,7 +794,8 @@ export class HitmanVisual {
         drive,
         parent,
         q: new THREE.Quaternion(),
-        p: new THREE.Vector3()
+        p: new THREE.Vector3(),
+        foot: name === 'Foot_L' || name === 'Foot_R'
       };
       this.joints.push(j);
       this.byName.set(name, j);
@@ -818,6 +836,7 @@ export class HitmanVisual {
     });
 
     if (look.outfit === 'staff' || look.outfit === 'boss') this.restyle(look, look.outfit);
+    else if (look.outfit === 'general') this.dressGeneral();
     this.buildHitboxes();
   }
 
@@ -1515,6 +1534,859 @@ export class HitmanVisual {
     }
   }
 
+  // ------------------------------------------------------------ the General
+
+  /**
+   * How much further out the General's shoulder joints are than the model's,
+   * along each collarbone. Letting out the bind pose cannot by itself make a
+   * man broad across the shoulders: the model's arms hang close against his
+   * sides, and a chest let out by a third would come out through his
+   * sleeves. So his collarbones are longer instead — the arm joints sit 5 cm
+   * further out, the arms go with them, and the cloth over the top of each
+   * shoulder is let out to meet them (see bulked).
+   */
+  private static readonly GENERAL_SHOULDERS = 0.05;
+
+  /** How far each arm's joints sit from where the model has them, in its frame; null for everyone but the General. */
+  private armShift: { L: THREE.Vector3; R: THREE.Vector3 } | null = null;
+  /** Built like a wardrobe: his hitboxes are let out to the size of him. */
+  private bulk = false;
+
+  /** The bones of one arm, shoulder joint to fingertips. */
+  private static armBones(sd: 'L' | 'R'): string[] {
+    const out = [`UpperArm_${sd}`, `LowerArm_${sd}`, `Hand_${sd}`];
+    for (const f of FINGERS) for (let k = 1; k <= 3; k++) out.push(`${f}${k}_${sd}`);
+    return out;
+  }
+
+  /** Where bone `n` is at rest in this copy, model frame: the model's rest, with the General's arms let out. */
+  private restP(n: string): THREE.Vector3 {
+    const p = HitmanVisual.rest.get(n)!.modelP;
+    const s = this.armShift;
+    if (!s || n.startsWith('Shoulder') || /Leg|Foot|Toe/.test(n)) return p;
+    if (n.endsWith('_L')) return p.clone().add(s.L);
+    if (n.endsWith('_R')) return p.clone().add(s.R);
+    return p;
+  }
+
+  /**
+   * Longer collarbones: each arm's joint moved `d` further out along the
+   * bone that carries it. The skin is bound to the model's own skeleton, so
+   * moving the bone moves every vertex hung on it — the whole arm — and the
+   * cloth between it and the chest stretches across the gap.
+   */
+  private broadenShoulders(d: number): void {
+    const H = HitmanVisual;
+    this.armShift = { L: new THREE.Vector3(), R: new THREE.Vector3() };
+    for (const sd of ['L', 'R'] as const) {
+      const j = this.byName.get(`UpperArm_${sd}`)!;
+      const r = j.rest;
+      this.armShift[sd].copy(r.modelP).sub(H.rest.get(`Shoulder_${sd}`)!.modelP).setLength(d);
+      // A rest of his own: the shared one is every agent's
+      const localP = r.localP.clone().setLength(r.localP.length() + d);
+      j.rest = { localQ: r.localQ, localP, modelQ: r.modelQ, modelP: r.modelP.clone().add(this.armShift[sd]) };
+      j.bone.position.copy(localP);
+    }
+  }
+
+  /**
+   * The General's build, pushed into the bind pose of one of the model's
+   * meshes the way the boss's is (see fattened), but muscle rather than
+   * fat: a chest a good deal broader and deeper with the pectorals standing
+   * out under the jacket, the shoulders let out to the longer collarbones,
+   * a bull's neck and the slope of muscle down from it to the shoulders,
+   * arms half as thick again — the forearms most of all near the elbow —
+   * big hands, heavy thighs, and no belly at all. With `face`, a heavy
+   * square jaw and a broad chin.
+   *
+   * The same smooth fields are applied to every layer — coat, lapels,
+   * shirt, tie, buttons — so one still lies over the other afterwards.
+   * Normals are left as modelled: re-deriving them would split the shading
+   * at every seam in the cloth.
+   */
+  private static bulked(src: THREE.BufferGeometry, face: boolean): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const g = src.clone();
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const P = (n: string) => H.rest.get(n)!.modelP;
+    const S = H.smoothstep;
+    const TORSO = ['Hips', 'Spine', 'Chest', 'UpperChest'];
+    const SHOULDERS = ['Shoulder_L', 'Shoulder_R'];
+    const gauss = (x: number, c: number, s: number) => Math.exp(-(((x - c) / s) ** 2));
+    const p = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const on = new THREE.Vector3();
+    /** Thicken round the segment a–b by k(t), t running 0 at a to 1 at b, as far as the vertex belongs to it. */
+    const swell = (a: THREE.Vector3, b: THREE.Vector3, k: (t: number) => number, w: number) => {
+      if (w <= 0) return;
+      ab.copy(b).sub(a);
+      const t = THREE.MathUtils.clamp(on.copy(p).sub(a).dot(ab) / ab.lengthSq(), 0, 1);
+      on.copy(a).addScaledVector(ab, t);
+      p.sub(on).multiplyScalar(1 + k(t) * w).add(on);
+    };
+    // The upper arm only a little thicker where the sleeve is set into the
+    // shoulder — swell it there and the sleeve's head stands up off the
+    // coat in a ring — and half as thick again from the biceps down; the
+    // forearm heaviest by the elbow; the thighs heaviest at the top
+    const UPPER = (t: number) => 0.12 + 0.43 * S(0, 0.45, t);
+    const FORE = (t: number) => 0.5 - 0.2 * t;
+    const HAND = () => 0.12;
+    const THIGH = (t: number) => 0.32 - 0.12 * t;
+    const CALF = (t: number) => 0.2 - 0.15 * t;
+    const sides = (['L', 'R'] as const).map((sd) => ({
+      sd,
+      sign: sd === 'L' ? -1 : 1,
+      arm: H.armBones(sd),
+      hand: H.armBones(sd).slice(2),
+      clavicle: P(`UpperArm_${sd}`).clone().sub(P(`Shoulder_${sd}`)).normalize()
+    }));
+    for (let v = 0; v < pos.count; v++) {
+      p.fromBufferAttribute(pos, v);
+      // The fields are all read off where the vertex was, so the order the
+      // changes go in does not move one layer of cloth off another
+      const x0 = p.x;
+      const y0 = p.y;
+      const z0 = p.z;
+      const ax = Math.abs(x0);
+      const tw = H.weightOn(g, v, TORSO);
+
+      // Limbs, thickened round their bones
+      for (const s of sides) {
+        const sd = s.sd;
+        swell(P(`UpperArm_${sd}`), P(`LowerArm_${sd}`), UPPER, H.weightOn(g, v, [`UpperArm_${sd}`]));
+        swell(P(`LowerArm_${sd}`), P(`Hand_${sd}`), FORE, H.weightOn(g, v, [`LowerArm_${sd}`]));
+        swell(P(`Hand_${sd}`), P(`Middle1_${sd}`), HAND, H.weightOn(g, v, s.hand));
+        swell(P(`UpperLeg_${sd}`), P(`LowerLeg_${sd}`), THIGH, H.weightOn(g, v, [`UpperLeg_${sd}`]));
+        swell(P(`LowerLeg_${sd}`), P(`Foot_${sd}`), CALF, H.weightOn(g, v, [`LowerLeg_${sd}`]));
+      }
+
+      if (tw > 0) {
+        // A little fuller through the chest and the waist. Most of his
+        // breadth is the shoulders and the lats going out with the arms
+        // (below): out here they would only push into his sleeves
+        p.x *= 1 + (0.06 * gauss(y0, 1.27, 0.12) + 0.04 * gauss(y0, 1.04, 0.1)) * tw;
+        // A deep chest: the pectorals out either side of the breastbone,
+        // which comes most of the way with them so the tie doesn't sink
+        // into a trench between them
+        const pec = gauss(y0, 1.33, 0.075) * (0.6 + 0.4 * S(0, 0.07, ax)) * (1 - S(0.11, 0.2, ax)) * S(0, -0.07, z0);
+        p.z -= 0.028 * pec * tw;
+        // And the back of it: shoulder blades and lats
+        p.z += 0.016 * gauss(y0, 1.3, 0.1) * S(0.02, 0.09, z0) * tw;
+      }
+
+      // A bull's neck, and the collars round it let out
+      const nw = H.weightOn(g, v, ['Neck']) + (y0 > 1.44 ? tw * S(1.44, 1.47, y0) : 0);
+      if (nw > 0 && y0 < 1.53) {
+        const k = 1 + 0.3 * Math.min(1, nw);
+        p.x *= k;
+        p.z = 0.008 + (p.z - 0.008) * k;
+      }
+      // The muscle sloping from it down to each shoulder, built up
+      const ws = H.weightOn(g, v, SHOULDERS);
+      p.y += 0.014 * gauss(ax, 0.1, 0.045) * S(1.4, 1.46, y0) * Math.min(1, tw + ws);
+
+      // The shoulders, and the sides of the chest under them, out with the
+      // arms on their longer collarbones: across the top of the shoulder,
+      // round the armhole and down the lats, all the way out at the sides
+      // and less the nearer the middle of him or his waist. The arm goes out
+      // with its bone, so only what the bone doesn't carry is moved here —
+      // and the coat round the armhole goes as far as the sleeve set in it
+      for (const s of sides) {
+        if (x0 * s.sign <= 0) continue;
+        const reach = S(0.07, 0.2, ax) * S(1.12, 1.36, y0) - H.weightOn(g, v, s.arm);
+        if (reach > 0) p.addScaledVector(s.clavicle, H.GENERAL_SHOULDERS * reach);
+      }
+
+      if (face) {
+        // A heavy jaw, square at the angles, and a broad chin brought forward
+        const jaw = gauss(y0, 1.525, 0.022) * S(0.02, 0.05, ax) * S(0.03, -0.01, z0);
+        p.x *= 1 + 0.16 * jaw;
+        const chin = gauss(y0, 1.51, 0.013) * (1 - S(0.022, 0.045, ax)) * S(-0.03, -0.06, z0);
+        p.x *= 1 + 0.3 * chin;
+        p.z -= 0.008 * chin;
+        p.y -= 0.003 * chin;
+      }
+      pos.setXYZ(v, p.x, p.y, p.z);
+    }
+    pos.needsUpdate = true;
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /**
+   * His dress uniform out of the suit, built heavy: everything below the
+   * waist is trousers, everything above it the coat — lapels and all, a
+   * dress uniform has them — and the lapels taken in, narrower than a
+   * civilian's, to leave the left breast clear for his ribbons. Material 0
+   * is the coat, 1 the trousers.
+   */
+  private static generalSuit(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const { of, top, bottom, front } = H.pieces(src);
+    const idx = src.index!.array;
+    const coat: number[] = [];
+    const trousers: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) (top.get(of[idx[i]])! < 1.035 ? trousers : coat).push(idx[i], idx[i + 1], idx[i + 2]);
+    const g = H.reindexed(H.bulked(src, false), [coat, trousers]);
+    // The lapels: pieces lying wholly on the front of the chest, below the
+    // collar. Each is drawn in towards the opening of the V
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const src0 = src.attributes.position;
+    for (let v = 0; v < pos.count; v++) {
+      const r = of[v];
+      if (!(front.get(r)! < -0.06 && bottom.get(r)! > 1.1 && top.get(r)! < 1.47)) continue;
+      // The opening runs from 1.5 cm off the middle at the bottom of the V
+      // to 6 cm at the collar
+      const y = src0.getY(v);
+      const inner = 0.016 + 0.155 * THREE.MathUtils.clamp(y - 1.18, 0, 0.3);
+      const ax = Math.abs(src0.getX(v));
+      if (ax <= inner) continue;
+      const k = (inner + (ax - inner) * 0.66) / ax;
+      pos.setX(v, pos.getX(v) * k);
+    }
+    pos.needsUpdate = true;
+    return g;
+  }
+
+  /** The shirt under his coat, built heavy, with no pocket square in the coat over it. */
+  private static generalShirt(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const { of, top, bottom } = H.pieces(src);
+    const idx = src.index!.array;
+    const keep: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const r = of[idx[i]];
+      if (!(bottom.get(r)! > 1.3 && top.get(r)! < 1.36)) keep.push(idx[i], idx[i + 1], idx[i + 2]);
+    }
+    const g = H.reindexed(H.bulked(src, false), [keep]);
+    g.clearGroups();
+    return g;
+  }
+
+  /**
+   * The model's tie mesh carries the coat's buttons as well — down the
+   * front and four at each cuff — so it is split: the tie (the knot and the
+   * blade, the only pieces of any height) is material 0, the buttons 1.
+   * The top button of the front goes with the tie: the blade hangs over
+   * it, and in gold it would show through as a bright nick in the tie.
+   */
+  private static generalTie(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const { of, top, bottom, front } = H.pieces(src);
+    const idx = src.index!.array;
+    const tie: number[] = [];
+    const buttons: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const r = of[idx[i]];
+      const button = top.get(r)! - bottom.get(r)! <= 0.03;
+      const underTie = button && bottom.get(r)! > 1.12 && front.get(r)! < -0.08;
+      (button && !underTie ? buttons : tie).push(idx[i], idx[i + 1], idx[i + 2]);
+    }
+    return H.reindexed(H.bulked(src, false), [tie, buttons]);
+  }
+
+  /**
+   * The agents' wraparounds made aviators: below the middle of each lens
+   * the glass is drawn further down, most of all two-thirds of the way out
+   * from the nose, so each lens comes to the teardrop that shape is named
+   * for. The frame (the bridge and the arms) is left as it is.
+   */
+  private static aviators(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const g = src.clone();
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const mid = 1.6285;
+    for (let v = 0; v < pos.count; v++) {
+      const y = pos.getY(v);
+      if (y >= mid) continue;
+      const k = 0.5 * Math.exp(-(((Math.abs(pos.getX(v)) - 0.042) / 0.026) ** 2));
+      pos.setY(v, mid + (y - mid) * (1 + k));
+    }
+    pos.needsUpdate = true;
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  private static generalMats(): Record<
+    'coat' | 'trousers' | 'shirt' | 'tie' | 'gold' | 'glove' | 'lens' | 'frame' | 'crown' | 'band' | 'visor' | 'ribbons' | 'medals',
+    THREE.Material
+  > {
+    const H = HitmanVisual;
+    const std = (key: string, p: THREE.MeshStandardMaterialParameters) =>
+      H.outfitMat(`general:${key}`, () => new THREE.MeshStandardMaterial(p));
+    return {
+      coat: std('coat', { name: 'HM_Uniform', color: 0x4a5236, roughness: 0.8 }),
+      trousers: std('trousers', { name: 'HM_Uniform', color: 0x3d4430, roughness: 0.82 }),
+      shirt: std('shirt', { name: 'HM_Shirt', color: 0xb8a67b, roughness: 0.85 }),
+      tie: std('tie', { name: 'HM_Tie', color: 0x2c3322, roughness: 0.5 }),
+      gold: std('gold', { name: 'HM_Gold', color: 0xd4a52a, roughness: 0.32, metalness: 0.6 }),
+      // Black leather, with a little shine on the knuckles
+      glove: std('glove', { name: 'HM_Glove', color: 0x121214, roughness: 0.36 }),
+      // Smoked glass with a gold mirror to it: the lights catch it gold
+      lens: std('lens', { name: 'HM_Lens', color: 0x2e2616, roughness: 0.1, metalness: 0.7 }),
+      frame: std('frame', { name: 'HM_Metal', color: 0xc89b3c, roughness: 0.3, metalness: 0.6 }),
+      crown: std('crown', { name: 'HM_Cap', color: 0x4a5236, roughness: 0.75, side: THREE.DoubleSide }),
+      band: std('band', { name: 'HM_Cap', color: 0x23271a, roughness: 0.85, side: THREE.DoubleSide }),
+      // Patent leather: black, and glossy enough to catch the sky
+      visor: std('visor', { name: 'HM_Visor', color: 0x0a0a0c, roughness: 0.14, metalness: 0.35, side: THREE.DoubleSide }),
+      ribbons: std('ribbons', { name: 'HM_Ribbon', color: 0xffffff, roughness: 0.62, vertexColors: true }),
+      medals: std('medals', { name: 'HM_Medal', color: 0xffffff, roughness: 0.3, metalness: 0.6, vertexColors: true })
+    };
+  }
+
+  /**
+   * Build a mesh out of curved sheets: each a grid of points from `at(i, j)`,
+   * i over `rows` and j over `cols`. Every sheet has vertices of its own, so
+   * the normals are smooth across a sheet and sharp where two sheets meet —
+   * the edge of a visor stays an edge.
+   */
+  private static sheets(build: (sheet: (rows: number, cols: number, at: (i: number, j: number, out: THREE.Vector3) => void, flip?: boolean) => void) => void): THREE.BufferGeometry {
+    const P: number[] = [];
+    const I: number[] = [];
+    const v = new THREE.Vector3();
+    build((rows, cols, at, flip = false) => {
+      const base = P.length / 3;
+      for (let i = 0; i <= rows; i++) {
+        for (let j = 0; j <= cols; j++) {
+          at(i, j, v);
+          P.push(v.x, v.y, v.z);
+        }
+      }
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+          const a = base + i * (cols + 1) + j;
+          const b = a + 1;
+          const c = a + cols + 1;
+          const d = c + 1;
+          if (flip) I.push(a, c, b, b, c, d);
+          else I.push(a, b, c, b, d, c);
+        }
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g.setIndex(I);
+    g.computeVertexNormals();
+    return g;
+  }
+
+  /** Geometries as one, positions and normals only, for parts that share a material. */
+  private static merged(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+    const flat = parts.map((p) => {
+      const n = p.index ? p.toNonIndexed() : p.clone();
+      for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k);
+      return n;
+    });
+    const g = mergeGeometries(flat, false) ?? new THREE.BufferGeometry();
+    for (const p of [...parts, ...flat]) p.dispose();
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /** His cap's band, in the cap's own frame: an oval just clear of his scalp, from its bottom edge to its top. */
+  private static readonly CAP = { rx: 0.085, rz: 0.095, y0: -0.008, y1: 0.034 };
+
+  /**
+   * One curved strip round the front of the cap, out from the band's bottom
+   * edge and pitched down: the visor (from 0 to 1 of the way out), or the
+   * gold on it (a band of that). It narrows to nothing at either end, the
+   * way a visor runs back into the band at the sides.
+   */
+  private static visorStrip(from: number, to: number, lift: number, thick: number): THREE.BufferGeometry {
+    const C = HitmanVisual.CAP;
+    const N = 30;
+    const SPAN = 1.32;
+    const DEPTH = 0.058;
+    const DROOP = 0.55;
+    const at = (i: number, f: number, dy: number, out: THREE.Vector3) => {
+      const a = -SPAN + (2 * SPAN * i) / N;
+      const reach = DEPTH * Math.pow(Math.max(0, Math.cos((a / SPAN) * (Math.PI / 2))), 0.55) * f;
+      // Square to the oval of the band
+      let nx = Math.sin(a) / C.rx;
+      let nz = -Math.cos(a) / C.rz;
+      const nl = Math.hypot(nx, nz);
+      nx /= nl;
+      nz /= nl;
+      const r = reach * Math.cos(DROOP);
+      out.set(Math.sin(a) * C.rx + nx * r, C.y0 + 0.002 - reach * Math.sin(DROOP) + lift + dy, -Math.cos(a) * C.rz + nz * r);
+    };
+    return HitmanVisual.sheets((sheet) => {
+      sheet(N, 3, (i, j, o) => at(i, from + ((to - from) * j) / 3, 0, o));
+      sheet(N, 3, (i, j, o) => at(i, from + ((to - from) * j) / 3, -thick, o), true);
+      sheet(N, 1, (i, j, o) => at(i, to, -thick * j, o), true);
+      sheet(N, 1, (i, j, o) => at(i, from, -thick * j, o));
+    });
+  }
+
+  /**
+   * The crown of the cap: out from the top of the band in a flare wider
+   * than it, the front stood up higher than the back — the saddle of an
+   * officer's cap — and the top falling a touch to the middle.
+   */
+  private static capCrown(): THREE.BufferGeometry {
+    const C = HitmanVisual.CAP;
+    const N = 44;
+    // Each ring: half widths, then its height at the front and at the back
+    const rings: [number, number, number, number][] = [
+      [C.rx * 0.985, C.rz * 0.985, C.y1 - 0.002, C.y1 - 0.002],
+      [0.107, 0.122, C.y1 + 0.036, C.y1 + 0.02],
+      [0.106, 0.121, C.y1 + 0.042, C.y1 + 0.026],
+      [0.08, 0.093, C.y1 + 0.044, C.y1 + 0.029]
+    ];
+    const top = C.y1 + 0.038;
+    return HitmanVisual.sheets((sheet) => {
+      sheet(rings.length - 1, N, (i, j, o) => {
+        const [rx, rz, yf, yb] = rings[i];
+        const a = (j / N) * Math.PI * 2;
+        o.set(Math.sin(a) * rx, yb + (yf - yb) * ((1 + Math.cos(a)) / 2), -Math.cos(a) * rz);
+      });
+      // The top: the last ring drawn in to the middle
+      sheet(1, N, (i, j, o) => {
+        const [rx, rz, yf, yb] = rings[rings.length - 1];
+        const a = (j / N) * Math.PI * 2;
+        const k = 1 - i;
+        o.set(Math.sin(a) * rx * k, (yb + (yf - yb) * ((1 + Math.cos(a)) / 2)) * k + top * (1 - k), -Math.cos(a) * rz * k);
+      });
+    });
+  }
+
+  /**
+   * The General's cap, in its own frame (hung on his head at the boss's
+   * cap's place): a dark band, the olive crown flaring out over it, the
+   * black visor pitched down over his glasses with two rows of gold oak
+   * leaves on it, a gold cord across the front of the band held by a button
+   * at each end, and the badge — a star in a wreath — on the front of the
+   * crown. One mesh per material.
+   */
+  private generalCap(): THREE.Group {
+    const H = HitmanVisual;
+    const C = H.CAP;
+    const mats = H.generalMats();
+    const cap = new THREE.Group();
+    cap.name = 'GeneralCap';
+    const band = new THREE.Mesh(
+      H.outfitGeo('general:cap:band', () => {
+        const g = new THREE.CylinderGeometry(1, 1, 1, 44, 1, true);
+        g.scale(C.rx, C.y1 - C.y0, C.rz);
+        g.translate(0, (C.y0 + C.y1) / 2, 0);
+        return g;
+      }),
+      mats.band
+    );
+    const crown = new THREE.Mesh(H.outfitGeo('general:cap:crown', () => H.capCrown()), mats.crown);
+    const visor = new THREE.Mesh(H.outfitGeo('general:cap:visor', () => H.visorStrip(-0.05, 1, 0, 0.0045)), mats.visor);
+    const gold = new THREE.Mesh(
+      H.outfitGeo('general:cap:gold', () => {
+        const parts: THREE.BufferGeometry[] = [];
+        // Oak leaves on the visor, two rows of them
+        parts.push(H.visorStrip(0.3, 0.56, 0.0016, 0.0012), H.visorStrip(0.64, 0.92, 0.0016, 0.0012));
+        // The cord across the front of the band, a button at each end
+        const along = (y: number) => {
+          const pts: THREE.Vector3[] = [];
+          for (let a = -1.22; a <= 1.2201; a += 0.122) pts.push(new THREE.Vector3(Math.sin(a) * (C.rx + 0.0028), y, -Math.cos(a) * (C.rz + 0.0028)));
+          return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.0021, 5, false);
+        };
+        parts.push(along(C.y0 + 0.008), along(C.y0 + 0.014));
+        for (const sx of [-1, 1]) {
+          const b = new THREE.SphereGeometry(0.0052, 10, 6);
+          b.scale(1, 1, 0.6);
+          b.rotateY(sx * 1.27);
+          b.translate(Math.sin(sx * 1.27) * (C.rx + 0.002), C.y0 + 0.011, -Math.cos(1.27) * (C.rz + 0.002));
+          parts.push(b);
+        }
+        // The badge, tipped forward with the flare of the crown
+        const badge: THREE.BufferGeometry[] = [new THREE.TorusGeometry(0.0128, 0.0023, 6, 22)];
+        const star = new THREE.Shape();
+        for (let k = 0; k < 10; k++) {
+          const a = (k / 10) * Math.PI * 2;
+          const r = k % 2 ? 0.0042 : 0.0098;
+          if (k === 0) star.moveTo(Math.sin(a) * r, Math.cos(a) * r);
+          else star.lineTo(Math.sin(a) * r, Math.cos(a) * r);
+        }
+        const sg = new THREE.ExtrudeGeometry(star, { depth: 0.0022, bevelEnabled: false });
+        sg.translate(0, 0, -0.0026);
+        badge.push(sg);
+        const place = new THREE.Matrix4().compose(
+          new THREE.Vector3(0, C.y1 + 0.017, -(C.rz + 0.47 * (0.122 - C.rz)) - 0.0024),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.62, 0, 0)),
+          new THREE.Vector3(1, 1, 1)
+        );
+        for (const b of badge) parts.push(b.applyMatrix4(place));
+        return H.merged(parts);
+      }),
+      mats.gold
+    );
+    cap.add(band, crown, visor, gold);
+    cap.position.set(0, 1.672, 0.004);
+    cap.rotation.x = -0.04;
+    return cap;
+  }
+
+  /**
+   * Skin `geo` like the cloth under it: every vertex takes the bone weights
+   * of the nearest vertex of `cloth`, so whatever is sewn on rides every
+   * pose — the shoulder rising with the arm under an epaulette, the chest
+   * under the ribbons — exactly as the cloth does. Both in the bind pose.
+   */
+  private static skinnedLike(geo: THREE.BufferGeometry, cloth: THREE.BufferGeometry): THREE.BufferGeometry {
+    const cp = cloth.attributes.position;
+    const ci = cloth.attributes.skinIndex;
+    const cw = cloth.attributes.skinWeight;
+    const gp = geo.attributes.position;
+    // Only the cloth anywhere near it is worth searching
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const near = geo.boundingBox!.clone().expandByScalar(0.06);
+    const cand: number[] = [];
+    const v = new THREE.Vector3();
+    for (let k = 0; k < cp.count; k++) if (near.containsPoint(v.fromBufferAttribute(cp, k))) cand.push(k);
+    const SI = new Uint16Array(gp.count * 4);
+    const SW = new Float32Array(gp.count * 4);
+    for (let i = 0; i < gp.count; i++) {
+      const x = gp.getX(i);
+      const y = gp.getY(i);
+      const z = gp.getZ(i);
+      let best = cand[0] ?? 0;
+      let bestD = Infinity;
+      for (const k of cand) {
+        const d = (cp.getX(k) - x) ** 2 + (cp.getY(k) - y) ** 2 + (cp.getZ(k) - z) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = k;
+        }
+      }
+      for (let k = 0; k < 4; k++) {
+        SI[i * 4 + k] = ci.getComponent(best, k);
+        SW[i * 4 + k] = cw.getComponent(best, k);
+      }
+    }
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4));
+    geo.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+    return geo;
+  }
+
+  /** Colour every vertex of `g` one colour, for the vertex-coloured kit. */
+  private static tinted(g: THREE.BufferGeometry, colour: number): THREE.BufferGeometry {
+    const c = new THREE.Color(colour);
+    const n = g.attributes.position.count;
+    const a = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      a[i * 3] = c.r;
+      a[i * 3 + 1] = c.g;
+      a[i * 3 + 2] = c.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    return g;
+  }
+
+  /** As merged(), keeping each part's vertex colours. */
+  private static mergedColoured(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+    const flat = parts.map((p) => {
+      const n = p.index ? p.toNonIndexed() : p.clone();
+      for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color') n.deleteAttribute(k);
+      return n;
+    });
+    const g = mergeGeometries(flat, false) ?? new THREE.BufferGeometry();
+    for (const p of [...parts, ...flat]) p.dispose();
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /** The kit sewn on his coat, built once: gold (epaulettes, pocket buttons), ribbons, medals. */
+  private static generalKitCache: { gold: THREE.BufferGeometry; ribbons: THREE.BufferGeometry; medals: THREE.BufferGeometry } | null = null;
+
+  /**
+   * Everything sewn onto his coat, in the bind pose of the coat as built
+   * (`coat`: its geometry, let out by bulked) and skinned like it:
+   *
+   *  - Gold epaulettes on the shoulders — a board along the top of each
+   *    from beside the collar out to the shoulder's point, a button at its
+   *    inner end, and a heavy bullion fringe hanging off the outer end down
+   *    over the top of the arm.
+   *  - Gold buttons on the four pocket flaps.
+   *  - On his left breast, over the pocket: four rows of ribbons in a rack,
+   *    and below it three medals on their ribbons — a gold disc, a silver
+   *    star, a bronze cross. Every colour made up; none of them anybody's.
+   *
+   * Laid on the cloth by looking at it: down onto the shoulders, in at the
+   * sides of the arms, straight at the chest.
+   */
+  private static generalKit(coat: THREE.BufferGeometry): { gold: THREE.BufferGeometry; ribbons: THREE.BufferGeometry; medals: THREE.BufferGeometry } {
+    const H = HitmanVisual;
+    if (H.generalKitCache) return H.generalKitCache;
+    const pos = coat.attributes.position;
+    const idx = coat.index!.array;
+    const tris: THREE.Triangle[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const t = new THREE.Triangle(
+        new THREE.Vector3().fromBufferAttribute(pos, idx[i]),
+        new THREE.Vector3().fromBufferAttribute(pos, idx[i + 1]),
+        new THREE.Vector3().fromBufferAttribute(pos, idx[i + 2])
+      );
+      // Above the waist only: the kit is all on the coat
+      if (t.a.y > 0.95 || t.b.y > 0.95 || t.c.y > 0.95) tris.push(t);
+    }
+    const ray = new THREE.Ray();
+    const hit = new THREE.Vector3();
+    const nrm = new THREE.Vector3();
+    /** The first surface along a ray, and which way it faces (towards the ray's origin), or null. */
+    const cast = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): { p: THREE.Vector3; n: THREE.Vector3 } | null => {
+      ray.origin.set(ox, oy, oz);
+      ray.direction.set(dx, dy, dz).normalize();
+      let best: { p: THREE.Vector3; n: THREE.Vector3 } | null = null;
+      let bestD = Infinity;
+      for (const t of tris) {
+        if (!ray.intersectTriangle(t.a, t.b, t.c, false, hit)) continue;
+        const d = hit.distanceToSquared(ray.origin);
+        if (d < bestD) {
+          bestD = d;
+          t.getNormal(nrm);
+          if (nrm.dot(ray.direction) > 0) nrm.negate();
+          best = { p: hit.clone(), n: nrm.clone() };
+        }
+      }
+      return best;
+    };
+    const down = (x: number, z: number) => cast(x, 2, z, 0, -1, 0);
+    const front = (x: number, y: number) => cast(x, y, -1, 0, 0, 1);
+
+    const gold: THREE.BufferGeometry[] = [];
+    const ribbons: THREE.BufferGeometry[] = [];
+    const medals: THREE.BufferGeometry[] = [];
+
+    // ---- Epaulettes. Along each shoulder from just clear of the collar
+    // (let out with the neck) to the point of the shoulder (let out to the
+    // longer collarbones)
+    for (const sx of [-1, 1]) {
+      const X0 = 0.128;
+      const X1 = 0.252;
+      const HW = 0.028;
+      const ZC = 0.004;
+      const NU = 16;
+      const NW = 6;
+      const surf = new Map<string, number>();
+      const topAt = (x: number, z: number) => {
+        const key = `${x.toFixed(4)}:${z.toFixed(4)}`;
+        let y = surf.get(key);
+        if (y === undefined) {
+          y = down(sx * x, z)?.p.y ?? 1.45;
+          surf.set(key, y);
+        }
+        return y;
+      };
+      // A rounded point at the inner end, square at the outer
+      const width = (u: number) => (u < 0.18 ? Math.sqrt(Math.max(0, 1 - ((0.18 - u) / 0.18) ** 2)) : 1);
+      const pt = (u: number, w: number, lift: number, o: THREE.Vector3) => {
+        const x = X0 + (X1 - X0) * u;
+        const z = ZC + HW * w * width(u);
+        // A little crowned across its width
+        const crown = 0.0018 * (1 - w * w);
+        o.set(sx * x, topAt(x, z) + 0.0028 + lift + (lift > 0 ? crown : 0), z);
+      };
+      gold.push(
+        H.sheets((sheet) => {
+          const T = 0.0055;
+          sheet(NU, NW, (i, j, o) => pt(i / NU, -1 + (2 * j) / NW, T, o), sx < 0);
+          sheet(NU, NW, (i, j, o) => pt(i / NU, -1 + (2 * j) / NW, 0, o), sx > 0);
+          sheet(NU, 1, (i, j, o) => pt(i / NU, -1, T * (1 - j), o), sx > 0);
+          sheet(NU, 1, (i, j, o) => pt(i / NU, 1, T * (1 - j), o), sx < 0);
+          sheet(NW, 1, (i, j, o) => pt(1, -1 + (2 * i) / NW, T * (1 - j), o), sx < 0);
+        })
+      );
+      // The button at its inner end
+      const btn = new THREE.SphereGeometry(0.0062, 10, 6);
+      btn.scale(1, 0.55, 1);
+      const bx = X0 + (X1 - X0) * 0.1;
+      btn.translate(sx * bx, topAt(bx, ZC) + 0.0028 + 0.0055 + 0.002, ZC);
+      gold.push(btn);
+      // The fringe: bullion, hanging off the outer end and lying down the
+      // outside of the arm below it
+      const THREADS = 10;
+      for (let k = 0; k < THREADS; k++) {
+        const z = ZC + HW * (-0.92 + (1.84 * k) / (THREADS - 1));
+        const y0 = topAt(X1, z) + 0.004;
+        const pts = [new THREE.Vector3(sx * (X1 - 0.004), y0, z)];
+        for (const dy of [0.008, 0.02, 0.033, 0.046]) {
+          const side = cast(sx * 0.6, y0 - dy, z, -sx, 0, 0);
+          const x = side ? Math.abs(side.p.x) + 0.0035 : X1 + 0.004;
+          pts.push(new THREE.Vector3(sx * Math.max(x, X1 - 0.002), y0 - dy, z));
+        }
+        gold.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 0.003, 5, false));
+      }
+    }
+
+    // ---- Buttons on the pocket flaps: the breast pockets' and the lower ones'
+    for (const [x, y] of [[0.096, 1.312], [0.104, 1.041]]) {
+      for (const sx of [-1, 1]) {
+        const s = front(sx * x, y);
+        if (!s) continue;
+        const b = new THREE.SphereGeometry(0.0058, 10, 6);
+        b.scale(1, 1, 0.5);
+        b.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), s.n));
+        b.translate(s.p.x + s.n.x * 0.0018, s.p.y + s.n.y * 0.0018, s.p.z + s.n.z * 0.0018);
+        gold.push(b);
+      }
+    }
+
+    // ---- Ribbons and medals on his left breast. One frame for the lot, off
+    // the cloth at the middle of the rack — they are on a bar, not sewn on
+    // one by one — and each piece then sat on the cloth along it.
+    const CX = -0.128;
+    const mid = front(CX, 1.36);
+    const out = mid ? mid.n.clone() : new THREE.Vector3(0, 0, -1);
+    const right = new THREE.Vector3(1, 0, 0).addScaledVector(out, -out.x).normalize();
+    const up = new THREE.Vector3().crossVectors(right, out).normalize().negate();
+    if (up.y < 0) up.negate();
+    const basis = new THREE.Matrix4().makeBasis(right, up, out.clone().negate());
+    /** A box `w` by `h`, `d` deep, its middle at (x, y) on the chest and standing off it by `off`. */
+    const plate = (w: number, h: number, d: number, x: number, y: number, off: number, colour: number, into: THREE.BufferGeometry[]) => {
+      const s = front(x, y);
+      const at = s ? s.p : new THREE.Vector3(x, y, -0.13);
+      // Back along the rack's own facing to wherever the cloth is
+      const g = H.tinted(new THREE.BoxGeometry(w, h, d), colour);
+      g.applyMatrix4(basis);
+      g.translate(at.x + out.x * (off + d / 2), at.y + out.y * (off + d / 2), at.z + out.z * (off + d / 2));
+      into.push(g);
+    };
+    const RIBBONS: [number, number, number][] = [
+      [0x8c1a1a, 0xe8e0d0, 0x1a2d6b],
+      [0xd8a821, 0x1f5a2e, 0xd8a821],
+      [0x5a1f6b, 0xe8e0d0, 0x5a1f6b],
+      [0x1a2d6b, 0xd8a821, 0x8c1a1a],
+      [0x2e6b3a, 0xe8e0d0, 0x8c1a1a],
+      [0xc8441a, 0x151515, 0xc8441a],
+      [0x1a2d6b, 0xe8e0d0, 0x1a2d6b],
+      [0xd8a821, 0x8c1a1a, 0xd8a821],
+      [0x6b8fb8, 0xe8e0d0, 0x6b8fb8],
+      [0x8c1a1a, 0xd8a821, 0x1f5a2e],
+      [0x3a3a3a, 0xd8a821, 0x3a3a3a]
+    ];
+    const RW = 0.023;
+    const RH = 0.0085;
+    const GAP = 0.0007;
+    /** One ribbon: five stripes, the outer pair, an inner pair and a centre. */
+    const ribbon = (x: number, y: number, w: number, h: number, c: [number, number, number], into: THREE.BufferGeometry[]) => {
+      const widths = [0.28, 0.13, 0.18, 0.13, 0.28];
+      const cols = [c[0], c[1], c[2], c[1], c[0]];
+      let left = x - w / 2;
+      widths.forEach((f, k) => {
+        plate(w * f, h, 0.0026, left + (w * f) / 2, y, 0.0006, cols[k], into);
+        left += w * f;
+      });
+    };
+    let n = 0;
+    const rows = [3, 3, 3, 2];
+    rows.forEach((count, row) => {
+      const y = 1.342 + row * (RH + GAP) + RH / 2;
+      for (let k = 0; k < count; k++) {
+        const x = CX + (k - (count - 1) / 2) * (RW + GAP);
+        ribbon(x, y, RW, RH, RIBBONS[n++ % RIBBONS.length], ribbons);
+      }
+    });
+    // Three medals hanging from a bar under the rack
+    const MEDAL_Y = 1.3395;
+    const metals = [0xd9a92e, 0xc9ced6, 0xa8672e];
+    for (let k = 0; k < 3; k++) {
+      const x = CX + (k - 1) * 0.025;
+      // The ribbon it hangs from, and the bar across its top
+      ribbon(x, MEDAL_Y - 0.0125, 0.0135, 0.024, RIBBONS[(k * 4 + 1) % RIBBONS.length], ribbons);
+      plate(0.015, 0.0028, 0.0022, x, MEDAL_Y - 0.0006, 0.0016, metals[0], medals);
+      // The medal
+      const s = front(x, MEDAL_Y - 0.035);
+      const at = s ? s.p : new THREE.Vector3(x, MEDAL_Y - 0.035, -0.13);
+      let m: THREE.BufferGeometry;
+      if (k === 0) {
+        m = new THREE.CylinderGeometry(0.0105, 0.0105, 0.0026, 20);
+        m.rotateX(Math.PI / 2);
+      } else {
+        const sh = new THREE.Shape();
+        const pts = k === 1 ? 10 : 8;
+        for (let i = 0; i < pts; i++) {
+          const a = (i / pts) * Math.PI * 2;
+          // A star; or a cross, its arms flaring out to their ends
+          const r = k === 1 ? (i % 2 ? 0.0052 : 0.013) : i % 2 ? 0.0124 : 0.0068;
+          const ang = k === 1 ? a : a + (i % 2 ? 0.28 : 0) - Math.PI / 8;
+          if (i === 0) sh.moveTo(Math.sin(ang) * r, Math.cos(ang) * r);
+          else sh.lineTo(Math.sin(ang) * r, Math.cos(ang) * r);
+        }
+        m = new THREE.ExtrudeGeometry(sh, { depth: 0.0024, bevelEnabled: false });
+        m.translate(0, 0, -0.0012);
+      }
+      H.tinted(m, metals[k]);
+      m.applyMatrix4(basis);
+      m.translate(at.x + out.x * 0.0045, at.y + out.y * 0.0045, at.z + out.z * 0.0045);
+      medals.push(m);
+    }
+
+    const result = {
+      gold: H.skinnedLike(H.merged(gold), coat),
+      ribbons: H.skinnedLike(H.mergedColoured(ribbons), coat),
+      medals: H.skinnedLike(H.mergedColoured(medals), coat)
+    };
+    H.generalKitCache = result;
+    return result;
+  }
+
+  /**
+   * Out of the agents' suit and into the General's dress uniform: built
+   * like a wardrobe (bulked) on longer collarbones, olive coat and
+   * trousers, a khaki shirt and an olive tie, gold buttons, black leather
+   * gloves, the sunglasses made aviators with gold frames, no earpiece, a
+   * peaked cap, gold epaulettes and a chest of ribbons and medals. His hair
+   * — what shows of it under the cap — is the grey buzz cut from his look.
+   */
+  private dressGeneral(): void {
+    const H = HitmanVisual;
+    this.bulk = true;
+    this.broadenShoulders(H.GENERAL_SHOULDERS);
+    const mats = H.generalMats();
+    this.model.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (!m.isMesh) return;
+      const mat = (m.material as THREE.Material).name;
+      if (mat === 'HM_Wire') {
+        m.visible = false;
+      } else if (m.name === 'HitmanBody_1') {
+        m.geometry = H.outfitGeo('general:suit', () => H.generalSuit(m.geometry));
+        m.material = [mats.coat, mats.trousers];
+      } else if (mat === 'HM_Shirt') {
+        m.geometry = H.outfitGeo('general:shirt', () => H.generalShirt(m.geometry));
+        m.material = mats.shirt;
+      } else if (mat === 'HM_Tie') {
+        m.geometry = H.outfitGeo('general:tie', () => H.generalTie(m.geometry));
+        m.material = [mats.tie, mats.gold];
+      } else if (mat === 'HM_Glove') {
+        m.geometry = H.outfitGeo('general:glove', () => H.bulked(m.geometry, false));
+        m.material = mats.glove;
+      } else if (mat === 'HM_Skin') {
+        m.geometry = H.outfitGeo(`general:${m.name}`, () => H.bulked(m.geometry, true));
+      } else if (mat === 'HM_Lens' || mat === 'HM_Metal') {
+        m.geometry = H.outfitGeo(`general:${m.name}`, () => H.aviators(m.geometry));
+        m.material = mat === 'HM_Lens' ? mats.lens : mats.frame;
+      }
+    });
+    this.hang(this.generalCap(), 'Head');
+
+    // What is sewn on the coat, skinned like it
+    const body = this.model.getObjectByName('HitmanBody_1') as THREE.SkinnedMesh;
+    const kit = H.generalKit(body.geometry);
+    const sewn: [THREE.BufferGeometry, THREE.Material, string][] = [
+      [kit.gold, mats.gold, 'HitmanBrass'],
+      [kit.ribbons, mats.ribbons, 'HitmanRibbons'],
+      [kit.medals, mats.medals, 'HitmanMedals']
+    ];
+    for (const [geo, mat, name] of sewn) {
+      const sk = new THREE.SkinnedMesh(geo, mat);
+      sk.name = name;
+      body.parent!.add(sk);
+      sk.position.copy(body.position);
+      sk.quaternion.copy(body.quaternion);
+      sk.scale.copy(body.scale);
+      sk.bind(body.skeleton, body.bindMatrix);
+      sk.boundingSphere = this.cull;
+    }
+  }
+
   /** Stains soaked into the front of his shirt: centre x, y and half width, height, in the rest frame. */
   private stains = [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()];
   /**
@@ -1669,8 +2541,12 @@ export class HitmanVisual {
    * in, alive or dead, and they are what the bullets are cast against.
    */
   private buildHitboxes(): void {
-    const R = HitmanVisual.rest;
-    const P = (n: string) => R.get(n)!.modelP;
+    // Where this copy's bones are at rest: the General's arms sit further out
+    const P = (n: string) => this.restP(n);
+    // And the General is a great deal more of a target: every shape is let
+    // out to the size bulked() made him, so a round that is seen to hit him
+    // does — through the coat over the pectorals, the deltoids, the forearms
+    const big = this.bulk;
     const add = (bone: string, part: string, geo: THREE.BufferGeometry, at: THREE.Vector3, q?: THREE.Quaternion, scale?: THREE.Vector3) => {
       const m = new THREE.Mesh(geo, HitmanVisual.boxMat);
       m.visible = false;
@@ -1708,25 +2584,38 @@ export class HitmanVisual {
     // The model is still at rest, in its own frame
     this.model.updateMatrixWorld(true);
     // Head: chin to crown, ear to ear, nose to the back of the skull
-    add('Head', 'head', new THREE.SphereGeometry(1, 14, 10), new THREE.Vector3(0, 1.628, -0.004), undefined, new THREE.Vector3(0.082, 0.12, 0.1));
-    drum('Neck', 'torso', 1.43, 1.53, 0.058, 0.058, 0.009);
+    add(
+      'Head',
+      'head',
+      new THREE.SphereGeometry(1, 14, 10),
+      new THREE.Vector3(0, 1.628, -0.004),
+      undefined,
+      big ? new THREE.Vector3(0.09, 0.126, 0.106) : new THREE.Vector3(0.082, 0.12, 0.1)
+    );
+    drum('Neck', 'torso', 1.43, 1.53, big ? 0.078 : 0.058, big ? 0.078 : 0.058, 0.009);
     // Body: jacket over the chest, the waist, the hips and the skirt of it
-    drum('UpperChest', 'torso', 1.28, 1.47, 0.214, 0.126, 0.002);
-    drum('Chest', 'torso', 1.1, 1.28, 0.178, 0.114, 0.002);
-    drum('Hips', 'torso', 0.84, 1.1, 0.182, 0.118, 0.004);
+    if (big) {
+      drum('UpperChest', 'torso', 1.28, 1.49, 0.262, 0.152, -0.006);
+      drum('Chest', 'torso', 1.1, 1.28, 0.214, 0.136, -0.006);
+      drum('Hips', 'torso', 0.84, 1.1, 0.194, 0.124, 0.004);
+    } else {
+      drum('UpperChest', 'torso', 1.28, 1.47, 0.214, 0.126, 0.002);
+      drum('Chest', 'torso', 1.1, 1.28, 0.178, 0.114, 0.002);
+      drum('Hips', 'torso', 0.84, 1.1, 0.182, 0.118, 0.004);
+    }
     for (const sd of ['L', 'R']) {
       const sh = P(`UpperArm_${sd}`);
       const el = P(`LowerArm_${sd}`);
       const wr = P(`Hand_${sd}`);
       const kn = P(`Middle1_${sd}`);
-      capsule(`UpperArm_${sd}`, 'arm', sh, el, 0.054);
-      capsule(`LowerArm_${sd}`, 'arm', el, wr, 0.045);
-      capsule(`Hand_${sd}`, 'arm', wr, kn.clone().sub(wr).multiplyScalar(1.7).add(wr), 0.042);
+      capsule(`UpperArm_${sd}`, 'arm', sh, el, big ? 0.08 : 0.054);
+      capsule(`LowerArm_${sd}`, 'arm', el, wr, big ? 0.068 : 0.045);
+      capsule(`Hand_${sd}`, 'arm', wr, kn.clone().sub(wr).multiplyScalar(1.7).add(wr), big ? 0.048 : 0.042);
       const hip = P(`UpperLeg_${sd}`);
       const knee = P(`LowerLeg_${sd}`);
       const ankle = P(`Foot_${sd}`);
-      capsule(`UpperLeg_${sd}`, 'leg', hip, knee, 0.088);
-      capsule(`LowerLeg_${sd}`, 'leg', knee, ankle, 0.066);
+      capsule(`UpperLeg_${sd}`, 'leg', hip, knee, big ? 0.114 : 0.088);
+      capsule(`LowerLeg_${sd}`, 'leg', knee, ankle, big ? 0.078 : 0.066);
       // The shoe, heel to toe
       add(
         `Foot_${sd}`,
@@ -1782,6 +2671,7 @@ export class HitmanVisual {
     H._qRootInv.invert();
 
     const drv = H._drv;
+    const plant = THREE.MathUtils.clamp(d.plant ?? 0, 0, 1);
     H.nodeQ(d.pelvis, drv.pelvis);
     H.nodeQ(d.torso, drv.torso);
     H.nodeQ(d.head, drv.head);
@@ -1813,11 +2703,23 @@ export class HitmanVisual {
       if (j.drive === 'rest') {
         if (par) j.q.copy(par.q).multiply(j.rest.localQ);
         else j.q.copy(j.rest.modelQ);
+        if (j.foot && plant > 0) this.flatFoot(j, plant);
       } else {
         j.q.copy(drv[j.drive]).multiply(j.rest.modelQ);
       }
       if (par) j.p.copy(j.rest.localP).applyQuaternion(par.q).add(par.p);
       else j.p.copy(j.rest.modelP);
+    }
+
+    // Planted, the soles go on the floor. The model's legs are not the
+    // rig's length, so wherever the rig has squatted or spread its feet the
+    // model's ankles come out a little high or low: all of him is moved up
+    // or down by that — by the lower foot, so one lifted to stomp stays up
+    if (plant > 0) {
+      const ankle = H.rest.get('Foot_L')!.modelP.y;
+      const low = Math.min(this.byName.get('Foot_L')!.p.y, this.byName.get('Foot_R')!.p.y);
+      const dy = (ankle - low) * plant;
+      if (Math.abs(dy) > 1e-6) for (const j of this.joints) if (j.parent) j.p.y += dy;
     }
 
     // A hand to his own face: where that is, now the head has been placed
@@ -1851,6 +2753,22 @@ export class HitmanVisual {
     this.curl(true, d.handL.curl);
     this.curl(false, d.handR.curl);
     this.cull.center.copy(this.byName.get('Hips')!.p);
+  }
+
+  /**
+   * A foot flat on the floor, `k` of the way from where its shin has put it:
+   * its rest pose, turned only about the vertical — by however far the leg
+   * has turned it that way. A squat tips the shin a long way forward, and a
+   * foot that went with it would be stood on its toes.
+   */
+  private flatFoot(j: Joint, k: number): void {
+    const H = HitmanVisual;
+    // The turn from rest, and of that only the part about the vertical
+    const turn = H._q.copy(j.q).multiply(H._q2.copy(j.rest.modelQ).invert());
+    const yaw = H._qh.set(0, turn.y, 0, turn.w);
+    if (yaw.lengthSq() < 1e-8) yaw.identity();
+    else yaw.normalize();
+    j.q.slerp(yaw.multiply(j.rest.modelQ), k);
   }
 
   private curl(left: boolean, c: number): void {

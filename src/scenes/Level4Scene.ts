@@ -134,6 +134,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
+    this.setupTakedown();
     this.dropKick = new DropKickViewmodel(this.player.camera);
     this.dropKick.onEvent = (e) => {
       if (e === 'launch') {
@@ -660,11 +661,18 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // move starts in one of those, and one already running ends.
     const scripted = !playable || this.dialogue.isActive || this.over || this.leaving;
 
+    // ---- The knife on F, next to one of them
+
+    const tdTarget = this.stepTakedown(dt, this.over ? [] : this.agents, this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
+
+    void tdTarget;
+
+
     // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
     // whole time, and the price of a full heal is three seconds with the gun
     // out of frame.
     if (
-      input.wasPressed('KeyG') &&
+      input.wasPressed('KeyG') && !this.inTakedown &&
       this.player.alive &&
       input.pointerLocked &&
       !scripted &&
@@ -681,7 +689,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // a move that silently does nothing when you misjudge the range just
     // reads as a broken button.
     if (
-      input.wasPressed('KeyQ') &&
+      input.wasPressed('KeyQ') && !this.inTakedown &&
       this.player.alive &&
       input.pointerLocked &&
       !scripted &&
@@ -701,7 +709,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
     // Both hands are busy — or holding a drink — so nothing else can happen
-    const busy = this.drink.engaged || this.dropKick.engaged;
+    const busy = this.drink.engaged || this.dropKick.engaged || this.inTakedown;
 
     // ---- Weapon slots, 1 and 2. Whatever was held drops out of frame while
     // both hands are on a can or he is on his back on the floor.
@@ -720,6 +728,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
+    this.holdTakedown();
 
     // Walking up on him starts the scene — but not mid-move: crossing the
     // line takes the camera away, and a kick would be left holding it.
@@ -748,7 +757,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
     this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - this.arsenal.zoomFov;
+    this.hud.setCinematic(this.takedownCinema > 0.5);
+    const targetFov = -10 * this.takedownCinema + 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
@@ -759,7 +769,7 @@ export class Level4Scene extends CombatScene<Level4Data> {
     // mid-move. The arsenal adds the rest (cooldown, pump, reload, mid-swap).
     const canFire = this.phase === 'play' && this.player.alive && input.pointerLocked && !busy;
     this.arsenal.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
-    if (input.wasPressed('KeyF') && this.player.alive) {
+    if (input.wasPressed('KeyF') && this.player.alive && !tdTarget && !this.inTakedown) {
       this.torchOn = !this.torchOn;
       this.torch.intensity = this.torchOn ? TORCH_ON : 0;
       this.ctx.audio.uiBeep(this.torchOn);

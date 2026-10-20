@@ -167,6 +167,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
+    this.setupTakedown();
     this.dropKick = new DropKickViewmodel(this.player.camera);
     this.dropKick.onEvent = (e) => {
       if (e === 'launch') {
@@ -349,11 +350,18 @@ export class Level6Scene extends CombatScene<Level6Data> {
 
     if (!cutscene && !this.over && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
+    // ---- The knife on F, next to one of them
+
+    const tdTarget = this.stepTakedown(dt, this.playable ? this.agents : [], this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
+
+    void tdTarget;
+
+
     // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
     // whole time, and the price of a full heal is three seconds with the AK
     // out of frame.
     if (
-      input.wasPressed('KeyG') && this.playable && input.pointerLocked &&
+      input.wasPressed('KeyG') && !this.inTakedown && this.playable && input.pointerLocked &&
       !this.arsenal.reloading && !this.dropKick.engaged
     ) {
       // The finger stays up if it was up: that is the left hand and this is
@@ -366,7 +374,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     // a move that silently does nothing when you misjudge the range just
     // reads as a broken button.
     if (
-      input.wasPressed('KeyQ') && this.playable && input.pointerLocked &&
+      input.wasPressed('KeyQ') && !this.inTakedown && this.playable && input.pointerLocked &&
       !this.arsenal.reloading && !this.drink.engaged && this.player.grounded
     ) {
       if (this.dropKick.start()) {
@@ -386,7 +394,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
     // Both hands are busy — or holding a drink — so nothing else can happen
-    const busy = this.drink.engaged || this.dropKick.engaged;
+    const busy = this.drink.engaged || this.dropKick.engaged || this.inTakedown;
 
     // The guns. Through the cutscene they are the scene's: pistol and
     // shotgun stay down, 1/2/3 do nothing, and the AK comes up after the
@@ -412,6 +420,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
+    this.holdTakedown();
     if (cutscene) this.cutsceneCamera();
 
     if (this.phase === 'wake') this.updateWake();
@@ -453,7 +462,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
     // The push-in on the drive: from Ravi's chair it is a few centimetres
     // of plastic four metres off, so the lens goes long enough to fill the
     // frame with the hand that is holding it up
-    const targetFov = 74 - A.zoomFov - 60 * this.zoom;
+    this.hud.setCinematic(this.takedownCinema > 0.5);
+    const targetFov = -10 * this.takedownCinema + 74 - A.zoomFov - 60 * this.zoom;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();

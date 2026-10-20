@@ -144,6 +144,7 @@ export class StairwellScene extends CombatScene<StairwellData> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
+    this.setupTakedown();
     this.dropKick = new DropKickViewmodel(this.player.camera);
     this.dropKick.onEvent = (e) => {
       if (e === 'launch') {
@@ -267,12 +268,19 @@ export class StairwellScene extends CombatScene<StairwellData> {
     this.t += dt;
     if (this.playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
+    // ---- The knife on F, next to one of them
+
+    const tdTarget = this.stepTakedown(dt, this.agents.filter((a) => a.e.alive).map((a) => a.e), this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
+
+    void tdTarget;
+
+
     // ---- Deadbull (G) and the drop kick (Q)
-    if (input.wasPressed('KeyG') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.dropKick.engaged) {
+    if (input.wasPressed('KeyG') && !this.inTakedown && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.dropKick.engaged) {
       this.drink.start();
     }
     if (!this.player.alive) this.drink.abort();
-    if (input.wasPressed('KeyQ') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.drink.engaged && this.player.grounded) {
+    if (input.wasPressed('KeyQ') && !this.inTakedown && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.drink.engaged && this.player.grounded) {
       if (this.dropKick.start()) {
         this.emote.cancel();
         this.player.cinematic = true;
@@ -289,7 +297,7 @@ export class StairwellScene extends CombatScene<StairwellData> {
     }
     this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
-    const busy = this.drink.engaged || this.dropKick.engaged;
+    const busy = this.drink.engaged || this.dropKick.engaged || this.inTakedown;
     this.arsenal.preUpdate(dt, input, { canSwitch: this.playable && input.pointerLocked, busy });
 
     const aiming =
@@ -297,6 +305,7 @@ export class StairwellScene extends CombatScene<StairwellData> {
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.dropKick.applyCamera(this.player);
+    this.holdTakedown();
 
     this.updateFalls();
     this.updateFire(dt);
@@ -311,7 +320,8 @@ export class StairwellScene extends CombatScene<StairwellData> {
     this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - this.arsenal.zoomFov;
+    this.hud.setCinematic(this.takedownCinema > 0.5);
+    const targetFov = -10 * this.takedownCinema + 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();

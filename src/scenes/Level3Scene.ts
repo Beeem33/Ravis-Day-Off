@@ -139,6 +139,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
+    this.setupTakedown();
     this.dropKick = new DropKickViewmodel(this.player.camera);
     this.dropKick.onEvent = (e) => {
       if (e === 'launch') {
@@ -872,11 +873,18 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // Ravi's feet through them.
     const fighting = this.phase === 'play';
 
+    // ---- The knife on F, next to one of them
+
+    const tdTarget = this.stepTakedown(dt, this.phase === 'play' ? this.agents : [], this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
+
+    void tdTarget;
+
+
     // ---- Deadbull on G. Not a cutscene: he keeps his feet and the mouse the
     // whole time, and the price of a full heal is three seconds with the gun
     // out of frame.
     if (
-      input.wasPressed('KeyG') && fighting && this.player.alive && input.pointerLocked &&
+      input.wasPressed('KeyG') && !this.inTakedown && fighting && this.player.alive && input.pointerLocked &&
       !this.arsenal.reloading && !this.dropKick.engaged
     ) {
       // The finger stays up if it was up: that is the left hand and this is
@@ -889,7 +897,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // a move that silently does nothing when you misjudge the range just
     // reads as a broken button.
     if (
-      input.wasPressed('KeyQ') && fighting && this.player.alive && input.pointerLocked &&
+      input.wasPressed('KeyQ') && !this.inTakedown && fighting && this.player.alive && input.pointerLocked &&
       !this.arsenal.reloading && !this.drink.engaged && this.player.grounded
     ) {
       if (this.dropKick.start()) {
@@ -909,7 +917,7 @@ export class Level3Scene extends CombatScene<Level3Data> {
     this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
     // Both hands are busy — or holding a drink — so nothing else can happen
-    const busy = this.drink.engaged || this.dropKick.engaged;
+    const busy = this.drink.engaged || this.dropKick.engaged || this.inTakedown;
     // The cutscenes leave the gun in his hand, so the only things that stow it
     // are a move (down out of frame while it runs, straight back up after) and
     // 1 / 2 swapping between the pistol and the shotgun.
@@ -926,10 +934,12 @@ export class Level3Scene extends CombatScene<Level3Data> {
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
     this.dropKick.applyCamera(this.player);
+    this.holdTakedown();
     this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - this.arsenal.zoomFov;
+    this.hud.setCinematic(this.takedownCinema > 0.5);
+    const targetFov = -10 * this.takedownCinema + 74 - this.arsenal.zoomFov;
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();

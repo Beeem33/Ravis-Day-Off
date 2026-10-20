@@ -15,6 +15,17 @@ const STAND_HEIGHT = 1.75;
 const CROUCH_HEIGHT = 1.05;
 const RADIUS = 0.34;
 const STEP_UP = 0.42; // auto-step height for stairs
+/**
+ * Walking down stairs: off one step he would drop the 17 cm to the next and
+ * spend most of every step in the air, where a jump does nothing. Ground
+ * this far below his feet is stepped down onto instead; anything further is
+ * a real drop.
+ */
+const STEP_DOWN = 0.45;
+/** A jump still counts this long after his feet have left an edge... */
+const COYOTE_TIME = 0.12;
+/** ...and a press this long before they land is kept for the landing. */
+const JUMP_BUFFER = 0.12;
 const EYE_INSET = 0.12;
 const MAX_HEALTH = 5;
 const REGEN_SECONDS = 30; // seconds of being hurt before you claw back 1 HP
@@ -70,6 +81,9 @@ export class FPSPlayer {
   currentSpeed = 0;
   /** >0 while vaulting: step-up limit is raised and glass ahead gets smashed. */
   private vaultTimer = 0;
+  /** Since his feet were last on something, and since Space was pressed (counting down). */
+  private coyote = 0;
+  private jumpBuffer = 0;
   /** Scene hook: shatter this glass collider (the player is crashing through it). */
   onVaultGlass: ((c: Collider) => void) | null = null;
 
@@ -244,7 +258,13 @@ export class FPSPlayer {
     this.currentSpeed = Math.hypot(this.velocity.x, this.velocity.z);
 
     // ---- Jump / gravity
-    if (this.grounded && input.wasPressed('Space')) {
+    const onGround = this.grounded;
+    let jumped = false;
+    if (input.wasPressed('Space')) this.jumpBuffer = JUMP_BUFFER;
+    if ((this.grounded || this.coyote > 0) && this.jumpBuffer > 0) {
+      jumped = true;
+      this.jumpBuffer = 0;
+      this.coyote = 0;
       // Something waist-high (a sill, a desk) or a pane of glass right ahead? Vault it.
       if (this.canVault(colliders)) {
         this.vaultTimer = 0.7;
@@ -264,6 +284,11 @@ export class FPSPlayer {
     this.moveAxis(this.velocity.x * dt, 0, colliders);
     this.moveAxis(this.velocity.z * dt, 2, colliders);
     this.moveVertical(this.velocity.y * dt, colliders);
+    // Off the edge of a step: down onto the next one, still on his feet
+    // (and for a moment after, in case the first frame off it found nothing yet)
+    if (!this.grounded && (onGround || this.coyote > 0) && !jumped && this.velocity.y <= 0) this.stepDown(colliders);
+    this.coyote = this.grounded ? COYOTE_TIME : Math.max(0, this.coyote - dt);
+    if (this.jumpBuffer > 0) this.jumpBuffer -= dt;
 
     // Fell out of the world? (shouldn't happen, but be safe)
     if (this.position.y < -10) this.position.set(0, 0.1, 8);
@@ -386,6 +411,30 @@ export class FPSPlayer {
     // Blocked: undo and zero velocity on that axis
     pos[key] -= delta;
     this.velocity[key] = 0;
+  }
+
+  /**
+   * The highest walkable top within STEP_DOWN under his feet, anywhere under
+   * his footprint: if there is one, and he fits standing there, he is put
+   * down on it.
+   */
+  private stepDown(colliders: Collider[]): void {
+    const p = this.position;
+    const r = RADIUS - 0.03;
+    const probe = new THREE.Box3(new THREE.Vector3(p.x - r, p.y - STEP_DOWN, p.z - r), new THREE.Vector3(p.x + r, p.y, p.z + r));
+    let top = -Infinity;
+    for (const c of colliders) {
+      if (c.disabled || c.box.max.y > p.y + 1e-3) continue;
+      if (probe.intersectsBox(c.box)) top = Math.max(top, c.box.max.y);
+    }
+    if (top === -Infinity) return;
+    // Does he fit there? The landing test's footprint, a hair inside his radius:
+    // leaving a step, the full one still grazes the step he has just left
+    const fit = new THREE.Box3(new THREE.Vector3(p.x - r, top + 0.02, p.z - r), new THREE.Vector3(p.x + r, top + this.height, p.z + r));
+    if (this.collides(fit, colliders)) return;
+    p.y = top + 0.001;
+    this.velocity.y = 0;
+    this.grounded = true;
   }
 
   private moveVertical(delta: number, colliders: Collider[]): void {

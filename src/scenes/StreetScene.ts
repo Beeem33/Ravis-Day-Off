@@ -13,7 +13,8 @@ import { DriveCar, CIVIC_TUNE, resolveCollisions } from '../entities/DriveCar';
 import { Traffic } from '../entities/Traffic';
 import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
-import { RaviVisual } from '../entities/RaviVisual';
+import { armWithAK } from '../entities/AkModel';
+import { RaviVisual, type RaviRig } from '../entities/RaviVisual';
 import { ParticleManager } from '../fx/ParticleManager';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
 
@@ -35,7 +36,7 @@ const CHECKPOINT_AHEAD = 140;
 const AIRPORT_CUT = 130;
 
 type Phase = 'intro' | 'drive' | 'cop' | 'airport' | 'failed' | 'done';
-type Shot = 'chase' | 'roadside' | 'cabin' | 'radar' | 'behindCop' | 'launch' | 'gate' | 'apron' | 'stairs' | 'arrive';
+type Shot = 'chase' | 'roadside' | 'cabin' | 'radar' | 'behindCop' | 'launch' | 'gate' | 'jetside' | 'pov';
 
 /**
  * Level 10 — the street. Ravi in the Civic after the boss: the avenue, the
@@ -63,6 +64,9 @@ export class StreetScene implements GameScene {
   private jet!: JetRig;
   private bossMan!: Enemy;
   private driver: THREE.Object3D | null = null;
+  private driverRig: RaviRig | null = null;
+  /** The bullet cracks on the windscreen, drawn over the closing shot. */
+  private crackCanvas: HTMLCanvasElement | null = null;
 
   private phase: Phase = 'intro';
   private phaseT = 0;
@@ -119,7 +123,6 @@ export class StreetScene implements GameScene {
   private runLen = 0;
   private endT = -1;
   private completed = false;
-  private readonly apronCam = new THREE.Vector3();
 
   // ---- UI
   private ui!: HTMLElement;
@@ -190,12 +193,11 @@ export class StreetScene implements GameScene {
     for (const r of [this.civicRig, this.bossRig, this.police]) this.scene.add(r.group);
     // The hubcap came off in the parking lot
     (this.civicRig as { hubcap?: THREE.Object3D }).hubcap?.removeFromParent();
-    const J = this.level.airport.jet;
-    this.jet.group.position.copy(J.pos);
-    this.jet.group.rotation.y = J.yaw;
-    this.jet.setDoor(1);
     this.scene.add(this.jet.group);
+    this.placeJet();
     this.buildDriver();
+    this.buildGuards();
+    this.cockpitGlass();
     this.bossMan = new Enemy(new THREE.Vector3(0, -60, 0), 0, 7, { name: 'THE BOSS', boss: true });
     this.bossMan.holdProp(dataDrive(), 0.045);
     this.bossMan.root.visible = false;
@@ -208,6 +210,7 @@ export class StreetScene implements GameScene {
       bus.on(Events.Resize, () => {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
+        this.sizeCracks();
       })
     );
     document.addEventListener('keydown', this.keyHandler);
@@ -228,6 +231,7 @@ export class StreetScene implements GameScene {
     this.engine?.stop();
     this.tyres?.stop();
     this.siren?.stop();
+    this.jetSound?.stop();
     this.ctx.audio.stopBossMusic(1);
     this.traffic.dispose();
     this.ui.remove();
@@ -285,6 +289,7 @@ export class StreetScene implements GameScene {
         }
       });
       this.driver = r.root;
+      this.driverRig = r;
     });
   }
 
@@ -320,6 +325,7 @@ export class StreetScene implements GameScene {
         .st-fail .t { font-size:40px; letter-spacing:10px; color:#ff6a50; font-weight:bold; }
         .st-fail .s { font-size:13px; letter-spacing:4px; color:#c9d6cf; }
       </style>
+      <canvas class="st-cracks" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0"></canvas>
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="st-hud off">
@@ -353,6 +359,39 @@ export class StreetScene implements GameScene {
     this.hintEl = el.querySelector('.st-hint')!;
     this.failEl = el.querySelector('.st-fail')!;
     this.endCard = el.querySelector('.st-end')!;
+    this.crackCanvas = el.querySelector('.st-cracks');
+    this.sizeCracks();
+  }
+
+  private sizeCracks(): void {
+    const c = this.crackCanvas;
+    if (!c) return;
+    c.width = Math.round(window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
+    c.height = Math.round(window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
+  }
+
+  /**
+   * Seen from the driver's seat the Civic has to be a closed box: its
+   * panels are drawn from both sides (single-sided, the roof and pillars
+   * vanish from inside), and the glass is clearer, so the road reads
+   * through it.
+   */
+  private cockpitGlass(): void {
+    const done = new Map<THREE.Material, THREE.Material>();
+    for (const m of this.civicRig.meshes) {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const out = mats.map((mat) => {
+        let c = done.get(mat);
+        if (!c) {
+          c = mat.clone();
+          c.side = THREE.DoubleSide;
+          if (c.transparent) c.opacity = Math.min(c.opacity, 0.16);
+          done.set(mat, c);
+        }
+        return c;
+      });
+      m.material = Array.isArray(m.material) ? out : out[0];
+    }
   }
 
   private setObjective(text: string): void {
@@ -748,27 +787,107 @@ export class StreetScene implements GameScene {
   // ------------------------------------------------------------ the airport
 
   /**
+   * The airport in the gate's own frame: `a` metres on past the gate (the
+   * airport road's end), `b` to the right of its line. The builder lays the
+   * airfield out in the same frame: the apron to a 240, the taxiway out at
+   * b 60 to the runway, whose centreline is at a 430.5, running along b.
+   */
+  private apt(a: number, b: number, out = new THREE.Vector3()): THREE.Vector3 {
+    const ap = this.net.roads.airport;
+    const end = ap.samples[ap.samples.length - 1];
+    const l = Math.hypot(end.tangent.x, end.tangent.z) || 1;
+    const fx = end.tangent.x / l;
+    const fz = end.tangent.z / l;
+    return out.set(end.pos.x + fx * a - fz * b, 0, end.pos.z + fz * a + fx * b);
+  }
+
+  /** The jet on the runway, lined up down it (toward −b) with the door open, waiting for him. */
+  private placeJet(): void {
+    const ap = this.net.roads.airport;
+    const end = ap.samples[ap.samples.length - 1];
+    const l = Math.hypot(end.tangent.x, end.tangent.z) || 1;
+    const fx = end.tangent.x / l;
+    const fz = end.tangent.z / l;
+    // Heading −R: R = (−fz, fx), so −R = (fz, −fx)
+    const yaw = Math.atan2(-fz, fx);
+    this.jetStart.copy(this.apt(430.5, 30));
+    this.jetYaw = yaw;
+    const g = this.jet.group;
+    g.position.copy(this.jetStart);
+    g.rotation.order = 'YXZ';
+    g.rotation.set(0, yaw, 0);
+    g.updateMatrixWorld(true);
+    this.jet.setDoor(1);
+    this.jet.setEngines(0.2);
+  }
+
+  private readonly jetStart = new THREE.Vector3();
+  private jetYaw = 0;
+  /** The jet's take-off run: metres rolled, speed, how far the nose is up, how high. */
+  private jetS = 0;
+  private jetV = 0;
+  private jetPitch = 0;
+  private jetUp = 0;
+  private jetRollAt = -1;
+  private jetSound: { setThrust(k: number): void; setDistance(m: number): void; stop(): void } | null = null;
+  /** The boss's men: [the one who walks him to the jet, the two who stay with the car]. */
+  private guards: Enemy[] = [];
+  private readonly escortPts: THREE.Vector3[] = [];
+  private escortLen = 0;
+  private escortS = 0;
+  private escortGone = false;
+  private bossGone = false;
+  private readonly coverAt: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly coverFrom: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3()];
+  private fireCd = [0.4, 0.9];
+  private burstLeft = [0, 0];
+  private povAt = -1;
+  /** How many have come through the windscreen. */
+  private cracks = 0;
+  /** Where Ravi's eyes go in the closing shot, smoothed. */
+  private readonly povLook = new THREE.Vector3();
+
+  /** The men in the boss's car: built now (hidden) so the warm-up compiles them. */
+  private buildGuards(): void {
+    for (let i = 0; i < 3; i++) {
+      const e = new Enemy(new THREE.Vector3(0, -60, 0), 0, 11 + i, { name: 'POLICE FORCE AGENT' });
+      armWithAK(e);
+      e.root.visible = false;
+      this.scene.add(e.root);
+      this.guards.push(e);
+    }
+  }
+
+  /**
    * He's off the exit and onto the airport road: from here it's scripted.
-   * Through the gate (the arm goes flying), across the apron to the jet,
-   * out of the car and up the airstair; the Civic and the cop skid in
-   * behind him as the door comes up.
+   * Through the gate (the arm goes flying), across the apron and down the
+   * taxiway to the jet waiting on the runway; out of the car, he and one of
+   * his men up the airstair, the door up and the jet away down the runway —
+   * and his other two men stay with the car and open up on the Civic.
    */
   private startAirport(): void {
-    const L = this.level;
     this.phase = 'airport';
     this.phaseT = 0;
+    this.shot = 'gate';
     this.cinematic(true);
     this.traffic.enabled = false;
     this.ctx.audio.stopBossMusic(4);
     this.setObjective('');
     const ap = this.net.roads.airport;
+    const A = (a: number, b: number): THREE.Vector3 => this.apt(a, b);
     const pathOn = (from: THREE.Vector3, s0: number, tail: THREE.Vector3[]): THREE.Vector3[] => {
       const pts = [from.clone().setY(0)];
       for (let s = s0 + 10; s < ap.length; s += 10) pts.push(this.net.sample('airport', s).pos.clone().setY(0));
       for (const q of tail) pts.push(q.clone().setY(0));
       return pts;
     };
-    this.bossPath = pathOn(this.boss.car.position, this.boss.car.at.s, L.airport.bossPath);
+    // Through the gate, across the apron, down the taxiway, and round onto
+    // the runway beside the jet's stair (his car ends up parallel to it)
+    // Out past the left wingtip (the span is 19 m), level with the stair
+    const stop = this.jetLocal(-11, 0, -6.5);
+    const across = [A(30, 0), A(110, 28), A(200, 55), A(240, 60), A(398, 60), A(414, 55)];
+    const bTurn = this.jetLocal(-11.5, 0, 10);
+    this.bossPath = pathOn(this.boss.car.position, this.boss.car.at.s, [...across, bTurn, stop]);
     this.bossPathLen = pathLength(this.bossPath);
     this.bossPathS = 0;
     this.bossV = Math.max(26, this.boss.car.speed);
@@ -782,25 +901,39 @@ export class StreetScene implements GameScene {
     }
     const rs = ravi.at.road === 'airport' ? ravi.at.s : 0;
     const head = ravi.at.road === 'exit' ? [ravi.position.clone(), this.net.sample('airport', 0).pos.clone()] : [ravi.position.clone()];
-    this.civicPath = [...head.map((v) => v.setY(0)), ...pathOn(this.net.sample('airport', rs).pos, rs, L.airport.civicPath).slice(1)];
+    // The Civic pulls up at the end of the taxiway, skidding round to face them
+    // ...and swings onto the runway behind the jet, looking straight down it past his car
+    const civicTail = [A(30, 0), A(110, 28), A(200, 55), A(240, 60), A(380, 61), A(402, 66), A(418, 64), A(425, 58)];
+    this.civicPath = [...head.map((v) => v.setY(0)), ...pathOn(this.net.sample('airport', rs).pos, rs, civicTail).slice(1)];
     this.civicPathLen = pathLength(this.civicPath);
     this.civicPathS = 0;
     this.civicV = Math.max(16, ravi.speed);
+    const face = StreetScene.tmpA.copy(A(425.5, 10)).sub(A(425, 58));
+    this.civicEndYaw = Math.atan2(-face.x, -face.z);
     // The cop rides the Civic's line, a way behind it
     this.copPathS = -Math.min(45, Math.max(18, ravi.position.distanceTo(this.cop.car.position)));
     this.copV = this.civicV;
-    this.jet.setEngines(0.25);
+    this.jetSound = this.ctx.audio.jetEngine();
+  }
+
+  private civicEndYaw = 0;
+
+  /** A point in the jet's frame (nose −Z, its left −X), in the world, on the ground. */
+  private jetLocal(x: number, y: number, z: number, out = new THREE.Vector3()): THREE.Vector3 {
+    const c = Math.cos(this.jetYaw);
+    const sn = Math.sin(this.jetYaw);
+    return out.set(this.jetStart.x + c * x + sn * z, y, this.jetStart.z - sn * x + c * z);
   }
 
   private updateAirport(dt: number): void {
     const t = this.phaseT;
     const { audio } = this.ctx;
     const L = this.level;
-    // ---- His car: hard all the way, then on the brakes for the jet
+    // ---- His car: hard all the way, then on the brakes beside the jet
     const bossLeft = this.bossPathLen - this.bossPathS;
     if (this.bossStoppedAt < 0) {
       const vStop = Math.sqrt(2 * 9 * Math.max(0, bossLeft));
-      this.bossV = Math.min(Math.min(32, this.bossV + 6 * dt), vStop);
+      this.bossV = Math.min(Math.min(34, this.bossV + 6 * dt), vStop);
       this.bossPathS = Math.min(this.bossPathLen, this.bossPathS + this.bossV * dt);
       if (bossLeft < 0.15) {
         this.bossStoppedAt = t;
@@ -819,6 +952,17 @@ export class StreetScene implements GameScene {
       const arm = L.airport.gateArm;
       arm.rotation.z = Math.min(1.45, arm.rotation.z + dt * 9);
     }
+    // The cut from the gate to the jet: the car's most of the way there
+    if (this.shot === 'gate' && this.gateHit && this.bossRig.group.position.distanceTo(L.airport.gate.pos) > 14) {
+      this.shot = 'jetside';
+      this.jetsideAt = t;
+      this.bossPathS = Math.max(this.bossPathS, this.bossPathLen - 70);
+      this.bossV = 26;
+      // Ravi a good way behind: he gets there as the door shuts
+      this.civicPathS = Math.max(this.civicPathS, this.civicPathLen - 230);
+      this.civicV = 27;
+      this.copPathS = this.civicPathS - 30;
+    }
 
     // ---- The Civic and the cop, behind him
     const civicLeft = this.civicPathLen - this.civicPathS;
@@ -828,54 +972,101 @@ export class StreetScene implements GameScene {
       this.civicPathS = Math.min(this.civicPathLen, this.civicPathS + this.civicV * dt);
       if (civicLeft < 0.15) {
         this.civicStoppedAt = t;
-        audio.tyreSqueal(0.9, 6);
+        audio.tyreSqueal(0.9, 2);
       }
     }
-    this.carOnPath(this.civicRig, this.civicPath, this.civicPathS, this.civicStoppedAt < 0 ? this.civicV : 0, dt, civicLeft < 22 && this.civicStoppedAt < 0);
-    const copEnd = this.civicPathLen - 11;
+    this.carOnPath(this.civicRig, this.civicPath, this.civicPathS, this.civicStoppedAt < 0 ? this.civicV : 0, dt, civicLeft < 22 && this.civicStoppedAt < 0, 0, this.civicEndYaw, 14);
+    const copEnd = this.civicPathLen - 12;
     const copLeft = copEnd - this.copPathS;
     this.copV = Math.min(Math.max(this.copV, 18), Math.sqrt(2 * 8 * Math.max(0, copLeft)));
     if (copLeft > 0.1) this.copPathS += this.copV * dt;
     if (this.copPathS >= 0) {
       this.carOnPath(this.police, this.civicPath, Math.min(this.copPathS, copEnd), copLeft > 0.1 ? this.copV : 0, dt, copLeft < 20 && copLeft > 0.1, 2.6);
     } else {
-      // Not on the Civic's line yet: on the road behind it
       const back = Math.min(this.copPathS, 0);
       const dir = StreetScene.tmpB.copy(this.civicPath[1] ?? this.civicPath[0]).sub(this.civicPath[0]).normalize();
       this.police.group.position.copy(this.civicPath[0]).addScaledVector(dir, back);
     }
 
-    // ---- Out and running
-    if (this.bossStoppedAt >= 0 && this.bossOnFoot < 0 && t - this.bossStoppedAt > 0.5) this.leaveCar();
+    // ---- Out of the car and up the stair
+    if (this.bossStoppedAt >= 0 && this.bossOnFoot < 0 && t - this.bossStoppedAt > 0.45) this.leaveCar();
     if (this.bossOnFoot >= 0) this.runForIt(dt);
 
-    // ---- Shots
-    if (this.bossOnFoot < 0) this.shot = !this.gateHit || this.bossRig.group.position.distanceTo(L.airport.gate.pos) < 14 ? 'gate' : 'apron';
-    else if (this.endT < 0) this.shot = 'stairs';
-    else this.shot = 'arrive';
-    this.jet.setEngines(Math.min(1, 0.25 + 0.75 * clamp01((t - 2) / 8)));
-
-    // ---- The end: the door comes up, to black, the card, and on
-    if (this.endT >= 0 && !this.completed) {
+    // ---- The door, then away down the runway
+    if (this.endT >= 0) {
       const e = t - this.endT;
-      this.jet.setDoor(1 - smooth(e / 1.6));
-      if (e > 4.2 && this.phase === 'airport') {
+      this.jet.setDoor(1 - smooth(e / 1.4));
+      // Away once the door's up — and Ravi's there to see it go
+      if (this.jetRollAt < 0 && e > 1.6 && this.shot === 'pov' && t - this.povAt > 1.5) this.jetRollAt = t;
+    }
+    const thrust = this.jetRollAt >= 0 ? 1 : this.bossOnFoot >= 0 ? 0.45 : 0.25;
+    this.jet.setEngines(thrust);
+    this.jetSound?.setThrust(thrust);
+    this.jetSound?.setDistance(this.camera.position.distanceTo(this.jet.group.position));
+    if (this.jetRollAt >= 0) this.takeOff(dt);
+
+    // ---- Shots: the gate; by the jet as he gets there and goes up the
+    // stair; then Ravi's own eyes as he pulls up under fire and the jet goes
+    if (this.shot === 'jetside' && this.endT >= 0 && t - this.endT > 0.6) {
+      this.shot = 'pov';
+      this.povAt = t;
+      if (this.civicPathLen - this.civicPathS > 45) this.civicPathS = this.civicPathLen - 45;
+      this.civicV = Math.min(this.civicV, 22);
+    }
+    this.updateGuards(dt);
+
+    // ---- The end: the jet's up and away; to black under the gunfire, the card, and on
+    if (this.jetRollAt >= 0 && !this.completed) {
+      const e = t - this.jetRollAt;
+      if (e > 11 && this.phase === 'airport') {
         this.phase = 'done';
         this.fadeEl.style.opacity = '1';
       }
-      if (e > 5.4) this.endCard.style.opacity = '1';
-      if (e > 9) {
+      if (e > 12.3) this.endCard.style.opacity = '1';
+      if (e > 16.5) {
         this.completed = true;
         this.ctx.bus.emit(Events.StreetComplete);
       }
     }
   }
 
+  /** The take-off run: power up, down the runway, rotate, unstick, and climb away. */
+  private takeOff(dt: number): void {
+    this.jetV += (this.jetV < 30 ? 9.5 : 8) * dt;
+    this.jetS += this.jetV * dt;
+    // Rotate at 46 m/s, unstick at 54
+    const pitchT = this.jetV > 46 ? 0.17 : 0;
+    this.jetPitch += (pitchT - this.jetPitch) * Math.min(1, dt * 1.4);
+    if (this.jetV > 54) this.jetUp += (this.jetV - 54) * 0.35 * dt + this.jetPitch * this.jetV * 0.25 * dt;
+    const g = this.jet.group;
+    const H = StreetScene.tmpA.set(-Math.sin(this.jetYaw), 0, -Math.cos(this.jetYaw));
+    g.position.copy(this.jetStart).addScaledVector(H, this.jetS);
+    // Nose up about the main gear (a few metres behind the middle): lift the middle as it rotates
+    g.position.y = this.jetUp + Math.sin(this.jetPitch) * 3;
+    g.rotation.x = this.jetPitch;
+  }
+
   /** A rig driven along a ground path at distance `s`, nose along it, wheels turning, a little squat under braking. */
-  private carOnPath(rig: CarRig, path: THREE.Vector3[], s: number, v: number, dt: number, braking: boolean, back = 0): void {
+  private carOnPath(
+    rig: CarRig,
+    path: THREE.Vector3[],
+    s: number,
+    v: number,
+    dt: number,
+    braking: boolean,
+    back = 0,
+    /** Turned round to this heading over the last `endSpan` metres: a skid to a stop. */
+    endYaw?: number,
+    endSpan = 0
+  ): void {
     const dir = StreetScene.tmpB;
+    const len = pathLength(path);
     alongPath(path, Math.max(0, s - back), rig.group.position, dir);
-    const yaw = Math.atan2(-dir.x, -dir.z);
+    let yaw = Math.atan2(-dir.x, -dir.z);
+    if (endYaw !== undefined && endSpan > 0) {
+      const k = smooth(1 - (len - s) / endSpan);
+      yaw += wrapAngle(endYaw - yaw) * k;
+    }
     const cur = rig.group.rotation.y;
     rig.group.rotation.y = cur + wrapAngle(yaw - cur) * Math.min(1, dt * 8);
     rig.group.rotation.x = 0;
@@ -883,6 +1074,7 @@ export class StreetScene implements GameScene {
     const spin = (v * dt) / 0.32;
     for (const w of [rig.wheels.fl, rig.wheels.fr, rig.wheels.rl, rig.wheels.rr]) w.rotation.x -= spin;
     rig.body.rotation.x = THREE.MathUtils.lerp(rig.body.rotation.x, braking ? -0.05 : 0, Math.min(1, dt * 6));
+    rig.body.rotation.z = 0;
     rig.brakelights.emissiveIntensity = braking ? 2.2 : 0.2;
     if (braking && v > 6) {
       const back2 = StreetScene.tmpC.copy(rig.group.position).addScaledVector(dir, -1.4).setY(0.3);
@@ -890,50 +1082,191 @@ export class StreetScene implements GameScene {
     }
   }
 
-  /** The door, and him: out of the driver's side with the drive, and away to the jet. */
+  /** A point beside his car, car-local (its left −X, nose −Z), in the world on the ground. */
+  private carLocal(x: number, z: number, out = new THREE.Vector3()): THREE.Vector3 {
+    const g = this.bossRig.group;
+    const c = Math.cos(g.rotation.y);
+    const sn = Math.sin(g.rotation.y);
+    return out.set(g.position.x + c * x + sn * z, 0, g.position.z - sn * x + c * z);
+  }
+
+  /**
+   * Out they get: the boss from the back on the jet's side, one of his men
+   * out of the front with him; the driver and the other one out of the far
+   * side, to the car's corners, rifles up at the Civic coming down the taxiway.
+   */
   private leaveCar(): void {
     const { audio } = this.ctx;
-    const L = this.level;
     this.bossOnFoot = this.phaseT;
-    this.bossRig.setDoor(1);
     audio.carDoor(true, this.camera.position.distanceTo(this.bossRig.group.position));
-    const g = this.bossRig.group;
-    // The driver's side: −X, car-local
-    const out = new THREE.Vector3(-1.35, 0, -0.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), g.rotation.y).add(g.position);
-    out.y = 0;
     const jet = this.jet.group;
     jet.updateMatrixWorld(true);
-    const foot = this.jet.stairFoot.clone().applyMatrix4(jet.matrixWorld);
+    const foot = this.jet.stairFoot.clone().applyMatrix4(jet.matrixWorld).setY(0);
     const top = this.jet.doorTop.clone().applyMatrix4(jet.matrixWorld);
-    // Round the end of the car rather than through it, then to the stair and up it
+    const bossOut = this.carLocal(1.3, 0.75);
     this.runPts.length = 0;
-    this.runPts.push(out, L.airport.stairFoot.clone().setY(0).lerp(foot, 0.5), foot, top);
+    this.runPts.push(bossOut, foot, top);
     this.runLen = pathLength(this.runPts);
-    this.bossMan.position.copy(out);
+    this.bossMan.position.copy(bossOut);
     this.bossMan.root.visible = true;
+    // His man, a step behind him all the way
+    const esc = this.guards[0];
+    const escOut = this.carLocal(1.3, -0.55);
+    this.escortPts.length = 0;
+    this.escortPts.push(escOut, foot.clone(), top.clone());
+    this.escortLen = pathLength(this.escortPts);
+    esc.position.copy(escOut);
+    esc.root.visible = true;
+    esc.setAiming(false);
+    // And the two who stay
+    for (let i = 0; i < 2; i++) {
+      const g = this.guards[1 + i];
+      // Round to the back of the car, facing up the runway at the Civic
+      this.coverFrom[i].copy(this.carLocal(-1.3, i === 0 ? -0.55 : 0.75));
+      this.coverAt[i].copy(this.carLocal(i === 0 ? -1.5 : 1.1, i === 0 ? 3.3 : 3.6));
+      g.position.copy(this.coverFrom[i]);
+      g.root.visible = true;
+    }
+    this.bossRig.setDoor(1);
   }
 
   private runS = 0;
 
   private runForIt(dt: number): void {
     const t = this.phaseT - this.bossOnFoot;
-    const b = this.bossMan;
-    if (t < 0.35) return;
-    if (t > 0.8) this.bossRig.setDoor(Math.max(0, 1 - (t - 0.8) * 3));
-    const climbing = this.runS > this.runLen - this.runPts[2].distanceTo(this.runPts[3]);
-    const speed = climbing ? 2.6 : 5.4;
-    this.runS = Math.min(this.runLen, this.runS + speed * dt);
-    const dir = StreetScene.tmpB;
-    alongPath(this.runPts, this.runS, b.position, dir);
-    b.faceToward(StreetScene.tmpC.copy(b.position).add(dir.setY(0)), dt, 14);
-    b.cadence = climbing ? 1.2 : 1.55;
-    b.setWalk(this.runS < this.runLen ? (climbing ? 0.8 : 1.35) : 0);
-    if (this.runS >= this.runLen && this.endT < 0) {
-      // In: gone, and the door comes up
-      b.root.visible = false;
-      this.endT = this.phaseT;
-      this.ctx.audio.bigEngineDrive(5, this.camera.position.distanceTo(this.jet.group.position));
+    if (t > 0.7) this.bossRig.setDoor(Math.max(0, 1 - (t - 0.7) * 3));
+    const climbLen = this.runPts[1].distanceTo(this.runPts[2]);
+    // The boss
+    if (!this.bossGone && t > 0.25) {
+      const b = this.bossMan;
+      const climbing = this.runS > this.runLen - climbLen;
+      this.runS = Math.min(this.runLen, this.runS + (climbing ? 2.6 : 5.2) * dt);
+      const dir = StreetScene.tmpB;
+      alongPath(this.runPts, this.runS, b.position, dir);
+      b.faceToward(StreetScene.tmpC.copy(b.position).add(dir.setY(0)), dt, 14);
+      b.cadence = climbing ? 1.2 : 1.55;
+      b.setWalk(this.runS < this.runLen ? (climbing ? 0.8 : 1.35) : 0);
+      if (this.runS >= this.runLen) {
+        b.root.visible = false;
+        this.bossGone = true;
+      }
     }
+    // His man, half a second behind
+    if (!this.escortGone && t > 0.75) {
+      const e = this.guards[0];
+      const climbing = this.escortS > this.escortLen - climbLen;
+      this.escortS = Math.min(this.escortLen, this.escortS + (climbing ? 2.6 : 5.0) * dt);
+      const dir = StreetScene.tmpB;
+      alongPath(this.escortPts, this.escortS, e.position, dir);
+      e.faceToward(StreetScene.tmpC.copy(e.position).add(dir.setY(0)), dt, 14);
+      e.cadence = climbing ? 1.2 : 1.5;
+      e.setWalk(this.escortS < this.escortLen ? (climbing ? 0.8 : 1.3) : 0);
+      if (this.escortS >= this.escortLen) {
+        e.root.visible = false;
+        this.escortGone = true;
+      }
+    }
+    // Both in: the door comes up
+    if (this.bossGone && this.escortGone && this.endT < 0) this.endT = this.phaseT;
+  }
+
+  /**
+   * The two by the car: out to its corners, rifles on the Civic, and once
+   * Ravi's in their sights, bursts into it — through the windscreen in his
+   * own eyes, cracks spidering across the glass where they hit.
+   */
+  private updateGuards(dt: number): void {
+    if (this.bossOnFoot < 0) return;
+    const t = this.phaseT - this.bossOnFoot;
+    const civic = this.civicRig.group.position;
+    const aimAt = StreetScene.tmpC.copy(civic).setY(1.1);
+    for (let i = 0; i < 2; i++) {
+      const g = this.guards[1 + i];
+      const k = clamp01((t - 0.4 - i * 0.2) / 0.9);
+      g.position.lerpVectors(this.coverFrom[i], this.coverAt[i], smooth(k));
+      g.setWalk(k > 0 && k < 1 ? 1 : 0);
+      g.faceToward(k < 1 ? StreetScene.tmpA.copy(this.coverAt[i]).add(this.coverAt[i]).sub(this.coverFrom[i]) : aimAt, dt, 8);
+      if (k >= 1) g.setAiming(true);
+      g.update(dt);
+      // Firing once the Civic is close and they're set
+      if (k < 1 || civic.distanceTo(g.position) > 110 || this.shot !== 'pov') continue;
+      this.fireCd[i] -= dt;
+      if (this.fireCd[i] > 0) continue;
+      if (this.burstLeft[i] <= 0) this.burstLeft[i] = 3 + Math.floor(Math.random() * 4);
+      this.burstLeft[i]--;
+      this.fireCd[i] = this.burstLeft[i] > 0 ? 0.11 : 0.45 + Math.random() * 0.6;
+      this.guardShot(g);
+    }
+    this.guards[0].update(dt);
+  }
+
+  private guardShot(g: Enemy): void {
+    const { audio } = this.ctx;
+    const muzzle = g.muzzleWorld(new THREE.Vector3());
+    g.flashMuzzle();
+    audio.enemyGunshot(this.camera.position.distanceTo(muzzle));
+    this.particles.muzzleFlash(muzzle, StreetScene.tmpA.copy(this.camera.position).sub(muzzle).normalize());
+    // Where it hits, as Ravi sees it: the glass in front of him, or the bonnet
+    // Most go past or into the bodywork; now and then one comes through the glass
+    const glass = this.cracks < 7 && (this.cracks === 0 || Math.random() < 0.13);
+    const sx = glass ? 0.32 + Math.random() * 0.5 : 0.22 + Math.random() * 0.56;
+    const sy = glass ? 0.3 + Math.random() * 0.24 : 0.72 + Math.random() * 0.16;
+    const ndc = StreetScene.tmpB.set(sx * 2 - 1, -(sy * 2 - 1), 0.5).unproject(this.camera);
+    const ray = ndc.sub(this.camera.position).normalize();
+    const hit = StreetScene.tmpC.copy(this.camera.position).addScaledVector(ray, glass ? 0.9 : 1.7);
+    this.particles.tracer(muzzle, hit, 0xffe0b0);
+    if (glass) {
+      this.cracks++;
+      this.crack(sx, sy);
+      audio.ricochet(1);
+    } else {
+      this.particles.sparks(hit, StreetScene.tmpA.set(0, 0.5, 0), 5);
+      audio.ricochet(2);
+    }
+    this.shake = Math.min(1, this.shake + 0.12);
+  }
+
+  /** A bullet through the windscreen: a hole and the cracks running out from it, on the glass in front of him. */
+  private crack(sx: number, sy: number): void {
+    const c = this.crackCanvas;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const x = sx * c.width;
+    const y = sy * c.height;
+    const r = c.height * (0.035 + Math.random() * 0.035);
+    ctx.strokeStyle = 'rgba(235,240,245,0.75)';
+    ctx.lineWidth = Math.max(1, c.height / 700);
+    const n = 7 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < n; i++) {
+      let a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+      let px = x;
+      let py = y;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      const len = r * (0.6 + Math.random() * 0.9);
+      for (let d = 0; d < len; d += r * 0.18) {
+        a += (Math.random() - 0.5) * 0.5;
+        px += Math.cos(a) * r * 0.18;
+        py += Math.sin(a) * r * 0.18;
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    // A ring or two round the hole
+    for (const k of [0.3, 0.55]) {
+      ctx.beginPath();
+      ctx.arc(x, y, r * k * (0.8 + Math.random() * 0.4), Math.random() * 6, Math.random() * 6 + 3.5);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(20,22,24,0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(2, c.height / 260), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(240,244,248,0.35)';
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(4, c.height / 140), 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // ------------------------------------------------------------- the world
@@ -1013,22 +1346,12 @@ export class StreetScene implements GameScene {
     let fov = 68;
     switch (this.shot) {
       case 'chase': {
-        // Behind and above, trailing the car's heading; further back and wider the faster he goes
-        if (!this.camReady) {
-          this.camYaw = p.yaw;
-          this.camY = p.position.y;
-          this.camReady = true;
-        }
-        this.camYaw += wrapAngle(p.yaw - this.camYaw) * Math.min(1, dt * 5.5);
-        this.camY += (p.position.y - this.camY) * Math.min(1, dt * 7);
-        const v = Math.abs(p.speed);
-        const k = clamp01(v / 50);
-        const back = 6.4 + 1.6 * k;
-        const fx = -Math.sin(this.camYaw);
-        const fz = -Math.cos(this.camYaw);
-        cam.position.set(p.position.x - fx * back, this.camY + 2.3 + 0.2 * k, p.position.z - fz * back);
-        this.lookAt.set(p.position.x + fx * 7, this.camY + 1.1, p.position.z + fz * 7);
-        fov = 66 + 16 * k;
+        // Ravi's own eyes, in the driver's seat: the car's every lurch and
+        // lean is the camera's, and he looks a little into the turn
+        this.eyeInCar(cam.position);
+        const k = clamp01(Math.abs(p.speed) / 50);
+        this.lookFromCar(-p.steerNow * 0.13, this.lookAt);
+        fov = 74 + 12 * k;
         break;
       }
       case 'roadside': {
@@ -1098,42 +1421,37 @@ export class StreetScene implements GameScene {
         fov = 38;
         break;
       }
-      case 'apron': {
-        // Alongside him across the apron, a little behind, low
-        const g = this.bossRig.group;
-        const f = StreetScene.tmpB.set(-Math.sin(g.rotation.y), 0, -Math.cos(g.rotation.y));
-        const want = StreetScene.tmpC.copy(g.position).addScaledVector(f, -6).add(StreetScene.tmpA.set(f.z * 8, 1.5, -f.x * 8));
-        if (this.apronCam.lengthSq() === 0) this.apronCam.copy(want);
-        this.apronCam.lerp(want, Math.min(1, dt * 3));
-        cam.position.copy(this.apronCam);
-        this.lookAt.lerp(StreetScene.tmpC.copy(g.position).addScaledVector(f, 3).setY(1), Math.min(1, dt * 6));
-        fov = 55;
+      case 'jetside': {
+        // Out ahead of the jet's left wingtip, low: his car pulls up beside
+        // it, and he and his man run for the stair and up it
+        this.jetLocal(-19, 1.7, -24, cam.position);
+        const tgt = this.bossOnFoot >= 0 && !this.bossGone ? this.bossMan.position : this.bossOnFoot >= 0 ? this.jetLocal(-2, 1.6, -5.6, StreetScene.tmpA) : this.bossRig.group.position;
+        if (this.phaseT - this.jetsideAt < 0.05) this.lookAt.copy(tgt).setY(1.2);
+        this.lookAt.lerp(StreetScene.tmpC.copy(tgt).setY(tgt.y + 1.2), Math.min(1, dt * 4));
+        fov = 48;
         break;
       }
-      case 'stairs': {
-        // Off the jet's left wingtip, low: he runs for the stair
-        const j = this.jet.group;
-        j.updateMatrixWorld(true);
-        cam.position.set(-14, 2.2, 6).applyMatrix4(j.matrixWorld);
-        const tgt = this.bossMan.position;
-        this.lookAt.lerp(StreetScene.tmpC.copy(tgt).setY(tgt.y + 1.3), Math.min(1, dt * 4));
-        fov = 50;
-        break;
-      }
-      case 'arrive': {
-        // Behind the Civic as it skids in, the jet's door coming up
-        const g = this.civicRig.group;
-        const f = StreetScene.tmpB.set(-Math.sin(g.rotation.y), 0, -Math.cos(g.rotation.y));
-        cam.position.copy(g.position).addScaledVector(f, -7).add(StreetScene.tmpC.set(f.z * 1.8, 2.4, -f.x * 1.8));
-        this.lookAt.lerp(StreetScene.tmpC.copy(this.jet.group.position).setY(2.5), Math.min(1, dt * 3));
-        fov = 55;
+      case 'pov': {
+        // Back in his seat as the Civic slides in: eyes on the men by the
+        // car shooting at him, and past them, the jet going
+        this.eyeInCar(cam.position);
+        const e = this.phaseT - this.povAt;
+        if (e < 0.05) this.lookFromCar(0, this.povLook);
+        const roll = this.jetRollAt >= 0 ? clamp01((this.phaseT - this.jetRollAt) / 7) : 0;
+        const want = StreetScene.tmpA.copy(this.bossRig.group.position).setY(1.4).lerp(StreetScene.tmpB.copy(this.jet.group.position).setY(this.jet.group.position.y + 2.5), 0.3 + 0.35 * roll);
+        if (e > 1.2 || this.civicStoppedAt >= 0) this.povLook.lerp(want, Math.min(1, dt * 2.2));
+        else this.lookFromCar(0, this.povLook);
+        this.lookAt.copy(this.povLook);
+        // His eyes on it as it goes: the view closes in as the jet gets away
+        fov = 64 - 26 * smooth(roll * 1.3);
         break;
       }
     }
-    // Knocks
+    // Knocks (a hand's breadth at most from the driver's seat)
+    const inCar = this.shot === 'chase' || this.shot === 'pov';
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt * 2.2);
-      const s = this.shake * 0.12;
+      const s = this.shake * (inCar ? 0.05 : 0.12);
       cam.position.x += (Math.random() - 0.5) * s;
       cam.position.y += (Math.random() - 0.5) * s;
       cam.position.z += (Math.random() - 0.5) * s;
@@ -1143,9 +1461,31 @@ export class StreetScene implements GameScene {
       cam.fov += (fov - cam.fov) * (this.shot === 'chase' ? Math.min(1, dt * 3) : 1);
       cam.updateProjectionMatrix();
     }
-    // Ravi is only seen from outside
-    if (this.driver) this.driver.visible = true;
+    // From his own eyes his head is out of the way; from outside, he's whole
+    const head = this.driverRig?.bones.get('head');
+    if (head) head.scale.setScalar(inCar ? 0.001 : 1);
+    if (this.crackCanvas) this.crackCanvas.style.opacity = this.shot === 'pov' ? '1' : '0';
   }
+
+  /** Where Ravi's eyes are, sat at the wheel, in the world. */
+  private eyeInCar(out: THREE.Vector3): THREE.Vector3 {
+    const rig = this.civicRig;
+    const seat = rig.seat;
+    // This frame's pose, not the last render's: at speed a frame is most of a metre
+    rig.group.updateMatrixWorld(true);
+    return out.set(seat.hip.x, seat.hip.y + 0.68 - rig.body.position.y, seat.hip.z + 0.06).applyMatrix4(rig.body.matrixWorld);
+  }
+
+  /** A point ten metres out ahead of his eyes, turned `yaw` (+ left), dipped a little toward the road. */
+  private lookFromCar(yaw: number, out: THREE.Vector3): THREE.Vector3 {
+    const rig = this.civicRig;
+    const seat = rig.seat;
+    return out
+      .set(seat.hip.x - Math.sin(yaw) * 10, seat.hip.y + 0.68 - rig.body.position.y - 0.55, seat.hip.z + 0.06 - Math.cos(yaw) * 10)
+      .applyMatrix4(rig.body.matrixWorld);
+  }
+
+  private jetsideAt = -1;
 
   // ------------------------------------------------------------------- HUD
 
@@ -1183,6 +1523,8 @@ export class StreetScene implements GameScene {
     this.particles.sparks(far, new THREE.Vector3(0, 1, 0), 4);
     this.particles.exhaust(far, new THREE.Vector3(0, 1, 0));
     this.particles.dust(far, 1, 1);
+    this.particles.muzzleFlash(far, new THREE.Vector3(0, 1, 0));
+    this.particles.tracer(far, far.clone().add(new THREE.Vector3(0, 0, 3)), 0xffe0b0);
     const hidden: THREE.Object3D[] = [];
     const culled: THREE.Object3D[] = [];
     this.scene.traverse((o) => {

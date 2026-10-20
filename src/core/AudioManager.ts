@@ -4485,4 +4485,94 @@ export class AudioManager {
       }
     };
   }
+
+  /**
+   * A business jet's two engines: a deep roar of filtered noise that swells
+   * and opens up with thrust, and the turbines' whine on top, rising in pitch
+   * as they spool. setThrust(0..1) spools them; setDistance() dulls and
+   * quietens them as the jet goes away; stop() fades out.
+   */
+  jetEngine(): { setThrust(k: number): void; setDistance(m: number): void; stop(): void } {
+    const idle = { setThrust: (): void => {}, setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const fin = (v: number, d: number): number => (Number.isFinite(v) ? v : d);
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const air = ctx.createBiquadFilter();
+    air.type = 'lowpass';
+    air.frequency.value = 8000;
+    out.connect(air).connect(this.sfxBus);
+    // The roar
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const roar = ctx.createBiquadFilter();
+    roar.type = 'lowpass';
+    roar.frequency.value = 300;
+    roar.Q.value = 0.7;
+    const roarG = ctx.createGain();
+    roarG.gain.value = 0.5;
+    n.connect(roar).connect(roarG).connect(out);
+    // The whine: two slightly detuned turbines, through a band
+    const whine = ctx.createBiquadFilter();
+    whine.type = 'bandpass';
+    whine.frequency.value = 2400;
+    whine.Q.value = 2;
+    const whineG = ctx.createGain();
+    whineG.gain.value = 0.05;
+    whine.connect(whineG).connect(out);
+    const oscs: OscillatorNode[] = [];
+    for (const det of [0, 9]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = 1400;
+      o.detune.value = det;
+      o.connect(whine);
+      oscs.push(o);
+    }
+    n.start(t, Math.random() * 1.5);
+    for (const o of oscs) o.start(t);
+    let thrust = 0;
+    let gainDist = 1;
+    let stopped = false;
+    const apply = (): void => {
+      const now = ctx.currentTime;
+      out.gain.setTargetAtTime((0.16 + 0.5 * thrust) * gainDist, now, 0.15);
+      roar.frequency.setTargetAtTime(220 + thrust * 1400, now, 0.4);
+      roarG.gain.setTargetAtTime(0.4 + thrust * 0.6, now, 0.3);
+      for (const o of oscs) o.frequency.setTargetAtTime(1300 + thrust * 2600, now, 0.6);
+      whineG.gain.setTargetAtTime(0.04 + thrust * 0.05, now, 0.3);
+    };
+    apply();
+    return {
+      setThrust: (k: number): void => {
+        if (stopped) return;
+        thrust = Math.max(0, Math.min(1, fin(k, 0)));
+        apply();
+      },
+      setDistance: (m: number): void => {
+        if (stopped) return;
+        const d = Math.max(1, fin(m, 50));
+        gainDist = Math.min(1, 40 / (d + 10));
+        air.frequency.setTargetAtTime(Math.max(900, 9000 - d * 18), ctx.currentTime, 0.2);
+        apply();
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        out.gain.cancelScheduledValues(now);
+        out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), now);
+        out.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+        try {
+          n.stop(now + 1.3);
+          for (const o of oscs) o.stop(now + 1.3);
+        } catch {
+          /* already stopped */
+        }
+      }
+    };
+  }
 }

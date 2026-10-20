@@ -13,6 +13,7 @@ import { Level5Scene } from './scenes/Level5Scene';
 import { Level6Scene } from './scenes/Level6Scene';
 import { Level7Scene } from './scenes/Level7Scene';
 import { Level8Scene } from './scenes/Level8Scene';
+import { StairwellScene } from './scenes/StairwellScene';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
@@ -76,11 +77,18 @@ bus.on(Events.Level6Complete, () => {
   engine.setScene(new Level7Scene(ctx), 'LEVEL 7 — THE TOP FLOOR');
 });
 bus.on(Events.Level7Complete, () => {
-  engine.setScene(new Level8Scene(ctx), 'LEVEL 8 — THE PARKING LOT');
+  engine.setScene(new StairwellScene(ctx), 'LEVEL 8 — STAIRWELL B');
+});
+bus.on<{ checkpoint?: number }>(Events.RestartStairwell, (p) => {
+  // From the last checkpoint he reached: a missed jump is not the whole stairwell again
+  engine.setScene(new StairwellScene(ctx, p?.checkpoint ?? 0), 'LEVEL 8 — STAIRWELL B');
+});
+bus.on(Events.StairwellComplete, () => {
+  engine.setScene(new Level8Scene(ctx), 'LEVEL 9 — THE PARKING LOT');
 });
 bus.on(Events.RestartLevel8, () => {
   // A retry picks up at the fight: the chase and the reveal once is enough
-  engine.setScene(new Level8Scene(ctx, true), 'LEVEL 8 — THE PARKING LOT');
+  engine.setScene(new Level8Scene(ctx, true), 'LEVEL 9 — THE PARKING LOT');
 });
 bus.on(Events.Level8Complete, () => {
   // The end of the line, for now: back to the menu
@@ -118,7 +126,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   level5: () => ({ scene: new Level5Scene(ctx), title: 'THE SERVICE LIFT' }),
   level6: () => ({ scene: new Level6Scene(ctx), title: 'LEVEL 6 — THE BOSS' }),
   level7: () => ({ scene: new Level7Scene(ctx), title: 'LEVEL 7 — THE TOP FLOOR' }),
-  level8: () => ({ scene: new Level8Scene(ctx), title: 'LEVEL 8 — THE PARKING LOT' })
+  stairwell: () => ({ scene: new StairwellScene(ctx), title: 'LEVEL 8 — STAIRWELL B' }),
+  level8: () => ({ scene: new Level8Scene(ctx), title: 'LEVEL 9 — THE PARKING LOT' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

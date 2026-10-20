@@ -76,6 +76,10 @@ export const Events = {
   RestartLevel7: 'restart-level7',
   /** The office floor held, the cameras checked, and the stairwell door reached. */
   Level7Complete: 'level7-complete',
+  /** {checkpoint: number} — back down the stairwell from the last checkpoint reached. */
+  RestartStairwell: 'restart-stairwell',
+  /** Down Stairwell B and out of the door at the bottom: on to the car park. */
+  StairwellComplete: 'stairwell-complete',
   RestartLevel8: 'restart-level8',
   /** The General down and the Civic away up the road after the boss. */
   Level8Complete: 'level8-complete',
@@ -95,7 +99,8 @@ export const LEVELS = [
   { id: 'level5', n: '5', name: 'THE SERVICE LIFT', blurb: 'Down to the basement' },
   { id: 'level6', n: '6', name: 'THE BOSS', blurb: 'Tied to a chair in his office' },
   { id: 'level7', n: '7', name: 'THE TOP FLOOR', blurb: 'The staff are fighting back' },
-  { id: 'level8', n: '8', name: 'THE PARKING LOT', blurb: 'The General' }
+  { id: 'stairwell', n: '8', name: 'STAIRWELL B', blurb: 'All the way down, the hard way' },
+  { id: 'level8', n: '9', name: 'THE PARKING LOT', blurb: 'The General' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

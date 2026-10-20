@@ -1126,6 +1126,131 @@ export class ParticleManager {
     }
   }
 
+  /**
+   * A fire, burning: tongues of flame licking up off `pos` (a heap of
+   * burning rubble, a wreck), a few embers carried up high, and dark smoke
+   * rolling off the top of it. An emitter — call it every frame for every
+   * fire in sight; `size` is how big a fire (1, a heap a metre or so across)
+   * and `amount` how hard it is going.
+   */
+  fire(pos: THREE.Vector3, size = 1, amount = 1): void {
+    if (!(amount > 0)) return;
+    const sz = Math.max(0.2, size);
+    const dt = this.frameDt;
+    const col = ParticleManager.tmpC;
+    const vel = ParticleManager.tmpV;
+    const at = ParticleManager.tmpD;
+    // The flames: soft lumpy cards, yellow-white at the root going deep
+    // orange, rising fast and narrowing to nothing — overlapping, they lick
+    const tongues = Math.min(6, Math.floor(amount * 46 * sz * dt + Math.random()));
+    for (let i = 0; i < tongues; i++) {
+      const p = this.smoke.spawn();
+      const ang = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * 0.45 * sz;
+      p.pos.set(pos.x + Math.cos(ang) * r, pos.y + 0.1 * sz + Math.random() * 0.15 * sz, pos.z + Math.sin(ang) * r);
+      p.vel.set((Math.random() - 0.5) * 0.35, (1.1 + Math.random() * 1.1) * Math.sqrt(sz), (Math.random() - 0.5) * 0.35);
+      p.drag = 1.2;
+      p.lift = 1.6;
+      p.life = 0.38 + Math.random() * 0.34;
+      p.size0 = (0.42 + Math.random() * 0.22) * sz;
+      p.size1 = 0.1 * sz;
+      p.alpha = 0.85;
+      p.fadeIn = 0.04;
+      const heat = Math.random();
+      p.color.setRGB(1, 0.36 + 0.44 * heat, 0.06 + 0.22 * heat * heat);
+      p.floorY = pos.y - 0.1;
+      p.wind = 0;
+    }
+    // A glow at the heart of it and the odd spark thrown up out of it
+    const sparks = Math.min(3, Math.floor(amount * 12 * sz * dt + Math.random()));
+    for (let i = 0; i < sparks; i++) {
+      at.set(pos.x + (Math.random() - 0.5) * 0.5 * sz, pos.y + 0.2 * sz, pos.z + (Math.random() - 0.5) * 0.5 * sz);
+      vel.set((Math.random() - 0.5) * 0.6, 1.2 + Math.random() * 1.4, (Math.random() - 0.5) * 0.6);
+      col.setRGB(1, 0.62 + Math.random() * 0.2, 0.2);
+      this.glow.spawn(at, vel, 0.25 + Math.random() * 0.25, (0.18 + Math.random() * 0.12) * sz, col, -0.8, 1.2);
+    }
+    // Embers: few, small, and carried a long way up the draught
+    if (Math.random() < amount * 5 * sz * dt) {
+      at.set(pos.x + (Math.random() - 0.5) * 0.6 * sz, pos.y + 0.4 * sz, pos.z + (Math.random() - 0.5) * 0.6 * sz);
+      vel.set((Math.random() - 0.5) * 0.9, 2.4 + Math.random() * 2.2, (Math.random() - 0.5) * 0.9);
+      col.setRGB(1, 0.55 + Math.random() * 0.25, 0.15);
+      this.glow.spawn(at, vel, 1.4 + Math.random() * 1.4, 0.05 + Math.random() * 0.04, col, -0.2, 0.25);
+    }
+    // Smoke off the top: dark, thick, lifting and spreading
+    const puffs = Math.min(3, Math.floor(amount * 7 * sz * dt + Math.random()));
+    for (let i = 0; i < puffs; i++) {
+      const p = this.smoke.spawn();
+      p.pos.set(pos.x + (Math.random() - 0.5) * 0.5 * sz, pos.y + (0.9 + Math.random() * 0.4) * sz, pos.z + (Math.random() - 0.5) * 0.5 * sz);
+      p.vel.set((Math.random() - 0.5) * 0.3, 0.7 + Math.random() * 0.6, (Math.random() - 0.5) * 0.3);
+      p.drag = 0.6;
+      p.lift = 0.5 + Math.random() * 0.3;
+      p.life = 2.8 + Math.random() * 1.8;
+      p.size0 = 0.45 * sz;
+      p.size1 = (1.8 + Math.random() * 1.0) * sz;
+      p.alpha = 0.32 + Math.random() * 0.14;
+      p.fadeIn = 0.12;
+      const shade = 0.12 + Math.random() * 0.08;
+      p.color.setRGB(shade * 1.05, shade, shade * 0.95);
+      p.floorY = pos.y;
+      p.wind = 0.15;
+    }
+  }
+
+  /**
+   * Something going up: a white-hot flash, a ball of fire swelling and
+   * blackening into smoke, a ring of dust punched out along the ground,
+   * sparks and grit thrown every way. One call per blast; `radius` is how
+   * far it reaches, metres.
+   */
+  explosion(pos: THREE.Vector3, radius = 3): void {
+    const r = Math.max(0.8, radius);
+    const col = ParticleManager.tmpC;
+    const vel = ParticleManager.tmpV;
+    // The flash and the fireball's core: additive, fast and brief
+    for (let i = 0; i < 26; i++) {
+      vel.set(Math.random() - 0.5, Math.random() * 0.8 - 0.15, Math.random() - 0.5).normalize().multiplyScalar(r * (2 + Math.random() * 4));
+      const heat = Math.random();
+      col.setRGB(1, 0.5 + 0.45 * heat, 0.15 + 0.5 * heat * heat);
+      this.glow.spawn(pos, vel, 0.18 + Math.random() * 0.3, (0.5 + Math.random() * 0.7) * (r / 3), col, 0, 5);
+    }
+    this.glow.spawn(pos, new THREE.Vector3(0, 0.5, 0), 0.12, 2.4 * (r / 3), new THREE.Color(1, 0.95, 0.8), 0, 0);
+    // The fireball, lit from inside: orange cards that swell fast and go
+    for (let i = 0; i < 9; i++) {
+      const p = this.smoke.spawn();
+      p.pos.set(pos.x + (Math.random() - 0.5) * 0.4 * r, pos.y + Math.random() * 0.3 * r, pos.z + (Math.random() - 0.5) * 0.4 * r);
+      p.vel.set((Math.random() - 0.5) * 3 * r, (0.5 + Math.random() * 1.5) * r, (Math.random() - 0.5) * 3 * r);
+      p.drag = 3;
+      p.lift = 1;
+      p.life = 0.45 + Math.random() * 0.35;
+      p.size0 = 0.5 * r;
+      p.size1 = (0.9 + Math.random() * 0.5) * r;
+      p.alpha = 0.85;
+      p.fadeIn = 0.02;
+      p.color.setRGB(1, 0.45 + Math.random() * 0.25, 0.12);
+      p.floorY = pos.y - 0.2;
+      p.wind = 0;
+    }
+    // The smoke it leaves: black, rolling up and hanging
+    for (let i = 0; i < 12; i++) {
+      const p = this.smoke.spawn();
+      p.pos.set(pos.x + (Math.random() - 0.5) * 0.6 * r, pos.y + Math.random() * 0.5 * r, pos.z + (Math.random() - 0.5) * 0.6 * r);
+      p.vel.set((Math.random() - 0.5) * 2.2 * r, (0.6 + Math.random() * 1.2) * r, (Math.random() - 0.5) * 2.2 * r);
+      p.drag = 2.2;
+      p.lift = 0.6;
+      p.life = 2.6 + Math.random() * 1.8;
+      p.size0 = 0.6 * r;
+      p.size1 = (1.4 + Math.random() * 0.8) * r;
+      p.alpha = 0.55 + Math.random() * 0.2;
+      p.fadeIn = 0.15;
+      const shade = 0.1 + Math.random() * 0.08;
+      p.color.setRGB(shade, shade, shade);
+      p.floorY = pos.y - 0.2;
+      p.wind = 0.5;
+    }
+    this.dust(pos, r * 1.2, 1.2);
+    this.sparks(pos, ParticleManager.UP, 22, pos.y > -0.5 ? Math.max(0, pos.y - 0.6) : 0);
+  }
+
   /** Drop every live particle and tracer — used after the shader warm-up. */
   clear(): void {
     this.solid.clear();

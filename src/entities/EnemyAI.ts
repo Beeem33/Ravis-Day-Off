@@ -96,6 +96,14 @@ export class EnemyAI {
     this.enterAttack();
   }
 
+  /**
+   * Fight from where he stands: no going looking for cover. For a man on a
+   * stair landing, where a step to one side for cover is a step off the edge.
+   */
+  holdGround(): void {
+    this.usesCover = false;
+  }
+
   // ---------------------------------------------------------------- senses
 
   private nearestWaypoint(): number {

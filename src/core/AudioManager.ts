@@ -3451,6 +3451,79 @@ export class AudioManager {
   }
 
   /**
+   * A fire going, close by: the roar of it under a handful of sharp cracks
+   * and pops at random through it. Called every so often for the nearest
+   * fire, so it never loops the same way twice.
+   */
+  fireCrackle(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 18);
+    if (a <= 0.02) return;
+    const out = this.place(ctx, d, a * 0.55, 0.15);
+    const r = Math.random;
+    this.burst(out, { D: 0.5, type: 'lowpass', f: 260 + r() * 120, gain: 0.22, attack: 0.08, rate: 0.6 });
+    const n = 2 + Math.floor(r() * 4);
+    for (let k = 0; k < n; k++) {
+      this.burst(out, {
+        at: r() * 0.4,
+        D: 0.006 + r() * 0.02,
+        type: 'bandpass',
+        f: 1600 + r() * 3600,
+        q: 2 + r() * 3,
+        gain: 0.18 + r() * 0.22,
+        attack: 0.001
+      });
+    }
+  }
+
+  /** A rocket leaving the tube: the thump of the charge and the hiss of the motor lighting, going away. */
+  rocketLaunch(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 140) * 0.75 + 0.15;
+    const out = this.place(ctx, d, a, 0.3);
+    const r = Math.random;
+    this.partial(out, { D: 0.22, type: 'sine', f: 90 + r() * 20, f1: 40, glide: 0.18, gain: 0.7, attack: 0.002 });
+    this.burst(out, { D: 0.12, type: 'lowpass', f: 700, gain: 0.8 });
+    this.burst(out, { D: 0.75, type: 'bandpass', f: 2600, f1: 900, q: 0.9, gain: 0.55, attack: 0.02 });
+  }
+
+  /**
+   * Something going up — a rocket's warhead on a car or the ground: the
+   * crack of it, a boom that drops away under hearing, the blast tearing
+   * through the air, and bits coming down for a second after.
+   */
+  explosion(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 160) * 0.8 + 0.2;
+    const out = this.place(ctx, d, a, 0.45);
+    const r = Math.random;
+    this.burst(out, { D: 0.06, type: 'highpass', f: 1500, gain: 0.7, attack: 0.001 });
+    this.partial(out, { D: 1.3, type: 'sine', f: 62 + r() * 10, f1: 19, glide: 1.0, gain: 1.0, attack: 0.004 });
+    this.burst(out, { D: 0.35, type: 'lowpass', f: 900, gain: 1.1 });
+    this.burst(out, { D: 1.4, type: 'lowpass', f: 160, gain: 1.3, attack: 0.03, rate: 0.5 });
+    this.burst(out, { D: 0.6, type: 'bandpass', f: 600, f1: 140, q: 0.8, gain: 0.7, attack: 0.01 });
+    this.crumple(out, 0.02, 0.15, 6, 0.3, 400, 2600);
+    for (let k = 0; k < 10; k++) {
+      const at = 0.15 + Math.pow(r(), 0.7) * 1.1;
+      this.burst(out, {
+        at,
+        D: 0.01 + r() * 0.02,
+        type: 'bandpass',
+        f: 1500 + r() * 3000,
+        q: 3,
+        gain: (0.1 + r() * 0.12) * (1 - at / 1.4),
+        attack: 0.001
+      });
+    }
+  }
+
+  /**
    * The General going down: three-odd metres of man falling flat on his back
    * onto a pile of wrecks. The impact (a boom that drops below hearing, the
    * body slam), the pile crushing under him crush after crush with a long

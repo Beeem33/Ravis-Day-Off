@@ -274,7 +274,7 @@ export class Level8Scene extends CombatScene<Level8Data> {
       }
     };
 
-    this.particles = new ParticleManager(this.scene, { smoke: 1600 });
+    this.particles = new ParticleManager(this.scene, { smoke: 2400 });
     this.flashPool = new MuzzleFlashPool(this.scene, 4);
     Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);

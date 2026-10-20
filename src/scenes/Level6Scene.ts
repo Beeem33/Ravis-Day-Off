@@ -375,7 +375,10 @@ export class Level6Scene extends CombatScene<Level6Data> {
 
     // ---- The knife on F, next to one of them
 
-    const tdTarget = this.stepTakedown(dt, this.playable ? this.agents : [], this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
+    // (F picks up the AK first, when it is lying in reach)
+    const gb = this.gunBody;
+    const gunNear = this.gunState === 'floor' && !!gb && Math.hypot(gb.position.x - this.player.position.x, gb.position.z - this.player.position.z) < 1.6;
+    const tdTarget = this.stepTakedown(dt, this.playable ? this.agents : [], this.player.alive && !gunNear && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) => this.hud.setTakedownHint(on));
 
     void tdTarget;
 

@@ -11,7 +11,7 @@ import type { ParticleManager } from '../fx/ParticleManager';
  * (`onBurst`); the ground, and running out of fuel, are handled here.
  */
 
-const POOL = 40;
+const POOL = 64;
 /** Seconds of fuel: one that has met nothing by then goes off where it is. */
 const LIFE = 4;
 const FWD = new THREE.Vector3(0, 0, 1);

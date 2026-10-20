@@ -87,12 +87,12 @@ const TRAMPLE_R = 1.75;
 const RAM_R = 1.3;
 
 /** Cars thrown between his specials (the rockets, the rush), by phase. */
-const THROWS_PER_SPECIAL: Record<1 | 2 | 3, number> = { 1: 3, 2: 2, 3: 2 };
+const THROWS_PER_SPECIAL: Record<1 | 2 | 3, number> = { 1: 2, 2: 2, 3: 1 };
 /** Getting the launcher off his back and up onto his shoulder: the tell. And putting it away. */
 const SHOULDER_TIME = 1.25;
 const UNSHOULDER_TIME = 0.75;
 /** A rocket every this-many seconds through the sweep, by phase, at this speed (m/s). */
-const ROCKET_EVERY: Record<1 | 2 | 3, number> = { 1: 0.12, 2: 0.1, 3: 0.085 };
+const ROCKET_EVERY: Record<1 | 2 | 3, number> = { 1: 0.08, 2: 0.065, 3: 0.055 };
 const ROCKET_SPEED = 42;
 /** The sweep goes round at this rate (rad/s), in no less and no more time than these. */
 const SWEEP_RATE = 0.6;

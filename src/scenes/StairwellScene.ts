@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { StairwellBuilder, type StairwellData, type StairAgent } from '../environment/StairwellBuilder';
+import { StairwellBuilder, type StairwellData, type StairAgent, type StairDrip } from '../environment/StairwellBuilder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -28,14 +28,60 @@ const ARMOUR_LETS = { torso: 0.6, head: 0.5 };
  * out of him; two storeys — the well, a missed jump in the collapse — is
  * the end of him.
  */
-const FALL_SAFE = 3.6;
-const FALL_HURT = 5.0;
-const FALL_KILL = 6.5;
+const FALL_SAFE = 2.6;
+const FALL_HURT = 3.2;
+const FALL_KILL = 3.8;
 /** Stood in the fire, a hit point this often. */
 const BURN_EVERY = 0.7;
 /** How close he has to be, and how near his level, before a landing's agents see him coming. */
 const SEE_RANGE = 9;
 const SEE_LEVEL = 2.6;
+
+/** Water off the leaking pipes: drops falling from each leak to the floor under it, one draw for all of them. */
+class Drips {
+  private mesh: THREE.InstancedMesh;
+  private drops: { src: StairDrip; p: THREE.Vector3; v: number; wait: number }[] = [];
+  private m = new THREE.Matrix4();
+  private static PARK = new THREE.Matrix4().makeScale(0, 0, 0);
+
+  constructor(scene: THREE.Scene, srcs: StairDrip[]) {
+    const per = srcs.map((s) => Math.max(1, Math.ceil(s.rate * Math.sqrt((2 * Math.max(0.1, s.from.y - s.toY)) / 9.8))));
+    const n = Math.max(1, per.reduce((a, b) => a + b, 0));
+    this.mesh = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.014, 0.09, 0.014),
+      new THREE.MeshBasicMaterial({ color: 0xbcd2e2, transparent: true, opacity: 0.55, depthWrite: false }),
+      n
+    );
+    this.mesh.frustumCulled = false;
+    for (let i = 0; i < n; i++) this.mesh.setMatrixAt(i, Drips.PARK);
+    scene.add(this.mesh);
+    srcs.forEach((s, i) => {
+      for (let k = 0; k < per[i]; k++) this.drops.push({ src: s, p: s.from.clone(), v: 0, wait: Math.random() * (per[i] / s.rate) });
+    });
+  }
+
+  update(dt: number): void {
+    this.drops.forEach((d, i) => {
+      if (d.wait > 0) {
+        d.wait -= dt;
+        this.mesh.setMatrixAt(i, Drips.PARK);
+        return;
+      }
+      d.v += 9.8 * dt;
+      d.p.y -= d.v * dt;
+      if (d.p.y <= d.src.toY) {
+        d.p.copy(d.src.from);
+        d.p.x += (Math.random() - 0.5) * 0.05;
+        d.p.z += (Math.random() - 0.5) * 0.05;
+        d.v = 0;
+        d.wait = (Math.random() * 1.6) / d.src.rate;
+      }
+      this.m.makeTranslation(d.p.x, d.p.y, d.p.z);
+      this.mesh.setMatrixAt(i, this.m);
+    });
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
 
 /** One of the agents on the landings. */
 interface Agent {
@@ -104,6 +150,24 @@ export class StairwellScene extends CombatScene<StairwellData> {
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
 
   private ray = new THREE.Ray();
+  private drips!: Drips;
+  private mineGone = new Set<number>();
+  private hint = false;
+  private cableSparkT = 0;
+  /** The man off the roof, coming down the well screaming; and what is left of him at the bottom. */
+  private faller: { e: Enemy; t: number; scream: { set(d: number): void; stop(): void }; spin: number } | null = null;
+  private fallDone = false;
+  private corpse: Enemy | null = null;
+  private readonly fallPose = {
+    handR: new THREE.Vector3(),
+    handL: new THREE.Vector3(),
+    elbow: new THREE.Vector3(0.6, -0.4, 0.6),
+    lean: -0.25,
+    head: new THREE.Euler(-0.5, 0, 0),
+    liftL: 0,
+    liftR: 0
+  };
+  private static UP = new THREE.Vector3(0, 1, 0);
   private static tmpA = new THREE.Vector3();
   private static tmpB = new THREE.Vector3();
   private static tmpC = new THREE.Vector3();
@@ -170,6 +234,9 @@ export class StairwellScene extends CombatScene<StairwellData> {
     this.flashPool = new MuzzleFlashPool(this.scene, 4);
     Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
+    this.drips = new Drips(this.scene, L.drips);
+    // The man off the roof only comes down once, at the start
+    this.fallDone = this.checkpoint > 0;
     this.arsenal = new Arsenal(
       {
         player: this.player,
@@ -225,6 +292,7 @@ export class StairwellScene extends CombatScene<StairwellData> {
   exit(): void {
     for (const u of this.unsubs) u();
     for (const a of this.agents) a.ai?.dispose();
+    this.faller?.scream.stop();
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);
     this.hud.destroy();
@@ -309,6 +377,8 @@ export class StairwellScene extends CombatScene<StairwellData> {
 
     this.updateFalls();
     this.updateFire(dt);
+    this.updateHazards(dt);
+    this.updateFaller(dt);
     this.updateProgress(dt);
     this.updateAgents(dt);
     this.updateCast(dt);
@@ -356,6 +426,159 @@ export class StairwellScene extends CombatScene<StairwellData> {
   }
 
   // ----------------------------------------------------------- the way down
+
+  /**
+   * What else is waiting on the way down: the mines blinking on the
+   * rubble, and going off under him; the live cables swinging across the
+   * flight; the live water on the half landing. Any of them, and he is dead.
+   * And at the crawl, the word to get down.
+   */
+  private updateHazards(dt: number): void {
+    const L = this.level;
+    const p = this.player;
+    const { tmpA, tmpB, UP } = StairwellScene;
+    const on = this.t % 0.9 < 0.2;
+    L.mines.forEach((m, i) => {
+      if (this.mineGone.has(i)) return;
+      m.led.emissiveIntensity = on ? 5 : 0.25;
+      const halo = m.obj.children[3];
+      if (halo) halo.visible = on;
+      if (!p.alive || p.cinematic) return;
+      const dy = p.position.y - m.pos.y;
+      if (dy > -0.3 && dy < 0.45 && Math.hypot(p.position.x - m.pos.x, p.position.z - m.pos.z) < 0.45) this.blowMine(i);
+    });
+    // The cables: each a pendulum across the flight, its live end low enough to catch him
+    for (const c of L.cables) {
+      const th = c.amp * Math.sin((Math.PI * 2 * this.t) / c.period + c.phase);
+      const end = tmpA.copy(c.pivot).addScaledVector(c.axis, Math.sin(th) * c.length);
+      end.y -= Math.cos(th) * c.length;
+      c.mesh.position.copy(c.pivot).add(end).multiplyScalar(0.5);
+      c.mesh.quaternion.setFromUnitVectors(UP, tmpB.copy(end).sub(c.pivot).normalize());
+      c.mesh.scale.set(1, c.length, 1);
+      c.tip.position.copy(end);
+      if (p.alive && !p.cinematic && this.touchesCable(c.pivot, end)) this.electrocute(end);
+    }
+    this.cableSparkT -= dt;
+    if (this.cableSparkT <= 0) {
+      this.cableSparkT = 0.12 + Math.random() * 0.2;
+      for (const c of L.cables) {
+        const d = c.tip.position.distanceTo(p.position);
+        if (d > 24) continue;
+        this.particles.electricSparks(c.tip.position, 2 + Math.floor(Math.random() * 3));
+        if (Math.random() < 0.25) this.ctx.audio.electricCrackle(d);
+      }
+    }
+    const feet = tmpA.set(p.position.x, p.position.y + 0.1, p.position.z);
+    if (p.alive && !p.cinematic) {
+      for (const z of L.shockZones) {
+        if (z.containsPoint(feet)) {
+          this.electrocute(feet.clone());
+          break;
+        }
+      }
+    }
+    const inHint = p.alive && L.crouchHint.containsPoint(feet) && !p.crouching;
+    if (inHint !== this.hint) {
+      this.hint = inHint;
+      this.setObjective(inHint ? 'GET DOWN UNDER IT — HOLD [C] TO CROUCH' : '');
+    }
+  }
+
+  /** Is any of the bottom of the cable within a hand's breadth of him, head to foot? */
+  private touchesCable(pivot: THREE.Vector3, end: THREE.Vector3): boolean {
+    const p = this.player;
+    const lo = p.position.y + 0.05;
+    const hi = p.eyePosition(StairwellScene.tmpC).y + 0.15;
+    const up = StairwellScene.tmpD.copy(pivot).sub(end).normalize();
+    for (let k = 0; k <= 8; k++) {
+      const x = end.x + up.x * k * 0.3;
+      const y = end.y + up.y * k * 0.3;
+      const z = end.z + up.z * k * 0.3;
+      if (y < lo || y > hi) continue;
+      if (Math.hypot(x - p.position.x, z - p.position.z) < 0.36) return true;
+    }
+    return false;
+  }
+
+  private electrocute(at: THREE.Vector3): void {
+    const p = this.player;
+    if (!p.alive) return;
+    this.ctx.audio.electrocute();
+    this.particles.electricSparks(StairwellScene.tmpB.set(p.position.x, p.position.y + 1.0, p.position.z), 18);
+    this.particles.electricSparks(at, 10);
+    p.kill('A LIVE WIRE', at);
+  }
+
+  private blowMine(i: number): void {
+    const m = this.level.mines[i];
+    this.mineGone.add(i);
+    m.obj.visible = false;
+    const at = StairwellScene.tmpB.copy(m.pos);
+    at.y += 0.25;
+    this.particles.explosion(at, 2.0);
+    this.ctx.audio.explosion(0);
+    this.flashPool.flash(at, 40);
+    this.player.kill('A LANDMINE', m.pos.clone().setY(m.pos.y - 0.6));
+  }
+
+  /**
+   * A few seconds in, one of them comes through the roof hatch — blown off
+   * the roof — and goes down the middle of the well, arms and legs going,
+   * screaming all the way: loud as he passes Ravi, fainter as he drops
+   * away, until the bottom. What is left lies there.
+   */
+  private updateFaller(dt: number): void {
+    const F = this.level.fall;
+    if (!this.fallDone && !this.faller && this.t >= 2.4) this.startFall();
+    if (this.corpse) {
+      this.corpse.update(dt);
+      if (!this.corpse.alive && this.corpse.settled && !this.pooled.has(this.corpse)) {
+        this.pooled.add(this.corpse);
+        this.poolUnder(this.corpse);
+      }
+    }
+    const f = this.faller;
+    if (!f) return;
+    f.t += dt;
+    const e = f.e;
+    const y = F.top - 4.9 * f.t * f.t;
+    const ph = f.t;
+    e.position.set(F.x + Math.sin(ph * 1.3) * 0.25, Math.max(0, y), F.z + Math.cos(ph * 1.1) * 0.2);
+    const P = this.fallPose;
+    P.handR.set(0.38 + 0.12 * Math.sin(ph * 11), 1.65 + 0.25 * Math.sin(ph * 14), -0.1 + 0.25 * Math.cos(ph * 9));
+    P.handL.set(-0.38 - 0.12 * Math.sin(ph * 12 + 1), 1.6 + 0.25 * Math.sin(ph * 13 + 2), -0.1 + 0.25 * Math.cos(ph * 10 + 1));
+    P.liftL = 0.5 + 0.5 * Math.sin(ph * 9);
+    P.liftR = 0.5 + 0.5 * Math.sin(ph * 9 + 2.5);
+    e.pose = P;
+    e.yaw += dt * f.spin;
+    e.update(dt);
+    e.root.rotation.set(-0.35 + 0.15 * Math.sin(ph * 2), e.yaw, 0.2 * Math.sin(ph * 1.7), 'YXZ');
+    const cam = this.player.camera.position;
+    f.scream.set(cam.distanceTo(StairwellScene.tmpB.copy(e.position).setY(e.position.y + 1.2)));
+    if (y > 0) return;
+    // The bottom
+    f.scream.stop();
+    const d = cam.distanceTo(e.position);
+    this.ctx.audio.stomp(d * 0.6);
+    this.ctx.audio.bodyThud(Math.max(0, d - 22));
+    this.particles.dust(e.position, 1.6, 1.2);
+    e.pose = null;
+    e.root.rotation.set(0, e.yaw, 0, 'YXZ');
+    e.die(StairwellScene.tmpB.copy(e.position).setY(1.0), new THREE.Vector3(0.2, -1, 0.1).normalize(), this.world, 'torso', 2);
+    this.corpse = e;
+    this.faller = null;
+    this.fallDone = true;
+  }
+
+  private startFall(): void {
+    const F = this.level.fall;
+    const e = new Enemy(new THREE.Vector3(F.x, F.top, F.z), 0, 99, { name: 'POLICE FORCE AGENT' });
+    e.slingWeapon(true);
+    e.setWalk(0);
+    e.root.rotation.order = 'YXZ';
+    this.scene.add(e.root);
+    this.faller = { e, t: 0, scream: this.ctx.audio.fallScream(), spin: (Math.random() < 0.5 ? -1 : 1) * 1.4 };
+  }
 
   /** A long enough drop hurts when he lands; a long one kills. */
   private updateFalls(): void {
@@ -702,11 +925,21 @@ export class StairwellScene extends CombatScene<StairwellData> {
     const L = this.level;
     const p = this.player.position;
     let nearest = Infinity;
-    for (const f of L.fires) {
+    // Each fire burns in three places that wander about over it, swelling
+    // and dying back, so it moves rather than standing in one column
+    const at = StairwellScene.tmpD;
+    L.fires.forEach((f, k) => {
       const d = f.pos.distanceTo(p);
       if (d < nearest) nearest = d;
-      if (d < 26) this.particles.fire(f.pos, f.size, 1);
-    }
+      if (d > 26) return;
+      const r = 0.32 * f.size;
+      for (let j = 0; j < 3; j++) {
+        const ph = k * 1.7 + j * 2.1;
+        at.set(f.pos.x + Math.sin(this.t * (0.9 + 0.35 * j) + ph) * r, f.pos.y, f.pos.z + Math.cos(this.t * (0.7 + 0.3 * j) + ph * 1.3) * r);
+        this.particles.fire(at, f.size * (0.5 + 0.18 * Math.sin(this.t * 2.3 + ph)), 0.75);
+      }
+    });
+    this.drips.update(dt);
     // Fire light: never steady
     L.fireLights.forEach((l, i) => {
       this.flick[i] += (Math.random() - this.flick[i]) * Math.min(1, dt * 9);

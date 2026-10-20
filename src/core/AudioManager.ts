@@ -784,6 +784,94 @@ export class AudioManager {
   }
 
   /**
+   * A man falling down the stairwell, screaming the whole way: one long
+   * "AAAH" that cracks, catches its breath and goes again. It plays on for
+   * four seconds unless stopped; the scene moves it — set(distance) every
+   * frame, loud and bright close by, quieter and duller as he drops away —
+   * and stop() cuts it off when he hits the bottom.
+   */
+  fallScream(): { set(distance: number): void; stop(): void } {
+    const none = { set: (_d: number): void => {}, stop: (): void => {} };
+    if (!this.ctx) return none;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const D = 4.2;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    const muffle = ctx.createBiquadFilter();
+    muffle.type = 'lowpass';
+    muffle.frequency.value = 7000;
+    out.connect(muffle).connect(this.sfxBus);
+    const voice = ctx.createGain();
+    for (const [f, q, g] of [[820, 5, 1.0], [1180, 6, 0.8], [2700, 8, 0.45]] as const) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f * (0.96 + Math.random() * 0.08);
+      bp.Q.value = q;
+      const gg = ctx.createGain();
+      gg.gain.value = g;
+      voice.connect(bp).connect(gg).connect(out);
+    }
+    const base = 185 + Math.random() * 25;
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 7.5;
+    const vibDepth = ctx.createGain();
+    vibDepth.gain.value = base * 0.09;
+    vib.connect(vibDepth);
+    const oscs: OscillatorNode[] = [vib];
+    for (const detune of [-7, 7]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.detune.value = detune;
+      const fq = osc.frequency;
+      fq.setValueAtTime(base, t);
+      fq.exponentialRampToValueAtTime(base * 2.3, t + 0.18);
+      fq.exponentialRampToValueAtTime(base * 2.1, t + 1.4);
+      // The crack, a gasp, and up again
+      fq.exponentialRampToValueAtTime(base * 1.3, t + 1.65);
+      fq.exponentialRampToValueAtTime(base * 2.4, t + 1.9);
+      fq.exponentialRampToValueAtTime(base * 2.0, t + 3.4);
+      fq.exponentialRampToValueAtTime(base * 1.4, t + D);
+      vibDepth.connect(fq);
+      osc.connect(voice);
+      oscs.push(osc);
+    }
+    const air = ctx.createBufferSource();
+    air.buffer = this.noiseBuffer;
+    const airF = ctx.createBiquadFilter();
+    airF.type = 'bandpass';
+    airF.frequency.value = 1800;
+    airF.Q.value = 0.8;
+    const airG = ctx.createGain();
+    airG.gain.value = 0.12;
+    air.connect(airF).connect(airG).connect(out);
+    for (const o of oscs) {
+      o.start(t);
+      o.stop(t + D + 0.05);
+    }
+    air.start(t, Math.random());
+    air.stop(t + D + 0.05);
+    let stopped = false;
+    return {
+      set: (d: number): void => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        out.gain.setTargetAtTime(0.6 / (1 + (d / 5) * (d / 5)) + 0.006, now, 0.03);
+        muffle.frequency.setTargetAtTime(900 + 6500 / (1 + d / 7), now, 0.05);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        out.gain.cancelScheduledValues(now);
+        out.gain.setTargetAtTime(0.0001, now, 0.012);
+        for (const o of oscs) o.stop(now + 0.12);
+        air.stop(now + 0.12);
+      }
+    };
+  }
+
+  /**
    * A man screaming with a knife in him: an open "AAH" that catches, holds,
    * then cracks and drops most of an octave. `strength` below 1 is the
    * second stab — shorter, lower, choked off.

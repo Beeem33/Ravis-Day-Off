@@ -87,6 +87,9 @@ export const Events = {
   RestartStreet: 'restart-street',
   /** The boss up the airstair and into his jet. */
   StreetComplete: 'street-complete',
+  RestartAirport: 'restart-airport',
+  /** Ravi in through the jet's vent. */
+  AirportComplete: 'airport-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -105,7 +108,8 @@ export const LEVELS = [
   { id: 'level7', n: '7', name: 'THE TOP FLOOR', blurb: 'The staff are fighting back' },
   { id: 'stairwell', n: '8', name: 'STAIRWELL B', blurb: 'All the way down, the hard way' },
   { id: 'level8', n: '9', name: 'THE PARKING LOT', blurb: 'The General' },
-  { id: 'street', n: '10', name: 'THE STREET', blurb: 'After him, through traffic, to the airport' }
+  { id: 'street', n: '10', name: 'THE STREET', blurb: 'After him, through traffic, to the airport' },
+  { id: 'airport', n: '11', name: 'THE AIRPORT', blurb: 'Stop that jet' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

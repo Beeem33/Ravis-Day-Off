@@ -91,6 +91,17 @@ export interface CarRig {
 /** The Civic: a CarRig plus its loose front-left hubcap, which comes off when he peels out. */
 export interface CivicRig extends CarRig {
   hubcap: THREE.Object3D;
+  /**
+   * Its aftermarket sunroof (the opening is a real hole in the roof, about
+   * 0.76 m across × 0.55 m along, over the front of the cabin). Shut unless
+   * the scene opens it. setOpen(0) shut .. 1 open: the panel lifts off its
+   * seat for the first fifth, then slides back along the roof until the
+   * opening is clear. `hatch`: the opening's centre at roof height, car-local
+   * (the group's frame; the panel and the hole ride the body, which pivots
+   * at axle height — under body pitch/roll take it through
+   * body.localToWorld(hatch − body.position)).
+   */
+  sunroof?: { setOpen(k: number): void; hatch: THREE.Vector3 };
 }
 
 // ------------------------------------------------------------------ the lot

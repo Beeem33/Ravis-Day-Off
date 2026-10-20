@@ -114,6 +114,12 @@ export class Enemy {
    */
   readonly general: boolean = false;
   /**
+   * Airport security: an agent in every way that matters (armed, the same
+   * brain), dressed as the airside team — pale blue short-sleeved shirt,
+   * navy trousers, hi-vis vest, black peaked cap, a radio on his chest.
+   */
+  readonly security: boolean = false;
+  /**
    * How fast the walk cycle turns over, as a multiple of the usual. A man
    * scaled up takes strides as many times longer, so at the same cadence his
    * feet would slide: scaled by S, walk him at about 1/S.
@@ -176,12 +182,13 @@ export class Enemy {
     spawn: THREE.Vector3,
     yaw: number,
     index: number,
-    opts: { name?: string; civilian?: boolean; boss?: boolean; general?: boolean } = {}
+    opts: { name?: string; civilian?: boolean; boss?: boolean; general?: boolean; security?: boolean } = {}
   ) {
     this.name = opts.name ?? AMERICAN_NAMES[index % AMERICAN_NAMES.length];
     this.civilian = opts.civilian ?? false;
     this.boss = opts.boss ?? false;
     this.general = !this.boss && (opts.general ?? false);
+    this.security = !this.boss && !this.general && !this.civilian && (opts.security ?? false);
     if (this.boss) {
       this.shoulderX = 0.34;
       this.hipX = 0.135;
@@ -217,7 +224,7 @@ export class Enemy {
       if ((o as THREE.Mesh).isMesh && !keep.has(o)) (o as THREE.Mesh).material = Enemy.unseen;
     });
     const h = new HitmanVisual(
-      HitmanVisual.lookFor(this.variant, this.general ? 'general' : this.boss ? 'boss' : this.civilian ? 'staff' : 'agent')
+      HitmanVisual.lookFor(this.variant, this.general ? 'general' : this.boss ? 'boss' : this.civilian ? 'staff' : this.security ? 'security' : 'agent')
     );
     if (this.civilian) this.setMood(0, 1, 0.75, 0);
     this.hitman = h;
@@ -910,8 +917,9 @@ export class Enemy {
     if (this.general) return this.buildGeneral();
     // The civilian wears what the floor staff wear: white shirt, blue
     // chinos, ball cap. Agents are in black suits.
-    const suit = this.civilian ? this.mat(0x2f4a7a, 0.9) : this.mat(0x15161a, 0.8);
-    const torsoMat = this.civilian ? this.mat(0xf4f2ec, 0.92) : suit;
+    // (Airport security, should the model never load: navy trousers, a pale blue shirt)
+    const suit = this.civilian ? this.mat(0x2f4a7a, 0.9) : this.security ? this.mat(0x1b2333, 0.85) : this.mat(0x15161a, 0.8);
+    const torsoMat = this.civilian ? this.mat(0xf4f2ec, 0.92) : this.security ? this.mat(0xa9c8e4, 0.9) : suit;
     const sleeveMat = torsoMat;
     const shirt = this.mat(0xe9e6df, 0.9);
     // Floor staff share Ravi's complexion (same tone as the viewmodel hands)

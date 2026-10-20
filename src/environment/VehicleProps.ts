@@ -281,9 +281,11 @@ const vec2 = (poly: P[]): THREE.Vector2[] => poly.map(([a, b]) => new THREE.Vect
 
 /**
  * A side-view profile (u, y) extruded across the car from x0 to x1, with a
- * bevel of bt across the car and bs in the profile.
+ * bevel of bt across the car and bs in the profile. `steps` cuts the run
+ * between the bevels into that many equal strips across the car (the
+ * Civic's roof, so its sunroof can be cut out along strip lines).
  */
-export function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2, holes: P[][] = []): THREE.BufferGeometry {
+export function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2, holes: P[][] = [], steps = 1): THREE.BufferGeometry {
   const bevel = bt > 0 && bs > 0;
   const shape = new THREE.Shape(vec2(wound(inset(dedupe(poly), bevel ? bs : 0), true)));
   for (const h of holes) shape.holes.push(new THREE.Path(vec2(wound(dedupe(h), false))));
@@ -294,7 +296,7 @@ export function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2,
     bevelThickness: tb,
     bevelSize: bevel ? bs : 0,
     bevelSegments: seg,
-    steps: 1,
+    steps,
     curveSegments: 1
   });
   // Shape x is u, so it lands on −z; the extrusion runs along x
@@ -413,8 +415,8 @@ export function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeo
 
 /** Which material a part takes: on the parked cars paint, trim, glass and lamps; the rigs split lamps by job. */
 export type Layer = 'paint' | 'primer' | 'trim' | 'glass' | 'head' | 'tail' | 'ind';
-/** Which moving piece of a rig it belongs to. */
-export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap';
+/** Which moving piece of a rig it belongs to. ('sunroof': the Civic's sliding glass panel, in its own frame.) */
+export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap' | 'sunroof';
 type WheelName = 'fl' | 'fr' | 'rl' | 'rr';
 export type WheelStyle = 'alloy' | 'exec' | 'steel' | 'steelBlack' | 'stub';
 
@@ -670,13 +672,17 @@ export function buildCar(m: Model, look: Look): Part[] {
   const uRear = (y: number): number => m.rearU + ((m.roofRU - m.rearU) * (y - m.rearY)) / (yR1 - m.rearY);
 
   // Roof: a thin slab along the roof line, 6 mm wider than the frames under it
-  const roofLine: P[] = [];
-  for (let i = 0; i <= 8; i++) {
-    const u = lerp(m.roofFU + 0.03, m.roofRU - 0.03, i / 8);
-    roofLine.push([u, roofTop(m, u)]);
+  if (civic) {
+    civicRoof(k, m, hwB, taper);
+  } else {
+    const roofLine: P[] = [];
+    for (let i = 0; i <= 8; i++) {
+      const u = lerp(m.roofFU + 0.03, m.roofRU - 0.03, i / 8);
+      roofLine.push([u, roofTop(m, u)]);
+    }
+    const slab: P[] = [...roofLine, ...[...roofLine].reverse().map(([u, y]) => [u, y - 0.055] as P)];
+    k.put(smooth(taper(side(slab, -hwB - 0.006, hwB + 0.006, 0.05, 0.022, 2))), 'paint');
   }
-  const slab: P[] = [...roofLine, ...[...roofLine].reverse().map(([u, y]) => [u, y - 0.055] as P)];
-  k.put(smooth(taper(side(slab, -hwB - 0.006, hwB + 0.006, 0.05, 0.022, 2))), 'paint');
 
   // Side frames: the greenhouse's side silhouette with the window hole through it
   const frame: P[] = [[uA(m.belt - 0.05), m.belt - 0.05], [uA(yA1 - 0.012), yA1 - 0.012]];
@@ -981,6 +987,134 @@ export function buildCar(m: Model, look: Look): Part[] {
   }
   k.node = 'body';
   return k.parts;
+}
+
+/**
+ * The Civic's sunroof, the aftermarket kind a car this age would have had
+ * fitted: an opening cut through the front half of the roof (side-view u
+ * from `front` to `rear`, about 0.76 across × 0.55 along), a black rubber
+ * seal round its edge, two low runners back along the roof behind it, and
+ * a tinted panel in a black frame that lifts `lift` off its seat and slides
+ * `slide` back along the runners.
+ */
+export const SUNROOF = {
+  front: -0.385,
+  rear: -0.935,
+  slide: 0.62,
+  lift: 0.032,
+  /** The panel's half-width across the car and half-length, and how far its underside stands off the roof when shut. */
+  panelHW: 0.43,
+  panelHL: 0.305,
+  stand: 0.004,
+  /** The runners' |x| (and the panel's feet that ride them). */
+  runnerX: 0.355
+};
+
+/** The roof slab is extruded in this many equal strips across the car; the opening is the middle three. */
+const ROOF_STEPS = 5;
+
+/** Keep the triangles of a (non-indexed) geometry whose centroids pass `keep`. */
+function keepTriangles(g: THREE.BufferGeometry, keep: (x: number, y: number, z: number) => boolean): THREE.BufferGeometry {
+  const src = g.index ? g.toNonIndexed() : g;
+  const pos = src.attributes.position as THREE.BufferAttribute;
+  const names = Object.keys(src.attributes);
+  const out: Record<string, number[]> = {};
+  for (const n of names) out[n] = [];
+  for (let t = 0; t < pos.count; t += 3) {
+    const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3;
+    const cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
+    const cz = (pos.getZ(t) + pos.getZ(t + 1) + pos.getZ(t + 2)) / 3;
+    if (!keep(cx, cy, cz)) continue;
+    for (const n of names) {
+      const a = src.attributes[n] as THREE.BufferAttribute;
+      for (let v = t; v < t + 3; v++) for (let c = 0; c < a.itemSize; c++) out[n].push(a.array[v * a.itemSize + c]);
+    }
+  }
+  const res = new THREE.BufferGeometry();
+  for (const n of names) res.setAttribute(n, new THREE.Float32BufferAttribute(out[n], (src.attributes[n] as THREE.BufferAttribute).itemSize));
+  if (src !== g) src.dispose();
+  g.dispose();
+  return res;
+}
+
+/**
+ * The Civic's roof: the same slab every car's roof is, extruded in five
+ * equal strips across the car so the opening's sides fall on strip lines,
+ * with the middle three strips' top and underside taken out between the
+ * opening's front and rear and the cut lined in black rubber — a real hole
+ * Ravi can come up through. Then the seal round its lip, the runners, and
+ * the sliding panel (its own node, in its own frame: origin at the middle
+ * of its underside, front toward −Z).
+ */
+function civicRoof(k: Kit, m: Model, hwB: number, taper: (g: THREE.BufferGeometry) => THREE.BufferGeometry): void {
+  const S = SUNROOF;
+  const x0 = -hwB - 0.006;
+  const x1 = hwB + 0.006;
+  const tb = 0.05;
+  // The opening's half-width before the tumblehome takes it in: the edge of the outermost strip
+  const hx = x1 - tb - (x1 - x0 - 2 * tb) / ROOF_STEPS;
+  const fu = m.roofFU + 0.03;
+  const ru = m.roofRU - 0.03;
+  const us: number[] = [];
+  for (let i = 0; i < 2; i++) us.push(lerp(fu, S.front, i / 2));
+  for (let i = 0; i < 4; i++) us.push(lerp(S.front, S.rear, i / 4));
+  for (let i = 0; i <= 4; i++) us.push(lerp(S.rear, ru, i / 4));
+  const roofLine: P[] = us.map((u) => [u, roofTop(m, u)] as P);
+  const slab: P[] = [...roofLine, ...[...roofLine].reverse().map(([u, y]) => [u, y - 0.055] as P)];
+  const cut = keepTriangles(side(slab, x0, x1, tb, 0.022, 2, [], ROOF_STEPS), (x, _y, z) => !(Math.abs(x) < hx && -z < S.front && -z > S.rear));
+  k.put(smooth(taper(cut)), 'paint');
+
+  // The cut's four faces, in black rubber, facing into the opening
+  const inner: THREE.BufferGeometry[] = [];
+  const yt = (u: number): number => roofTop(m, u) - 0.001;
+  const yb = (u: number): number => roofTop(m, u) - 0.054;
+  for (const [u, face] of [[S.front, 1], [S.rear, -1]] as const) {
+    inner.push(facet([V(-hx, yt(u), -u), V(hx, yt(u), -u), V(hx, yb(u), -u), V(-hx, yb(u), -u)], V(0, 0, face)));
+  }
+  const along = us.filter((u) => u <= S.front + 1e-6 && u >= S.rear - 1e-6);
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < along.length - 1; i++) {
+      const a = along[i];
+      const b = along[i + 1];
+      inner.push(facet([V(s * hx, yt(a), -a), V(s * hx, yt(b), -b), V(s * hx, yb(b), -b), V(s * hx, yb(a), -a)], V(-s, 0, 0)));
+    }
+  }
+  // The seal over the lip, 2.2 cm wide, just proud of the paint
+  const lip = (u: number): number => roofTop(m, u) + 0.0025;
+  for (const u of [S.front, S.rear]) inner.push(strip(V(-hx - 0.011, lip(u), -u), V(hx + 0.011, lip(u), -u), 0.022, V(0, 1, 0)));
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < along.length - 1; i++) {
+      const a = along[i];
+      const b = along[i + 1];
+      inner.push(strip(V(s * hx, lip(a), -a), V(s * hx, lip(b), -b), 0.022, V(0, 1, 0)));
+    }
+  }
+  for (const g of inner) k.trim(taper(g), C.black);
+
+  // The runners, back along the roof behind the opening (already at their tapered width)
+  const r0 = S.rear - 0.02;
+  const r1 = (S.front + S.rear) / 2 - S.slide - S.panelHL + 0.01;
+  const nr = 4;
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < nr; i++) {
+      const a = lerp(r0, r1, i / nr);
+      const b = lerp(r0, r1, (i + 1) / nr);
+      const ua = (a + b) / 2;
+      const len = Math.hypot(a - b, roofTop(m, a) - roofTop(m, b));
+      k.trim(box(0.014, 0.012, len + 0.004, s * S.runnerX, roofTop(m, ua) + 0.004, -ua, Math.atan2(roofTop(m, a) - roofTop(m, b), a - b)), C.black);
+    }
+  }
+
+  // The panel: smoked glass in a black frame, with a foot under each corner of it for the runners
+  k.node = 'sunroof';
+  const hw = S.panelHW;
+  const hl = S.panelHL;
+  const fw = 0.04;
+  k.put(facet([V(-hw + fw, 0.009, -hl + fw), V(hw - fw, 0.009, -hl + fw), V(hw - fw, 0.009, hl - fw), V(-hw + fw, 0.009, hl - fw)], V(0, 1, 0)), 'glass');
+  for (const sz of [-1, 1]) k.trim(box(2 * hw, 0.014, fw, 0, 0.007, sz * (hl - fw / 2)), C.black);
+  for (const sx of [-1, 1]) k.trim(box(fw, 0.014, 2 * hl - 2 * fw, sx * (hw - fw / 2), 0.007, 0), C.black);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.trim(box(0.014, S.lift - 0.008, 0.06, sx * S.runnerX, -(S.lift - 0.008) / 2, sz * (hl - 0.09)), C.black);
+  k.node = 'body';
 }
 
 /** Width of the tail lamp's inboard block (for placing the tape over it). */
@@ -1322,7 +1456,7 @@ export function bakedCar(kind: CarKind, wrecked = false): BakedCar {
   });
   const by: Record<keyof BakedCar, THREE.BufferGeometry[]> = { paint: [], trim: [], glass: [], lamps: [] };
   for (const part of parts) {
-    if (part.node === 'hubcap') continue;
+    if (part.node === 'hubcap' || part.node === 'sunroof') continue;
     if (part.node !== 'body' && part.node !== 'door') part.g.applyMatrix4(wheelMatrix(m, part.node));
     const slot: keyof BakedCar =
       part.layer === 'paint' || part.layer === 'primer'
@@ -1427,9 +1561,19 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const spins: Record<WheelName, THREE.Object3D> = { fl: fl.spin, fr: fr.spin, rl: rl.spin, rr: rr.spin };
 
   let hubcap: THREE.Object3D | null = null;
+  let sunroof: THREE.Object3D | null = null;
   const parentOf = (node: Node): THREE.Object3D => {
     if (node === 'body') return body;
     if (node === 'door') return door;
+    if (node === 'sunroof') {
+      // Only the Civic has one; placed by its setOpen (see civic)
+      if (!sunroof) {
+        sunroof = new THREE.Group();
+        sunroof.name = 'sunroof';
+        body.add(sunroof);
+      }
+      return sunroof;
+    }
     if (node === 'hubcap') {
       if (!hubcap) {
         hubcap = new THREE.Group();
@@ -1446,6 +1590,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const toNode = (node: Node): THREE.Matrix4 => {
     if (node === 'body') return new THREE.Matrix4().makeTranslation(0, -m.R, 0);
     if (node === 'door') return new THREE.Matrix4().makeTranslation(-hinge.x, -hinge.y, -hinge.z);
+    if (node === 'sunroof') return new THREE.Matrix4();
     if (node === 'fr' || node === 'rr') return new THREE.Matrix4().makeRotationY(Math.PI);
     return new THREE.Matrix4();
   };
@@ -1568,5 +1713,33 @@ export function civic(): CivicRig {
     V(0.48, m.tailLow - 0.03, m.L / 2 + 0.05)
   );
   if (!rig.hubcap) throw new Error('VehicleProps: the Civic lost its hubcap before the scene could');
-  return { ...rig, hubcap: rig.hubcap };
+  const panel = rig.body.getObjectByName('sunroof');
+  if (!panel) throw new Error('VehicleProps: the Civic has no sunroof');
+  return { ...rig, hubcap: rig.hubcap, sunroof: sunroofRig(m, panel) };
+}
+
+/**
+ * The Civic's sunroof as the scene drives it: setOpen(0) shut, the panel
+ * seated over the opening; up to 0.2 it lifts off its seat; on to 1 it
+ * slides back along the runners until the opening is clear. `hatch` is the
+ * opening's middle at roof height, car-local (the group's frame).
+ */
+function sunroofRig(m: Model, panel: THREE.Object3D): { setOpen(k: number): void; hatch: THREE.Vector3 } {
+  const S = SUNROOF;
+  const uc = (S.front + S.rear) / 2;
+  const ease = (t: number): number => {
+    const c = clamp01(t);
+    return c * c * (3 - 2 * c);
+  };
+  const slope = (u: number): number => (roofTop(m, u + 0.01) - roofTop(m, u - 0.01)) / 0.02;
+  const setOpen = (k: number): void => {
+    const t = clamp01(k);
+    const lift = S.lift * ease(t / 0.2);
+    const u = uc - S.slide * ease((t - 0.2) / 0.8);
+    // On the body, which pivots at axle height
+    panel.position.set(0, roofTop(m, u) + S.stand + lift - m.R, -u);
+    panel.rotation.set(Math.atan(slope(u)), 0, 0);
+  };
+  setOpen(0);
+  return { setOpen, hatch: V(0, roofTop(m, uc), -uc) };
 }

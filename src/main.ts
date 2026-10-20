@@ -15,6 +15,7 @@ import { Level7Scene } from './scenes/Level7Scene';
 import { Level8Scene } from './scenes/Level8Scene';
 import { StairwellScene } from './scenes/StairwellScene';
 import { StreetScene } from './scenes/StreetScene';
+import { AirportScene } from './scenes/AirportScene';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
@@ -98,6 +99,12 @@ bus.on<{ checkpoint?: number }>(Events.RestartStreet, (p) => {
   engine.setScene(new StreetScene(ctx, p?.checkpoint ?? 0), 'LEVEL 10 — THE STREET');
 });
 bus.on(Events.StreetComplete, () => {
+  engine.setScene(new AirportScene(ctx), 'LEVEL 11 — THE AIRPORT');
+});
+bus.on(Events.RestartAirport, () => {
+  engine.setScene(new AirportScene(ctx), 'LEVEL 11 — THE AIRPORT');
+});
+bus.on(Events.AirportComplete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
 });
@@ -135,7 +142,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   level7: () => ({ scene: new Level7Scene(ctx), title: 'LEVEL 7 — THE TOP FLOOR' }),
   stairwell: () => ({ scene: new StairwellScene(ctx), title: 'LEVEL 8 — STAIRWELL B' }),
   level8: () => ({ scene: new Level8Scene(ctx), title: 'LEVEL 9 — THE PARKING LOT' }),
-  street: () => ({ scene: new StreetScene(ctx), title: 'LEVEL 10 — THE STREET' })
+  street: () => ({ scene: new StreetScene(ctx), title: 'LEVEL 10 — THE STREET' }),
+  airport: () => ({ scene: new AirportScene(ctx), title: 'LEVEL 11 — THE AIRPORT' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

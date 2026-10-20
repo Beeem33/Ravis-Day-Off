@@ -1226,6 +1226,14 @@ function elevation(a: number): number {
 
 const deg = (d: number): number => (d * Math.PI) / 180;
 
+/**
+ * The access vent on top of the fuselage just aft of the left wing root:
+ * its z extent, its edges' elevations above the left side's horizontal
+ * (the top edge, nearer the crown, carries the hinge), how deep its dark
+ * well goes into the skin, and how far the cover swings up.
+ */
+const VENT = { z0: 2.8, z1: 3.45, e0: deg(32), e1: deg(66), depth: 0.34, open: deg(122) };
+
 /** The paint at a point of the fuselage: white, a pale belly, and the navy / gold / black cheatlines along the side. */
 function livery(a: number, z: number): number {
   const phi = elevation(a);
@@ -1395,7 +1403,38 @@ export function privateJet(): JetRig {
   zs.push(JET.tail, -7.7, 8.3, D.z0, D.z1);
   const Z = uniq(zs.filter((z) => z >= JET.nose && z <= JET.tail));
   const inDoor = (a: number, z: number): boolean => a > aD0 && a < aD1 && z > D.z0 && z < D.z1;
-  list.push(hullPatch(A, Z, 0, (a, z) => (inDoor(a, z) ? null : livery(a, z))));
+  // The skin's own grid also carries the vent's edges, so its hole falls on grid lines (the door keeps A and Z)
+  const aV0 = 1.5 * Math.PI + VENT.e0;
+  const aV1 = 1.5 * Math.PI + VENT.e1;
+  const inVent = (a: number, z: number): boolean => a > aV0 && a < aV1 && z > VENT.z0 && z < VENT.z1;
+  list.push(hullPatch(uniq([...A, aV0, aV1]), uniq([...Z, VENT.z0, VENT.z1]), 0, (a, z) => (inDoor(a, z) || inVent(a, z) ? null : livery(a, z))));
+
+  // ---- the vent's well: walls let into the skin round the hole, louvres across the bottom of it
+  {
+    const vA: number[] = [];
+    for (let i = 0; i <= 6; i++) vA.push(lerp(aV0, aV1, i / 6));
+    const vZ: number[] = [];
+    for (let i = 0; i <= 10; i++) vZ.push(lerp(VENT.z0, VENT.z1, i / 10));
+    const d = VENT.depth;
+    const dz = (VENT.z1 - VENT.z0) / 10;
+    list.push(hullPatch(vA, vZ, -d, (_a, z) => (Math.floor((z - VENT.z0) / dz) % 2 ? 0x24262a : 0x0b0c0e)));
+    const mid = (a: number, z: number): V3 => hullPoint((aV0 + aV1) / 2, (VENT.z0 + VENT.z1) / 2, -d / 2).sub(hullPoint(a, z));
+    const wall = 0x121316;
+    for (const a of [aV0, aV1]) {
+      for (let i = 0; i < vZ.length - 1; i++) {
+        const p0 = hullPoint(a, vZ[i]);
+        const p1 = hullPoint(a, vZ[i + 1]);
+        list.push(finish(facet([p0, p1, hullPoint(a, vZ[i + 1], -d), hullPoint(a, vZ[i], -d)], mid(a, vZ[i])), wall));
+      }
+    }
+    for (const z of [VENT.z0, VENT.z1]) {
+      for (let j = 0; j < vA.length - 1; j++) {
+        const p0 = hullPoint(vA[j], z);
+        const p1 = hullPoint(vA[j + 1], z);
+        list.push(finish(facet([p0, p1, hullPoint(vA[j + 1], z, -d), hullPoint(vA[j], z, -d)], mid(vA[j], z)), wall));
+      }
+    }
+  }
 
   // ---- the doorway: a lining round the hole, a bulkhead behind it, floor and ceiling
   {
@@ -1772,6 +1811,110 @@ export function privateJet(): JetRig {
     const doorTop = V(sill.x + 0.35, sill.y + 0.01, zc);
     const stairFoot = V(foot.x - 0.4, 0, zc);
 
+    // ---- the vent's cover: a panel of the skin, hinged along its top edge, and the crawl to it
+    const ventHinge = hullPoint(aV1, (VENT.z0 + VENT.z1) / 2);
+    const ventPivot = new THREE.Group();
+    ventPivot.name = 'ventCover';
+    ventPivot.position.copy(ventHinge);
+    group.add(ventPivot);
+    {
+      const vg = 0.012;
+      const cA: number[] = [];
+      for (let i = 0; i <= 6; i++) cA.push(lerp(aV0 + vg / R, aV1 - vg / R, i / 6));
+      const cZ: number[] = [];
+      for (let i = 0; i <= 4; i++) cZ.push(lerp(VENT.z0 + vg, VENT.z1 - vg, i / 4));
+      const cl: THREE.BufferGeometry[] = [];
+      const ct = 0.03;
+      cl.push(hullPatch(cA, cZ, 0.002, (a, z) => livery(a, z)));
+      cl.push(hullPatch(cA, cZ, -ct, () => 0x8e9298, true));
+      const edge = 0x9a9ea3;
+      for (const z of [cZ[0], cZ[cZ.length - 1]]) {
+        for (let i = 0; i < cA.length - 1; i++) {
+          const p0 = hullPoint(cA[i], z, 0.002);
+          const p1 = hullPoint(cA[i + 1], z, 0.002);
+          cl.push(finish(facet([p0, p1, hullPoint(cA[i + 1], z, -ct), hullPoint(cA[i], z, -ct)], V(0, 0, z < (VENT.z0 + VENT.z1) / 2 ? -1 : 1)), edge));
+        }
+      }
+      for (const a of [cA[0], cA[cA.length - 1]]) {
+        for (let i = 0; i < cZ.length - 1; i++) {
+          const p0 = hullPoint(a, cZ[i], 0.002);
+          const p1 = hullPoint(a, cZ[i + 1], 0.002);
+          // Round the skin, away from the panel's middle
+          const out = hullNormal(a, cZ[i]).cross(V(0, 0, 1)).multiplyScalar(a < (aV0 + aV1) / 2 ? -1 : 1);
+          cl.push(finish(facet([p0, p1, hullPoint(a, cZ[i + 1], -ct), hullPoint(a, cZ[i], -ct)], out), edge));
+        }
+      }
+      // Two hinges along the top edge, and a flush latch at the bottom
+      for (const z of [lerp(VENT.z0, VENT.z1, 0.2), lerp(VENT.z0, VENT.z1, 0.8)]) {
+        const p = hullPoint(aV1, z, 0.012);
+        cl.push(finish(cylZ(0.016, 0.09, 8, p.x, p.y, z), JC.metal));
+      }
+      const lp = hullPoint(aV0 + 0.05, (VENT.z0 + VENT.z1) / 2, 0.004);
+      const latch = box(0.012, 0.03, 0.12, 0, 0, 0);
+      latch.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(1, 0, 0), hullNormal(aV0 + 0.05, (VENT.z0 + VENT.z1) / 2)));
+      latch.translate(lp.x, lp.y, lp.z);
+      cl.push(finish(latch, JC.dark));
+      const coverGeo = merge(cl, 'vent cover');
+      coverGeo.translate(-ventHinge.x, -ventHinge.y, -ventHinge.z);
+      coverGeo.computeBoundingSphere();
+      const cover = new THREE.Mesh(coverGeo, jetMat);
+      cover.name = 'ventCoverPanel';
+      cover.userData.surface = 'metal';
+      ventPivot.add(cover);
+    }
+    const ventMouth = hullPoint((aV0 + aV1) / 2, (VENT.z0 + VENT.z1) / 2);
+
+    /** The left wing's upper surface at |x| along the span and z: the loft's sections, interpolated as the loft joins them. */
+    const tipY = wing.rootY + (wing.tipX - wing.rootX) * Math.tan(wing.dihedral);
+    const midX = lerp(wing.rootX, wing.tipX, 0.35);
+    const secs = [
+      { x: wing.rootX, pts: aerofoil(V(wing.rootX, wing.rootY, wing.rootLE), wing.rootC, 0.13, 'y') },
+      { x: midX, pts: aerofoil(V(midX, lerp(wing.rootY, tipY, 0.35), lerp(wing.rootLE, wing.tipLE, 0.35)), lerp(wing.rootC, wing.tipC, 0.35), 0.115, 'y') },
+      { x: wing.tipX, pts: aerofoil(V(wing.tipX, tipY, wing.tipLE), wing.tipC, 0.1, 'y') }
+    ];
+    const upperAt = (x: number): V3[] => {
+      const i = x < midX ? 0 : 1;
+      const t = clamp01((x - secs[i].x) / (secs[i + 1].x - secs[i].x));
+      // The first AF.length points are the upper surface, trailing edge to leading edge
+      return AF.map((_c, j) => secs[i].pts[j].clone().lerp(secs[i + 1].pts[j], t));
+    };
+    const onWing = (x: number, c: number): V3 => {
+      const up = upperAt(x);
+      const le = up[up.length - 1].z;
+      const te = up[0].z;
+      const z = lerp(le, te, c);
+      let y = up[0].y;
+      for (let j = 0; j < up.length - 1; j++) {
+        const a = up[j];
+        const b = up[j + 1];
+        if (z <= a.z && z >= b.z) {
+          y = lerp(a.y, b.y, (a.z - z) / (a.z - b.z || 1));
+          break;
+        }
+      }
+      return V(-x, y, z);
+    };
+    // Two-thirds of the way out, a little aft of the thickest part; then in toward the root's
+    // trailing edge, crossing the chord line slowly aft so it comes in behind the root
+    const wingPath: V3[] = [];
+    const xs = [lerp(wing.rootX, wing.tipX, 2 / 3), 5.3, 4.45, 3.6, 2.8, 2.05, 1.45, 1.1];
+    const land = onWing(xs[0], 0.42);
+    const zEnd = 2.42;
+    xs.forEach((x, i) => {
+      if (i === 0) {
+        wingPath.push(land);
+        return;
+      }
+      const up = upperAt(x);
+      const le = up[up.length - 1].z;
+      const te = up[0].z;
+      const z = lerp(land.z, zEnd, (xs[0] - x) / (xs[0] - xs[xs.length - 1]));
+      wingPath.push(onWing(x, (z - le) / (te - le)));
+    });
+    // Off the root, up the side of the fuselage behind the wing, over the lip and to the mouth
+    for (const [e, z] of [[-22, 2.62], [0, 2.8], [18, 2.93], [30, 3.02]] as const) wingPath.push(hullPoint(1.5 * Math.PI + deg(e), z));
+    wingPath.push(ventMouth.clone());
+
     const rig: JetRig = {
       group,
       setDoor(k: number): void {
@@ -1786,9 +1929,18 @@ export function privateJet(): JetRig {
         const t = clamp01(k);
         glow.emissiveIntensity = 2.4 * t * t;
         spinner.emissiveIntensity = 0.45 * t;
+      },
+      vent: {
+        setOpen(k: number): void {
+          // Its free (lower) edge swings out and up over the hinge
+          ventPivot.rotation.z = -clamp01(k) * VENT.open;
+        },
+        mouth: ventMouth,
+        wingPath
       }
     };
     rig.setDoor(0);
+    rig.vent?.setOpen(0);
     return rig;
   }
 }

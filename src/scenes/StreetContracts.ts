@@ -170,6 +170,18 @@ export interface JetRig {
   stairFoot: THREE.Vector3;
   /** Engines' glow / heat for spool-up, 0..1. */
   setEngines(k: number): void;
+  /**
+   * An access vent on top of the fuselage just aft of the left wing root
+   * (Map 11: Ravi crawls in through it). setOpen(0) shut, its cover flush
+   * with the skin .. 1 the cover hinged up off its top edge, standing over a
+   * dark opening about 0.65 m long × 0.55 m across. `mouth`: the opening's
+   * centre on the skin, jet-local. `wingPath`: jet-local points for the
+   * crawl, all on the skin: from where a man leaping from a car beside the
+   * jet lands, two-thirds of the way out along the left wing's upper surface,
+   * inward along it to the root, up the side of the fuselage behind the wing
+   * and over the vent's lip, ending at `mouth`.
+   */
+  vent?: { setOpen(k: number): void; mouth: THREE.Vector3; wingPath: THREE.Vector3[] };
 }
 
 // ------------------------------------------------------------------ the driving

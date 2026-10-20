@@ -14,6 +14,7 @@ import { Traffic } from '../entities/Traffic';
 import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
+import { buildAirside } from '../environment/AirsideProps';
 import { RaviVisual, type RaviRig } from '../entities/RaviVisual';
 import { ParticleManager } from '../fx/ParticleManager';
 import { Helicopter, HELI_HP } from '../entities/Helicopter';
@@ -256,6 +257,7 @@ export class StreetScene implements GameScene {
     (this.civicRig as { hubcap?: THREE.Object3D }).hubcap?.removeFromParent();
     this.scene.add(this.jet.group);
     this.placeJet();
+    this.buildAirside();
     this.buildDriver();
     this.buildGuards();
     this.cockpitGlass();
@@ -1006,6 +1008,24 @@ export class StreetScene implements GameScene {
   /** Where Ravi's eyes go in the closing shot, smoothed. */
   private readonly povLook = new THREE.Vector3();
 
+  /** The airside security fence and gate across the taxiway, and the security team on it. */
+  private officers: Enemy[] = [];
+  private buildAirside(): void {
+    const ap = this.net.roads.airport;
+    const end = ap.samples[ap.samples.length - 1];
+    const f = new THREE.Vector3(end.tangent.x, 0, end.tangent.z).normalize();
+    const side = buildAirside({ origin: end.pos.clone().setY(0), f, r: new THREE.Vector3(-f.z, 0, f.x) });
+    this.scene.add(side.group);
+    for (let i = 0; i < 4; i++) {
+      const e = new Enemy(this.apt(394.5 + (i % 2) * 0.8, 49 + i * 6.2), 0, 20 + i, { name: 'AIRPORT SECURITY', security: true });
+      e.faceToward(this.apt(300, 60), 1, 100);
+      armWithAK(e);
+      e.setAiming(true);
+      this.scene.add(e.root);
+      this.officers.push(e);
+    }
+  }
+
   /** The men in the boss's car: built now (hidden) so the warm-up compiles them. */
   private buildGuards(): void {
     for (let i = 0; i < 3; i++) {
@@ -1071,13 +1091,13 @@ export class StreetScene implements GameScene {
     const rs = ravi.at.road === 'airport' ? ravi.at.s : 0;
     const head = ravi.at.road === 'exit' ? [ravi.position.clone(), this.net.sample('airport', 0).pos.clone()] : [ravi.position.clone()];
     // The Civic pulls up at the end of the taxiway, skidding round to face them
-    // ...and swings onto the runway behind the jet, looking straight down it past his car
-    const civicTail = [A(30, 0), A(110, 28), A(200, 55), A(240, 60), A(380, 61), A(402, 66), A(418, 64), A(425, 58)];
+    // ...and pulls up at the airside gate, the security team in front of it
+    const civicTail = [A(30, 0), A(110, 28), A(200, 55), A(240, 60), A(368, 60), A(384, 60)];
     this.civicPath = [...head.map((v) => v.setY(0)), ...pathOn(this.net.sample('airport', rs).pos, rs, civicTail).slice(1)];
     this.civicPathLen = pathLength(this.civicPath);
     this.civicPathS = 0;
     this.civicV = Math.max(16, ravi.speed);
-    const face = StreetScene.tmpA.copy(A(425.5, 10)).sub(A(425, 58));
+    const face = StreetScene.tmpA.copy(stop).sub(A(384, 60));
     this.civicEndYaw = Math.atan2(-face.x, -face.z);
     // The cop rides the Civic's line, a way behind it
     this.copPathS = -Math.min(45, Math.max(18, ravi.position.distanceTo(this.cop.car.position)));
@@ -1183,16 +1203,21 @@ export class StreetScene implements GameScene {
       this.civicV = Math.min(this.civicV, 22);
     }
     this.updateGuards(dt);
+    for (const o of this.officers) {
+      o.faceToward(this.civicRig.group.position, dt, 4);
+      o.update(dt);
+    }
 
     // ---- The end: the jet's up and away; to black under the gunfire, the card, and on
     if (this.jetRollAt >= 0 && !this.completed) {
       const e = t - this.jetRollAt;
-      if (e > 11 && this.phase === 'airport') {
+      // To black as it starts its run: the chase down the runway is Level 11's
+      if (e > 3.2 && this.phase === 'airport') {
         this.phase = 'done';
         this.fadeEl.style.opacity = '1';
       }
-      if (e > 12.3) this.endCard.style.opacity = '1';
-      if (e > 16.5) {
+      if (e > 4.5) this.endCard.style.opacity = '1';
+      if (e > 8) {
         this.completed = true;
         this.ctx.bus.emit(Events.StreetComplete);
       }

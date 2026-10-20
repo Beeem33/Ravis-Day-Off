@@ -73,9 +73,11 @@ export interface HitmanDrive {
  * floor's uniform — white shirt, blue trousers, a navy cap, bare hands — and
  * the boss is him built heavy, bearded, in a red cap and a striped tie. The
  * General is him built like a wardrobe, in an olive dress uniform with
- * everything a dress uniform can carry.
+ * everything a dress uniform can carry. Airport security are him in the
+ * airside team's kit: a pale blue short-sleeved shirt with epaulettes, navy
+ * trousers, a hi-vis vest, a black peaked cap and a radio on his chest.
  */
-export type Outfit = 'agent' | 'staff' | 'boss' | 'general';
+export type Outfit = 'agent' | 'staff' | 'boss' | 'general' | 'security';
 
 export interface HitmanLook {
   /** A Hair_* mesh in the model, or null for a shaved head. */
@@ -658,6 +660,10 @@ export class HitmanVisual {
       // Only what fits under a cap
       return { hair: STAFF_STYLES[(i * 3 + 1) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
     }
+    if (outfit === 'security') {
+      // Under a peaked cap, the same
+      return { hair: STAFF_STYLES[(i * 5 + 2) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
+    }
     return {
       hair: STYLE_ORDER[(i * 5 + 3) % STYLE_ORDER.length],
       skin: SKIN_TONES[tone],
@@ -837,6 +843,7 @@ export class HitmanVisual {
 
     if (look.outfit === 'staff' || look.outfit === 'boss') this.restyle(look, look.outfit);
     else if (look.outfit === 'general') this.dressGeneral();
+    else if (look.outfit === 'security') this.dressSecurity(look);
     this.buildHitboxes();
   }
 
@@ -2384,6 +2391,623 @@ export class HitmanVisual {
       sk.scale.copy(body.scale);
       sk.bind(body.skeleton, body.bindMatrix);
       sk.boundingSphere = this.cull;
+    }
+  }
+
+  // ------------------------------------------------------- airport security
+
+  /** How far down the arm from the shoulder joint the short sleeves end, metres (the upper arm is 0.29). */
+  private static readonly SLEEVE_END = 0.19;
+
+  /**
+   * For a vertex of the bind pose mostly carried by an arm: how far down it
+   * from the shoulder joint it lies (metres, along the bones) and the nearest
+   * point on them. Null for anything not on an arm.
+   */
+  private static onArm(g: THREE.BufferGeometry, v: number, p: THREE.Vector3): { s: number; axis: THREE.Vector3 } | null {
+    const H = HitmanVisual;
+    const sd = p.x < 0 ? 'L' : 'R';
+    if (H.weightOn(g, v, H.armBones(sd)) < 0.5) return null;
+    const a = H.rest.get(`UpperArm_${sd}`)!.modelP;
+    const b = H.rest.get(`LowerArm_${sd}`)!.modelP;
+    const c = H.rest.get(`Hand_${sd}`)!.modelP;
+    const ab = b.clone().sub(a);
+    const t1 = p.clone().sub(a).dot(ab) / ab.lengthSq();
+    if (t1 <= 1) {
+      const t = Math.max(0, t1);
+      return { s: t * ab.length(), axis: a.clone().addScaledVector(ab, t) };
+    }
+    const bc = c.clone().sub(b);
+    const t2 = Math.min(1.2, p.clone().sub(b).dot(bc) / bc.lengthSq());
+    return { s: ab.length() + t2 * bc.length(), axis: b.clone().addScaledVector(bc, t2) };
+  }
+
+  /**
+   * The suit as the security team's uniform: the staff's plain shirt out of
+   * the jacket (the V closed up), and from a little above the elbow down the
+   * sleeve given vertices of its own drawn in toward the bones — a bare arm
+   * is slimmer than the sleeve it was — to be skin. The bare arm starts a
+   * few centimetres up inside the sleeve; the sleeve itself is cut off
+   * cleanly at SLEEVE_END by its material (see securityShirtMat), off the
+   * `armS` attribute: each vertex's distance down the arm, 0 off it.
+   * Material 0 is the shirt, 1 the trousers, 2 the bare arms.
+   */
+  private static securitySuit(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const { shirt, trousers } = H.suitParts(src);
+    const base = H.reindexed(src, [shirt, trousers]);
+    H.reshaped(base, shirt, 0);
+    const pos = base.attributes.position;
+    const p = new THREE.Vector3();
+    const place = new Map<number, { s: number; axis: THREE.Vector3 } | null>();
+    const at = (v: number): { s: number; axis: THREE.Vector3 } | null => {
+      if (!place.has(v)) place.set(v, H.onArm(base, v, p.fromBufferAttribute(pos, v)));
+      return place.get(v)!;
+    };
+    // The sleeve keeps every triangle it has a fragment of; the arm takes them from just inside it down
+    const sleeve: number[] = [];
+    const arm: number[] = [];
+    for (let i = 0; i < shirt.length; i += 3) {
+      const tri = [shirt[i], shirt[i + 1], shirt[i + 2]];
+      const pl = tri.map(at);
+      const onArm = pl.every((q) => q !== null);
+      const s = pl.map((q) => (q ? q.s : 0));
+      if (!onArm || Math.min(...s) < H.SLEEVE_END) sleeve.push(...tri);
+      if (onArm && (s[0] + s[1] + s[2]) / 3 > H.SLEEVE_END - 0.05) arm.push(...tri);
+    }
+    const order: number[] = [];
+    const remap = new Map<number, number>();
+    for (const v of arm) {
+      if (!remap.has(v)) {
+        remap.set(v, pos.count + order.length);
+        order.push(v);
+      }
+    }
+    const out = new THREE.BufferGeometry();
+    for (const [name, attr] of Object.entries(base.attributes)) {
+      const a = attr as THREE.BufferAttribute;
+      const n = a.itemSize;
+      const Arr = a.array.constructor as new (len: number) => THREE.TypedArray;
+      const na = new THREE.BufferAttribute(new Arr((a.count + order.length) * n), n, a.normalized);
+      for (let v = 0; v < a.count; v++) for (let k = 0; k < n; k++) na.setComponent(v, k, a.getComponent(v, k));
+      order.forEach((v, j) => {
+        for (let k = 0; k < n; k++) na.setComponent(a.count + j, k, a.getComponent(v, k));
+      });
+      out.setAttribute(name, na);
+    }
+    // In toward the bones, less so at the wrist where the hand has to fit into it
+    const np = out.attributes.position as THREE.BufferAttribute;
+    order.forEach((v, j) => {
+      const q = at(v)!;
+      p.fromBufferAttribute(pos, v);
+      const k = 0.84 + 0.12 * H.smoothstep(0.49, 0.56, q.s);
+      p.sub(q.axis).multiplyScalar(k).add(q.axis);
+      np.setXYZ(pos.count + j, p.x, p.y, p.z);
+    });
+    const armS = new Float32Array(pos.count + order.length);
+    for (let v = 0; v < pos.count; v++) armS[v] = at(v)?.s ?? 0;
+    order.forEach((v, j) => (armS[pos.count + j] = at(v)!.s));
+    out.setAttribute('armS', new THREE.BufferAttribute(armS, 1));
+    const tris = [...sleeve, ...trousers, ...arm.map((v) => remap.get(v)!)];
+    out.setIndex(tris);
+    out.addGroup(0, sleeve.length, 0);
+    out.addGroup(sleeve.length, trousers.length, 1);
+    out.addGroup(sleeve.length + trousers.length, arm.length, 2);
+    out.computeBoundingBox();
+    out.computeBoundingSphere();
+    return out;
+  }
+
+  /** The model's shirt under the uniform: its collar and front, as the staff's, without the pocket square or the cuffs (the sleeves are short). */
+  private static securityShirt(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const { of, top, bottom } = H.pieces(src);
+    const pos = src.attributes.position;
+    const idx = src.index!.array;
+    const p = new THREE.Vector3();
+    const cuff = (v: number): boolean => {
+      const q = H.onArm(src, v, p.fromBufferAttribute(pos, v));
+      return q !== null && q.s > H.SLEEVE_END;
+    };
+    const keep: number[] = [];
+    for (let i = 0; i < idx.length; i += 3) {
+      const r = of[idx[i]];
+      const square = bottom.get(r)! > 1.3 && top.get(r)! < 1.36;
+      if (!square && !(cuff(idx[i]) && cuff(idx[i + 1]) && cuff(idx[i + 2]))) keep.push(idx[i], idx[i + 1], idx[i + 2]);
+    }
+    const g = H.reindexed(src, [keep]);
+    g.clearGroups();
+    H.reshaped(g, keep, 0.0015);
+    return g;
+  }
+
+  /**
+   * The shirt's material: pale blue, its sleeves ending at SLEEVE_END down
+   * the arm — cut per fragment off the suit's `armS`, so the hem is a clean
+   * line round the arm whatever the triangles under it. (The model's own
+   * shirt mesh, the collar and front, has no `armS` and reads 0: uncut.)
+   */
+  private static securityShirtMat(): THREE.Material {
+    return HitmanVisual.outfitMat('security:shirt', () => {
+      const m = new THREE.MeshStandardMaterial({ name: 'HM_SecurityShirt', color: 0xa9c8e4, roughness: 0.86 });
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute float armS;\nvarying float vArmS;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvArmS = armS;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vArmS;')
+          .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>\nif (vArmS > ${HitmanVisual.SLEEVE_END.toFixed(3)}) discard;`);
+      };
+      m.customProgramCacheKey = () => 'hitman-security-shirt';
+      return m;
+    });
+  }
+
+  /**
+   * A hi-vis vest out of the shirt it is worn over: the torso from the hips
+   * to the shoulders, every vertex lifted 1.1 cm off the cloth along its
+   * normal and skinned as the cloth is, so it rides every pose exactly as the
+   * shirt does. The triangles are a generous cut; the vest's own outline —
+   * the hem, the armholes, the V-neck and the straps over the shoulders — is
+   * cut cleanly by its material (vestMat), off the bind pose.
+   */
+  private static vestFrom(suit: THREE.BufferGeometry): THREE.BufferGeometry {
+    const H = HitmanVisual;
+    const pos = suit.attributes.position;
+    const nor = suit.attributes.normal;
+    const idx = suit.index!.array;
+    const shirtCount = suit.groups[0].count;
+    const ARMS = [...H.armBones('L'), ...H.armBones('R')];
+    const p = new THREE.Vector3();
+    const ok = new Map<number, boolean>();
+    const inVest = (v: number): boolean => {
+      let r = ok.get(v);
+      if (r === undefined) {
+        p.fromBufferAttribute(pos, v);
+        r = H.weightOn(suit, v, ARMS) < 0.6 && p.y > 0.92 && p.y < 1.5 && Math.abs(p.x) < 0.2;
+        ok.set(v, r);
+      }
+      return r;
+    };
+    const tris: number[] = [];
+    for (let i = 0; i < shirtCount; i += 3) if (inVest(idx[i]) || inVest(idx[i + 1]) || inVest(idx[i + 2])) tris.push(idx[i], idx[i + 1], idx[i + 2]);
+    const order: number[] = [];
+    const used = new Map<number, number>();
+    const newIdx = tris.map((v) => {
+      let k = used.get(v);
+      if (k === undefined) {
+        k = order.length;
+        used.set(v, k);
+        order.push(v);
+      }
+      return k;
+    });
+    const P = new Float32Array(order.length * 3);
+    const N = new Float32Array(order.length * 3);
+    const SI = new Uint16Array(order.length * 4);
+    const SW = new Float32Array(order.length * 4);
+    const si = suit.attributes.skinIndex;
+    const sw = suit.attributes.skinWeight;
+    order.forEach((v, k) => {
+      const lift = 0.011;
+      for (let c = 0; c < 3; c++) {
+        P[k * 3 + c] = pos.getComponent(v, c) + nor.getComponent(v, c) * lift;
+        N[k * 3 + c] = nor.getComponent(v, c);
+      }
+      for (let j = 0; j < 4; j++) {
+        SI[k * 4 + j] = si.getComponent(v, j);
+        SW[k * 4 + j] = sw.getComponent(v, j);
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4));
+    g.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+    g.setIndex(newIdx);
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /**
+   * Fluorescent yellow, with two bands of silver reflective tape round the
+   * body and a pair up over the shoulders. Its outline, in the bind pose
+   * (y up, the front toward −Z): the hem at the hips; armholes cut higher
+   * and narrower toward the shoulder; a V at the front down to 1.27 m that
+   * becomes a slot 17 cm across at the neck, a scoop at the back — leaving a
+   * strap over each shoulder.
+   */
+  private static vestMat(): THREE.Material {
+    return HitmanVisual.outfitMat('security:vest', () => {
+      const m = new THREE.MeshStandardMaterial({ name: 'HM_Vest', color: 0xd4ee1c, emissive: 0x2c3400, roughness: 0.82, side: THREE.DoubleSide });
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBind = position;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBind;')
+          .replace(
+            '#include <clipping_planes_fragment>',
+            `#include <clipping_planes_fragment>
+            {
+              float ax = abs(vBind.x);
+              float y = vBind.y;
+              bool hem = y < 0.955 || y > 1.485;
+              bool armhole = y > 1.2 && ax > 0.18 - 0.055 * smoothstep(1.2, 1.47, y);
+              bool vee = vBind.z < 0.0 && y > 1.27 && ax < min((y - 1.27) / 1.4, 0.085);
+              bool scoop = vBind.z >= 0.0 && ax < 0.085 && y > 1.40 + 4.0 * ax * ax;
+              if (hem || armhole || vee || scoop) discard;
+            }`
+          )
+          .replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+            float ax = abs(vBind.x);
+            bool round1 = vBind.y > 1.035 && vBind.y < 1.083;
+            bool round2 = vBind.y > 1.14 && vBind.y < 1.188;
+            bool brace = vBind.y > 1.188 && ax > 0.082 && ax < 0.122;
+            if (round1 || round2 || brace) diffuseColor.rgb = vec3(0.56, 0.58, 0.6);`
+          )
+          .replace(
+            '#include <emissivemap_fragment>',
+            `#include <emissivemap_fragment>
+            if ((vBind.y > 1.035 && vBind.y < 1.083) || (vBind.y > 1.14 && vBind.y < 1.188) || (vBind.y > 1.188 && abs(vBind.x) > 0.082 && abs(vBind.x) < 0.122)) totalEmissiveRadiance = vec3(0.0);`
+          );
+      };
+      m.customProgramCacheKey = () => 'hitman-vest';
+      return m;
+    });
+  }
+
+  /** SECURITY, black: lettering only, the vest showing round it. */
+  private static securityTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 64;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, 256, 64);
+    g.fillStyle = '#111214';
+    g.font = 'bold 50px Arial, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('SECURITY', 128, 34, 248);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return t;
+  }
+
+  /**
+   * The kit on him, built once off the cloth at rest: the epaulettes on the
+   * shirt's shoulders, outboard of the vest's straps (navy boards with two
+   * silver bars at the shoulder end, skinned as the cloth is), and what rides
+   * the chest with the vest — the radio clipped on his left breast with its
+   * aerial, a shoulder mic on the strap and the coiled lead between them, a
+   * pass on his right breast, SECURITY across the back and small on the front.
+   */
+  private static securityKitCache: { boards: THREE.BufferGeometry; radio: THREE.BufferGeometry; patches: THREE.BufferGeometry } | null = null;
+
+  private static securityKit(suit: THREE.BufferGeometry, vest: THREE.BufferGeometry): NonNullable<typeof HitmanVisual.securityKitCache> {
+    const H = HitmanVisual;
+    if (H.securityKitCache) return H.securityKitCache;
+    const tris = (g: THREE.BufferGeometry, count: number, keep: (t: THREE.Triangle) => boolean): THREE.Triangle[] => {
+      const pos = g.attributes.position;
+      const idx = g.index!.array;
+      const out: THREE.Triangle[] = [];
+      for (let i = 0; i < count; i += 3) {
+        const t = new THREE.Triangle(
+          new THREE.Vector3().fromBufferAttribute(pos, idx[i]),
+          new THREE.Vector3().fromBufferAttribute(pos, idx[i + 1]),
+          new THREE.Vector3().fromBufferAttribute(pos, idx[i + 2])
+        );
+        if (keep(t)) out.push(t);
+      }
+      return out;
+    };
+    const cloth = tris(suit, suit.groups[0].count, (t) => t.a.y > 1.25 || t.b.y > 1.25 || t.c.y > 1.25);
+    const shell = tris(vest, vest.index!.count, () => true);
+    const ray = new THREE.Ray();
+    const hit = new THREE.Vector3();
+    const nrm = new THREE.Vector3();
+    const cast = (on: THREE.Triangle[], o: THREE.Vector3, d: THREE.Vector3): { p: THREE.Vector3; n: THREE.Vector3 } | null => {
+      ray.origin.copy(o);
+      ray.direction.copy(d).normalize();
+      let best: { p: THREE.Vector3; n: THREE.Vector3 } | null = null;
+      let bestD = Infinity;
+      for (const t of on) {
+        if (!ray.intersectTriangle(t.a, t.b, t.c, false, hit)) continue;
+        const dd = hit.distanceToSquared(ray.origin);
+        if (dd < bestD) {
+          bestD = dd;
+          t.getNormal(nrm);
+          if (nrm.dot(ray.direction) > 0) nrm.negate();
+          best = { p: hit.clone(), n: nrm.clone() };
+        }
+      }
+      return best;
+    };
+    const DOWN = new THREE.Vector3(0, -1, 0);
+    const BACKWARD = new THREE.Vector3(0, 0, 1);
+    const FORWARD = new THREE.Vector3(0, 0, -1);
+
+    // ---- Epaulettes: a board along the top of each shoulder from the vest's strap out to the shoulder's point
+    const boards: THREE.BufferGeometry[] = [];
+    const bars: THREE.BufferGeometry[] = [];
+    for (const sx of [-1, 1]) {
+      const X0 = 0.128;
+      const X1 = 0.206;
+      const HW = 0.024;
+      const ZC = 0.004;
+      const top = new Map<string, number>();
+      const topAt = (x: number, z: number): number => {
+        const key = `${x.toFixed(4)}:${z.toFixed(4)}`;
+        let y = top.get(key);
+        if (y === undefined) {
+          y = cast(cloth, new THREE.Vector3(sx * x, 2, z), DOWN)?.p.y ?? 1.45;
+          top.set(key, y);
+        }
+        return y;
+      };
+      const pt = (u: number, w: number, lift: number, o: THREE.Vector3): void => {
+        const x = X0 + (X1 - X0) * u;
+        // Pointed at the collar end
+        const z = ZC + HW * w * (u < 0.2 ? Math.sqrt(Math.max(0, 1 - ((0.2 - u) / 0.2) ** 2)) : 1);
+        o.set(sx * x, topAt(x, z) + 0.0024 + lift, z);
+      };
+      const T = 0.0045;
+      boards.push(
+        H.sheets((sheet) => {
+          sheet(12, 4, (i, j, o) => pt(i / 12, -1 + (2 * j) / 4, T, o), sx < 0);
+          sheet(12, 4, (i, j, o) => pt(i / 12, -1 + (2 * j) / 4, 0, o), sx > 0);
+          sheet(12, 1, (i, j, o) => pt(i / 12, -1, T * (1 - j), o), sx > 0);
+          sheet(12, 1, (i, j, o) => pt(i / 12, 1, T * (1 - j), o), sx < 0);
+          sheet(4, 1, (i, j, o) => pt(1, -1 + (2 * i) / 4, T * (1 - j), o), sx < 0);
+        })
+      );
+      // Two silver bars across it at the shoulder end, and a button at the collar end
+      for (const u of [0.72, 0.86]) {
+        const x = X0 + (X1 - X0) * u;
+        const b = new THREE.BoxGeometry(0.008, 0.0022, 2 * HW * 0.82);
+        b.translate(sx * x, topAt(x, ZC) + 0.0024 + T + 0.0011, ZC);
+        bars.push(b);
+      }
+      const btn = new THREE.SphereGeometry(0.0052, 10, 6);
+      btn.scale(1, 0.5, 1);
+      const bx = X0 + (X1 - X0) * 0.12;
+      btn.translate(sx * bx, topAt(bx, ZC) + 0.0024 + T + 0.0015, ZC);
+      bars.push(btn);
+    }
+
+    // ---- The radio on his left breast (−X), clipped to the vest, the aerial up off its top corner
+    const radio: THREE.BufferGeometry[] = [];
+    const RX = -0.098;
+    const RY = 1.315;
+    const front = cast(shell, new THREE.Vector3(RX, RY, -1), BACKWARD);
+    const at = front ? front.p : new THREE.Vector3(RX, RY, -0.13);
+    const out = front ? front.n.clone() : new THREE.Vector3(0, 0, -1);
+    const lean = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), out);
+    const place = (g: THREE.BufferGeometry, x: number, y: number, z: number): THREE.BufferGeometry => {
+      g.translate(x, y, z);
+      g.applyQuaternion(lean);
+      g.translate(at.x, at.y, at.z);
+      return g;
+    };
+    radio.push(place(new THREE.BoxGeometry(0.056, 0.105, 0.03), 0, 0, -0.017));
+    radio.push(place(new THREE.BoxGeometry(0.03, 0.022, 0.012), 0, 0.068, -0.004));
+    radio.push(place(new THREE.CylinderGeometry(0.0055, 0.007, 0.085, 6), 0.016, 0.095, -0.017));
+    radio.push(place(new THREE.CylinderGeometry(0.009, 0.009, 0.014, 8).rotateX(Math.PI / 2), -0.014, 0.06, -0.033));
+    // The shoulder mic, on the strap just under the collarbone, and the lead to it
+    const micAt = cast(shell, new THREE.Vector3(-0.108, 1.405, -1), BACKWARD);
+    const mic = micAt ? micAt.p.clone().addScaledVector(micAt.n, 0.012) : new THREE.Vector3(-0.108, 1.405, -0.125);
+    const mg = new THREE.BoxGeometry(0.034, 0.05, 0.022);
+    if (micAt) mg.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), micAt.n));
+    mg.translate(mic.x, mic.y, mic.z);
+    radio.push(mg);
+    const radioTop = new THREE.Vector3(-0.012, 0.055, -0.03).applyQuaternion(lean).add(at);
+    const curve = new THREE.CatmullRomCurve3([
+      radioTop,
+      radioTop.clone().add(new THREE.Vector3(-0.012, 0.03, -0.012)),
+      mic.clone().add(new THREE.Vector3(-0.008, -0.04, -0.012)),
+      mic.clone().add(new THREE.Vector3(0, -0.024, 0))
+    ]);
+    radio.push(new THREE.TubeGeometry(curve, 16, 0.0028, 5, false));
+
+    // ---- His pass, on a clip on the right breast
+    const passAt = cast(shell, new THREE.Vector3(0.1, 1.235, -1), BACKWARD);
+    const pass: THREE.BufferGeometry[] = [];
+    if (passAt) {
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), passAt.n);
+      const card = new THREE.BoxGeometry(0.054, 0.084, 0.002).applyQuaternion(q);
+      const c0 = passAt.p.clone().addScaledVector(passAt.n, 0.003);
+      card.translate(c0.x, c0.y, c0.z);
+      pass.push(card);
+    }
+
+    // ---- SECURITY across the back of the vest, and small over the right breast above the pass
+    const patches: THREE.BufferGeometry[] = [];
+    const back = cast(shell, new THREE.Vector3(0, 1.33, 1), FORWARD);
+    if (back) {
+      const g = new THREE.PlaneGeometry(0.27, 0.0675);
+      g.translate(back.p.x, back.p.y, back.p.z + 0.004);
+      patches.push(g);
+    }
+    const chest = cast(shell, new THREE.Vector3(0.112, 1.335, -1), BACKWARD);
+    if (chest) {
+      const g = new THREE.PlaneGeometry(0.1, 0.025);
+      g.rotateY(Math.PI);
+      g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), chest.n));
+      g.translate(chest.p.x + chest.n.x * 0.003, chest.p.y + chest.n.y * 0.003, chest.p.z + chest.n.z * 0.003);
+      patches.push(g);
+    }
+
+    // One vertex-coloured draw each: the epaulettes (navy boards, silver bars), and the radio with the pass
+    const result = {
+      boards: H.skinnedLike(H.mergedColoured([...boards.map((g) => H.tinted(g, 0x161d2c)), ...bars.map((g) => H.tinted(g, 0xc9ced6))]), suit),
+      radio: H.mergedColoured([...radio.map((g) => H.tinted(g, 0x18191c)), ...pass.map((g) => H.tinted(g, 0xe8ecef))]),
+      patches: (() => {
+        const g = mergeGeometries(patches.map((x) => x.toNonIndexed()), false) ?? new THREE.BufferGeometry();
+        for (const x of patches) x.dispose();
+        return g;
+      })()
+    };
+    H.securityKitCache = result;
+    return result;
+  }
+
+  /**
+   * His cap, in its own frame (hung on his head at the other caps' place):
+   * the peaked cap's band and flared crown in black, a glossy black visor,
+   * a silver cord across the front of the band and a silver badge above it.
+   */
+  private securityCap(): THREE.Group {
+    const H = HitmanVisual;
+    const C = H.CAP;
+    const black = H.outfitMat('security:cap', () => new THREE.MeshStandardMaterial({ name: 'HM_Cap', color: 0x15161a, roughness: 0.8, side: THREE.DoubleSide }));
+    const visorMat = H.outfitMat('security:visor', () => new THREE.MeshStandardMaterial({ name: 'HM_Visor', color: 0x0a0a0c, roughness: 0.14, metalness: 0.35, side: THREE.DoubleSide }));
+    const silver = H.outfitMat('security:silver', () => new THREE.MeshStandardMaterial({ name: 'HM_Silver', color: 0xc9ced6, roughness: 0.3, metalness: 0.55 }));
+    const cap = new THREE.Group();
+    cap.name = 'SecurityCap';
+    // The band and the crown flaring out of it, one black shell
+    const shell = new THREE.Mesh(
+      H.outfitGeo('security:cap:shell', () => {
+        const g = new THREE.CylinderGeometry(1, 1, 1, 44, 1, true);
+        g.scale(C.rx, C.y1 - C.y0, C.rz);
+        g.translate(0, (C.y0 + C.y1) / 2, 0);
+        return H.merged([g, H.capCrown()]);
+      }),
+      black
+    );
+    const visor = new THREE.Mesh(H.outfitGeo('security:cap:visor', () => H.visorStrip(-0.05, 1, 0, 0.0045)), visorMat);
+    const trim = new THREE.Mesh(
+      H.outfitGeo('security:cap:silver', () => {
+        const parts: THREE.BufferGeometry[] = [];
+        const along = (y: number): THREE.BufferGeometry => {
+          const pts: THREE.Vector3[] = [];
+          for (let a = -1.22; a <= 1.2201; a += 0.122) pts.push(new THREE.Vector3(Math.sin(a) * (C.rx + 0.0028), y, -Math.cos(a) * (C.rz + 0.0028)));
+          return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.0019, 5, false);
+        };
+        parts.push(along(C.y0 + 0.01));
+        for (const sx of [-1, 1]) {
+          const b = new THREE.SphereGeometry(0.0048, 10, 6);
+          b.scale(1, 1, 0.6);
+          b.translate(Math.sin(sx * 1.27) * (C.rx + 0.002), C.y0 + 0.01, -Math.cos(1.27) * (C.rz + 0.002));
+          parts.push(b);
+        }
+        // The badge: a shield, tipped forward with the flare of the crown
+        const sh = new THREE.Shape();
+        sh.moveTo(0, 0.016);
+        sh.lineTo(0.012, 0.012);
+        sh.lineTo(0.011, -0.002);
+        sh.quadraticCurveTo(0.008, -0.012, 0, -0.017);
+        sh.quadraticCurveTo(-0.008, -0.012, -0.011, -0.002);
+        sh.lineTo(-0.012, 0.012);
+        sh.closePath();
+        const badge = new THREE.ExtrudeGeometry(sh, { depth: 0.0022, bevelEnabled: false, curveSegments: 4 });
+        badge.translate(0, 0, -0.0026);
+        badge.applyMatrix4(
+          new THREE.Matrix4().compose(
+            new THREE.Vector3(0, C.y1 + 0.017, -(C.rz + 0.47 * (0.122 - C.rz)) - 0.0024),
+            new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.62, 0, 0)),
+            new THREE.Vector3(1, 1, 1)
+          )
+        );
+        parts.push(badge);
+        return H.merged(parts);
+      }),
+      silver
+    );
+    cap.add(shell, visor, trim);
+    // Worn a little higher and further back than the General's, so the visor clears his eyes
+    cap.position.set(0, 1.683, 0.006);
+    cap.rotation.x = 0.06;
+    return cap;
+  }
+
+  /**
+   * Out of the agents' suit and into airport security's kit: a pale blue
+   * short-sleeved shirt (the jacket made a shirt as the staff's is, the
+   * sleeves cut short and bare forearms below them), navy trousers, bare
+   * hands, no glasses or earpiece and eyes where they were, navy epaulettes,
+   * a hi-vis vest with silver tape and SECURITY on it, a radio on his chest,
+   * a black peaked cap.
+   */
+  private dressSecurity(look: HitmanLook): void {
+    const H = HitmanVisual;
+    const shirtMat = H.securityShirtMat();
+    const trouserMat = H.outfitMat('security:trousers', () => new THREE.MeshStandardMaterial({ name: 'HM_Trousers', color: 0x1b2333, roughness: 0.88 }));
+    const arm = H.handMat(look.skin);
+    let suit: THREE.SkinnedMesh | null = null;
+    this.model.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (!m.isMesh) return;
+      const mat = (m.material as THREE.Material).name;
+      if (mat === 'HM_Lens' || mat === 'HM_Metal' || mat === 'HM_Wire' || mat === 'HM_Tie') {
+        m.visible = false;
+      } else if (mat === 'HM_Glove') {
+        m.material = arm;
+      } else if (m.name === 'HitmanBody_1') {
+        suit = m;
+        m.geometry = H.outfitGeo('security:suit', () => H.securitySuit(m.geometry));
+        m.material = [shirtMat, trouserMat, arm];
+      } else if (mat === 'HM_Shirt') {
+        m.geometry = H.outfitGeo('security:shirt', () => H.securityShirt(m.geometry));
+        m.material = shirtMat;
+      }
+    });
+
+    // Eyes, set into the face where the lenses were
+    const white = H.outfitMat('eye:white', () => new THREE.MeshStandardMaterial({ name: 'HM_EyeWhite', color: 0xf0ece4, roughness: 0.35 }));
+    const iris = H.outfitMat('eye:iris', () => new THREE.MeshStandardMaterial({ name: 'HM_Iris', color: 0x1f140d, roughness: 0.3 }));
+    const ball = H.outfitGeo('eye:ball', () => new THREE.SphereGeometry(1, 14, 10));
+    for (const sd of [-1, 1]) {
+      const eye = new THREE.Group();
+      eye.position.set(sd * 0.032, 1.6335, -0.0745);
+      const w = new THREE.Mesh(ball, white);
+      w.scale.set(0.0125, 0.0082, 0.0055);
+      const pupil = new THREE.Mesh(ball, iris);
+      pupil.scale.set(0.0052, 0.0056, 0.0022);
+      pupil.position.set(0, 0, -0.0048);
+      eye.add(w, pupil);
+      this.hang(eye, 'Head');
+      this.eyes.push(eye);
+    }
+    this.hang(this.securityCap(), 'Head');
+    if (!suit) return;
+
+    // What is worn over the shirt and sewn on it, skinned like it
+    const body = suit as THREE.SkinnedMesh;
+    const shirtMesh = this.model.getObjectByName('HitmanBody_2') as THREE.Mesh;
+    const vestGeo = H.outfitGeo('security:vest', () => H.vestFrom(body.geometry));
+    const kit = H.securityKit(body.geometry, vestGeo);
+    // Vertex-coloured kit: the epaulettes' navy and silver, the radio's black and the pass's white
+    const coloured = H.outfitMat('security:kit', () => new THREE.MeshStandardMaterial({ name: 'HM_Kit', color: 0xffffff, vertexColors: true, roughness: 0.55, metalness: 0.15 }));
+    const skinned: [THREE.BufferGeometry, THREE.Material, string][] = [
+      [vestGeo, H.vestMat(), 'HitmanVest'],
+      [kit.boards, coloured, 'HitmanEpaulettes'],
+      [
+        H.outfitGeo('security:buttons', () => H.buttonsFor(body.geometry, shirtMesh.geometry)),
+        H.outfitMat('staff:button', () => new THREE.MeshStandardMaterial({ name: 'HM_Button', color: 0x0d0d0f, roughness: 0.35 })),
+        'HitmanButtons'
+      ]
+    ];
+    for (const [geo, mat, name] of skinned) {
+      const sk = new THREE.SkinnedMesh(geo, mat);
+      sk.name = name;
+      body.parent!.add(sk);
+      sk.position.copy(body.position);
+      sk.quaternion.copy(body.quaternion);
+      sk.scale.copy(body.scale);
+      sk.bind(body.skeleton, body.bindMatrix);
+      sk.boundingSphere = this.cull;
+    }
+    // The radio, the pass and the lettering ride the chest with the vest
+    const rigid: [THREE.BufferGeometry, THREE.Material][] = [
+      [kit.radio, coloured],
+      [kit.patches, H.outfitMat('security:patch', () => new THREE.MeshStandardMaterial({ name: 'HM_Patch', map: H.securityTexture(), alphaTest: 0.5, roughness: 0.8 }))]
+    ];
+    for (const [geo, mat] of rigid) {
+      if (!geo.attributes.position) continue;
+      this.hang(new THREE.Mesh(geo, mat), 'UpperChest');
     }
   }
 

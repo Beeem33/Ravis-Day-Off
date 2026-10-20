@@ -183,6 +183,7 @@ export class Level7Builder {
     const boss = this.buildBossRoom();
     this.buildWindows();
     this.buildOffice();
+    this.buildCover();
     this.buildTopCorridor();
     this.buildEastCorridor();
     this.buildRestroom();
@@ -865,6 +866,133 @@ export class Level7Builder {
       const y = 0.8 + ((i * 2.9) % 1.7);
       this.bulletHoles.push({ pos: new THREE.Vector3(x, y, L7.office.z1 - T / 2 - 0.002), normal: new THREE.Vector3(0, 0, -1) });
     }
+  }
+
+  // ----------------------------------------------------------------- cover
+
+  /**
+   * Cover to fight forward behind: across no-man's land and the staff's
+   * side, staggered so there is always another piece a dash ahead — banks
+   * of filing cabinets dragged out, cubicle walls still standing, and
+   * slabs of the ceiling that came down with the hole, propped up on what
+   * fell with them. All of it chest-high or more: crouched behind any of
+   * it, nothing reaches him.
+   */
+  private buildCover(): void {
+    this.concreteMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([142, 138, 131], 18), 1, 1) });
+    this.fabricMat = new THREE.MeshLambertMaterial({ map: makeTex(noiseCanvas([88, 98, 114], 10), 2, 2) });
+    // No-man's land
+    this.slabCover(2.6, 12.2, 0.12, 1.9, 1);
+    this.slabCover(15.4, 12.6, -0.2, 1.8, 2);
+    this.cabinetBank(10.8, 9.6, 0.04, 2);
+    this.cabinetBank(6.9, 9.0, -0.05, 2);
+    this.partition(3.6, 9.4, 0.1, 1.8);
+    this.partition(13.6, 9.6, -0.12, 1.7);
+    this.moundCover(8.9, 10.7);
+    // The staff's side, where he comes in
+    this.partition(6.0, 18.2, 0.05, 2.0);
+    this.cabinetBank(13.4, 18.2, 0.02, 2);
+    this.slabCover(3.0, 17.8, 0.3, 1.7, 3);
+  }
+
+  private concreteMat!: THREE.MeshLambertMaterial;
+  private fabricMat!: THREE.MeshLambertMaterial;
+  private static unseen = new THREE.MeshBasicMaterial({ visible: false });
+
+  /**
+   * The solid part of a piece of cover made of props: the box he can't walk
+   * through, and an unseen box the agents can't see through (props stop
+   * bullets, but only these stop eyes). Axis-aligned round a small turn.
+   */
+  private coverBox(x: number, z: number, w: number, d: number, h: number, yaw: number): void {
+    const c = Math.abs(Math.cos(yaw));
+    const s = Math.abs(Math.sin(yaw));
+    this.blk(x, z, w * c + d * s, w * s + d * c, h);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), Level7Builder.unseen);
+    m.position.set(x, h / 2, z);
+    m.rotation.y = yaw;
+    this.group.add(m);
+    this.occluders.push(m);
+  }
+
+  /** Tall filing cabinets dragged out side by side, drawers to the south, one hanging open. */
+  private cabinetBank(x: number, z: number, yaw: number, n: number): void {
+    const g = new THREE.Group();
+    const w = 0.92;
+    for (let i = 0; i < n; i++) {
+      const fc = fileCabinet(0.5, 1.42, 0.9, 4);
+      fc.position.set(0, 0, (i - (n - 1) / 2) * w);
+      fc.rotation.y = (i % 2 ? 1 : -1) * 0.03;
+      g.add(fc);
+    }
+    // A drawer pulled out, files spilling
+    const drawer = this.box(0.5, 0.3, 0.8, this.darkMetal, -0.52, 0.62, (n - 1) / 2 * -w);
+    g.add(drawer);
+    this.put(g, x, z, Math.PI / 2 + yaw);
+    this.put(scatteredPaper(5, 0.6), x - (n - 1) / 2 * w * Math.cos(yaw), z + 0.9, yaw);
+    this.coverBox(x, z, n * w, 0.55, 1.42, yaw);
+  }
+
+  /** A cubicle wall still standing: fabric panel, aluminium frame and feet. */
+  private partition(x: number, z: number, yaw: number, w: number): void {
+    const g = new THREE.Group();
+    const h = 1.55;
+    g.add(this.box(w, h - 0.06, 0.06, this.fabricMat, 0, 0.06 + (h - 0.06) / 2, 0));
+    g.add(this.box(w + 0.03, 0.035, 0.075, this.steel, 0, h, 0));
+    for (const sx of [-1, 1]) {
+      g.add(this.box(0.04, h, 0.08, this.steel, (sx * w) / 2, h / 2, 0));
+      g.add(this.box(0.06, 0.03, 0.5, this.steel, (sx * (w - 0.1)) / 2, 0.015, 0));
+    }
+    // Something still pinned to it
+    g.add(this.box(0.21, 0.29, 0.005, new THREE.MeshLambertMaterial({ color: 0xe9e4d6 }), w * 0.2, 1.15, 0.034));
+    this.put(g, x, z, yaw);
+    this.coverBox(x, z, w, 0.12, h, yaw);
+  }
+
+  /**
+   * A slab of the floor above, down through the ceiling: stood up on its
+   * edge where it landed, leant back on the rubble that came with it, rebar
+   * out of its broken end.
+   */
+  private slabCover(x: number, z: number, yaw: number, w: number, seed: number): void {
+    const g = new THREE.Group();
+    const slab = this.box(w, 1.3, 0.24, this.concreteMat, 0, 0.62, 0);
+    slab.rotation.x = -0.22;
+    slab.rotation.z = (seed % 2 ? 1 : -1) * 0.05;
+    g.add(slab);
+    // Its broken top edge: chunks, and the steel through it
+    for (let i = 0; i < 4; i++) {
+      const c = this.box(0.25 + (i % 2) * 0.15, 0.18, 0.26, this.concreteMat, -w / 2 + 0.3 + i * (w - 0.5) / 3, 1.28 - (i % 3) * 0.05, 0.12);
+      c.rotation.set(0.3 * i, 0.4 * i, 0.2);
+      g.add(c);
+    }
+    for (let i = 0; i < 5; i++) {
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.35 + (i % 3) * 0.12, 5), this.darkMetal);
+      bar.position.set(-w / 2 + 0.2 + i * (w - 0.4) / 4, 1.4, 0.15);
+      bar.rotation.set(0.5 - i * 0.2, 0, 0.3 * (i - 2));
+      g.add(bar);
+    }
+    // What it is leant on, behind, and what is round its foot
+    g.add(rubble(0.9, 20 + seed));
+    g.children[g.children.length - 1].position.set(0.2, 0, 0.55);
+    this.put(g, x, z, yaw);
+    this.put(rubblePile(0.45), x + Math.cos(yaw) * (w / 2 + 0.2), z - Math.sin(yaw) * (w / 2 + 0.2), seed);
+    this.put(rubble(0.55, 30 + seed), x - Math.cos(yaw) * (w / 2), z + Math.sin(yaw) * (w / 2) - 0.2, seed * 0.7);
+    this.coverBox(x, z + 0.15, w, 0.75, 1.3, yaw);
+  }
+
+  /** Where the hole is: a heap of what came down, built up into a mound worth getting behind. */
+  private moundCover(x: number, z: number): void {
+    const g = new THREE.Group();
+    const a = this.box(1.6, 0.22, 1.1, this.concreteMat, 0, 0.75, 0);
+    a.rotation.set(0.35, 0.4, -0.25);
+    const b = this.box(1.3, 0.2, 0.9, this.concreteMat, 0.3, 0.42, 0.2);
+    b.rotation.set(-0.3, 1.1, 0.3);
+    g.add(a, b);
+    this.put(g, x, z);
+    this.put(rubble(1.1, 41), x - 0.4, z + 0.3, 0.6);
+    this.put(rubblePile(0.7), x + 0.5, z - 0.2, 1.4);
+    this.coverBox(x, z, 1.8, 1.3, 1.1, 0);
   }
 
   // ------------------------------------------------------------ corridors

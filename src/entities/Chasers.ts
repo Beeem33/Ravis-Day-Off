@@ -48,7 +48,7 @@ interface Style {
   cornerGrip: number;
 }
 
-const BOSS_STYLE: Style = { trigger: 24, triggerT: 0.95, lateral: 4.2, oncoming: true, shoulder: true, clearance: 0.35, cornerGrip: 0.82 };
+const BOSS_STYLE: Style = { trigger: 34, triggerT: 1.35, lateral: 5.6, oncoming: true, shoulder: true, clearance: 0.55, cornerGrip: 0.88 };
 const COP_STYLE: Style = { trigger: 30, triggerT: 1.25, lateral: 3.0, oncoming: false, shoulder: true, clearance: 0.6, cornerGrip: 0.78 };
 
 class RouteDriver {
@@ -455,8 +455,8 @@ class RouteDriver {
 }
 
 /** Cruise speeds the boss drifts back to when he has the gap he wants. */
-const BOSS_CRUISE: Record<RoadId, number> = { city: 24, onramp: 27, highway: 43, exit: 30, airport: 24 };
-const BOSS_FLOOR: Record<RoadId, number> = { city: 15, onramp: 17, highway: 27, exit: 18, airport: 14 };
+const BOSS_CRUISE: Record<RoadId, number> = { city: 30, onramp: 34, highway: 52, exit: 36, airport: 32 };
+const BOSS_FLOOR: Record<RoadId, number> = { city: 21, onramp: 25, highway: 38, exit: 27, airport: 24 };
 
 /**
  * The boss: a maniac in a big black saloon, always just about catchable.
@@ -468,8 +468,8 @@ const BOSS_FLOOR: Record<RoadId, number> = { city: 15, onramp: 17, highway: 27, 
 export class BossDriver extends RouteDriver implements IBossDriver {
   mode: 'drive' | 'hold' = 'drive';
   /** The gap he aims for, route metres ahead of Ravi. */
-  gapMin = 35;
-  gapMax = 70;
+  gapMin = 55;
+  gapMax = 105;
   private holdSpeed = -1;
   /** The speed he's aiming for this frame (debug/HUD). */
   vWant = 0;
@@ -502,8 +502,11 @@ export class BossDriver extends RouteDriver implements IBossDriver {
     const top = me.tune.topSpeed;
     const mid = (this.gapMin + this.gapMax) / 2;
     let v: number;
-    if (gap < 20) v = top;
-    else if (gap > 110) v = Math.max(BOSS_FLOOR[road], Math.min(BOSS_CRUISE[road], rv * 0.9));
+    // Ravi on his tail (or, somehow, past him): flat out, always
+    if (gap < 35) v = top;
+    // Well ahead: he lets up — and right out ahead (Ravi's crashed), he all but waits
+    else if (gap > 210) v = BOSS_FLOOR[road] * 0.65;
+    else if (gap > 150) v = Math.max(BOSS_FLOOR[road], Math.min(BOSS_CRUISE[road], rv * 0.95));
     else {
       v = rv + (mid - gap) * 0.32;
       v = clamp(v, BOSS_FLOOR[road], top);
@@ -512,7 +515,8 @@ export class BossDriver extends RouteDriver implements IBossDriver {
     // His lane choice is judged against the speed he wants, then he follows whatever's still in his way
     this.vRef = v;
     this.pickLine(dt, this.exitPull());
-    v = this.followOrShove(dt, v);
+    // Ravi alongside or ahead: he stops waiting for anyone and goes through what's in his way
+    v = gap < 6 ? Math.max(this.followOrShove(dt, v), Math.min(v, rv + 6)) : this.followOrShove(dt, v);
     // The end of the line: pull up before the airport road runs out
     const ar = this.net.roads.airport;
     if (road === 'airport') v = Math.min(v, Math.sqrt(2 * 6 * Math.max(0, ar.length - me.at.s - 8)));

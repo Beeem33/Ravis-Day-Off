@@ -62,15 +62,16 @@ export const CIVIC_TUNE: CarTune = {
   width: 1.76,
   wheelRadius: 0.3,
   wheelbase: 2.57,
-  latMax: 10.5,
+  // Arcade grip: it turns at speed far better than a real tired hatch would
+  latMax: 16,
   reverseSpeed: 9,
-  steerRate: 5
+  steerRate: 11
 };
 
 /** The boss's big black saloon: a little faster than the Civic, heavier, planted. */
 export const BOSS_TUNE: CarTune = {
-  topSpeed: 53,
-  accel: 6.6,
+  topSpeed: 62,
+  accel: 8.6,
   brake: 13,
   steerLow: 0.58,
   steerHigh: 0.012,
@@ -80,9 +81,9 @@ export const BOSS_TUNE: CarTune = {
   width: 1.9,
   wheelRadius: 0.34,
   wheelbase: 3.15,
-  latMax: 11.5,
+  latMax: 15,
   reverseSpeed: 9,
-  steerRate: 12
+  steerRate: 14
 };
 
 /** The highway patrol cruiser: a big sedan with the pursuit package. */
@@ -273,7 +274,7 @@ export class DriveCar implements ICar {
 
     // ---- inputs, smoothed: a keyboard is all or nothing, a car isn't
     const towardIn = Math.abs(steerIn) > Math.abs(this.steerNow) && steerIn * this.steerNow >= 0;
-    const sRate = towardIn ? t.steerRate / (1 + av / 42) : t.steerRate * 1.8;
+    const sRate = towardIn ? t.steerRate / (1 + av / 70) : t.steerRate * 1.8;
     this.steerNow += clamp(steerIn - this.steerNow, -sRate * h, sRate * h);
     const tRate = thrIn > this.throttleNow ? 5 : 9;
     this.throttleNow += clamp(thrIn - this.throttleNow, -tRate * h, tRate * h);

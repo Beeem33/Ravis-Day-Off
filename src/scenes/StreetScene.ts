@@ -20,9 +20,9 @@ import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cuts
 /** m/s → mph, for the speedo and the radar. */
 const MPH = 2.237;
 /** Past this far ahead of Ravi (route metres) the boss is getting away; held there this long, he's gone. */
-const LOSING_GAP = 170;
-const LOST_GAP = 240;
-const LOST_TIME = 3.5;
+const LOSING_GAP = 200;
+const LOST_GAP = 280;
+const LOST_TIME = 4;
 /** The cop cutscene starts with the boss this far short of the cop (route metres). */
 const COP_LEAD = 170;
 /** And Ravi this far behind the boss, both flat out. */
@@ -163,7 +163,11 @@ export class StreetScene implements GameScene {
     this.level = new StreetBuilder().build();
     this.scene.add(this.level.group);
     this.net = new RoadNet(this.level.roads);
-    this.traffic = new Traffic(this.net, { seed: (Math.random() * 1e6) | 0 });
+    // Busy, but with room to drive: about half the builder's default traffic
+    this.traffic = new Traffic(this.net, {
+      seed: (Math.random() * 1e6) | 0,
+      density: { city: 0.5, onramp: 0.45, highway: 0.5, exit: 0, airport: 0 }
+    });
     this.scene.add(this.traffic.object);
 
     this.player = new DriveCar(this.net, CIVIC_TUNE, 'player');
@@ -557,6 +561,16 @@ export class StreetScene implements GameScene {
       return;
     }
 
+    // ---- He's always out in front. Closing on his bumper, the Civic's
+    // flat out drops to just under his — it can't get past him on pace —
+    // and if he's been boxed in and Ravi gets by, it's held right down
+    // until he's back in front
+    const bv = Math.max(0, this.boss.car.speed);
+    let top = CIVIC_TUNE.topSpeed;
+    if (gap < 0) top = Math.min(top, Math.max(14, bv * 0.75));
+    else if (gap < 30) top = Math.min(top, Math.max(18, bv - 2.5 + gap * 0.3));
+    this.player.tune.topSpeed += (top - this.player.tune.topSpeed) * Math.min(1, dt * 3);
+
     // ---- Losing him
     if (p.at.road === 'highway' && p.at.s > L.missedExitS && (this.boss.car.at.road === 'exit' || this.boss.car.at.road === 'airport')) {
       this.fail('YOU MISSED THE EXIT');
@@ -638,6 +652,7 @@ export class StreetScene implements GameScene {
     this.boss.mode = 'hold';
     const rLane = this.nearestLane('highway', this.player.at.road === 'highway' ? this.player.at.d : lane);
     this.player.place({ road: 'highway', s: bossS - COP_RAVI_GAP, d: rLane }, COP_RAVI_SPEED);
+    this.player.tune.topSpeed = CIVIC_TUNE.topSpeed;
     // Room to get by, and for him to pull out
     this.traffic.clear('highway', bossS - COP_RAVI_GAP - 60, L.cop.s + 300);
     this.copMan.pose('feetUp');

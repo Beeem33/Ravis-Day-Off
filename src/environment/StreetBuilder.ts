@@ -14,8 +14,9 @@ import type { Lane, Road, RoadId, RoadSample, StreetBlocker, StreetData } from '
 //            cross streets at s 110, 400 and 640 (and one behind the start)
 //   onramp   from the avenue's end: funnels to one lane, curves right (east)
 //            and climbs to the deck (8 m), merges onto the highway's right side
-//   highway  east, then a long left bend to east-north-east; the cop at s 500,
-//            the fork at s 1150, the construction closure at s 1500
+//   highway  east, a long left bend, a long right one and a last left one
+//            onto the final straight: three and a half kilometres. The cop
+//            at s 500, the fork at s 3150, the construction closure at s 3500
 //   exit     peels off the right at the fork, curves right and down to grade
 //   airport  south-south-east to the gate; beyond it the apron and the jet
 //
@@ -55,12 +56,14 @@ const MERGE_LEN = 110;
 const RAMP_HALF = 4.5;
 
 const HW_BACK = 900;
-const HW_LEN = 1510;
+const HW_LEN = 3510;
 const HW_ON = 700;
-const EXIT_S = 1150;
-const MISSED_S = 1420;
-const CLOSURE_S = 1500;
-const NEAR_END = 1560;
+const EXIT_S = 3150;
+const MISSED_S = 3420;
+const CLOSURE_S = 3500;
+const NEAR_END = 3560;
+/** Where the last bend ends: the highway is straight from here to the closure, and the exit is laid out against that straight. */
+const HW_STRAIGHT = 2660;
 const COP_S = 500;
 const EXIT_HALF = 2.75;
 const AIR_HALF = 3.75;
@@ -343,19 +346,23 @@ function buildRoute(): Route {
     }
   }
 
-  // ---- The highway: 900 m of deck behind the merge for the view, the drivable 1510, 700 more of the far side
+  // ---- The highway: 900 m of deck behind the merge for the view, the drivable 3510, 700 more of the far side
   const hwPoses = trace({ x: H0x - fx(hwYaw) * HW_BACK, z: H0z - fz(hwYaw) * HW_BACK, yaw: hwYaw }, [
     { len: HW_BACK, turn: 0 },
     { len: 560, turn: 0 },
     { len: 240, turn: 0.24 },
-    { len: HW_LEN - 800, turn: 0 },
+    { len: 700, turn: 0 },
+    { len: 320, turn: -0.42 },
+    { len: 560, turn: 0 },
+    { len: 280, turn: 0.32 },
+    { len: HW_LEN - HW_STRAIGHT, turn: 0 },
     { len: HW_ON, turn: 0 }
   ]);
   const iu = (u: number): number => Math.round((u + HW_BACK) / STEP);
-  // The straight from u 800 on, as a frame: where the exit is measured against it
-  const S = hwPoses[iu(800)];
+  // The last straight, as a frame: where the exit is measured against it
+  const S = hwPoses[iu(HW_STRAIGHT)];
   const toHw = (x: number, z: number): { u: number; lat: number } => ({
-    u: 800 + (x - S.x) * fx(S.yaw) + (z - S.z) * fz(S.yaw),
+    u: HW_STRAIGHT + (x - S.x) * fx(S.yaw) + (z - S.z) * fz(S.yaw),
     lat: (x - S.x) * rx(S.yaw) + (z - S.z) * rz(S.yaw)
   });
 
@@ -1201,6 +1208,16 @@ function signAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Regio
       }
     },
     {
+      key: 'g6',
+      w: 1024,
+      h: 448,
+      draw: (g, w, h) => {
+        plate(g, w, h, GREEN, SIGN_WHITE);
+        planeText(g, 'AIRPORT', w / 2, 160, 160, SIGN_WHITE);
+        text(g, 'EXIT 1 MI', w / 2, 330, 120, SIGN_WHITE);
+      }
+    },
+    {
       key: 'g2',
       w: 1024,
       h: 512,
@@ -1425,7 +1442,7 @@ function signAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Regio
   ];
   // Shelf-packed tallest first; the big guide signs drawn at 3/4 size, and
   // everything shrunk a little more if it still would not fit
-  const big = new Set(['g1', 'g2', 'g4', 'g5', 'hwy', 'airport', 'g3', 'closed']);
+  const big = new Set(['g1', 'g2', 'g4', 'g5', 'g6', 'hwy', 'airport', 'g3', 'closed']);
   const order = specs.slice().sort((a, b) => b.h - a.h);
   const pad = 12;
   const pack = (k: number): Map<string, [number, number, number, number]> | null => {
@@ -1469,6 +1486,138 @@ function signAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Regio
     // A little inside the edges: no bleed from the neighbour at a distance
     regions[s.key] = { u0: (x + 1.5) / W, u1: (x + w - 1.5) / W, v1: 1 - (y + 1.5) / H, v0: 1 - (y + h - 1.5) / H, aspect: s.w / s.h };
   }
+  return { canvas: c, regions };
+}
+
+
+/**
+ * The billboards' posters, six of them on one canvas, each 1024 by 340:
+ * local businesses, and the people in this story.
+ */
+function billboardAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Region> } {
+  const W = 2048;
+  const H = 2048;
+  const PW = 1024;
+  const PH = 340;
+  const c = makeCanvas(W, H);
+  const g = c.getContext('2d')!;
+  const fontOf = (px: number, bold = true): string => `${bold ? 'bold ' : ''}${px}px Arial, Helvetica, sans-serif`;
+  const say = (t: string, x: number, y: number, px: number, col: string, bold = true, align: CanvasTextAlign = 'left'): void => {
+    g.font = fontOf(px, bold);
+    g.fillStyle = col;
+    g.textAlign = align;
+    g.textBaseline = 'middle';
+    g.fillText(t, x, y);
+  };
+  const posters: { key: string; draw: () => void }[] = [
+    {
+      key: 'deadbull',
+      draw: () => {
+        const grd = g.createLinearGradient(0, 0, PW, 0);
+        grd.addColorStop(0, '#0d2c7a');
+        grd.addColorStop(1, '#1d4fc4');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, PW, PH);
+        // The can
+        g.fillStyle = '#c9ced6';
+        g.fillRect(70, 40, 130, 260);
+        g.fillStyle = '#d42a2a';
+        g.fillRect(70, 110, 130, 110);
+        say('DB', 135, 165, 64, '#f7d23a', true, 'center');
+        say('DEADBULL', 250, 120, 120, '#f7d23a');
+        say('GIVES YOU A SECOND LIFE', 254, 230, 52, '#ffffff');
+      }
+    },
+    {
+      key: 'ravicall',
+      draw: () => {
+        g.fillStyle = '#10161f';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#3ad18b';
+        g.lineWidth = 16;
+        g.beginPath();
+        g.arc(150, 170, 90, Math.PI * 1.05, Math.PI * 1.95);
+        g.stroke();
+        g.fillStyle = '#3ad18b';
+        g.fillRect(52, 160, 34, 70);
+        g.fillRect(214, 160, 34, 70);
+        say('RAVI-CALL SYSTEMS', 290, 125, 84, '#ffffff');
+        say("WE'RE ALWAYS LISTENING.", 294, 225, 50, '#3ad18b');
+      }
+    },
+    {
+      key: 'lawyer',
+      draw: () => {
+        g.fillStyle = '#f5d415';
+        g.fillRect(0, 0, PW, PH);
+        g.fillStyle = '#111111';
+        g.fillRect(0, 0, PW, 22);
+        g.fillRect(0, PH - 22, PW, 22);
+        say('HURT IN A CAR CHASE?', PW / 2, 100, 80, '#111111', true, 'center');
+        say('CALL 1-800-SUE-THEM', PW / 2, 195, 86, '#c41d1d', true, 'center');
+        say('BIG MIKE · ATTORNEY AT LAW', PW / 2, 280, 40, '#111111', true, 'center');
+      }
+    },
+    {
+      key: 'doughnut',
+      draw: () => {
+        g.fillStyle = '#ffb3cf';
+        g.fillRect(0, 0, PW, PH);
+        g.fillStyle = '#c98a4b';
+        g.beginPath();
+        g.arc(170, 170, 120, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#ff5f9e';
+        g.beginPath();
+        g.arc(170, 170, 104, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#ffb3cf';
+        g.beginPath();
+        g.arc(170, 170, 40, 0, Math.PI * 2);
+        g.fill();
+        say('DOUGHNUT DEPOT', 330, 120, 88, '#5a1630');
+        say('COPS EAT FREE', 334, 225, 64, '#ffffff');
+      }
+    },
+    {
+      key: 'jets',
+      draw: () => {
+        const grd = g.createLinearGradient(0, 0, 0, PH);
+        grd.addColorStop(0, '#5aa2e6');
+        grd.addColorStop(1, '#d9ecfb');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, PW, PH);
+        drawPlane(g, 170, 170, 1.6, '#ffffff');
+        say('SKYLINE JET CHARTERS', 320, 125, 74, '#0f2a4a');
+        say('LEAVE IT ALL BEHIND.', 324, 220, 54, '#0f2a4a', false);
+      }
+    },
+    {
+      key: 'scrap',
+      draw: () => {
+        g.fillStyle = '#4b5232';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#e8c547';
+        g.lineWidth = 10;
+        g.strokeRect(18, 18, PW - 36, PH - 36);
+        say("THE GENERAL'S SCRAP", PW / 2, 110, 82, '#e8c547', true, 'center');
+        say('WE BUY ANY CAR. WE THROW THE REST.', PW / 2, 220, 44, '#ffffff', true, 'center');
+      }
+    }
+  ];
+  const regions: Record<string, Region> = {};
+  posters.forEach((p, i) => {
+    const x = (i % 2) * PW;
+    const y = Math.floor(i / 2) * PH;
+    g.save();
+    g.translate(x, y);
+    g.beginPath();
+    g.rect(0, 0, PW, PH);
+    g.clip();
+    p.draw();
+    g.restore();
+    regions[p.key] = { u0: (x + 2) / W, u1: (x + PW - 2) / W, v1: 1 - (y + 2) / H, v0: 1 - (y + PH - 2) / H, aspect: PW / PH };
+  });
   return { canvas: c, regions };
 }
 
@@ -1655,6 +1804,8 @@ export class StreetBuilder {
     this.buildAirportRoad();
     this.buildAirport();
     this.buildUnderRoads();
+    this.buildHighwayScenery();
+    this.buildStreetFurniture();
     this.buildCityBlocks();
     this.buildOutskirts();
     this.buildSkyline();
@@ -1732,7 +1883,7 @@ export class StreetBuilder {
   private underChains(): Chain[] {
     if (this.underCache) return this.underCache;
     const out: Chain[] = [];
-    for (const u of [300, 980]) {
+    for (const u of [300, 980, 1760, 2480]) {
       const f = this.r.hwVis.at(u);
       const yaw = yawOf(f.tangent) - Math.PI / 2;
       const poses = trace({ x: f.pos.x - fx(yaw) * 350, z: f.pos.z - fz(yaw) * 350, yaw }, [{ len: 700, turn: 0 }]);
@@ -1788,7 +1939,34 @@ export class StreetBuilder {
 
   /** Grass under the whole map, a little below everything that lies on it. */
   private buildGround(): void {
-    flatQuad(this.grass, [[-1400, -1800], [-1400, 1000], [3200, 1000], [3200, -1800]], GROUND, WHITE, 6);
+    const b = this.routeBounds();
+    flatQuad(this.grass, [[b.x0 - 1400, b.z0 - 1400], [b.x0 - 1400, b.z1 + 1400], [b.x1 + 1400, b.z1 + 1400], [b.x1 + 1400, b.z0 - 1400]], GROUND, WHITE, 6);
+  }
+
+  /** The box round every road of the route and the airfield, on the ground plane. */
+  private routeBounds(): { x0: number; x1: number; z0: number; z1: number } {
+    const r = this.r;
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (const ch of [r.cityVis, r.hwVis, r.ramp, r.exit, r.air]) {
+      for (let s = ch.s0; s <= ch.s1; s += 20) {
+        const p = ch.at(s).pos;
+        x0 = Math.min(x0, p.x);
+        x1 = Math.max(x1, p.x);
+        z0 = Math.min(z0, p.z);
+        z1 = Math.max(z1, p.z);
+      }
+    }
+    for (const [a, b] of [[0, -780], [540, -780], [0, 980], [540, 980]] as const) {
+      const [x, z] = this.ap(a, b);
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      z0 = Math.min(z0, z);
+      z1 = Math.max(z1, z);
+    }
+    return { x0, x1, z0, z1 };
   }
 
   // ------------------------------------------------------------------ city
@@ -1976,6 +2154,207 @@ export class StreetBuilder {
     // Speed limit up the avenue, and the ramp's sign at its end
     this.postSign(pt(ch.at(30), 9.6, WALK), yawOf(ch.at(30).tangent), 'sl35', 0.75, 2.1);
     this.postSign(pt(ch.at(560), 10.2, WALK), yawOf(ch.at(560).tangent), 'hwy', 3.2, 2.6, true);
+  }
+
+  // ------------------------------------------------------- street furniture
+
+  /**
+   * The avenue's pavements, furnished: hydrants and bins by the kerb, a
+   * bench now and then, newspaper boxes and a mailbox by the crossings,
+   * bollards on the corners and a bus shelter each side; and the road's
+   * own ironwork, manholes in the lanes and drains along the kerbs.
+   */
+  private buildStreetFurniture(): void {
+    const ch = this.r.cityVis;
+    const g = this.props;
+    const rnd = lcg(777);
+    const near = (s: number, m: number): boolean => CROSS.some((si) => Math.abs(s - si) < m);
+    const gate = (s: number, side: number, m: number): boolean => side > 0 && s > LOT.gate0 - m && s < LOT.gate1 + m;
+    const shelters: [number, 1 | -1][] = [[253, 1], [512, -1]];
+    const inShelter = (s: number, side: number): boolean => shelters.some(([ss, sd]) => sd === side && Math.abs(s - ss) < 5);
+    const at = (s: number, side: number, lat: number): { c: V3; yaw: number } => {
+      const f = ch.at(s);
+      return { c: pt(f, side * lat, WALK), yaw: yawOf(f.tangent) };
+    };
+
+    // Along each pavement, in the gap between one lamp (and its tree) and the next
+    let k = 0;
+    for (let s = -240; s < 630; s += 34) {
+      for (const side of [1, -1] as const) {
+        const ss = s + (side > 0 ? 0 : 17);
+        const ok = (u: number): boolean => u < 628 && !near(u, 15) && !gate(u, side, 4) && !inShelter(u, side);
+        if (k % 2 === 0 && ok(ss + 14)) this.hydrant(at(ss + 14, side, 8.25).c);
+        if (k % 2 === 1 && ok(ss + 26)) {
+          const b = at(ss + 26, side, 8.35);
+          this.bin(b.c, b.yaw);
+        }
+        if (k % 3 === 1 && ok(ss + 20)) {
+          const b = at(ss + 20, side, 11.7);
+          this.bench(b.c, b.yaw, side);
+        }
+        k++;
+      }
+    }
+    // By the crossings: newspaper boxes and a mailbox at the kerb, bollards on every corner
+    const boxCols = [rgba(0x2a5aa8), rgba(0xb83a32), rgba(0xd8b02a), rgba(0xe8e6de)];
+    CROSS.forEach((si, n) => {
+      if (si - 13 < 628) {
+        for (let j = 0; j < 3; j++) {
+          const b = at(si - 13.2 + j * 0.62, 1, 8.6);
+          this.newsBox(b.c, b.yaw, 1, boxCols[(n + j) % boxCols.length]);
+        }
+      }
+      if (si + 12.5 < 628) {
+        const m = at(si + 12.5, -1, 8.6);
+        this.mailbox(m.c, m.yaw, -1);
+      }
+      for (const side of [1, -1]) {
+        for (const dir of [-1, 1]) {
+          for (const o of [10.4, 11.4, 12.4]) {
+            const s = si + dir * o;
+            if (s > 628 || gate(s, side, 2)) continue;
+            const b = at(s, side, 7.85);
+            cylY(g, b.c[0], b.c[1], b.c[2], 0.1, 0.09, 0.85, 8, C.dark);
+            cylY(g, b.c[0], b.c[1] + 0.68, b.c[2], 0.105, 0.105, 0.1, 8, C.hiViz);
+          }
+        }
+      }
+    });
+    for (const [s, side] of shelters) this.busShelter(s, side);
+
+    // The road's ironwork: manhole covers out in the lanes, drains in the gutters
+    const iron = rgba(0x5a5d61);
+    for (let s = -230; s < 620; s += 36 + rnd() * 16) {
+      if (near(s, 12)) continue;
+      const f = ch.at(s);
+      const lat = (rnd() < 0.5 ? 1 : -1) * (rnd() < 0.5 ? 1.9 : 5.3);
+      const c = pt(f, lat, 0);
+      cylY(g, c[0], c[1], c[2], 0.36, 0.36, 0.024, 14, iron);
+    }
+    for (let s = -235; s < 625; s += 47) {
+      for (const side of [1, -1]) {
+        const u = s + (side > 0 ? 0 : 23);
+        if (near(u, 12) || gate(u, side, 2)) continue;
+        const f = ch.at(u);
+        const c = pt(f, side * 7.15, 0);
+        boxAt(g, c[0], c[1], c[2], yawOf(f.tangent), 0.42, 0.022, 0.9, C.black);
+      }
+    }
+  }
+
+  /** `a` along the road, `l` across it (+ right) and `h` up from `c`, for a road heading `yaw`. */
+  private static off(c: V3, yaw: number, a: number, l: number, h = 0): V3 {
+    return [c[0] + fx(yaw) * a + rx(yaw) * l, c[1] + h, c[2] + fz(yaw) * a + rz(yaw) * l];
+  }
+
+  /** A fire hydrant: red, its cap and nozzles yellow. */
+  private hydrant(c: V3): void {
+    const g = this.props;
+    const red = rgba(0xc8382c);
+    const cap = rgba(0xe6c23a);
+    cylY(g, c[0], c[1], c[2], 0.17, 0.17, 0.07, 10, red);
+    cylY(g, c[0], c[1] + 0.07, c[2], 0.12, 0.12, 0.5, 10, red);
+    cylY(g, c[0], c[1] + 0.57, c[2], 0.14, 0.14, 0.05, 10, cap);
+    cylY(g, c[0], c[1] + 0.62, c[2], 0.12, 0.05, 0.13, 10, cap);
+    boxAt(g, c[0], c[1] + 0.36, c[2], 0, 0.4, 0.1, 0.1, cap);
+    boxAt(g, c[0], c[1] + 0.36, c[2], Math.PI / 2, 0.3, 0.12, 0.12, cap);
+  }
+
+  /** A litter bin: a dark green drum with its lid. */
+  private bin(c: V3, yaw: number): void {
+    const g = this.props;
+    cylY(g, c[0], c[1], c[2], 0.27, 0.3, 0.9, 12, rgba(0x2f4a3a));
+    cylY(g, c[0], c[1] + 0.55, c[2], 0.305, 0.305, 0.06, 12, rgba(0x3f5f4a));
+    cylY(g, c[0], c[1] + 0.9, c[2], 0.32, 0.22, 0.09, 12, rgba(0x22262a));
+    const s = StreetBuilder.off(c, yaw, 0, 0, 0.99);
+    boxAt(g, s[0], s[1], s[2], yaw, 0.2, 0.03, 0.08, C.black);
+  }
+
+  /** A bench along the road, facing it: wooden slats on two steel frames, its back to the buildings. */
+  private bench(c: V3, yaw: number, side: number): void {
+    const g = this.props;
+    const wood = rgba(0x8a5a36);
+    for (const l of [-0.14, 0, 0.14]) {
+      const p = StreetBuilder.off(c, yaw, 0, side * l, 0.44);
+      boxAt(g, p[0], p[1], p[2], yaw, 0.12, 0.04, 1.8, wood);
+    }
+    for (const h of [0.6, 0.76]) {
+      const p = StreetBuilder.off(c, yaw, 0, side * 0.24, h);
+      boxAt(g, p[0], p[1], p[2], yaw, 0.04, 0.12, 1.8, wood);
+    }
+    for (const a of [-0.75, 0.75]) {
+      const p = StreetBuilder.off(c, yaw, a, 0, 0);
+      boxAt(g, p[0], p[1], p[2], yaw, 0.44, 0.44, 0.05, C.dark);
+      const q = StreetBuilder.off(c, yaw, a, side * 0.26, 0);
+      boxAt(g, q[0], q[1], q[2], yaw, 0.05, 0.9, 0.05, C.dark);
+    }
+  }
+
+  /** A newspaper vending box on its post, its window toward the road. */
+  private newsBox(c: V3, yaw: number, side: number, col: RGBA): void {
+    const g = this.props;
+    boxAt(g, c[0], c[1], c[2], yaw, 0.08, 0.32, 0.08, C.dark);
+    boxAt(g, c[0], c[1] + 0.32, c[2], yaw, 0.42, 0.62, 0.5, col);
+    const w = StreetBuilder.off(c, yaw, 0, -side * 0.215, 0.62);
+    boxAt(g, w[0], w[1], w[2], yaw, 0.01, 0.22, 0.36, C.lens);
+    boxAt(g, c[0], c[1] + 0.94, c[2], yaw, 0.44, 0.04, 0.52, C.dark);
+  }
+
+  /** A blue mailbox: the box on four short legs, its rounded top. */
+  private mailbox(c: V3, yaw: number, side: number): void {
+    const g = this.props;
+    const blue = rgba(0x2b4b8c);
+    for (const a of [-0.2, 0.2]) {
+      for (const l of [-0.18, 0.18]) {
+        const p = StreetBuilder.off(c, yaw, a, l, 0);
+        boxAt(g, p[0], p[1], p[2], yaw, 0.05, 0.22, 0.05, C.dark);
+      }
+    }
+    boxAt(g, c[0], c[1] + 0.22, c[2], yaw, 0.5, 0.72, 0.52, blue);
+    const top0 = StreetBuilder.off(c, yaw, -0.26, 0, 0.94);
+    const top1 = StreetBuilder.off(c, yaw, 0.26, 0, 0.94);
+    tube(g, top0, top1, 0.25, 0.25, 12, blue);
+    const slot = StreetBuilder.off(c, yaw, 0, -side * 0.26, 0.86);
+    boxAt(g, slot[0], slot[1], slot[2], yaw, 0.02, 0.05, 0.3, C.black);
+  }
+
+  /** A bus shelter at `s` on `side`: a steel frame, smoked glass back and ends, a roof, a bench, and a poster on its back wall. */
+  private busShelter(s: number, side: 1 | -1): void {
+    const g = this.props;
+    const f = this.r.cityVis.at(s);
+    const yaw = yawOf(f.tangent);
+    const c = pt(f, 0, WALK);
+    const O = (a: number, l: number, h = 0): V3 => StreetBuilder.off(c, yaw, a, side * l, h);
+    const smoke = rgba(0x5d6f78);
+    for (const a of [-2.5, 2.5]) {
+      for (const l of [10.6, 12.2]) {
+        const p = O(a, l);
+        boxAt(g, p[0], p[1], p[2], yaw, 0.08, 2.4, 0.08, C.galv);
+      }
+      // The glass ends
+      const e = O(a, 11.4, 0.3);
+      boxAt(g, e[0], e[1], e[2], yaw, 1.5, 1.9, 0.03, smoke);
+    }
+    const back = O(0, 12.2, 0.3);
+    boxAt(g, back[0], back[1], back[2], yaw, 0.03, 1.9, 4.95, smoke);
+    const roof = O(0, 11.35, 2.4);
+    boxAt(g, roof[0], roof[1], roof[2], yaw, 1.95, 0.12, 5.4, C.dark);
+    const edge = O(0, 10.4, 2.33);
+    boxAt(g, edge[0], edge[1], edge[2], yaw, 0.04, 0.16, 5.4, C.hiViz);
+    this.bench(O(0, 11.75), yaw, side);
+    // The poster, on the back wall facing the road
+    const regs = this.adRegions;
+    if (!regs) return;
+    const keys = Object.keys(regs);
+    const R = regs[keys[(side > 0 ? 1 : 3) % keys.length]];
+    const n: V3 = [-rx(yaw) * side, 0, -rz(yaw) * side];
+    const P = (a: number, h: number): V3 => O(a, 12.17, h);
+    this.ads.poly(
+      [P(side * 1.25, 1.05), P(-side * 1.25, 1.05), P(-side * 1.25, 1.88), P(side * 1.25, 1.88)],
+      [[R.u0, R.v0], [R.u1, R.v0], [R.u1, R.v1], [R.u0, R.v1]],
+      WHITE,
+      n
+    );
   }
 
   private streetLamp(f: RoadSample, side: 1 | -1): void {
@@ -2404,7 +2783,7 @@ export class StreetBuilder {
     const r = this.r;
     const ch = r.hwVis;
     const g = this.props;
-    const gantries = [40, 650, EXIT_S - 25];
+    const gantries = [40, EXIT_S - 1600, EXIT_S - 800, EXIT_S - 25];
     for (let u = ch.s0 + 20; u < ch.s1; u += 50) {
       if (gantries.some((q) => Math.abs(q - u) < 12)) continue;
       const f = ch.at(u);
@@ -2444,7 +2823,8 @@ export class StreetBuilder {
       }
     };
     gantry(40, [['g1', -2.2, 3.1]]);
-    gantry(650, [['g2', -2.2, 3.4]]);
+    gantry(EXIT_S - 1600, [['g6', -2.2, 3.1]]);
+    gantry(EXIT_S - 800, [['g2', -2.2, 3.4]]);
     gantry(EXIT_S - 25, [['g5', -5.6, 3.0], ['g4', 1.3, 3.2]]);
     // Speed limits, on the right barrier
     const barSign = (u: number, key: string, h: number): void => {
@@ -2453,10 +2833,10 @@ export class StreetBuilder {
       this.postSign(b, yawOf(f.tangent), key, h, 1.2);
     };
     barSign(90, 'sl65', 1.0);
-    barSign(1250, 'work', 1.5);
-    barSign(1330, 'work', 1.5);
+    barSign(CLOSURE_S - 250, 'work', 1.5);
+    barSign(CLOSURE_S - 170, 'work', 1.5);
     {
-      const f = ch.at(1250);
+      const f = ch.at(CLOSURE_S - 250);
       this.postSign(pt(f, -10.4, BAR_H), yawOf(f.tangent), 'work', 1.5, 1.2);
     }
 
@@ -2492,8 +2872,8 @@ export class StreetBuilder {
       cylY(g, p[0], p[1], p[2], 0.38, 0.38, 0.06, 8, C.black);
     };
     // Taper from the shoulder across all three lanes
-    for (let u = 1360, k = 0; u <= CLOSURE_S - 8; u += 7, k++) {
-      const t = (u - 1360) / (CLOSURE_S - 8 - 1360);
+    for (let u = CLOSURE_S - 140, k = 0; u <= CLOSURE_S - 8; u += 7, k++) {
+      const t = (u - (CLOSURE_S - 140)) / 132;
       barrel(u, 4.6 - t * 13.8);
     }
     for (let l = -9.2; l <= 4.8; l += 2.0) barrel(CLOSURE_S - 4, l);
@@ -2522,12 +2902,12 @@ export class StreetBuilder {
     }
     this.panel(pt(fb, -2.3, 1.95), yaw, 2.4, 0.8, 'closed', 0.05);
     // Past the blocks: a work light, a mixer and an excavator on the unfinished deck
-    const fl = ch.at(1520);
+    const fl = ch.at(CLOSURE_S + 20);
     const lp = pt(fl, 3.2, 0);
     boxAt(g, lp[0], lp[1], lp[2], yaw, 1.4, 1.0, 2.2, C.hiViz);
     cylY(g, lp[0], lp[1] + 1.0, lp[2], 0.08, 0.06, 6.5, 6, C.galv);
     boxAt(g, lp[0], lp[1] + 7.3, lp[2], yaw, 1.6, 0.6, 0.3, C.dark);
-    const ex = ch.at(1536);
+    const ex = ch.at(CLOSURE_S + 36);
     const ep = pt(ex, -4.5, 0);
     boxAt(g, ep[0], ep[1], ep[2], yaw + 0.3, 2.6, 0.9, 4.2, C.dark);
     boxAt(g, ep[0], ep[1] + 0.9, ep[2], yaw + 0.3, 2.4, 1.2, 2.6, C.hiViz);
@@ -2536,6 +2916,228 @@ export class StreetBuilder {
     const boom1 = add(boom0, [-fx(yaw + 0.3) * 4, 2.2, -fz(yaw + 0.3) * 4]);
     beam(g, boom0, boom1, 0.4, 0.5, C.hiViz);
     beam(g, boom1, add(boom1, [-fx(yaw + 0.3) * 1.5, -2.6, -fz(yaw + 0.3) * 1.5]), 0.3, 0.4, C.hiViz);
+  }
+
+  // ------------------------------------------------------- highway scenery
+
+  /**
+   * What there is to see from the deck, now it runs three and a half
+   * kilometres: billboards on both sides, a line of pylons striding along
+   * beside it with their cables, two rail viaducts crossing over it (a train
+   * stood on one), and blocks of flats and offices close enough to stand up
+   * over the barriers.
+   */
+  private buildHighwayScenery(): void {
+    const ch = this.r.hwVis;
+    const g = this.props;
+    const rnd = lcg(4242);
+    const nearExit = (u: number): boolean => u > EXIT_S - 80 && u < CLOSURE_S + 60;
+
+    // ---- The rail viaducts: laid out first, so nothing is built under them
+    for (const u of [1450, 2260]) this.viaduct(u, u === 1450);
+
+    // ---- Billboards, alternating sides, angled in toward the traffic
+    const ad = billboardAtlas();
+    this.adRegions = ad.regions;
+    const tex = new THREE.CanvasTexture(ad.canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    this.adMat = new THREE.MeshLambertMaterial({ map: tex });
+    const keys = Object.keys(ad.regions);
+    let n = 0;
+    for (let u = 160; u < HW_LEN; u += 230 + rnd() * 90) {
+      if (nearExit(u)) continue;
+      const side = n % 2 === 0 ? 1 : -1;
+      const f = ch.at(u);
+      const lat = side > 0 ? HW.R + 15 : HW.farL - 14;
+      const c = pt(f, lat, 0);
+      if (this.clear.blocked(c[0], c[2], 1)) continue;
+      // Facing back up the road at the driver, turned in toward it
+      const a = 0.32;
+      const nx = -f.tangent.x * Math.cos(a) - side * f.right.x * Math.sin(a);
+      const nz = -f.tangent.z * Math.cos(a) - side * f.right.z * Math.sin(a);
+      const nl = Math.hypot(nx, nz);
+      if (!this.place({ x: c[0], z: c[2], ax: [nz / nl, -nx / nl], az: [nx / nl, nz / nl], hx: 7, hz: 2 }, 2)) continue;
+      this.billboard(c, [nx / nl, 0, nz / nl], 12, 4, DECK + 5.5, ad.regions[keys[n % keys.length]]);
+      n++;
+    }
+
+    // ---- Pylons along the right-hand side, cables slung between them
+    let prev: V3[] | null = null;
+    for (let u = -300; u < EXIT_S - 120; u += 115) {
+      const f = ch.at(u);
+      const c = pt(f, 64, 0);
+      if (this.clear.blocked(c[0], c[2], 6) || !this.place({ x: c[0], z: c[2], ax: [f.tangent.x, f.tangent.z], az: [f.right.x, f.right.z], hx: 4, hz: 4 }, 1)) {
+        prev = null;
+        continue;
+      }
+      const tips = this.pylon(c, f);
+      if (prev) for (let k = 0; k < tips.length; k++) this.cableSag(prev[k], tips[k], 2.2);
+      prev = tips;
+    }
+
+    // ---- Flats and offices beside the road, in a few clumps
+    const tints = [0xd9d3c7, 0xbfa58a, 0xa7adb3, 0xcfcac0, 0x9fa9b2, 0xc4b8a0];
+    for (const [u0, side] of [[620, -1], [1080, 1], [1650, -1], [1990, 1], [2520, -1], [2850, 1]] as [number, number][]) {
+      for (let k = 0; k < 7; k++) {
+        const u = u0 + k * 34 + rnd() * 10;
+        const f = ch.at(u);
+        const w = 22 + rnd() * 14;
+        const d = 16 + rnd() * 10;
+        const lat = side > 0 ? 34 + rnd() * 70 : -52 - rnd() * 70;
+        const c = pt(f, lat + (side * d) / 2, 0);
+        const ax: [number, number] = [f.tangent.x, f.tangent.z];
+        const az: [number, number] = [f.right.x * side, f.right.z * side];
+        if (!this.place({ x: c[0], z: c[2], ax, az, hx: w / 2, hz: d / 2 }, 3)) continue;
+        const h = Math.round((18 + rnd() * rnd() * 34) / 3.5) * 3.5;
+        this.building(c[0], c[2], ax, az, w, d, h, rgba(tints[Math.floor(rnd() * tints.length) % tints.length]), false);
+      }
+    }
+    void g;
+  }
+
+  private adMat: THREE.MeshLambertMaterial | null = null;
+  private adRegions: Record<string, Region> | null = null;
+  private ads = new Geo();
+
+  /** A billboard on two legs: the poster facing `n`, `w` by `h`, its middle `mid` up, a catwalk and lamps under it. */
+  private billboard(base: V3, n: V3, w: number, h: number, mid: number, reg: Region): void {
+    const g = this.props;
+    const rt: V3 = [n[2], 0, -n[0]];
+    const c: V3 = [base[0], mid, base[2]];
+    const P = (a: number, b: number, back = 0): V3 => [c[0] + rt[0] * a - n[0] * back, c[1] + b, c[2] + rt[2] * a - n[2] * back];
+    // The poster
+    this.ads.poly(
+      [P(-w / 2, -h / 2), P(w / 2, -h / 2), P(w / 2, h / 2), P(-w / 2, h / 2)],
+      [[reg.u0, reg.v0], [reg.u1, reg.v0], [reg.u1, reg.v1], [reg.u0, reg.v1]],
+      WHITE,
+      n
+    );
+    // Its frame and back, the legs, the catwalk, the lamps
+    const yaw = Math.atan2(-n[0], -n[2]);
+    const fb = P(0, 0, 0.22);
+    boxAt(g, fb[0], c[1] - h / 2 - 0.15, fb[2], yaw, w + 0.35, h + 0.3, 0.4, C.dark);
+    for (const a of [-w / 3, w / 3]) {
+      const l = P(a, 0, 0.5);
+      cylY(g, l[0], GROUND, l[2], 0.32, 0.28, c[1] - h / 2 - GROUND, 10, C.galv);
+    }
+    const cw = P(0, -h / 2 - 0.25, -0.5);
+    boxAt(g, cw[0], cw[1], cw[2], yaw, w, 0.08, 1.0, C.galv);
+    for (let a = -w / 2 + 1.5; a <= w / 2 - 1.5; a += 3) {
+      const arm = P(a, -h / 2 - 0.2, -1.1);
+      boxAt(g, arm[0], arm[1], arm[2], yaw, 0.35, 0.18, 0.3, C.dark);
+    }
+  }
+
+  /** A lattice pylon on the ground at `c`, its arms across the road's line: returns where its three cables hang. */
+  private pylon(c: V3, f: RoadSample): V3[] {
+    const g = this.props;
+    const H = 30;
+    const t: V3 = [f.tangent.x, 0, f.tangent.z];
+    const r: V3 = [f.right.x, 0, f.right.z];
+    const at = (a: number, y: number, b: number): V3 => [c[0] + t[0] * a + r[0] * b, GROUND + y, c[2] + t[2] * a + r[2] * b];
+    const half = (y: number): number => 2.6 - (2.6 - 0.7) * (y / H);
+    const legs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    for (const [sa, sb] of legs) beam(g, at(sa * half(0), 0, sb * half(0)), at(sa * half(H), H, sb * half(H)), 0.22, 0.22, C.galv);
+    // Bracing: rings and crosses up the faces
+    for (let y = 0; y < H; y += 5) {
+      const y1 = y + 5;
+      for (let i = 0; i < 4; i++) {
+        const [a0, b0] = legs[i];
+        const [a1, b1] = legs[(i + 1) % 4];
+        beam(g, at(a0 * half(y1), y1, b0 * half(y1)), at(a1 * half(y1), y1, b1 * half(y1)), 0.1, 0.1, C.galv);
+        beam(g, at(a0 * half(y), y, b0 * half(y)), at(a1 * half(y1), y1, b1 * half(y1)), 0.07, 0.07, C.galv);
+      }
+    }
+    // The arms, across the line, and the insulators hanging off them
+    const tips: V3[] = [];
+    for (const [y, span] of [[H - 6, 7.5], [H, 5.5]] as [number, number][]) {
+      beam(g, at(0, y, -span), at(0, y, span), 0.35, 0.5, C.galv);
+      for (const sb of y === H ? [0] : [-1, 1]) {
+        const b = sb * (span - 0.5);
+        const top = at(0, y - 0.25, b);
+        const bot = at(0, y - 2.2, b);
+        tube(g, top, bot, 0.12, 0.12, 6, C.lens);
+        tips.push(bot);
+      }
+    }
+    return tips;
+  }
+
+  /** A cable slung from a to b, sagging `sag` in the middle. */
+  private cableSag(a: V3, b: V3, sag: number): void {
+    const N = 8;
+    let last = a;
+    for (let i = 1; i <= N; i++) {
+      const k = i / N;
+      const p: V3 = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k - sag * 4 * k * (1 - k), a[2] + (b[2] - a[2]) * k];
+      tube(this.props, last, p, 0.035, 0.035, 3, C.dark);
+      last = p;
+    }
+  }
+
+  /**
+   * A rail viaduct across the highway at u: a concrete deck on piers either
+   * side, and over the highway itself a steel truss span. `train`: a train
+   * stood on it, off to one side.
+   */
+  private viaduct(u: number, train: boolean): void {
+    const ch = this.r.hwVis;
+    const g = this.props;
+    const f = ch.at(u);
+    const mid = pt(f, -10, 0);
+    const yaw = yawOf(f.right);
+    const poses = trace({ x: mid[0] - f.right.x * 330, z: mid[2] - f.right.z * 330, yaw }, [{ len: 660, turn: 0 }]);
+    const vc = new Chain(resample(poses.map((p) => ({ x: p.x, y: 0, z: p.z, hl: 3.5, hr: 3.5, tag: 0 }))).samples);
+    // Its own lat 0 is the highway's median: the truss from 16 right of our side to 36 left of it
+    const lat0 = 330 - 26;
+    const lat1 = 330 + 26;
+    const Y = DECK + 7.4;
+    const frs = vc.span(vc.s0, vc.s1);
+    extrude(this.conc, frs, () => [[3.6, Y], [3.6, Y + 1.1], [-3.6, Y + 1.1], [-3.6, Y], [3.6, Y]], C.conc, 3);
+    for (const sd of [1, -1]) {
+      const par: Prof = sd > 0 ? [[3.6, Y + 1.1], [3.6, Y + 2.0], [3.35, Y + 2.0], [3.35, Y + 1.1]] : [[-3.35, Y + 1.1], [-3.35, Y + 2.0], [-3.6, Y + 2.0], [-3.6, Y + 1.1]];
+      extrude(this.conc, frs, () => par, C.concDark, 3);
+    }
+    // Ballast and rails
+    extrude(this.asph, frs, () => [[2.6, Y + 1.2], [-2.6, Y + 1.2]], C.asphaltDark, 5, true);
+    for (const l of [-1.55, -0.85, 0.85, 1.55]) this.line(vc, vc.s0, vc.s1, () => l, 0.08, C.galv, Y + 1.25);
+    // Piers, skipping the highway's corridor and any road on the ground
+    for (let s = vc.s0 + 10; s < vc.s1; s += 30) {
+      if (s > lat0 - 4 && s < lat1 + 4) continue;
+      const p = pt(vc.at(s), 0, 0);
+      if (this.groundRoads.blocked(p[0], p[2], 2.5)) continue;
+      boxAt(this.conc, p[0], GROUND, p[2], yaw, 2.4, Y - GROUND, 2.0, C.concDark, 3);
+    }
+    for (const s of [lat0, lat1]) {
+      const p = pt(vc.at(s), 0, 0);
+      boxAt(this.conc, p[0], GROUND, p[2], yaw, 3.2, Y - GROUND, 7.6, C.concDark, 3);
+    }
+    // The truss over the highway, both sides of the track
+    const T = 5.6;
+    for (const sd of [1, -1]) {
+      const A = (s: number, y: number): V3 => pt(vc.at(s), sd * 3.5, Y + 1.1 + y);
+      beam(g, A(lat0, T), A(lat1, T), 0.45, 0.45, C.dark);
+      beam(g, A(lat0, 0), A(lat1, 0), 0.5, 0.5, C.dark);
+      for (let s = lat0; s <= lat1 + 0.1; s += 4.4) {
+        beam(g, A(s, 0), A(s, T), 0.28, 0.28, C.dark);
+        if (s + 4.4 <= lat1 + 0.1) beam(g, A(s, 0), A(s + 4.4, T), 0.2, 0.2, C.dark);
+      }
+    }
+    for (let s = lat0; s <= lat1 + 0.1; s += 8.8) beam(g, pt(vc.at(s), 3.5, Y + 1.1 + T), pt(vc.at(s), -3.5, Y + 1.1 + T), 0.25, 0.25, C.dark);
+    this.clear.addChain(vc, vc.s0, vc.s1, 5);
+    // A train stood on it, off to one side
+    if (train) {
+      for (let k = 0; k < 4; k++) {
+        const s = lat1 + 40 + k * 21;
+        const q = vc.at(s + 10);
+        const p = pt(q, 0, Y + 1.3);
+        const ty = yawOf(q.tangent);
+        boxAt(g, p[0], p[1], p[2], ty, 3.0, 3.6, 20, rgba(0xc8ccd0));
+        boxAt(g, p[0], p[1] + 1.7, p[2], ty, 3.04, 0.9, 19.2, C.dark);
+        boxAt(g, p[0], p[1] + 0.5, p[2], ty, 3.04, 0.3, 19.6, rgba(0x2f5fa8));
+      }
+    }
   }
 
   // ------------------------------------------------------------------ exit
@@ -3017,7 +3619,7 @@ export class StreetBuilder {
       const Y = PAD + 0.02;
       flatQuad(this.asph, [[P(-w / 2 - 8, Y, -d / 2 - 14)[0], P(-w / 2 - 8, Y, -d / 2 - 14)[2]], [P(w / 2 + 8, Y, -d / 2 - 14)[0], P(w / 2 + 8, Y, -d / 2 - 14)[2]], [P(w / 2 + 8, Y, d / 2 + 6)[0], P(w / 2 + 8, Y, d / 2 + 6)[2]], [P(-w / 2 - 8, Y, d / 2 + 6)[0], P(-w / 2 - 8, Y, d / 2 + 6)[2]]], Y, C.yard, 5);
     };
-    for (let u = -500; u < 1900; u += 26) {
+    for (let u = -500; u < HW_LEN + 400; u += 26) {
       for (const sd of [1, -1]) {
         if (rnd() < 0.35) continue;
         const f = ch.at(u + rnd() * 10);
@@ -3075,10 +3677,22 @@ export class StreetBuilder {
       }
     };
     cluster(34, -900, -330, -400, 350, 40, 150);
-    cluster(40, -400, 2300, -1650, -1250, 12, 50);
-    cluster(22, 2650, 3000, -1300, 200, 15, 60);
     cluster(26, 300, 1500, 350, 750, 10, 36);
     cluster(16, -700, 250, 450, 850, 12, 45);
+    // Towns out on either side of the highway, all the way along it: bands
+    // 350 to 650 m off it, and a cluster out past the airport
+    const ch = this.r.hwVis;
+    for (let u = 0; u < HW_LEN + 400; u += 220) {
+      for (const sd of [1, -1]) {
+        const f = ch.at(u);
+        const c = pt(f, sd * (380 + rnd() * 260), 0);
+        cluster(4, c[0] - 110, c[0] + 110, c[2] - 110, c[2] + 110, 12, 55);
+      }
+    }
+    {
+      const b = this.routeBounds();
+      cluster(22, b.x1 + 250, b.x1 + 650, b.z0 - 200, b.z1 + 200, 15, 60);
+    }
   }
 
   // ----------------------------------------------------------------- trees
@@ -3087,9 +3701,11 @@ export class StreetBuilder {
     const rnd = lcg(53);
     const spots = this.treeSpots;
     // Out in the fields: off the roads, out of the yards and the airfield
-    for (let placed = 0, guard = 0; placed < 520 && guard < 9000; guard++) {
-      const x = -900 + rnd() * 3700;
-      const z = -1500 + rnd() * 2200;
+    const bb = this.routeBounds();
+    const want = Math.round(((bb.x1 - bb.x0 + 1200) * (bb.z1 - bb.z0 + 1200)) / 9000);
+    for (let placed = 0, guard = 0; placed < want && guard < want * 18; guard++) {
+      const x = bb.x0 - 600 + rnd() * (bb.x1 - bb.x0 + 1200);
+      const z = bb.z0 - 600 + rnd() * (bb.z1 - bb.z0 + 1200);
       if (this.clear.blocked(x, z, 6) || this.inAirport(x, z, 15)) continue;
       const foot: Foot = { x, z, ax: [1, 0], az: [0, 1], hx: 2, hz: 2 };
       if (this.feet.some((o) => overlaps(foot, o, 2))) continue;
@@ -3212,6 +3828,7 @@ export class StreetBuilder {
     add(this.props, m.props, 'rgb', 'props', 'metal');
     add(this.glow, m.glow, 'rgb', 'lamps', 'glass');
     add(this.sign, m.sign, 'none', 'signs', 'metal');
+    if (this.adMat) add(this.ads, this.adMat, 'none', 'billboards', 'metal');
     add(this.glass, m.glass, 'rgb', 'glass', 'glass');
     add(this.fence, m.fence, 'none', 'fence', 'metal', 2);
     add(this.soft, m.soft, 'rgba', 'shade', null, 1);

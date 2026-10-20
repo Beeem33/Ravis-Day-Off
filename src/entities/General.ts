@@ -191,7 +191,7 @@ const _s1 = new THREE.Vector3();
  * a front grip under it and the sight on its left. Body units (he scales
  * it); its own −Z is the muzzle end, the tubes' mouths at z = −0.5.
  */
-function rocketLauncher(): THREE.Group {
+export function rocketLauncher(): THREE.Group {
   const g = new THREE.Group();
   g.name = 'rocketLauncher';
   const olive = new THREE.MeshStandardMaterial({ color: 0x4e5534, roughness: 0.75 });

@@ -4193,6 +4193,107 @@ export class AudioManager {
    * pitch bends with how fast the distance is changing (Doppler: sharp
    * closing in, flat pulling away). stop() fades it.
    */
+  /**
+   * A helicopter overhead: the blade slap — low noise chopped at the rotor
+   * rate, a thump every blade — over the turbine's whine. Louder and
+   * brighter close; stop() fades it out.
+   */
+  heliLoop(): { setDistance(m: number): void; stop(): void } {
+    const idle = { setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const air = ctx.createBiquadFilter();
+    air.type = 'lowpass';
+    air.frequency.value = 6000;
+    out.connect(air).connect(this.lotBus(ctx));
+    // The blades: noise through a low band, its level chopped ~17 times a second
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+    noise.loop = true;
+    const body = ctx.createBiquadFilter();
+    body.type = 'lowpass';
+    body.frequency.value = 420;
+    const chop = ctx.createGain();
+    chop.gain.value = 0;
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sawtooth';
+    lfo.frequency.value = 17;
+    const lfoG = ctx.createGain();
+    lfoG.gain.value = 0.9;
+    lfo.connect(lfoG).connect(chop.gain);
+    const bias = ctx.createConstantSource();
+    bias.offset.value = 0.55;
+    bias.connect(chop.gain);
+    noise.connect(body).connect(chop).connect(out);
+    // The thump under it
+    const thump = ctx.createOscillator();
+    thump.type = 'sine';
+    thump.frequency.value = 52;
+    const thumpG = ctx.createGain();
+    thumpG.gain.value = 0;
+    lfo.connect(thumpG.gain);
+    thump.connect(thumpG).connect(out);
+    // The turbine
+    const whine = ctx.createOscillator();
+    whine.type = 'sawtooth';
+    whine.frequency.value = 2350;
+    const wf = ctx.createBiquadFilter();
+    wf.type = 'bandpass';
+    wf.frequency.value = 2400;
+    wf.Q.value = 6;
+    const wg = ctx.createGain();
+    wg.gain.value = 0.05;
+    whine.connect(wf).connect(wg).connect(out);
+    const sources: AudioScheduledSourceNode[] = [noise, lfo, bias, thump, whine];
+    for (const src of sources) src.start(t);
+    let stopped = false;
+    return {
+      setDistance: (m: number): void => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const d = this.far(m);
+        out.gain.setTargetAtTime(0.55 / (1 + d / 18), now, 0.1);
+        air.frequency.setTargetAtTime(Math.min(9000, 14000 / (1 + d / 30)), now, 0.1);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        out.gain.cancelScheduledValues(now);
+        out.gain.setTargetAtTime(0.0001, now, 0.4);
+        for (const src of sources) {
+          try {
+            src.stop(now + 2);
+          } catch {
+            /* already stopped */
+          }
+        }
+      }
+    };
+  }
+
+  /** A missile lock: two quick high beeps, the warning before a launch. */
+  lockBeep(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    for (const at of [0, 0.12]) {
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = 1760;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(0.09, t + at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.08);
+      o.connect(g).connect(this.sfxBus);
+      o.start(t + at);
+      o.stop(t + at + 0.1);
+    }
+  }
+
   sirenLoop(): { setDistance(m: number): void; stop(): void } {
     const idle = { setDistance: (): void => {}, stop: (): void => {} };
     if (!this.ctx) return idle;

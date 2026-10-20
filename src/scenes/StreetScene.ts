@@ -3,7 +3,7 @@ import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { StreetBuilder, STREET_ATMOSPHERE } from '../environment/StreetBuilder';
-import type { StreetData, RoadPos, DriveInput, CopRig, JetRig, PoliceRig } from './StreetContracts';
+import type { StreetData, RoadPos, RoadId, DriveInput, CopRig, JetRig, PoliceRig } from './StreetContracts';
 import type { CarRig } from './Level8Contracts';
 import { civic, bossCar } from '../environment/VehicleProps';
 import { policeCruiser, copRig, privateJet } from '../environment/StreetProps';
@@ -16,6 +16,11 @@ import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
 import { RaviVisual, type RaviRig } from '../entities/RaviVisual';
 import { ParticleManager } from '../fx/ParticleManager';
+import { Helicopter, HELI_HP } from '../entities/Helicopter';
+import { StreetMissiles, type MissileHit } from '../entities/StreetMissiles';
+import { RifleViewmodel } from '../entities/RifleViewmodel';
+import { rocketLauncher } from '../entities/General';
+import type { FPSPlayer } from '../entities/FPSPlayer';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
 
 /** m/s → mph, for the speedo and the radar. */
@@ -34,6 +39,19 @@ const COP_RAVI_SPEED = 47;
 const CHECKPOINT_AHEAD = 140;
 /** The airport cutscene takes over with the boss this far short of the gate (the end of the airport road). */
 const AIRPORT_CUT = 130;
+/** The passenger's missiles: seconds from the tube to the ring; seconds between volleys, and between missiles in one. */
+const MISSILE_T = 1.45;
+const VOLLEY_EVERY: [number, number] = [4.2, 6.2];
+const VOLLEY_GAP = 1.0;
+/** A missile going off this near the middle of the Civic is the end of it: the ring's own radius. */
+const BLAST_KILL = 2.3;
+/** Ravi's own blood (the helicopter's gunner): what he has, and what a round that finds him costs. */
+const RAVI_HP = 100;
+const HELI_ROUND = 2.9;
+/** Where on the highway each helicopter comes in. */
+const HELI_AT = [720, 1950];
+/** Highway checkpoints past the helicopters (1, past the cop, is set by the level). */
+const CP_HELI = [1600, 2750];
 
 type Phase = 'intro' | 'drive' | 'cop' | 'airport' | 'failed' | 'done';
 type Shot = 'chase' | 'roadside' | 'cabin' | 'radar' | 'behindCop' | 'launch' | 'gate' | 'jetside' | 'pov';
@@ -84,6 +102,49 @@ export class StreetScene implements GameScene {
   private scrapeCd = 0;
   private crashCd = 0;
   private lightT = 0;
+
+  // ---- The boss's man with the launcher, and his missiles
+  private passenger!: Enemy;
+  private launcher!: THREE.Object3D;
+  private lean = 0;
+  private volleyCd = 5;
+  private volleyLeft = 0;
+  private volleyGap = 0;
+  private missiles!: StreetMissiles;
+  // ---- The helicopters, and Ravi's AK for them
+  private heliCraft!: Helicopter;
+  private heli: Helicopter | null = null;
+  private heliIndex = 0;
+  private heliT = 0;
+  private heliFireCd = 0;
+  private heliBurst = 0;
+  private heliSound: { setDistance(m: number): void; stop(): void } | null = null;
+  private combat = false;
+  private rifle!: RifleViewmodel;
+  private ammo = 30;
+  private rifleCd = 0;
+  /** Where Ravi is looking in the car (the mouse, only while a helicopter is up). */
+  private headYaw = 0;
+  private headPitch = 0;
+  /** His head held on the road against the car's swerves (relative to the car, + left). */
+  private headSteady = 0;
+  private introClear = false;
+  private armsAway = false;
+  private hp = RAVI_HP;
+  private hurt = 0;
+  private hitMark = 0;
+  /** The Civic on fire (a missile, or a crash). */
+  private burning = false;
+  /** The furthest checkpoint reached, for a retry. */
+  private reached = 0;
+  private crossEl!: HTMLElement;
+  private combatHint!: HTMLElement;
+  private heliBar!: HTMLElement;
+  private hpEl!: HTMLElement;
+  private ammoEl!: HTMLElement;
+  private hurtEl!: HTMLElement;
+  private hitEl!: HTMLElement;
+  private warnEl!: HTMLElement;
 
   // ---- The chase camera: a yaw that trails the car's, and the lens
   private camYaw = 0;
@@ -166,10 +227,10 @@ export class StreetScene implements GameScene {
     this.level = new StreetBuilder().build();
     this.scene.add(this.level.group);
     this.net = new RoadNet(this.level.roads);
-    // Busy, but with room to drive: about half the builder's default traffic
+    // Light: a car to get round now and then, not a jam to thread
     this.traffic = new Traffic(this.net, {
       seed: (Math.random() * 1e6) | 0,
-      density: { city: 0.5, onramp: 0.45, highway: 0.5, exit: 0, airport: 0 }
+      density: { city: 0.2, onramp: 0.15, highway: 0.2, exit: 0, airport: 0 }
     });
     this.scene.add(this.traffic.object);
 
@@ -204,6 +265,22 @@ export class StreetScene implements GameScene {
     this.scene.add(this.bossMan.root);
 
     this.particles = new ParticleManager(this.scene, { smoke: 1600 });
+    this.missiles = new StreetMissiles(this.scene, this.particles);
+    this.missiles.onBurst = (pos, hit) => this.onMissileBurst(pos, hit);
+    this.buildPassenger();
+    // The helicopter, built now and kept hidden: the warm-up compiles it
+    this.heliCraft = new Helicopter(this.scene, new THREE.Vector3(0, -500, 0));
+    this.heliCraft.hide();
+    // Ravi's AK, out of frame until a helicopter is up
+    this.rifle = new RifleViewmodel(this.camera);
+    this.rifle.stow = 1;
+    this.rifle.onReloadEvent = (e) => {
+      const a = this.ctx.audio;
+      if (e === 'magIn') a.magIn();
+      else if (e === 'rackBack') a.boltBack();
+      else if (e === 'rack') a.boltForward();
+      else if (e === 'done') this.ammo = 30;
+    };
 
     this.buildUI();
     this.unsubs.push(
@@ -231,6 +308,9 @@ export class StreetScene implements GameScene {
     this.engine?.stop();
     this.tyres?.stop();
     this.siren?.stop();
+    this.heliSound?.stop();
+    this.missiles.dispose();
+    this.heliCraft.dispose(this.scene);
     this.jetSound?.stop();
     this.ctx.audio.stopBossMusic(1);
     this.traffic.dispose();
@@ -245,7 +325,10 @@ export class StreetScene implements GameScene {
     if (this.checkpoint >= 1) {
       const hw = L.roads.highway;
       const lane = hw.lanes.filter((l) => l.dir === 1)[1] ?? hw.lanes[0];
-      const s = L.cop.s + CHECKPOINT_AHEAD;
+      // Past the cop; or past the first helicopter, or the second
+      const s = this.checkpoint >= 2 ? CP_HELI[Math.min(1, this.checkpoint - 2)] : L.cop.s + CHECKPOINT_AHEAD;
+      this.heliIndex = Math.max(0, this.checkpoint - 1);
+      this.reached = this.checkpoint;
       this.player.place({ road: 'highway', s, d: lane.offset }, 40);
       this.boss.place({ road: 'highway', s: s + 55, d: lane.offset }, 42);
       this.cop.car.place({ road: 'highway', s: s - 50, d: lane.offset }, 42);
@@ -324,7 +407,32 @@ export class StreetScene implements GameScene {
         .st-fail.show { opacity:1; pointer-events:all; }
         .st-fail .t { font-size:40px; letter-spacing:10px; color:#ff6a50; font-weight:bold; }
         .st-fail .s { font-size:13px; letter-spacing:4px; color:#c9d6cf; }
+        .st-hp { position:absolute; right:34px; bottom:128px; display:flex; align-items:center; gap:10px; font-size:11px; letter-spacing:3px; }
+        .st-hp i { display:block; width:150px; height:7px; border:1px solid rgba(232,244,236,0.6); }
+        .st-hp i b { display:block; height:100%; width:100%; background:#e8f4ec; transition:width 0.2s; }
+        .st-heli { position:absolute; left:50%; top:52px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; font-size:12px;
+          letter-spacing:4px; color:#ff7a5a; opacity:0; transition:opacity 0.4s; }
+        .st-heli.on { opacity:1; }
+        .st-heli i { display:block; width:260px; height:8px; border:1px solid rgba(255,122,90,0.8); }
+        .st-heli i b { display:block; height:100%; width:100%; background:#ff5a3a; transition:width 0.15s; }
+        .st-cross { position:absolute; left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; opacity:0; transition:opacity 0.2s; }
+        .st-cross.on { opacity:0.9; }
+        .st-cross:before, .st-cross:after { content:''; position:absolute; background:#e8f4ec; box-shadow:0 0 3px rgba(0,0,0,0.9); }
+        .st-cross:before { left:10px; top:0; width:2px; height:22px; }
+        .st-cross:after { top:10px; left:0; height:2px; width:22px; }
+        .st-hit { position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px; border:3px solid #ff5a3a;
+          border-radius:50%; opacity:0; }
+        .st-ammo { position:absolute; right:34px; bottom:150px; font-size:12px; letter-spacing:3px; opacity:0; transition:opacity 0.3s; }
+        .st-ammo.on { opacity:1; }
+        .st-aimhint { position:absolute; left:50%; top:60%; transform:translateX(-50%); font-size:13px; letter-spacing:4px; opacity:0; transition:opacity 0.3s; }
+        .st-aimhint.show { opacity:1; }
+        .st-warn { position:absolute; left:50%; top:84px; transform:translateX(-50%); font-size:16px; letter-spacing:6px; color:#ff4a36;
+          font-weight:bold; opacity:0; }
+        .st-warn.on { animation:st-blink 0.25s steps(2,jump-none) infinite; opacity:1; }
+        .st-hurt { position:absolute; inset:0; pointer-events:none; opacity:0;
+          background:radial-gradient(ellipse at center, rgba(160,0,0,0) 50%, rgba(170,0,0,0.6) 100%); }
       </style>
+      <div class="st-hurt"></div>
       <canvas class="st-cracks" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0"></canvas>
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
@@ -333,6 +441,13 @@ export class StreetScene implements GameScene {
         <div class="st-dmg">CAR <i><b></b></i></div>
         <div class="st-speed"><b>0</b><span>MPH</span></div>
         <div class="st-cop">◆ POLICE PURSUIT ◆</div>
+        <div class="st-hp">RAVI <i><b></b></i></div>
+        <div class="st-ammo">30 / 30</div>
+        <div class="st-heli">HELICOPTER <i><b></b></i></div>
+        <div class="st-cross"></div>
+        <div class="st-hit"></div>
+        <div class="st-warn">◆ INCOMING ◆</div>
+        <div class="st-aimhint">CLICK TO AIM — MOUSE TO LOOK — HOLD CLICK TO FIRE</div>
         <div class="st-hint"><span class="k">W</span>GAS<span class="k">S</span>BRAKE<span class="k">A</span><span class="k" style="margin-left:0">D</span>STEER<span class="k">SPACE</span>HANDBRAKE</div>
       </div>
       <div class="st-title" style="position:absolute;left:0;right:0;bottom:22vh;text-align:center;pointer-events:none;
@@ -360,6 +475,14 @@ export class StreetScene implements GameScene {
     this.failEl = el.querySelector('.st-fail')!;
     this.endCard = el.querySelector('.st-end')!;
     this.crackCanvas = el.querySelector('.st-cracks');
+    this.crossEl = el.querySelector('.st-cross')!;
+    this.combatHint = el.querySelector('.st-aimhint')!;
+    this.heliBar = el.querySelector('.st-heli')!;
+    this.hpEl = el.querySelector('.st-hp i b')!;
+    this.ammoEl = el.querySelector('.st-ammo')!;
+    this.hurtEl = el.querySelector('.st-hurt')!;
+    this.hitEl = el.querySelector('.st-hit')!;
+    this.warnEl = el.querySelector('.st-warn')!;
     this.sizeCracks();
   }
 
@@ -421,7 +544,7 @@ export class StreetScene implements GameScene {
   }
 
   private retry(): void {
-    this.ctx.bus.emit(Events.RestartStreet, { checkpoint: this.copDone ? 1 : 0 });
+    this.ctx.bus.emit(Events.RestartStreet, { checkpoint: Math.max(this.reached, this.copDone ? 1 : 0) });
   }
 
   /** The keyboard, as the car's controls. */
@@ -491,7 +614,7 @@ export class StreetScene implements GameScene {
         input = this.autopilot(COP_RAVI_SPEED);
         break;
       case 'failed':
-        input = { throttle: this.failWhy === 'BUSTED' || this.damage >= 100 ? -1 : 0, steer: 0, handbrake: false };
+        input = { throttle: this.failWhy === 'BUSTED' || this.damage >= 100 || this.burning ? -1 : 0, steer: 0, handbrake: false };
         break;
       default:
         input = null;
@@ -506,6 +629,19 @@ export class StreetScene implements GameScene {
       if (this.cop.mode === 'launch' && this.cop.merged) this.cop.mode = 'chase';
     } else {
       this.updateAirport(dt);
+    }
+
+    // The fights: a helicopter when he gets to one, the missiles between
+    if (this.phase === 'drive' && !this.heli && this.heliIndex < HELI_AT.length && this.player.at.road === 'highway' && this.player.at.s > HELI_AT[this.heliIndex]) {
+      this.startHeli();
+    }
+    this.updateHeli(dt);
+    this.updateMissiles(dt);
+    this.updateRifle(dt);
+    if (this.burning) {
+      const g = this.civicRig.group;
+      const at = StreetScene.tmpA.set(0, 0.9, -1.2).applyQuaternion(g.quaternion).add(g.position);
+      this.particles.fire(at, 1.1, 1);
     }
 
     if (this.phase === 'intro') this.updateIntro();
@@ -548,6 +684,11 @@ export class StreetScene implements GameScene {
 
   private updateIntro(): void {
     const t = this.phaseT;
+    // The autopilot doesn't drive round traffic: nothing in the way while it has the wheel
+    if (!this.introClear) {
+      this.introClear = true;
+      this.traffic.clear(this.player.at.road, this.player.at.s - 20, this.player.at.s + 280);
+    }
     this.shot = t < 2.6 ? 'roadside' : 'chase';
     if (t > 2.8 && this.titleEl.style.opacity !== '1') {
       this.titleEl.style.opacity = '1';
@@ -610,6 +751,14 @@ export class StreetScene implements GameScene {
     else if (gap < 30) top = Math.min(top, Math.max(18, bv - 2.5 + gap * 0.3));
     this.player.tune.topSpeed += (top - this.player.tune.topSpeed) * Math.min(1, dt * 3);
 
+    // ---- Checkpoints: past the cop, and past each helicopter once it's down
+    if (this.copDone) this.reached = Math.max(this.reached, 1);
+    for (let k = 0; k < CP_HELI.length; k++) {
+      if (this.reached < k + 2 && this.heliIndex > k && p.at.road === 'highway' && p.at.s > CP_HELI[k]) {
+        this.reached = k + 2;
+        this.setObjective('CHECKPOINT');
+      }
+    }
     // ---- Losing him
     if (p.at.road === 'highway' && p.at.s > L.missedExitS && (this.boss.car.at.road === 'exit' || this.boss.car.at.road === 'airport')) {
       this.fail('YOU MISSED THE EXIT');
@@ -634,6 +783,14 @@ export class StreetScene implements GameScene {
   private onPlayerImpact(speed: number, point: THREE.Vector3, other: 'wall' | 'traffic' | 'boss' | 'cop' | 'player'): void {
     const { audio } = this.ctx;
     if (this.phase === 'done') return;
+    // Another car, at any speed worth the name: that's it. The boss's own
+    // bumper only kills at a proper ram — a nudge on it is just a nudge
+    const lethal = other === 'traffic' ? speed > 2 : other === 'boss' && speed > 8;
+    if (this.phase === 'drive' && this.phaseT > 1.2 && lethal) {
+      this.particles.sparks(point, StreetScene.tmpA.set(0, 0.8, 0), 30);
+      this.blowUp('YOU CRASHED');
+      return;
+    }
     let dmg = 0;
     if (other === 'wall') {
       dmg = Math.max(0, speed - 5) * 1.1;
@@ -661,6 +818,8 @@ export class StreetScene implements GameScene {
 
   private fail(why: string): void {
     this.phase = 'failed';
+    this.combat = false;
+    this.ctx.input.exitPointerLock();
     this.failT = 0;
     this.failWhy = why;
     (this.failEl.querySelector('.t') as HTMLElement).textContent = why;
@@ -866,6 +1025,16 @@ export class StreetScene implements GameScene {
    * and his other two men stay with the car and open up on the Civic.
    */
   private startAirport(): void {
+    if (this.heli) {
+      this.heli.hide();
+      this.heli = null;
+      this.heliSound?.stop();
+      this.heliSound = null;
+      this.heliBar.classList.remove('on');
+    }
+    this.combat = false;
+    this.ctx.input.exitPointerLock();
+    this.missiles.clear();
     this.phase = 'airport';
     this.phaseT = 0;
     this.shot = 'gate';
@@ -1269,6 +1438,417 @@ export class StreetScene implements GameScene {
     ctx.fill();
   }
 
+
+  // ------------------------------------------------------------ the fights
+
+  /** The man in the boss's passenger seat, and his launcher: built hidden, shown leaning out of the window. */
+  private buildPassenger(): void {
+    const e = new Enemy(new THREE.Vector3(), Math.PI, 13, { name: 'POLICE FORCE AGENT' });
+    e.root.rotation.order = 'YXZ';
+    // Knelt up on the seat facing the back of the car
+    e.setKneeling(true);
+    const L = rocketLauncher();
+    L.scale.setScalar(0.9);
+    // On his left shoulder — the outside one, as he faces back — its muzzle the way he faces
+    L.position.set(-0.17, 0.27, 0.05);
+    e.chest.add(L);
+    this.launcher = L;
+    this.bossRig.body.add(e.root);
+    e.root.visible = false;
+    // Hands on its grips (the kneel takes 0.38 off his shoulders)
+    e.pose = {
+      handL: new THREE.Vector3(-0.2, 0.95, -0.24),
+      handR: new THREE.Vector3(-0.06, 1.0, -0.5),
+      elbow: new THREE.Vector3(0.8, -0.3, 0.4),
+      lean: 0.05
+    };
+    e.poseCurl = 1;
+    this.passenger = e;
+  }
+
+  /** Where the passenger leans out of the window: in (0) or right out (1), placed on the car. */
+  private placePassenger(dt: number): void {
+    const e = this.passenger;
+    const k = this.lean;
+    e.root.visible = k > 0.03;
+    if (!e.root.visible) return;
+    // Knees on the passenger seat, facing back down the road at Ravi; he
+    // gets up on them and leans out from there, hips in the window, until
+    // his whole top half is out past the roof and his launcher is out over the road
+    const seat = this.bossRig.seat.hip;
+    const axle = this.bossRig.body.position.y;
+    e.position.set(-seat.x + 0.28 * k, seat.y + 0.28 * k - axle, seat.z - 0.3);
+    e.yaw = Math.PI;
+    e.update(dt);
+    e.root.rotation.set(0, Math.PI, 0.12 + 0.68 * k, 'YXZ');
+  }
+
+  /** Is this where the missiles fly? Ravi on the avenue, or on the highway between the helicopters. */
+  private missileZone(): boolean {
+    const p = this.player.at;
+    if (p.road === 'city') return p.s > 160;
+    if (p.road !== 'highway') return false;
+    if (p.s < 60 || p.s > this.level.exitS - 150) return false;
+    // Not up to the first helicopter's stretch, nor the second's, until each is down
+    if (this.heliIndex === 0) return p.s < HELI_AT[0];
+    if (this.heliIndex === 1) return p.s < HELI_AT[1];
+    return true;
+  }
+
+  private get heliUp(): boolean {
+    return !!this.heli && (this.heli.state === 'in' || this.heli.state === 'fight');
+  }
+
+  /**
+   * The passenger's missiles: he leans out, the lock beeps, two or three
+   * go in quick succession, each with its ring on the road where Ravi will
+   * be; then back in, and a few seconds' peace.
+   */
+  private updateMissiles(dt: number): void {
+    const p = this.player;
+    const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
+    const can = this.phase === 'drive' && !this.heliUp && this.missileZone() && gap > 30 && gap < 170;
+    if (can) {
+      this.volleyCd -= dt;
+      if (this.volleyCd <= 0 && this.volleyLeft === 0 && this.lean > 0.92) {
+        this.volleyLeft = this.heliIndex >= 2 ? 3 : 2;
+        this.volleyGap = 0.25;
+        this.ctx.audio.lockBeep();
+      }
+      if (this.volleyLeft > 0) {
+        this.volleyGap -= dt;
+        // Only a shot he can get out of the way of; otherwise hold it a moment
+        if (this.volleyGap <= 0 && !this.fairShot()) this.volleyGap = 0.15;
+        else if (this.volleyGap <= 0) {
+          this.fireMissile();
+          this.volleyLeft--;
+          this.volleyGap = VOLLEY_GAP;
+          if (this.volleyLeft === 0) this.volleyCd = VOLLEY_EVERY[0] + Math.random() * (VOLLEY_EVERY[1] - VOLLEY_EVERY[0]);
+        }
+      }
+    } else {
+      this.volleyLeft = 0;
+      this.volleyCd = Math.max(this.volleyCd, 2.2);
+    }
+    const out = can && (this.volleyLeft > 0 || this.volleyCd < 0.9);
+    this.lean += ((out ? 1 : 0) - this.lean) * Math.min(1, dt * (out ? 5 : 3));
+    this.placePassenger(dt);
+    const v = StreetScene.tmpC.set(-Math.sin(p.yaw), 0, -Math.cos(p.yaw)).multiplyScalar(p.speed);
+    this.missiles.update(dt, v, (q) => this.missileHit(q));
+  }
+
+  private fireMissile(): void {
+    const p = this.player;
+    this.launcher.updateWorldMatrix(true, false);
+    const from = this.launcher.localToWorld(new THREE.Vector3(0, 0, -0.55));
+    // Where he will be: up the road at his speed, in the lane he is in
+    const T = MISSILE_T;
+    const exit = this.boss.car.at.road === 'exit' || this.boss.car.at.road === 'airport';
+    const ahead = this.net.advance(p.at, Math.max(0, p.speed) * T, exit, { road: p.at.road, s: 0, d: 0 });
+    // Square in the lane he's in (or most of the way into): the dodge is always one lane over
+    ahead.d = this.laneNear(ahead.road, p.at.d);
+    const aim = this.net.point(ahead, new THREE.Vector3());
+    aim.y += 0.5;
+    this.missiles.fire(from, aim, T);
+    this.ctx.audio.rocketLaunch(this.camera.position.distanceTo(from));
+    this.particles.muzzleFlash(from, StreetScene.tmpA.copy(aim).sub(from).normalize());
+  }
+
+  /** The middle of the lane (his way) on `road` nearest `d`. */
+  private laneNear(road: RoadId, d: number): number {
+    let best = d;
+    let bd = Infinity;
+    for (const l of this.net.roads[road].lanes) {
+      if (l.dir !== 1 || Math.abs(l.offset - d) >= bd) continue;
+      bd = Math.abs(l.offset - d);
+      best = l.offset;
+    }
+    return best;
+  }
+
+  /**
+   * Can he get out of the way of one fired now? The ring lands on this
+   * road, on a stretch straight enough to swerve on, and the lane next to
+   * his is clear of traffic all the way up to it.
+   */
+  private fairShot(): boolean {
+    const p = this.player;
+    const road = this.net.roads[p.at.road];
+    const reach = Math.max(0, p.speed) * MISSILE_T;
+    if (p.at.s + reach + 12 > road.length) return false;
+    const a = this.net.sample(p.at.road, p.at.s).tangent;
+    const ax = a.x;
+    const az = a.z;
+    const b = this.net.sample(p.at.road, p.at.s + reach).tangent;
+    if (ax * b.x + az * b.z < Math.cos(0.22) * Math.hypot(ax, az) * Math.hypot(b.x, b.z)) return false;
+    const mine = this.laneNear(p.at.road, p.at.d);
+    for (const l of road.lanes) {
+      const dd = Math.abs(l.offset - mine);
+      if (l.dir !== 1 || dd < 2.5 || dd > 4.5) continue;
+      let clear = true;
+      for (const c of this.traffic.cars) {
+        if (c.at.road !== p.at.road) continue;
+        const ds = c.at.s - p.at.s;
+        if (ds > -8 && ds < reach + 15 && Math.abs(c.at.d - l.offset) < 2.4) {
+          clear = false;
+          break;
+        }
+      }
+      if (clear) return true;
+    }
+    return false;
+  }
+
+  /** What a missile at `q` is touching: Ravi's car, a traffic car, or nothing. */
+  private missileHit(q: THREE.Vector3): MissileHit {
+    const p = this.player;
+    const inBox = (cx: number, cy: number, cz: number, yaw: number, hl: number, hw: number): boolean => {
+      if (q.y < cy - 0.2 || q.y > cy + 1.7) return false;
+      const dx = q.x - cx;
+      const dz = q.z - cz;
+      const along = -dx * Math.sin(yaw) - dz * Math.cos(yaw);
+      const lat = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+      return Math.abs(along) < hl && Math.abs(lat) < hw;
+    };
+    if (inBox(p.position.x, p.position.y, p.position.z, p.yaw, 2.3, 1.0)) return { kind: 'ravi' };
+    for (const c of this.traffic.cars) {
+      if (inBox(c.position.x, c.position.y, c.position.z, c.yaw, c.halfLength + 0.2, c.halfWidth + 0.2)) return { kind: 'car', id: c.id };
+    }
+    return null;
+  }
+
+  private onMissileBurst(pos: THREE.Vector3, hit: MissileHit): void {
+    const { audio } = this.ctx;
+    const d = this.camera.position.distanceTo(pos);
+    this.particles.explosion(pos, 2.3);
+    audio.explosion(d);
+    this.shake = Math.min(1.4, this.shake + Math.max(0, 1.2 - d / 40));
+    if (hit && hit.kind === 'car') {
+      const c = this.traffic.cars.find((x) => x.id === hit.id);
+      if (c) {
+        const away = StreetScene.tmpA.set(c.position.x - pos.x, 0, c.position.z - pos.z);
+        if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
+        away.normalize().multiplyScalar(7);
+        this.traffic.hit(c.id, away, (Math.random() - 0.5) * 6);
+      }
+    }
+    const car = this.player.position;
+    const near = Math.hypot(pos.x - car.x, pos.z - car.z) < BLAST_KILL && Math.abs(pos.y - car.y) < 3;
+    if (this.phase === 'drive' && (hit?.kind === 'ravi' || near)) this.blowUp('HIT BY A MISSILE');
+  }
+
+  /** The end of the Civic: a fireball on it, the screen goes. */
+  private blowUp(why: string): void {
+    if (this.phase !== 'drive') return;
+    const at = this.player.position.clone();
+    at.y += 0.8;
+    this.particles.explosion(at, 3.2);
+    this.ctx.audio.explosion(0);
+    this.ctx.audio.carCrash(0, true);
+    this.shake = 1.6;
+    this.burning = true;
+    this.fail(why);
+  }
+
+  // ------------------------------------------------------------ helicopters
+
+  private startHeli(): void {
+    const p = this.player;
+    const at = this.net.point(this.net.advance(p.at, 260, false, { road: p.at.road, s: 0, d: 0 }), new THREE.Vector3());
+    at.y += 55;
+    this.heliCraft.reset(at);
+    this.heli = this.heliCraft;
+    this.heliT = 0;
+    this.heliFireCd = 3.2;
+    this.heliBurst = 0;
+    this.heliSound = this.ctx.audio.heliLoop();
+    this.combat = true;
+    this.missiles.clear();
+    this.setObjective('HELICOPTER — SHOOT IT DOWN');
+    this.combatHint.classList.add('show');
+    this.heliBar.classList.add('on');
+    this.cop.gapMin = 55;
+    this.cop.gapMax = 90;
+  }
+
+  /**
+   * The helicopter: out ahead of him over the road, drifting, the door
+   * gunner's bursts into the car; and once it has taken its ten, down it
+   * goes off the side of the road.
+   */
+  private updateHeli(dt: number): void {
+    const h = this.heli;
+    if (!h) return;
+    const p = this.player;
+    this.heliT += dt;
+    const t = this.heliT;
+    if (h.state === 'in' || h.state === 'fight') {
+      // Station: forty-odd metres up the road, swinging across it and up and down
+      const ahead = this.net.advance(p.at, 36 + 9 * Math.sin(t * 0.45), false, { road: p.at.road, s: 0, d: 0 });
+      ahead.d = p.at.d + 8 * Math.sin(t * 0.37 + 0.6);
+      this.net.point(ahead, h.want);
+      h.want.y += 12 + 3 * Math.sin(t * 0.6);
+    }
+    h.update(dt, p.position);
+    this.heliSound?.setDistance(this.camera.position.distanceTo(h.group.position));
+    const hb = this.heliBar.querySelector('b') as HTMLElement;
+    hb.style.width = `${(Math.max(0, h.hp) / HELI_HP) * 100}%`;
+
+    // The door gunner
+    if (h.state === 'fight' && this.phase === 'drive') {
+      this.heliFireCd -= dt;
+      if (this.heliFireCd <= 0) {
+        if (this.heliBurst <= 0) this.heliBurst = 5;
+        this.heliBurst--;
+        this.heliFireCd = this.heliBurst > 0 ? 0.11 : 1.0 + Math.random() * 0.7;
+        this.heliShot();
+      }
+    }
+    // Smoking, and burning, as it is hurt
+    if (h.hp < HELI_HP * 0.6 || h.state === 'down') {
+      const c = h.centre(StreetScene.tmpA);
+      this.particles.exhaust(c, StreetScene.tmpB.set(0, 1, 0));
+      if (h.hp < HELI_HP * 0.3 || h.state === 'down') this.particles.fire(c.setY(c.y + 0.4), 0.9, 1);
+    }
+    // Down: into the ground off the side of the road, and up it goes
+    if (h.state === 'down' && (h.group.position.y < p.position.y + 0.8 || h.downT > 6)) {
+      const at = h.group.position.clone();
+      this.particles.explosion(at, 5);
+      this.ctx.audio.explosion(this.camera.position.distanceTo(at));
+      this.shake = Math.min(1.2, this.shake + 0.6);
+      h.hide();
+      this.heli = null;
+      this.heliSound?.stop();
+      this.heliSound = null;
+    }
+  }
+
+  /** One of the gunner's rounds: into the car, past it, or through the glass in front of Ravi. */
+  private heliShot(): void {
+    const h = this.heli!;
+    const { audio } = this.ctx;
+    const muzzle = h.muzzle(new THREE.Vector3());
+    h.gunner.flashMuzzle();
+    audio.enemyGunshot(this.camera.position.distanceTo(muzzle));
+    this.particles.muzzleFlash(muzzle, StreetScene.tmpA.copy(this.camera.position).sub(muzzle).normalize());
+    const hit = Math.random() < 0.7;
+    const at = StreetScene.tmpB.copy(this.camera.position);
+    if (hit) {
+      at.x += (Math.random() - 0.5) * 1.4;
+      at.y -= 0.2 + Math.random() * 0.5;
+      at.z += (Math.random() - 0.5) * 1.4;
+      this.hp = Math.max(0, this.hp - HELI_ROUND);
+      this.hurt = 1;
+      this.shake = Math.min(1, this.shake + 0.15);
+      if (this.cracks < 6 && Math.random() < 0.18) {
+        this.cracks++;
+        this.crack(0.25 + Math.random() * 0.5, 0.25 + Math.random() * 0.35);
+      }
+      audio.ricochet(1.5);
+      if (this.hp <= 0) {
+        this.fail('THE HELICOPTER GOT YOU');
+        return;
+      }
+    } else {
+      at.x += (Math.random() - 0.5) * 7;
+      at.y -= Math.random() * 2;
+      at.z += (Math.random() - 0.5) * 7;
+      audio.bulletWhiz();
+    }
+    this.particles.tracer(muzzle, at, 0xffe0b0);
+  }
+
+  /**
+   * Ravi's AK, while a helicopter is up: the mouse turns his head, the
+   * trigger fires, thirty to a magazine. Rounds into the cabin count; ten
+   * and it goes down.
+   */
+  private updateRifle(dt: number): void {
+    const { input, audio } = this.ctx;
+    const r = this.rifle;
+    const armed = this.combat && this.phase === 'drive';
+    r.stow += ((armed ? 0 : 1) - r.stow) * Math.min(1, dt * (armed ? 6 : 4));
+    if (r.stow > 0.995) r.stow = 1;
+    // His own arms off the wheel while the rifle's up (the viewmodel's are his arms then)
+    const away = r.stow < 0.6;
+    if (this.driverRig && away !== this.armsAway) {
+      this.armsAway = away;
+      for (const side of ['l', 'r']) this.driverRig.bones.get(`upperarm_${side}`)?.scale.setScalar(away ? 0.001 : 1);
+    }
+    const { dx, dy } = input.consumeMouseDelta();
+    if (armed) {
+      if (!input.pointerLocked && input.mouseHeld) input.requestPointerLock();
+      this.headYaw = THREE.MathUtils.clamp(this.headYaw - dx * 0.0021, -1.35, 1.35);
+      this.headPitch = THREE.MathUtils.clamp(this.headPitch - dy * 0.0021, -0.3, 1.0);
+    } else {
+      this.headYaw *= Math.max(0, 1 - dt * 3);
+      this.headPitch *= Math.max(0, 1 - dt * 3);
+    }
+    this.combatHint.classList.toggle('show', armed && !input.pointerLocked);
+    this.crossEl.classList.toggle('on', armed && r.stow < 0.3);
+    const fake = { sprinting: false, currentSpeed: 0, crouching: false, bob: { phase: 0, amount: 0 } } as unknown as FPSPlayer;
+    r.update(dt, fake, dx, dy, false);
+    this.rifleCd -= dt;
+    if (!armed || r.stow > 0.2 || r.reloading) {
+      input.consumeClick();
+      return;
+    }
+    if (this.ammo <= 0) {
+      if (r.startReload()) audio.magOut();
+      return;
+    }
+    if (!input.mouseHeld || !input.pointerLocked || this.rifleCd > 0) return;
+    this.rifleCd = 0.1;
+    this.ammo--;
+    r.fire();
+    audio.rifleShot();
+    this.shake = Math.min(0.5, this.shake + 0.04);
+    // Down the middle of his view
+    const cam = this.camera;
+    cam.updateMatrixWorld(true);
+    const o = StreetScene.tmpA.setFromMatrixPosition(cam.matrixWorld);
+    const dir = StreetScene.tmpB.set(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+    dir.x += (Math.random() - 0.5) * 0.012;
+    dir.y += (Math.random() - 0.5) * 0.012;
+    dir.normalize();
+    let end = o.clone().addScaledVector(dir, 160);
+    const h = this.heli;
+    if (h && (h.state === 'in' || h.state === 'fight')) {
+      const c = h.centre(StreetScene.tmpC);
+      const ray = new THREE.Ray(o, dir);
+      const hitP = new THREE.Vector3();
+      if (ray.intersectSphere(new THREE.Sphere(c, 2.5), hitP)) {
+        end = hitP;
+        h.hp--;
+        this.particles.sparks(hitP, StreetScene.tmpC.copy(dir).negate(), 9);
+        audio.armourHit(o.distanceTo(hitP));
+        this.hitMark = 1;
+        if (h.hp <= 0) {
+          const right = this.net.sample(this.player.at.road, this.player.at.s).right;
+          const side = Math.sign((h.group.position.x - this.player.position.x) * right.x + (h.group.position.z - this.player.position.z) * right.z) || 1;
+          h.kill(right.clone().multiplyScalar(side));
+          this.heliDown();
+        }
+      }
+    }
+    this.particles.tracer(r.muzzleWorld(new THREE.Vector3()), end, 0xffe6b0);
+  }
+
+  /** It's going down: the fight is over. */
+  private heliDown(): void {
+    this.heliIndex++;
+    this.combat = false;
+    this.ctx.input.exitPointerLock();
+    this.hp = Math.min(RAVI_HP, this.hp + 35);
+    // A breather before the passenger's back at the window
+    this.volleyCd = 6;
+    this.setObjective('HELICOPTER DOWN — STAY ON THE BOSS');
+    this.heliBar.classList.remove('on');
+    this.cop.gapMin = 25;
+    this.cop.gapMax = 60;
+    this.ctx.audio.killConfirm();
+  }
+
   // ------------------------------------------------------------- the world
 
   /** Brake lights, the cop's light bar, the boss's lamps. */
@@ -1346,12 +1926,18 @@ export class StreetScene implements GameScene {
     let fov = 68;
     switch (this.shot) {
       case 'chase': {
-        // Ravi's own eyes, in the driver's seat: the car's every lurch and
-        // lean is the camera's, and he looks a little into the turn
-        this.eyeInCar(cam.position);
+        // Ravi's own eyes, in the driver's seat — steady: the car leans,
+        // lurches and swerves round him, his head doesn't. He keeps looking
+        // down the road (and, with a helicopter up, where the mouse puts his eyes)
+        this.eyeSteady(cam.position);
         const k = clamp01(Math.abs(p.speed) / 50);
-        this.lookFromCar(-p.steerNow * 0.13, this.lookAt);
-        fov = 74 + 12 * k;
+        const fr = this.net.sample(p.at.road, p.at.s + 10);
+        const off = wrapAngle(p.yaw - Math.atan2(-fr.tangent.x, -fr.tangent.z));
+        // Only part of a swerve reaches his eyes; spun right round, he goes with the car
+        const want = THREE.MathUtils.clamp(-off * 0.85 * clamp01((1.1 - Math.abs(off)) / 0.4), -0.6, 0.6);
+        this.headSteady += (want - this.headSteady) * Math.min(1, dt * 10);
+        this.lookSteady(this.headSteady + this.headYaw, this.headPitch, this.lookAt);
+        fov = 74 + 8 * k;
         break;
       }
       case 'roadside': {
@@ -1467,6 +2053,26 @@ export class StreetScene implements GameScene {
     if (this.crackCanvas) this.crackCanvas.style.opacity = this.shot === 'pov' ? '1' : '0';
   }
 
+  /** Ravi's eyes in the seat, carried by the car's heading and the road's slope only — not its lean or lurch. */
+  private eyeSteady(out: THREE.Vector3): THREE.Vector3 {
+    const rig = this.civicRig;
+    const seat = rig.seat;
+    rig.group.updateMatrixWorld(true);
+    const b = rig.body.position;
+    return out.set(seat.hip.x + b.x, seat.hip.y + 0.68, seat.hip.z + 0.06 + b.z).applyMatrix4(rig.group.matrixWorld);
+  }
+
+  /** Ten metres out from his steady eyes, turned `yaw` (+ left) and `pitch` (+ up), a touch down toward the road. */
+  private lookSteady(yaw: number, pitch: number, out: THREE.Vector3): THREE.Vector3 {
+    const rig = this.civicRig;
+    const seat = rig.seat;
+    const b = rig.body.position;
+    const cp = Math.cos(pitch);
+    return out
+      .set(seat.hip.x + b.x - Math.sin(yaw) * cp * 10, seat.hip.y + 0.68 + (Math.sin(pitch) - 0.055) * 10, seat.hip.z + 0.06 + b.z - Math.cos(yaw) * cp * 10)
+      .applyMatrix4(rig.group.matrixWorld);
+  }
+
   /** Where Ravi's eyes are, sat at the wheel, in the world. */
   private eyeInCar(out: THREE.Vector3): THREE.Vector3 {
     const rig = this.civicRig;
@@ -1502,6 +2108,19 @@ export class StreetScene implements GameScene {
     if (b.textContent !== txt) b.textContent = txt;
     this.bossEl.classList.toggle('far', gap > LOSING_GAP);
     this.copEl.classList.toggle('on', this.copChasing && this.phase === 'drive');
+    this.hpEl.style.width = `${this.hp}%`;
+    this.hpEl.style.background = this.hp > 50 ? '#e8f4ec' : this.hp > 25 ? '#e0c452' : '#ff5a46';
+    const ammo = this.rifle.reloading ? 'RELOADING' : `${this.ammo} / 30`;
+    if (this.ammoEl.textContent !== ammo) this.ammoEl.textContent = ammo;
+    this.ammoEl.classList.toggle('on', this.combat && this.phase === 'drive');
+    this.hurt = Math.max(0, this.hurt - 0.05);
+    this.hurtEl.style.opacity = (this.hurt * 0.9 + (this.combat ? Math.max(0, (60 - this.hp) / 100) : 0)).toFixed(3);
+    // The lock tone's on, or one's in the air
+    this.warnEl.classList.toggle('on', this.phase === 'drive' && (this.missiles.flying > 0 || this.volleyLeft > 0));
+    this.hitMark = Math.max(0, this.hitMark - 0.08);
+    this.hitEl.style.opacity = this.hitMark.toFixed(3);
+    // Cracks in the glass show from his seat while he's driving too
+    if (this.crackCanvas && this.shot === 'chase') this.crackCanvas.style.opacity = this.cracks > 0 ? '0.85' : '0';
   }
 
   // ---------------------------------------------------------------- render
@@ -1525,6 +2144,9 @@ export class StreetScene implements GameScene {
     this.particles.dust(far, 1, 1);
     this.particles.muzzleFlash(far, new THREE.Vector3(0, 1, 0));
     this.particles.tracer(far, far.clone().add(new THREE.Vector3(0, 0, 3)), 0xffe0b0);
+    this.particles.explosion(far, 2);
+    this.particles.fire(far, 1, 1);
+    this.particles.rocketTrail(far, new THREE.Vector3(0, 0, 1), 0.7);
     const hidden: THREE.Object3D[] = [];
     const culled: THREE.Object3D[] = [];
     this.scene.traverse((o) => {

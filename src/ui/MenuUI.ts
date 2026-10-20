@@ -102,6 +102,7 @@ export class MenuUI {
             <tr><td>DEADBULL</td><td>G (DRINK IT — BACK TO FULL HEALTH)</td></tr>
             <tr><td>DROP KICK</td><td>Q (KILLS WHOEVER IS IN FRONT OF YOU)</td></tr>
             <tr><td>MENU</td><td>ESC</td></tr>
+            <tr><td>DRIVING</td><td>W GAS · S BRAKE / REVERSE · A / D STEER · SPACE HANDBRAKE</td></tr>
           </table>
           <div class="divider"></div>
           <div>ONE SHOT KILLS THEM. YOU HAVE 5 HP<br/>AND HEAL 1 EVERY 30s.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>

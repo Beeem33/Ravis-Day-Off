@@ -36,10 +36,10 @@ import type { BakedCar, CarKind, CarRig, CarSpec, CivicRig } from '../scenes/Lev
 
 // --------------------------------------------------------------- the models
 
-type P = [number, number];
+export type P = [number, number];
 
 /** One body style, in the side-view frame (u forward, y up), metres. */
-interface Model {
+export interface Model {
   L: number;
   W: number;
   H: number;
@@ -97,7 +97,7 @@ interface Model {
   roofRails?: boolean;
 }
 
-const MODELS: Record<CarKind | 'exec', Model> = {
+export const MODELS: Record<CarKind | 'exec', Model> = {
   sedan: {
     L: 4.65, W: 1.82, H: 1.45, R: 0.32, arch: 0.03, tyreW: 0.21, rimR: 0.205, track: 0.78,
     uF: 1.37, uR: -1.35, clear: 0.17, belt: 0.93, noseY: 0.74, noseLow: 0.2, tailY: 0.99, tailLow: 0.24,
@@ -142,7 +142,7 @@ const MODELS: Record<CarKind | 'exec', Model> = {
 const MASS: Record<CarKind, number> = { sedan: 1300, hatch: 1150, suv: 1800, pickup: 2000 };
 
 /** The roof's top line, for u along it (front t = 1, rear t = 0): a slight crown, a little lower at the back. */
-function roofTop(m: Model, u: number): number {
+export function roofTop(m: Model, u: number): number {
   const t = (u - m.roofRU) / (m.roofFU - m.roofRU);
   return m.H - 0.035 * (2 * t - 1) ** 2 - m.roofDrop * (1 - t);
 }
@@ -190,7 +190,7 @@ export const WRECK_COLOURS: number[] = [
 // ---------------------------------------------------------------- colours
 
 /** Trim and lamp vertex colours (sRGB hex; THREE.Color takes them to linear). */
-const C = {
+export const C = {
   tyre: 0x151515,
   rim: 0x8a8f96,
   rimDark: 0x2f3236,
@@ -219,9 +219,9 @@ const C = {
 
 // --------------------------------------------------------- geometry helpers
 
-const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
-const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-const clamp01 = (t: number): number => Math.min(1, Math.max(0, t));
+export const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+export const clamp01 = (t: number): number => Math.min(1, Math.max(0, t));
 
 function dedupe(poly: P[]): P[] {
   const out: P[] = [];
@@ -283,7 +283,7 @@ const vec2 = (poly: P[]): THREE.Vector2[] => poly.map(([a, b]) => new THREE.Vect
  * A side-view profile (u, y) extruded across the car from x0 to x1, with a
  * bevel of bt across the car and bs in the profile.
  */
-function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2, holes: P[][] = []): THREE.BufferGeometry {
+export function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2, holes: P[][] = []): THREE.BufferGeometry {
   const bevel = bt > 0 && bs > 0;
   const shape = new THREE.Shape(vec2(wound(inset(dedupe(poly), bevel ? bs : 0), true)));
   for (const h of holes) shape.holes.push(new THREE.Path(vec2(wound(dedupe(h), false))));
@@ -304,7 +304,7 @@ function side(poly: P[], x0: number, x1: number, bt = 0, bs = 0, seg = 2, holes:
 }
 
 /** A plan-view shape (x, u) extruded upward from y0 to y1: bumpers and lamps that wrap the corners. */
-function plan(poly: P[], y0: number, y1: number, b = 0): THREE.BufferGeometry {
+export function plan(poly: P[], y0: number, y1: number, b = 0): THREE.BufferGeometry {
   const shape = new THREE.Shape(vec2(wound(inset(dedupe(poly), b), true)));
   const g = new THREE.ExtrudeGeometry(shape, {
     depth: y1 - y0 - 2 * b,
@@ -321,7 +321,7 @@ function plan(poly: P[], y0: number, y1: number, b = 0): THREE.BufferGeometry {
 }
 
 /** Smooth across the bevels, keep the creases: the bonnet's edge, the screen's foot. */
-function smooth(g: THREE.BufferGeometry, crease = 0.9): THREE.BufferGeometry {
+export function smooth(g: THREE.BufferGeometry, crease = 0.9): THREE.BufferGeometry {
   return toCreasedNormals(g, crease);
 }
 
@@ -339,7 +339,7 @@ function newell(pts: THREE.Vector3[]): THREE.Vector3 {
 }
 
 /** A flat convex polygon, single-sided, facing `out`. */
-function facet(pts: THREE.Vector3[], out: THREE.Vector3): THREE.BufferGeometry {
+export function facet(pts: THREE.Vector3[], out: THREE.Vector3): THREE.BufferGeometry {
   const list = newell(pts).dot(out) < 0 ? [...pts].reverse() : pts;
   const pos: number[] = [];
   for (let i = 1; i < list.length - 1; i++) {
@@ -352,12 +352,12 @@ function facet(pts: THREE.Vector3[], out: THREE.Vector3): THREE.BufferGeometry {
 }
 
 /** A thin flat strip from a to b, w wide, facing `out`: shut lines, cracks, pinstripes. */
-function strip(a: THREE.Vector3, b: THREE.Vector3, w: number, out: THREE.Vector3): THREE.BufferGeometry {
+export function strip(a: THREE.Vector3, b: THREE.Vector3, w: number, out: THREE.Vector3): THREE.BufferGeometry {
   const across = b.clone().sub(a).cross(out).normalize().multiplyScalar(w / 2);
   return facet([a.clone().add(across), b.clone().add(across), b.clone().sub(across), a.clone().sub(across)], out);
 }
 
-function box(w: number, h: number, d: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): THREE.BufferGeometry {
+export function box(w: number, h: number, d: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): THREE.BufferGeometry {
   const g = new THREE.BoxGeometry(w, h, d);
   if (rx || ry || rz) g.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)));
   g.translate(x, y, z);
@@ -365,7 +365,7 @@ function box(w: number, h: number, d: number, x: number, y: number, z: number, r
 }
 
 /** A cylinder along X (radius r0 at +X, r1 at −X). */
-function cylX(r0: number, len: number, seg: number, x: number, y: number, z: number, r1 = r0): THREE.BufferGeometry {
+export function cylX(r0: number, len: number, seg: number, x: number, y: number, z: number, r1 = r0): THREE.BufferGeometry {
   const g = new THREE.CylinderGeometry(r0, r1, len, seg);
   g.rotateZ(-Math.PI / 2);
   g.translate(x, y, z);
@@ -373,7 +373,7 @@ function cylX(r0: number, len: number, seg: number, x: number, y: number, z: num
 }
 
 /** A cylinder along Z (radius r0 at +Z). */
-function cylZ(r0: number, len: number, seg: number, x: number, y: number, z: number, r1 = r0): THREE.BufferGeometry {
+export function cylZ(r0: number, len: number, seg: number, x: number, y: number, z: number, r1 = r0): THREE.BufferGeometry {
   const g = new THREE.CylinderGeometry(r0, r1, len, seg);
   g.rotateX(Math.PI / 2);
   g.translate(x, y, z);
@@ -385,7 +385,7 @@ function cylZ(r0: number, len: number, seg: number, x: number, y: number, z: num
  * colour; non-indexed, no groups — because mergeGeometries refuses to merge
  * anything that differs, and the whole point is that a car is four draws.
  */
-function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeometry {
+export function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeometry {
   let out = g;
   if (g.index) {
     out = g.toNonIndexed();
@@ -412,19 +412,19 @@ function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeometry {
 // ------------------------------------------------------------- the builder
 
 /** Which material a part takes: on the parked cars paint, trim, glass and lamps; the rigs split lamps by job. */
-type Layer = 'paint' | 'primer' | 'trim' | 'glass' | 'head' | 'tail' | 'ind';
+export type Layer = 'paint' | 'primer' | 'trim' | 'glass' | 'head' | 'tail' | 'ind';
 /** Which moving piece of a rig it belongs to. */
-type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap';
+export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap';
 type WheelName = 'fl' | 'fr' | 'rl' | 'rr';
-type WheelStyle = 'alloy' | 'exec' | 'steel' | 'steelBlack' | 'stub';
+export type WheelStyle = 'alloy' | 'exec' | 'steel' | 'steelBlack' | 'stub';
 
-interface Part {
+export interface Part {
   g: THREE.BufferGeometry;
   layer: Layer;
   node: Node;
 }
 
-class Kit {
+export class Kit {
   readonly parts: Part[] = [];
   node: Node = 'body';
   put(g: THREE.BufferGeometry, layer: Layer, colour = 0xffffff): void {
@@ -435,7 +435,7 @@ class Kit {
   }
 }
 
-interface Look {
+export interface Look {
   /** A hand-animated car: an open cabin with seats in it, and the driver's door its own piece. */
   rig?: boolean;
   wreck?: boolean;
@@ -445,13 +445,13 @@ interface Look {
 }
 
 /** Below the rigs' cabin floor is the sill. */
-const FLOOR = 0.34;
+export const FLOOR = 0.34;
 /** The body's bevel: across the car, and in the profile. */
-const BT = 0.13;
-const BS = 0.065;
+export const BT = 0.13;
+export const BS = 0.065;
 const DOOR_OPEN = THREE.MathUtils.degToRad(70);
 
-const halfBody = (m: Model): number => m.W / 2 - 0.015;
+export const halfBody = (m: Model): number => m.W / 2 - 0.015;
 
 /** The lower body's side profile: sills and arches, nose, bonnet, the belt, the boot or tail. */
 function lowerOutline(m: Model, notch?: { front: number; rear: number; floor: number }): P[] {
@@ -494,7 +494,7 @@ function lowerOutline(m: Model, notch?: { front: number; rear: number; floor: nu
 }
 
 /** The bonnet's top at fraction t of the way from its front edge to the cowl: rises quickly, flattens out. */
-function bonnetY(m: Model, t: number): number {
+export function bonnetY(m: Model, t: number): number {
   return m.noseY + (m.belt - 0.01 - m.noseY) * (1 - (1 - t) ** 2);
 }
 
@@ -575,7 +575,7 @@ function bumperPlan(hw: number, e: number): P[] {
 }
 
 /** Where the driver sits, car-local: left of centre, hip half a metre up, behind a raked wheel. */
-function seatOf(m: Model): { hip: THREE.Vector3; wheel: THREE.Vector3; wheelFacing: THREE.Vector3 } {
+export function seatOf(m: Model): { hip: THREE.Vector3; wheel: THREE.Vector3; wheelFacing: THREE.Vector3 } {
   const dx = Math.round(halfBody(m) * 0.43 * 100) / 100;
   const wheel = V(-dx, m.belt - 0.06, -(m.cowlU - 0.5));
   return { hip: V(-dx, 0.5, wheel.z + 0.38), wheel, wheelFacing: V(0, 0.42, 0.91).normalize() };
@@ -594,7 +594,7 @@ function rng(seed: number): () => number {
  * The whole car as parts, car-local; wheel parts in their own frame (centred
  * on the hub, +X out through the face), which the bake or the rig places.
  */
-function buildCar(m: Model, look: Look): Part[] {
+export function buildCar(m: Model, look: Look): Part[] {
   const k = new Kit();
   const hw = halfBody(m);
   const hwB = hw - 0.1; // the greenhouse's half-width where it meets the belt
@@ -1226,7 +1226,7 @@ function wheelMatrix(m: Model, name: WheelName): THREE.Matrix4 {
   return mat;
 }
 
-function merge(list: THREE.BufferGeometry[], what: string): THREE.BufferGeometry {
+export function merge(list: THREE.BufferGeometry[], what: string): THREE.BufferGeometry {
   const g = list.length ? mergeGeometries(list, false) : null;
   for (const p of list) p.dispose();
   if (!g) throw new Error(`VehicleProps: could not merge the ${what}`);
@@ -1373,7 +1373,7 @@ export function carMaterials(): { paint: THREE.MeshStandardMaterial; trim: THREE
 
 // -------------------------------------------------------------------- rigs
 
-interface RigMats {
+export interface RigMats {
   paint: THREE.Material;
   primer: THREE.Material;
   glass: THREE.Material;
@@ -1383,7 +1383,7 @@ interface RigMats {
 }
 
 /** Fresh lamp materials for one rig: lenses with colour of their own, dark until the scene lights them. */
-function rigLamps(): Pick<RigMats, 'headlights' | 'brakelights' | 'indicators'> {
+export function rigLamps(): Pick<RigMats, 'headlights' | 'brakelights' | 'indicators'> {
   return {
     headlights: new THREE.MeshStandardMaterial({ color: 0xd9d6cc, roughness: 0.25, metalness: 0.1, emissive: C.head, emissiveIntensity: 0 }),
     brakelights: new THREE.MeshStandardMaterial({ color: 0x6e0c0c, roughness: 0.3, metalness: 0.1, emissive: 0xff1d12, emissiveIntensity: 0 }),
@@ -1398,7 +1398,7 @@ function rigLamps(): Pick<RigMats, 'headlights' | 'brakelights' | 'indicators'> 
  * half round, so that adding to its rotation.x rolls the car forward (−Z):
  * a plain rotation about +X would turn the top of the wheel backward.
  */
-function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THREE.Vector3): CarRig & { hubcap: THREE.Object3D | null } {
+export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THREE.Vector3): CarRig & { hubcap: THREE.Object3D | null } {
   const group = new THREE.Group();
   const body = new THREE.Group();
   body.position.set(0, m.R, 0);

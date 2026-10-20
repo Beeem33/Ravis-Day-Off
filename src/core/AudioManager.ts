@@ -4023,4 +4023,466 @@ export class AudioManager {
     }
     this.burst(dest, { t, D: 2.2, type: 'bandpass', f: 2600, q: 0.7, gain: 0.08, attack: 0.25 });
   }
+
+  // ------------------------------------------------------------ Level 10: the street
+
+  /**
+   * The Civic's engine, running: a tired 1.6 four-pot. Two firing pulses a
+   * revolution through the same note / rasp / rumble layers as engine(),
+   * but live — setSpeed() every frame picks a gear from the road speed
+   * (five of them, with hysteresis), works out the revs, and on every
+   * upshift the note dips as he lifts and the revs fall into the next gear.
+   * Throttle drives it harder into the saturator and opens the rasp (the
+   * grit); off it, it goes dull and quiet with a little exhaust burble. A
+   * slow wobble at the cam rate is the misfire it has had since 2009.
+   * setGain() for the scene's mix (cutscenes, the radio); stop() fades it.
+   */
+  engineLoop(): { setSpeed(mps: number, throttle: number): void; setGain(g: number): void; stop(): void } {
+    const idle = { setSpeed: (): void => {}, setGain: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const level = ctx.createGain();
+    level.gain.value = 1;
+    level.connect(this.lotBus(ctx));
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(0.3, t + 0.25);
+    env.connect(level);
+
+    const sources: AudioScheduledSourceNode[] = [];
+    // The note: two saws a few cents apart and the half-order square, saturated, through a low-pass that opens with the revs
+    const pre = ctx.createGain();
+    pre.gain.value = 0.5;
+    const lump = ctx.createGain();
+    lump.gain.value = 0.88;
+    const drive = ctx.createWaveShaper();
+    drive.curve = driveCurve(2.4);
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.Q.value = 2.2;
+    tone.frequency.value = 400;
+    const noteG = ctx.createGain();
+    noteG.gain.value = 0.55;
+    pre.connect(lump).connect(drive).connect(tone).connect(noteG).connect(env);
+    const main = ctx.createOscillator();
+    main.type = 'sawtooth';
+    const twin = ctx.createOscillator();
+    twin.type = 'sawtooth';
+    twin.detune.value = 9 + Math.random() * 6;
+    const half = ctx.createOscillator();
+    half.type = 'square';
+    const halfG = ctx.createGain();
+    halfG.gain.value = 0.32;
+    main.connect(pre);
+    twin.connect(pre);
+    half.connect(halfG).connect(pre);
+    // The tired bit: an uneven wobble at the cam rate
+    const cam = ctx.createOscillator();
+    cam.type = 'triangle';
+    const camG = ctx.createGain();
+    camG.gain.value = 0.12;
+    cam.connect(camG).connect(lump.gain);
+    sources.push(main, twin, half, cam);
+
+    // The rasp: noise chopped at the firing rate
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 0.9;
+    band.frequency.value = 600;
+    const chop = ctx.createGain();
+    chop.gain.value = 0.35;
+    const chopDepth = ctx.createGain();
+    chopDepth.gain.value = 0.65;
+    main.connect(chopDepth).connect(chop.gain);
+    const raspDrive = ctx.createWaveShaper();
+    raspDrive.curve = driveCurve(2.5);
+    const raspG = ctx.createGain();
+    raspG.gain.value = 0.06;
+    n.connect(band).connect(chop).connect(raspDrive).connect(raspG).connect(env);
+    // The exhaust rumble
+    const rumble = ctx.createBiquadFilter();
+    rumble.type = 'lowpass';
+    rumble.frequency.value = 90;
+    const rumbleG = ctx.createGain();
+    rumbleG.gain.value = 0.6;
+    n.connect(rumble).connect(rumbleG).connect(env);
+    sources.push(n);
+    for (const s of sources) {
+      if (s === n) n.start(t, Math.random() * 1.5);
+      else s.start(t);
+    }
+
+    // Gears: the top of each in m/s; revs run 1000 → ~6000 across a gear
+    const TOPS = [12, 21, 30, 40, 53];
+    const IDLE = 850;
+    let gear = 0;
+    let dipUntil = 0;
+    let stopped = false;
+    const setF = (p: AudioParam, v: number, tc: number): void => {
+      p.setTargetAtTime(Math.max(1, fin(v, 1)), ctx.currentTime, tc);
+    };
+    return {
+      setSpeed: (mps: number, throttle: number): void => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const v = Math.abs(fin(mps, 0));
+        const thr = Math.max(0, Math.min(1, Math.abs(fin(throttle, 0))));
+        // Pick the gear, with some hysteresis so it doesn't hunt
+        let g = gear;
+        while (g < TOPS.length - 1 && v > TOPS[g] * 0.97) g++;
+        while (g > 0 && v < TOPS[g - 1] * 0.78) g--;
+        const up = g > gear;
+        gear = g;
+        let rpm = 1000 + (v / TOPS[g]) * 5000;
+        if (g === 0) rpm = Math.max(IDLE + thr * 1600, rpm + thr * 500 * (1 - v / TOPS[0])); // clutch slip off the line
+        rpm = Math.min(6600, rpm);
+        const hz = (rpm / 60) * 2;
+        const tc = up ? 0.09 : 0.045;
+        setF(main.frequency, hz, tc);
+        setF(twin.frequency, hz, tc);
+        setF(half.frequency, hz / 2, tc);
+        setF(cam.frequency, rpm / 120, tc);
+        setF(tone.frequency, 260 + hz * (3.2 + thr * 3.2), 0.06);
+        setF(band.frequency, 300 + hz * 3.2, 0.06);
+        setF(rumble.frequency, 60 + hz * 1.2, 0.06);
+        pre.gain.setTargetAtTime(0.32 + thr * 0.42, now, 0.05);
+        raspG.gain.setTargetAtTime(0.03 + thr * 0.2, now, 0.05);
+        // Loudness: louder on the throttle and up the revs; a lift and a dip on every upshift
+        const L = 0.18 + thr * 0.17 + (rpm / 6600) * 0.1;
+        if (up && v > 3) {
+          dipUntil = now + 0.16;
+          env.gain.cancelScheduledValues(now);
+          env.gain.setValueAtTime(Math.max(0.0001, env.gain.value), now);
+          env.gain.linearRampToValueAtTime(L * 0.38, now + 0.03);
+          env.gain.setValueAtTime(L * 0.38, now + 0.11);
+          env.gain.linearRampToValueAtTime(L, now + 0.16);
+          this.burst(env, { at: 0.02, D: 0.05, type: 'lowpass', f: 700, gain: 0.25, attack: 0.001 });
+        } else if (now > dipUntil) env.gain.setTargetAtTime(L, now, 0.06);
+      },
+      setGain: (g: number): void => {
+        if (stopped) return;
+        level.gain.setTargetAtTime(Math.max(0, fin(g, 1)), ctx.currentTime, 0.08);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        env.gain.cancelScheduledValues(now);
+        env.gain.setValueAtTime(Math.max(0.0001, env.gain.value), now);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+        for (const s of sources) {
+          try {
+            s.stop(now + 0.35);
+          } catch {
+            /* already stopped */
+          }
+        }
+      }
+    };
+  }
+
+  /**
+   * An American police siren: the wail (a slow rise and fall, ~650–1450 Hz,
+   * about four seconds round) for a while, then the yelp (the same sweep at
+   * three a second), and back — out of a horn speaker, all mids and buzz.
+   * setDistance() every frame: quieter and duller with distance, and the
+   * pitch bends with how fast the distance is changing (Doppler: sharp
+   * closing in, flat pulling away). stop() fades it.
+   */
+  sirenLoop(): { setDistance(m: number): void; stop(): void } {
+    const idle = { setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const air = ctx.createBiquadFilter();
+    air.type = 'lowpass';
+    air.Q.value = 0.5;
+    air.frequency.value = 9000;
+    out.connect(air).connect(this.lotBus(ctx));
+    const send = ctx.createGain();
+    send.gain.value = 0.18;
+    air.connect(send).connect(this.echoBus(ctx));
+
+    const speaker = ctx.createBiquadFilter();
+    speaker.type = 'bandpass';
+    speaker.frequency.value = 1250;
+    speaker.Q.value = 0.65;
+    const buzz = ctx.createWaveShaper();
+    buzz.curve = driveCurve(1.8);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(1, t + 0.4);
+    buzz.connect(speaker).connect(env).connect(out);
+
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 1050;
+    const saw = ctx.createOscillator();
+    saw.type = 'sawtooth';
+    saw.frequency.value = 1050;
+    saw.detune.value = 6;
+    const oscG = ctx.createGain();
+    oscG.gain.value = 0.5;
+    const sawG = ctx.createGain();
+    sawG.gain.value = 0.35;
+    osc.connect(oscG).connect(buzz);
+    saw.connect(sawG).connect(buzz);
+    // The sweep
+    const lfo = ctx.createOscillator();
+    lfo.type = 'triangle';
+    const depth = ctx.createGain();
+    depth.gain.value = 400;
+    lfo.connect(depth);
+    depth.connect(osc.frequency);
+    depth.connect(saw.frequency);
+    // Wail ~9 s, yelp ~3.5 s, round and round for twenty minutes (each change one automation event)
+    let s = t;
+    lfo.frequency.setValueAtTime(0.23, s);
+    while (s < t + 1200) {
+      s += 8.7;
+      lfo.frequency.setValueAtTime(3.1, s);
+      s += 3.5;
+      lfo.frequency.setValueAtTime(0.23, s);
+    }
+    // Doppler, in cents
+    const bend = ctx.createConstantSource();
+    bend.offset.value = 0;
+    bend.connect(osc.detune);
+    bend.connect(saw.detune);
+    const sources: AudioScheduledSourceNode[] = [osc, saw, lfo, bend];
+    for (const src of sources) src.start(t);
+
+    let lastM = NaN;
+    let lastT = 0;
+    let vr = 0;
+    let stopped = false;
+    return {
+      setDistance: (m: number): void => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const d = this.far(m);
+        if (Number.isFinite(lastM) && now - lastT > 0.005) {
+          const raw = (d - lastM) / (now - lastT);
+          vr += (Math.max(-80, Math.min(80, raw)) - vr) * 0.25;
+        }
+        lastM = d;
+        lastT = now;
+        const factor = 343 / (343 + vr);
+        const cents = Math.max(-260, Math.min(260, 1200 * Math.log2(factor)));
+        bend.offset.setTargetAtTime(cents, now, 0.12);
+        out.gain.setTargetAtTime(0.16 / (1 + d / 22), now, 0.08);
+        air.frequency.setTargetAtTime(Math.min(14000, 20000 / (1 + d / 25)), now, 0.08);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        env.gain.cancelScheduledValues(now);
+        env.gain.setValueAtTime(Math.max(0.0001, env.gain.value), now);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+        for (const src of sources) {
+          try {
+            src.stop(now + 0.65);
+          } catch {
+            /* already stopped */
+          }
+        }
+      }
+    };
+  }
+
+  /**
+   * A car horn, `dist` metres off: the usual pair of disc horns a major
+   * third apart, square and buzzy through the grille, a short angry blast
+   * (sometimes two). Quieter and duller with distance.
+   */
+  horn(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const t = ctx.currentTime;
+    const a = this.atten(d, 160) * 0.85 + 0.15;
+    const out = this.place(ctx, d, 0.32 * a, 0.16);
+    const speaker = ctx.createBiquadFilter();
+    speaker.type = 'bandpass';
+    speaker.frequency.value = 900;
+    speaker.Q.value = 0.7;
+    const buzz = ctx.createWaveShaper();
+    buzz.curve = driveCurve(1.5);
+    buzz.connect(speaker).connect(out);
+    const p = 0.9 + Math.random() * 0.2;
+    const blasts = Math.random() < 0.35 ? 2 : 1;
+    const lens = blasts === 2 ? [0.16, 0.42] : [0.3 + Math.random() * 0.35];
+    let at = t;
+    for (const D of lens) {
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0.0001, at);
+      env.gain.exponentialRampToValueAtTime(1, at + 0.012);
+      env.gain.setValueAtTime(1, at + D - 0.03);
+      env.gain.exponentialRampToValueAtTime(0.0001, at + D);
+      env.connect(buzz);
+      for (const f of [415, 522]) {
+        const o = ctx.createOscillator();
+        o.type = 'square';
+        o.frequency.value = f * p;
+        const g = ctx.createGain();
+        g.gain.value = 0.5;
+        o.connect(g).connect(env);
+        o.start(at);
+        o.stop(at + D + 0.02);
+      }
+      at += D + 0.09;
+    }
+  }
+
+  /** The radar gun locking on: two quick pips and a held tone, thin and electronic, from the dash. */
+  radarBeep(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = this.place(ctx, 0, 0.16, 0);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 5000;
+    lp.connect(out);
+    const notes: [number, number, number][] = [
+      [0, 0.07, 2350],
+      [0.11, 0.07, 2350],
+      [0.22, 0.55, 2800]
+    ];
+    for (const [at, D, f] of notes) {
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      const s = t + at;
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(0.5, s + 0.004);
+      g.gain.setValueAtTime(0.5, s + D - 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + D);
+      o.connect(g).connect(lp);
+      o.start(s);
+      o.stop(s + D + 0.02);
+    }
+  }
+
+  /**
+   * Tyres sliding, continuously: the squeal of tyreSqueal() held open —
+   * the wandering stick-slip tone, its harsh octave, the rubber hiss, all
+   * chattering — with set(slide) every frame (0 silent .. 1 full drift):
+   * louder, and a little higher and harsher, the more it slides.
+   */
+  tyreSlideLoop(): { set(slide: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = this.place(ctx, 0, 0.75, 0.14);
+    const env = ctx.createGain();
+    env.gain.value = 0;
+    env.connect(out);
+    const chatter = ctx.createGain();
+    chatter.gain.value = 0.75;
+    chatter.connect(env);
+    const chat = ctx.createOscillator();
+    chat.frequency.value = 17 + Math.random() * 8;
+    const chatDepth = ctx.createGain();
+    chatDepth.gain.value = 0.25;
+    chat.connect(chatDepth).connect(chatter.gain);
+
+    const base = 1150 * (0.95 + Math.random() * 0.1);
+    // The load wandering: two slow LFOs at awkward rates into the detune, and a quick shake
+    const w1 = ctx.createOscillator();
+    w1.frequency.value = 0.37;
+    const w1g = ctx.createGain();
+    w1g.gain.value = 260;
+    const w2 = ctx.createOscillator();
+    w2.frequency.value = 1.13;
+    const w2g = ctx.createGain();
+    w2g.gain.value = 140;
+    const lift = ctx.createConstantSource();
+    lift.offset.value = 0;
+    w1.connect(w1g);
+    w2.connect(w2g);
+    const shake = ctx.createOscillator();
+    shake.frequency.value = 9 + Math.random() * 4;
+    const shakeG = ctx.createGain();
+    shakeG.gain.value = 30;
+    shake.connect(shakeG);
+    const toneBus = ctx.createGain();
+    const edge = ctx.createWaveShaper();
+    edge.curve = driveCurve(1.5);
+    const toneBand = ctx.createBiquadFilter();
+    toneBand.type = 'bandpass';
+    toneBand.frequency.value = 1350;
+    toneBand.Q.value = 0.8;
+    const toneG = ctx.createGain();
+    toneG.gain.value = 0.18;
+    toneBus.connect(edge).connect(toneBand).connect(toneG).connect(chatter);
+    const oscs: OscillatorNode[] = [];
+    const harsh = ctx.createGain();
+    harsh.gain.value = 0.15;
+    for (const [type, mul] of [['triangle', 1], ['sawtooth', 2.01]] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = base * mul;
+      w1g.connect(o.detune);
+      w2g.connect(o.detune);
+      lift.connect(o.detune);
+      shakeG.connect(o.frequency);
+      if (type === 'sawtooth') o.connect(harsh).connect(toneBus);
+      else o.connect(toneBus);
+      oscs.push(o);
+    }
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    for (const [f, q, lv] of [[2300, 1.3, 0.35], [900, 2.5, 0.3]] as const) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f;
+      bp.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = lv;
+      n.connect(bp).connect(g).connect(chatter);
+    }
+    const sources: AudioScheduledSourceNode[] = [chat, w1, w2, lift, shake, ...oscs, n];
+    for (const src of sources) {
+      if (src === n) n.start(t, Math.random() * 1.5);
+      else src.start(t);
+    }
+    let stopped = false;
+    return {
+      set: (slide: number): void => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const k = Math.max(0, Math.min(1, fin(slide, 0)));
+        const g = k < 0.06 ? 0 : Math.pow((k - 0.06) / 0.94, 1.3);
+        env.gain.setTargetAtTime(g, now, g > env.gain.value ? 0.04 : 0.09);
+        lift.offset.setTargetAtTime(k * 260, now, 0.1);
+        harsh.gain.setTargetAtTime(0.12 + k * 0.25, now, 0.1);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        const now = ctx.currentTime;
+        env.gain.cancelScheduledValues(now);
+        env.gain.setValueAtTime(env.gain.value, now);
+        env.gain.linearRampToValueAtTime(0, now + 0.15);
+        for (const src of sources) {
+          try {
+            src.stop(now + 0.2);
+          } catch {
+            /* already stopped */
+          }
+        }
+      }
+    };
+  }
 }

@@ -1424,10 +1424,9 @@ export class Level8Scene extends CombatScene<Level8Data> {
       this.setShot(OUTRO_CAM, Level8Scene.tmpB.copy(C).setY(0.8), 50);
     }
 
-    // To black, the card, and on
+    // To black, and on after him: the street
     if (t > 10.2) this.fadeEl.style.opacity = String(Math.min(1, (t - 10.2) / 0.9));
-    if (t > 11.4) this.endCard.style.opacity = '1';
-    if (t > 15.4 && !this.handedOff) {
+    if (t > 11.4 && !this.handedOff) {
       this.handedOff = true;
       this.ctx.bus.emit(Events.Level8Complete);
     }

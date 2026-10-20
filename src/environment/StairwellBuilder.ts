@@ -309,7 +309,7 @@ export class StairwellBuilder {
    * sticking out of the face. `along` is the way out of the face (unit, flat),
    * `across` the edge's length, `y` the walking surface there.
    */
-  private brokenEdge(at: THREE.Vector3, along: THREE.Vector3, across: number, y: number, seed: number, hangs = true): void {
+  private brokenEdge(at: THREE.Vector3, along: THREE.Vector3, across: number, y: number, seed: number, hangs = false): void {
     const r = this.rnd(seed);
     const side = new THREE.Vector3(-along.z, 0, along.x);
     const n = Math.max(3, Math.round(across / 0.32));
@@ -647,9 +647,7 @@ export class StairwellBuilder {
     this.mine(8.55, halfY(6), 3.3);
     this.mine(0.7, floorY(5), 7.1);
     // What fell, down in the well and on the landings below it
-    this.put(rubble(1.1, 81), 4.6, floorY(5) + 0.05, 1.0, 0.5);
     this.put(rubblePile(0.6), 1.6, floorY(5), 3.4, 1.1);
-    this.put(rubble(0.9, 83), 6.0, stepB(5, 4) + 0.02, 7.0, 2.2);
     this.put(warningSign(['DANGER', 'STRUCTURAL', 'COLLAPSE']), 0.02, floorY(6) + 1.5, 6.6, WEST);
     // Cut cables down the shaft, live
     const c = new THREE.Vector3(9.8, floorY(6) + 1.2, 0.4);
@@ -700,7 +698,7 @@ export class StairwellBuilder {
     this.add(cable([w0, new THREE.Vector3(XB + 0.4, y + 0.8, 1.6), new THREE.Vector3(7.9, y + 0.05, 3.0), wEnd], 0.02));
     this.sparks.push(wEnd.clone().setY(y + 0.08));
     this.sparks.push(new THREE.Vector3(8.6, y + 0.05, 5.2));
-    this.put(warningSign(['DANGER', 'LIVE', 'WIRES']), XB + 0.02, y + 1.4, 7.4, WEST);
+    this.put(warningSign(['DANGER', 'LIVE', 'WIRES']), SW.x1 - 0.02, y + 1.5, 3.0, EAST);
   }
 
   // ------------------------------------------------------------------ crawl
@@ -783,7 +781,7 @@ export class StairwellBuilder {
     this.put(rubble(1.0, 113), 7.6, S.pit, -2.2, 1.7);
     this.fires.push({ pos: new THREE.Vector3(5.0, S.pit, -1.8), size: 1.4, zone: null });
     // Signs on the stairwell side of the hole
-    this.put(warningSign(['LIFT', 'SHAFT', 'NO ENTRY']), 2.25, floorY(3) + 1.5, 0.02, SOUTH);
+    this.put(warningSign(['LIFT', 'SHAFT', 'NO ENTRY']), 2.25, floorY(3) + 1.5, 0.02, 0);
   }
 
   /** A lift car stuck in the shaft, its roof at `roof`: walked on, a hatch and the crosshead on top. */

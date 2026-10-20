@@ -211,6 +211,10 @@
     @keyframes key-glow {
       50% { box-shadow: 0 2px 0 rgba(0,0,0,0.55), 0 0 12px rgba(255,216,94,0.75); }
     }
+    /* A prompt that has to be answered now: it flashes */
+    .hud-prompt.flash.show { animation: prompt-flash 0.42s steps(2, jump-none) infinite; font-size: 18px; }
+    .hud-prompt.flash .key { min-width: 32px; padding: 5px 9px 4px; font-size: 18px; }
+    @keyframes prompt-flash { 0% { opacity: 1; } 100% { opacity: 0.25; } }
 
     /* ---------- Intro level: letterbox, objective, wipe ---------- */
     #intro-ui { position: absolute; inset: 0; pointer-events: none; }

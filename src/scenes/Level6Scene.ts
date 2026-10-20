@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level6Builder, Level6Data } from '../environment/Level6Builder';
@@ -118,6 +119,19 @@ export class Level6Scene extends CombatScene<Level6Data> {
   /** Where the fist was when it landed, to draw it back from. */
   private punchAt = new THREE.Vector3();
 
+  // ---- The punch in slow motion, and the AK in the air
+  /** How fast the world runs against Ravi: down to a crawl as the punch lands, back up once the gun is his. */
+  private timeScale = 1;
+  private slowRamp = false;
+  /** The dead man's AK: tossed up as he goes over, caught on F — or lying where it fell. */
+  private gunProp: THREE.Object3D | null = null;
+  private gunBody: CANNON.Body | null = null;
+  private gunState: 'none' | 'air' | 'floor' | 'taken' = 'none';
+  private gunAirT = 0;
+  private grabPrompt!: HTMLElement;
+  /** Seconds left of easing his aim down off the gun's arc onto the last agent. */
+  private settleAim = 0;
+
   private ui!: HTMLElement;
   private objective!: HTMLElement;
   private letterbox!: HTMLElement;
@@ -130,6 +144,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
   private pooled = new Set<Enemy>();
   private static tmpA = new THREE.Vector3();
   private static tmpB = new THREE.Vector3();
+  private static tmpC = new THREE.Vector3();
   private static tmpQ = new THREE.Quaternion();
 
   constructor(
@@ -289,12 +304,14 @@ export class Level6Scene extends CombatScene<Level6Data> {
       <div class="intro-objective"></div>
       <div class="l6-lid-top" style="position:absolute;left:0;right:0;top:0;height:50%;background:#000;pointer-events:none"></div>
       <div class="l6-lid-bot" style="position:absolute;left:0;right:0;bottom:0;height:50%;background:#000;pointer-events:none"></div>
+      <div class="hud-prompt flash l6-grab"><span class="key">F</span>GRAB THE AK</div>
     `;
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
     this.letterbox = el.querySelector('.intro-letterbox')!;
     this.objective = el.querySelector('.intro-objective')!;
     this.lids = { top: el.querySelector('.l6-lid-top')!, bot: el.querySelector('.l6-lid-bot')! };
+    this.grabPrompt = el.querySelector('.l6-grab')!;
   }
 
   private setObjective(text: string): void {
@@ -346,6 +363,12 @@ export class Level6Scene extends CombatScene<Level6Data> {
   update(dt: number, _time: number): void {
     const { input } = this.ctx;
     this.t += dt;
+    // Bullet time: the world runs at timeScale, Ravi at full speed
+    if (this.slowRamp) {
+      this.timeScale = Math.min(1, this.timeScale + dt * 0.6);
+      if (this.timeScale >= 1) this.slowRamp = false;
+    }
+    const sdt = dt * this.timeScale;
     const cutscene = this.phase === 'wake' || this.phase === 'talk' || this.phase === 'untie';
 
     if (!cutscene && !this.over && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
@@ -403,8 +426,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
     if (cutscene) {
       A.pistol.stow = 1;
       A.shotgun.stow = 1;
-      if (this.afterT >= 0.45) A.rifle.stow = Math.max(0, A.rifle.stow - dt * 3);
     }
+    this.updateGun(dt);
     A.preUpdate(dt, input, {
       canSwitch: !cutscene && this.player.alive && !this.over && input.pointerLocked,
       busy,
@@ -416,6 +439,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
       !cutscene && !busy && input.rightHeld && input.pointerLocked && this.player.alive && !this.over &&
       !A.reloading && !A.switching;
     this.player.aiming = aiming;
+    if (this.settleAim > 0) this.easeAimOntoAgent(dt);
     this.player.update(dt, this.level.colliders);
     // Layered on after player.update so the leap and the landing ride on top
     // of the ordinary eye position instead of being overwritten by it
@@ -429,13 +453,13 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.fill.intensity += (fillTo + 2.2 * this.zoom - this.fill.intensity) * Math.min(1, dt * 2);
     // Reaching across the desk to him while the camera is in on the drive
     this.fill.distance = 3.4 + 2.6 * this.zoom;
-    this.updateBoss(dt);
+    this.updateBoss(sdt);
     this.updateArms();
 
     // Agents
     for (let i = 0; i < this.agents.length; i++) {
       const e = this.agents[i];
-      e.update(dt);
+      e.update(sdt);
       if (!e.alive && e.settled && !this.pooled.has(e)) {
         this.pooled.add(e);
         this.poolUnder(e);
@@ -446,10 +470,10 @@ export class Level6Scene extends CombatScene<Level6Data> {
       }
     }
     if (this.aiDelay > 0) {
-      this.aiDelay -= dt;
+      this.aiDelay -= sdt;
       if (this.aiDelay <= 0) this.wakeAgent();
     }
-    if (this.agentAI && this.agents[1].alive) this.agentAI.update(dt);
+    if (this.agentAI && this.agents[1].alive) this.agentAI.update(sdt);
 
     if (input.wasPressed('KeyT') && !cutscene && this.player.alive && input.pointerLocked && !A.reloading) {
       this.emote.toggle();
@@ -475,11 +499,12 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.updateSearch(dt);
     this.hud.setHealth(this.player.health, this.player.regenProgress);
     this.dialogue.update(dt);
-    this.updateDebris(dt);
-    this.decals.update(dt);
-    this.particles.update(dt);
+    this.updateDebris(sdt);
+    this.decals.update(sdt);
+    this.particles.update(sdt);
     this.flashPool.update(dt);
-    this.world.step(1 / 60, dt, 3);
+    this.world.step(1 / 60, sdt, 3);
+    this.syncGun();
     input.endFrame();
   }
 
@@ -519,6 +544,16 @@ export class Level6Scene extends CombatScene<Level6Data> {
       yaw = ty;
       pitch = tp;
       rate = this.step === 'strike' || this.step === 'windup' ? 14 : 3.2;
+      // Eyes on the AK as it turns over in the air in front of him
+      if (this.gunState === 'air' && this.gunProp) {
+        const eye = this.player.eyePosition(Level6Scene.tmpA);
+        eye.y = SEATED_EYE + this.lift;
+        const d = Level6Scene.tmpB.copy(this.gunProp.position).sub(eye);
+        const k = smooth(this.afterT / 0.35);
+        yaw += (Math.atan2(-d.x, -d.z) - yaw) * k;
+        pitch += (Math.atan2(d.y, Math.hypot(d.x, d.z)) - pitch) * k;
+        rate = 7;
+      }
     }
     const k = 1 - Math.exp(-dt * rate);
     this.camYaw += (yaw - this.camYaw) * k;
@@ -844,7 +879,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
       // He is out of the chair as it lands, and on his feet by the end
       this.lift = track([[0, 0.4], [0.6, 0.45]], this.afterT);
       this.player.position.z = L.chairAt.z - 0.18 - (STAND_UP - 0.18) * smooth(this.afterT / 1.0);
-      if (this.afterT >= 1.05) this.startFight();
+      // The fight starts when the gun is caught, or once it has hit the floor
     } else if (this.step === 'windup' || this.step === 'strike') {
       // Coming up out of the chair into it: nearly on his feet as it lands,
       // so the man's face is level with his
@@ -1044,7 +1079,12 @@ export class Level6Scene extends CombatScene<Level6Data> {
     const dir = head.clone().sub(this.player.camera.position).setY(0).normalize();
     dir.y = 0.35;
     dir.normalize();
-    this.killEnemy(a, head, dir, true, true, 'head');
+    // Everything but Ravi drops to a crawl: the man going over, the boss
+    // going for the floor, the other one bringing his rifle up
+    this.timeScale = 0.16;
+    this.slowRamp = false;
+    this.tossGun(a, dir);
+    this.killEnemy(a, head, dir, true, true, 'head', 1.25);
     // A spray off the blow, not a gunshot's worth
     this.particles.bloodSpray(head, dir, false, 0.02);
     this.duckT = 0;
@@ -1053,6 +1093,173 @@ export class Level6Scene extends CombatScene<Level6Data> {
     b.faceToward(this.player.position, 1, 10);
     b.setAiming(true);
     audio.enemyShout(3);
+  }
+
+  // ------------------------------------------------------------ the AK in the air
+
+  /**
+   * As the punch lands his AK leaves his hands, tossed up turning over — so
+   * that, in the slow motion, it peaks just in front of Ravi's face as he
+   * comes up out of the chair. A copy of the very gun he held, on a body of
+   * its own that only meets the room (not the man falling under it).
+   */
+  private tossGun(a: Enemy, dir: THREE.Vector3): void {
+    const src = (a as unknown as { rifle: THREE.Object3D }).rifle;
+    src.updateWorldMatrix(true, true);
+    const gun = src.clone(true);
+    // Its bounds in its own frame, for the body
+    gun.position.set(0, 0, 0);
+    gun.quaternion.identity();
+    gun.scale.setScalar(1);
+    gun.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(gun);
+    const half = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    const mid = bb.getCenter(new THREE.Vector3());
+    half.x = Math.max(half.x, 0.03);
+    half.y = Math.max(half.y, 0.05);
+    half.z = Math.max(half.z, 0.2);
+    // Out of his hands in front of his chest, across him, the muzzle up
+    // over his left shoulder — whatever it was doing a moment ago (slung)
+    const head = a.headWorld(new THREE.Vector3());
+    const toRavi = Level6Scene.tmpA.set(-dir.x, 0, -dir.z).normalize();
+    const start = head.clone().addScaledVector(toRavi, 0.1);
+    start.y -= 0.55;
+    const across = new THREE.Vector3(-toRavi.z, 0, toRavi.x);
+    const barrel = across.multiplyScalar(Math.cos(0.5)).add(new THREE.Vector3(0, Math.sin(0.5), 0));
+    gun.position.copy(start);
+    this.scene.add(gun);
+    // lookAt points +Z at the target; the barrel runs down −Z
+    gun.lookAt(start.clone().sub(barrel));
+    gun.visible = true;
+    gun.traverse((o) => (o.visible = true));
+    a.hideWeapon();
+
+    // Up to a peak an arm's length and a bit in front of where his eyes
+    // will be, above them — far enough off to see the whole gun turn over
+    const L = this.level;
+    const eye = new THREE.Vector3(L.chairAt.x, SEATED_EYE + 0.45, L.chairAt.z - STAND_UP);
+    const fwd = Level6Scene.tmpB.copy(start).sub(eye).setY(0).normalize();
+    const apex = eye.clone().addScaledVector(fwd, 1.05);
+    apex.y += 0.3;
+    const g = Math.abs(this.world.gravity.y);
+    const rise = Math.max(0.3, apex.y - start.y);
+    const vy = Math.sqrt(2 * g * rise);
+    const T = vy / g;
+    const body = new CANNON.Body({
+      mass: 3.5,
+      position: new CANNON.Vec3(start.x, start.y, start.z),
+      linearDamping: 0,
+      angularDamping: 0.05,
+      // Meets the room, not the ragdoll going over under it
+      collisionFilterGroup: 4,
+      collisionFilterMask: 1
+    });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(half.x, half.y, half.z)), new CANNON.Vec3(mid.x, mid.y, mid.z));
+    body.quaternion.set(gun.quaternion.x, gun.quaternion.y, gun.quaternion.z, gun.quaternion.w);
+    body.velocity.set((apex.x - start.x) / T, vy, (apex.z - start.z) / T);
+    // End over end about its own width, with a little roll
+    const side = Level6Scene.tmpC.set(fwd.z, 0, -fwd.x);
+    body.angularVelocity.set(side.x * 7 + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, side.z * 7 + (Math.random() - 0.5) * 2);
+    body.allowSleep = true;
+    this.world.addBody(body);
+    this.gunProp = gun;
+    this.gunBody = body;
+    this.gunState = 'air';
+    this.gunAirT = 0;
+  }
+
+  private syncGun(): void {
+    const b = this.gunBody;
+    const g = this.gunProp;
+    if (!b || !g) return;
+    g.position.set(b.position.x, b.position.y, b.position.z);
+    g.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+  }
+
+  /**
+   * The catch, the miss, and the pick-up. In the air: the F prompt flashes
+   * while it is within reach of his face, and F takes it out of the air —
+   * the AK is his and up at his shoulder, the fight is on, and the world
+   * comes back up to speed over a second and a half. Not caught by the time
+   * it is down past his waist, it clatters onto the carpet and the fight
+   * starts anyway, with the pistol: walk over and F picks it up.
+   */
+  private updateGun(dt: number): void {
+    const { input } = this.ctx;
+    const b = this.gunBody;
+    if (this.gunState === 'air' && b) {
+      this.gunAirT += dt;
+      const eye = this.player.eyePosition(Level6Scene.tmpA);
+      eye.y = SEATED_EYE + this.lift;
+      const near = eye.distanceTo(Level6Scene.tmpB.set(b.position.x, b.position.y, b.position.z)) < 1.5;
+      const canGrab = near && this.afterT > 0.2 && this.player.alive;
+      this.grabPrompt.classList.toggle('show', canGrab);
+      if (canGrab && input.wasPressed('KeyF')) {
+        this.catchGun();
+        return;
+      }
+      // Gone past him, below his waist: missed
+      if (b.velocity.y < 0 && b.position.y < 0.8) {
+        this.gunState = 'floor';
+        this.grabPrompt.classList.remove('show');
+        this.slowRamp = true;
+        this.startFight();
+      }
+      return;
+    }
+    if (this.gunState === 'floor' && b) {
+      const p = this.player.position;
+      const close = this.playable && Math.hypot(b.position.x - p.x, b.position.z - p.z) < 1.6;
+      this.hud.setPrompt(close ? '[ F ] PICK UP THE AK' : null);
+      if (close && input.wasPressed('KeyF')) {
+        this.hud.setPrompt(null);
+        this.takeGun();
+        this.arsenal.equip('rifle', 1);
+        this.ctx.audio.boltBack();
+      }
+    }
+  }
+
+  /** The view drawn down off the ceiling onto the last agent's chest, quickly, on top of the mouse. */
+  private easeAimOntoAgent(dt: number): void {
+    this.settleAim -= dt;
+    const b = this.agents[1];
+    if (!b.alive) {
+      this.settleAim = 0;
+      return;
+    }
+    const eye = this.player.eyePosition(Level6Scene.tmpA);
+    const d = Level6Scene.tmpB.copy(b.position).setY(b.position.y + 1.3).sub(eye);
+    const yaw = Math.atan2(-d.x, -d.z);
+    const pitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
+    let dy = yaw - this.player.yaw;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    const k = 1 - Math.exp(-dt * 12);
+    this.player.yaw += dy * k;
+    this.player.pitch += (pitch - this.player.pitch) * k;
+  }
+
+  /** Out of the air: his now, straight up into his shoulder. */
+  private catchGun(): void {
+    const { audio } = this.ctx;
+    this.grabPrompt.classList.remove('show');
+    this.takeGun();
+    this.arsenal.equip('rifle', 0.85);
+    audio.magIn();
+    audio.boltBack();
+    // Cut the slow fall of his hands short: they are on the gun now
+    this.afterT = Math.max(this.afterT, 0.6);
+    this.slowRamp = true;
+    this.startFight();
+  }
+
+  private takeGun(): void {
+    if (this.gunBody) this.world.removeBody(this.gunBody);
+    if (this.gunProp) this.scene.remove(this.gunProp);
+    this.gunBody = null;
+    this.gunProp = null;
+    this.gunState = 'taken';
+    this.arsenal.give('rifle');
   }
 
   // ----------------------------------------------------------- the boss goes
@@ -1107,11 +1314,18 @@ export class Level6Scene extends CombatScene<Level6Data> {
     this.afterT = -1;
     this.lift = 0;
     this.player.cinematic = false;
+    // The cutscene's bare hands are done with: the gun's own take over
+    this.hands.right.visible = false;
+    this.hands.left.visible = false;
     this.player.position.set(this.level.chairAt.x, 0, this.level.chairAt.z - STAND_UP);
     this.player.yaw = this.camYaw;
     this.player.pitch = this.camPitch;
     this.letterbox.classList.add('open');
     this.hud.show();
+    // Missed the AK: he fights with the pistol until he picks it up
+    if (!this.arsenal.owns('rifle')) this.arsenal.equip('pistol', 1);
+    // Eyes were up on the gun: bring them down onto the man who is left
+    if (this.gunState !== 'none') this.settleAim = 0.45;
     this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.setObjective('KILL THE AGENT');
     this.ctx.input.requestPointerLock();
@@ -1166,10 +1380,9 @@ export class Level6Scene extends CombatScene<Level6Data> {
   ): void {
     if (!enemy.alive || enemy.boss) return;
     if (enemy === this.agents[0]) {
-      // Punched, not shot: no hole, and the rifle is Ravi's now — kept from
-      // here to the end of the game. The scene brings it up itself.
-      enemy.die(point, dir, this.world, 'head', 0.85, { wound: false, keepWeapon: true });
-      this.arsenal.give('rifle');
+      // Punched, not shot: no hole. His rifle leaves his hands as he goes
+      // (tossGun) — Ravi's if he can catch it, kept to the end of the game
+      enemy.die(point, dir, this.world, 'head', 0.85 * impulseScale, { wound: false, keepWeapon: true });
       return;
     }
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
@@ -1219,6 +1432,7 @@ export class Level6Scene extends CombatScene<Level6Data> {
     // The boss stays in his chair only long enough to be photographed
     this.duckAfterPhoto = true;
     this.phase = 'fight';
+    this.arsenal.give('rifle');
     this.arsenal.equip('rifle');
     this.player.cinematic = false;
     this.player.position.set(L.chairAt.x, 0, L.chairAt.z - STAND_UP);

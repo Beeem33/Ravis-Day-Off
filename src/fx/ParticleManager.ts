@@ -769,13 +769,16 @@ export class ParticleManager {
   private static SPARK_HOT = new THREE.Color(1, 0.86, 0.52);
   private static SPARK_FLASH = new THREE.Color(1, 0.8, 0.45);
 
-  /** `lit`: blood, chips and smoke take the scene's lighting (dark levels). */
-  constructor(scene: THREE.Scene, opts: { lit?: boolean } = {}) {
+  /**
+   * `lit`: blood, chips and smoke take the scene's lighting (dark levels).
+   * `smoke`: how many smoke cards can be up at once (a rocket barrage needs more).
+   */
+  constructor(scene: THREE.Scene, opts: { lit?: boolean; smoke?: number } = {}) {
     this.scene = scene;
     this.solid = new ParticlePool(scene, 1600, false, opts.lit ?? false);
     // Made between the two point pools, so it draws after the blood and
     // before the glow: sparks stay bright in front of a cloud.
-    this.smoke = new SmokePool(scene, 720, opts.lit ?? false);
+    this.smoke = new SmokePool(scene, opts.smoke ?? 720, opts.lit ?? false);
     this.glow = new ParticlePool(scene, 400, true);
     this.streaks = new SparkPool(scene, 320);
     this.tracerGeo = new THREE.CylinderGeometry(0.008, 0.008, 1, 5, 1, true);
@@ -1123,6 +1126,33 @@ export class ParticleManager {
       p.color.setRGB(shade, shade * 1.02, shade * 1.06);
       p.floorY = pos.y - 0.3;
       p.wind = 1;
+    }
+  }
+
+  /**
+   * A rocket's trail: pale smoke left hanging along the `step` metres it
+   * has just flown (call every frame it flies), swelling and drifting off —
+   * close enough together to read as one line. `dir` is the way it is going.
+   */
+  rocketTrail(pos: THREE.Vector3, dir: THREE.Vector3, step = 0.7): void {
+    const d = this.unit(dir);
+    const n = step > 0.45 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const back = 0.45 + (step * i) / n;
+      const p = this.smoke.spawn();
+      p.pos.set(pos.x - d.x * back, pos.y - d.y * back, pos.z - d.z * back);
+      p.vel.set((Math.random() - 0.5) * 0.4, 0.15 + Math.random() * 0.25, (Math.random() - 0.5) * 0.4);
+      p.drag = 2;
+      p.lift = 0.25;
+      p.life = 0.55 + Math.random() * 0.35;
+      p.size0 = 0.3;
+      p.size1 = 0.8 + Math.random() * 0.4;
+      p.alpha = 0.4;
+      p.fadeIn = 0.02;
+      const shade = 0.68 + Math.random() * 0.12;
+      p.color.setRGB(shade, shade, shade * 0.97);
+      p.floorY = -1;
+      p.wind = 0.6;
     }
   }
 

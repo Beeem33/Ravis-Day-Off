@@ -16,6 +16,7 @@ import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { CarSystem } from '../entities/CarSystem';
 import { General } from '../entities/General';
+import { Rockets } from '../entities/Rockets';
 import { RaviVisual, HAND, type RaviRig } from '../entities/RaviVisual';
 import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox } from '../ui/DialogueBox';
@@ -60,6 +61,19 @@ const GLANCE_SHOVE = 3;
 /** The stomp's shockwave: what it costs a man on the ground inside it. */
 const STOMP_DAMAGE = 1;
 const STOMP_SHOVE = 5;
+/**
+ * His rockets: one that hits Ravi himself costs this much; one going off
+ * this near him, with nothing between, 2 in the core and 1 out to the edge.
+ * A car between takes all of it. One that would pass within ROCKET_FUSE of
+ * him goes off there.
+ */
+const ROCKET_DIRECT = 3;
+const ROCKET_FUSE = 1.3;
+const ROCKET_SPLASH = 3.2;
+const ROCKET_CORE = 1.8;
+/** Clipped by a rush (before his last 15%, when it kills): this much, and knocked this far off the line. */
+const RUSH_DAMAGE = 3;
+const RUSH_SHOVE = 6;
 
 /** The boss running for his car. Enemy has no run, so the walk is driven faster, with a longer stride. */
 const BOSS_SPEED = 7;
@@ -99,6 +113,14 @@ export class Level8Scene extends CombatScene<Level8Data> {
 
   private cars!: CarSystem;
   private general!: General;
+  private rockets!: Rockets;
+  /** The ground a charge will run over, painted on the lot (General.chargeLine). */
+  private chargeLine!: THREE.Mesh;
+  private chargeMat!: THREE.MeshBasicMaterial;
+  private chargeTex!: THREE.CanvasTexture;
+  /** What the objective says between his specials. */
+  private fightObjective = 'DODGE THE CARS — GET CLOSE — TAKE HIM DOWN';
+  private raged = false;
   private boss!: Enemy;
   private bossRig!: CarRig;
   private civicRig!: CivicRig;
@@ -252,7 +274,7 @@ export class Level8Scene extends CombatScene<Level8Data> {
       }
     };
 
-    this.particles = new ParticleManager(this.scene);
+    this.particles = new ParticleManager(this.scene, { smoke: 1600 });
     this.flashPool = new MuzzleFlashPool(this.scene, 4);
     Enemy.flashPool = this.flashPool;
     this.decals = new BloodDecalSystem(this.scene);
@@ -306,6 +328,33 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.buildGeneral();
     this.buildDriver();
 
+    // His rockets in the air, and what they do going off
+    this.rockets = new Rockets(this.scene, this.particles, (a, b) => this.rocketHit(a, b));
+    this.rockets.onBurst = (pos, dir, direct) => this.onRocketBurst(pos, dir, direct);
+    // The line a charge will run down, painted on the lot ahead of him
+    this.chargeTex = chargeLineTexture();
+    this.chargeMat = new THREE.MeshBasicMaterial({
+      map: this.chargeTex,
+      color: 0xff3b1f,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4
+    });
+    const lineGeo = new THREE.PlaneGeometry(1, 1);
+    lineGeo.rotateX(-Math.PI / 2);
+    this.chargeLine = new THREE.Mesh(lineGeo, this.chargeMat);
+    this.chargeLine.name = 'chargeLine';
+    this.chargeLine.renderOrder = 2;
+    this.chargeLine.frustumCulled = false;
+    this.chargeLine.visible = false;
+    this.scene.add(this.chargeLine);
+
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 1, this.player.maxHealth);
     this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.dialogue = new DialogueBox(this.ctx.uiRoot, audio);
@@ -336,6 +385,10 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.ctx.audio.stopBossMusic(0.4);
     this.cars.dispose();
     this.general.dispose();
+    this.rockets.dispose();
+    this.chargeLine.geometry.dispose();
+    this.chargeMat.dispose();
+    this.chargeTex.dispose();
     this.hud.destroy();
     this.dialogue.destroy();
     this.flashPool.dispose();
@@ -907,7 +960,7 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.general.mode = 'fight';
     this.general.paused = false;
     this.level.gate.collider.disabled = false;
-    this.setObjective('DODGE THE CARS — GET CLOSE — TAKE HIM DOWN');
+    this.setObjective(this.fightObjective);
     input.requestPointerLock();
     // Anything Space or a click queued up during the cutscene is not a shot or a jump
     input.consumeClick();
@@ -956,13 +1009,34 @@ export class Level8Scene extends CombatScene<Level8Data> {
         break;
       }
       case 'enrage':
-        this.setObjective('HE\'S CHARGING — GET OUT OF HIS WAY');
+        this.raged = true;
+        this.fightObjective = 'HE\'S CHARGING — GET OUT OF HIS WAY';
+        this.setObjective(this.fightObjective);
         this.addShake(0.6);
         break;
       case 'chargeWarn':
-        // Snorting and scraping the ground: the tell
+        // Snorting and scraping the ground: the tell (and the line he will run down, on the ground)
         audio.giantStep(dist);
         this.particles.dust(e.pos, 2.2, 0.7);
+        if (!this.raged && this.phase === 'fight') this.setObjective('HE\'S RUSHING YOU — GET OFF THE LINE');
+        break;
+      case 'rocketWarn':
+        // The launcher off his back: get behind something
+        audio.giantRoar(0.5, dist);
+        if (this.phase === 'fight') this.setObjective('ROCKETS — GET BEHIND A CAR');
+        break;
+      case 'rocket': {
+        this.rockets.fire(e.pos, e.dir, e.speed);
+        audio.rocketLaunch(e.pos.distanceTo(me));
+        this.particles.muzzleFlash(e.pos, e.dir);
+        // The back-blast out of the rear of the tube
+        const back = Level8Scene.tmpA.copy(e.pos).addScaledVector(e.dir, -1.8);
+        this.particles.exhaust(back, Level8Scene.tmpB.copy(e.dir).negate());
+        this.flashPool.flash(e.pos, 12);
+        break;
+      }
+      case 'specialDone':
+        if (this.phase === 'fight') this.setObjective(this.fightObjective);
         break;
       case 'charge':
         audio.giantRoar(0.8, dist);
@@ -973,14 +1047,23 @@ export class Level8Scene extends CombatScene<Level8Data> {
         if (d < 40) this.addShake(0.9 * (1 - d / 40));
         break;
       }
-      case 'trample':
+      case 'trample': {
         if (this.phase !== 'fight' || !this.player.alive) break;
         audio.punchHit();
         audio.stomp(0);
         this.addShake(1.8);
-        // Run down: thrown on ahead of him
-        this.player.kill('THE GENERAL', e.from);
+        if (e.lethal) {
+          // Run down: thrown on ahead of him
+          this.player.kill('THE GENERAL', e.from);
+          break;
+        }
+        // Clipped as he goes by: hurt, and knocked flying off the line, on the side he was
+        this.hurtRavi(RUSH_DAMAGE);
+        const side = Level8Scene.tmpA.set(-e.dir.z, 0, e.dir.x);
+        if (side.dot(Level8Scene.tmpB.copy(me).sub(e.from)) < 0) side.negate();
+        this.startShove(side.addScaledVector(e.dir, 0.6), RUSH_SHOVE);
         break;
+      }
       case 'skid': {
         const d = e.pos.distanceTo(me);
         this.particles.dust(e.pos, 3.2, 1.5);
@@ -1004,6 +1087,95 @@ export class Level8Scene extends CombatScene<Level8Data> {
       default:
         break;
     }
+  }
+
+  /**
+   * What a rocket's flight a→b runs into first: Ravi himself (within 0.6 m
+   * of him, from his knees to the top of his head) or, passing near enough,
+   * the air beside him (the fuse); a car; solid cover.
+   */
+  private rocketHit(a: THREE.Vector3, b: THREE.Vector3): { t: number; direct: boolean } | null {
+    let best = 2;
+    let direct = false;
+    const p = this.player;
+    if (p.alive && this.phase === 'fight') {
+      const at = p.position;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const l2 = dx * dx + dz * dz;
+      const t = l2 > 1e-9 ? THREE.MathUtils.clamp(((at.x - a.x) * dx + (at.z - a.z) * dz) / l2, 0, 1) : 0;
+      const ox = a.x + dx * t - at.x;
+      const oz = a.z + dz * t - at.z;
+      const y = a.y + (b.y - a.y) * t;
+      const top = p.eyePosition(Level8Scene.tmpD).y + 0.15;
+      const bottom = at.y + 0.25;
+      const v = y < bottom ? bottom - y : y > top ? y - top : 0;
+      const d = Math.sqrt(ox * ox + oz * oz + v * v);
+      if (d < ROCKET_FUSE) {
+        best = t;
+        direct = d < 0.6;
+      }
+    }
+    const tc = this.cars.firstHit(a, b);
+    if (tc >= 0 && tc < best) {
+      best = tc;
+      direct = false;
+    }
+    return best <= 1 ? { t: best, direct } : null;
+  }
+
+  /** A rocket going off: fire and smoke, the cars round it jumping, and Ravi hurt if it got him or he was out in the open by it. */
+  private onRocketBurst(pos: THREE.Vector3, dir: THREE.Vector3, direct: boolean): void {
+    const { audio } = this.ctx;
+    const me = this.player.position;
+    const dist = pos.distanceTo(me);
+    this.particles.explosion(pos, 2.4);
+    audio.explosion(dist);
+    this.flashPool.flash(Level8Scene.tmpA.copy(pos).setY(pos.y + 1.2), 40);
+    this.cars.blast(pos, 3);
+    this.addShake(dist < 5 ? 1.3 : Math.max(0, 1 - dist / 30) * 0.8);
+    if (this.phase !== 'fight' || !this.player.alive) return;
+    if (direct) {
+      this.hurtRavi(ROCKET_DIRECT);
+      this.startShove(Level8Scene.tmpA.copy(dir).setY(0), 3);
+      return;
+    }
+    const chest = this.player.eyePosition(Level8Scene.tmpB);
+    chest.y -= this.player.crouching ? 0.3 : 0.45;
+    const d = pos.distanceTo(chest);
+    if (d > ROCKET_SPLASH) return;
+    // Behind a car — or a lamp post's footing — it all goes into that
+    if (!this.cars.clearLine(Level8Scene.tmpA.copy(pos).setY(pos.y + 0.35), chest)) return;
+    this.hurtRavi(d < ROCKET_CORE ? 2 : 1);
+    const away = Level8Scene.tmpA.copy(me).sub(pos).setY(0);
+    if (away.lengthSq() < 1e-4) away.copy(dir).setY(0);
+    this.startShove(away, 2.2);
+  }
+
+  /**
+   * The ground he is about to run over, painted on the lot as a band of
+   * chevrons running his way: orange while he lines up on Ravi, red once it
+   * is set and he is about to go, and orange again, fainter, for his run home.
+   */
+  private updateChargeLine(): void {
+    const mesh = this.chargeLine;
+    const line = this.phase === 'fight' && !this.general.dead ? this.general.chargeLine : null;
+    const dx = line ? line.to.x - line.from.x : 0;
+    const dz = line ? line.to.z - line.from.z : 0;
+    const len = Math.hypot(dx, dz);
+    if (!line || len < 0.5) {
+      mesh.visible = false;
+      return;
+    }
+    mesh.visible = true;
+    mesh.position.set((line.from.x + line.to.x) / 2, 0.06, (line.from.z + line.to.z) / 2);
+    mesh.rotation.y = Math.atan2(-dx, -dz);
+    mesh.scale.set(line.halfWidth * 2, 1, len);
+    this.chargeTex.repeat.set(1, len / 2.4);
+    this.chargeTex.offset.y = -this.t * (line.locked ? 2.4 : 1.2);
+    const pulse = 0.5 + 0.5 * Math.sin(this.t * (line.locked ? 18 : 7));
+    this.chargeMat.color.setHex(line.back ? 0xff9a3a : line.locked ? 0xff2412 : 0xff7a1a);
+    this.chargeMat.opacity = (line.back ? 0.38 : line.locked ? 0.62 : 0.42) + (line.back ? 0.12 : 0.3) * pulse;
   }
 
   /** Damage without the death-flash rule bending: the HUD flashes on any hit that leaves him standing. */
@@ -1365,6 +1537,8 @@ export class Level8Scene extends CombatScene<Level8Data> {
     else if (this.phase === 'won') this.updateWon(dt);
     else if (this.phase === 'outro') this.updateOutro(dt);
     this.general.update(dt);
+    this.rockets.update(dt);
+    this.updateChargeLine();
     this.applyShot();
     this.applyShake(dt);
 
@@ -1452,6 +1626,35 @@ export class Level8Scene extends CombatScene<Level8Data> {
     this.warmUp(renderer, this.player.camera);
     renderer.render(this.scene, this.player.camera);
   }
+}
+
+/**
+ * The charge line's texture: both edges of the band, and a chevron pointing
+ * up it (the way he will run), to repeat down its length.
+ */
+function chargeLineTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const g = c.getContext('2d')!;
+  g.clearRect(0, 0, 64, 64);
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 6, 64);
+  g.fillRect(58, 0, 6, 64);
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 9;
+  g.lineCap = 'butt';
+  g.lineJoin = 'miter';
+  g.beginPath();
+  g.moveTo(12, 50);
+  g.lineTo(32, 22);
+  g.lineTo(52, 50);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.ClampToEdgeWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  return t;
 }
 
 /** Seconds into the getaway that the Civic finds some grip and goes. */

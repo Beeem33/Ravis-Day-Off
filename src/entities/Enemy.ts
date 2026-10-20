@@ -1296,6 +1296,15 @@ export class Enemy {
   }
 
   /**
+   * The block build's chest, which everything above the hips is posed off
+   * and the model follows: something placed off it leans and turns with him
+   * (the General's launcher, slung across his back).
+   */
+  get chest(): THREE.Object3D {
+    return this.torso;
+  }
+
+  /**
    * Something small held in the right fist — a phone, a drive. On the
    * model it is closed in the hand and rides it; on the block build it
    * hangs where the rig's hand is.

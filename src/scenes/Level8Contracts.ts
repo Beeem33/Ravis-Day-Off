@@ -194,10 +194,31 @@ export type GeneralEvent =
   | { type: 'charge'; dir: THREE.Vector3 }
   /** Through `count` cars at `pos`. */
   | { type: 'ram'; pos: THREE.Vector3; count: number }
-  /** Ran Ravi down. `from` is where the General was. */
-  | { type: 'trample'; from: THREE.Vector3; dir: THREE.Vector3 }
+  /** Ran Ravi down. `from` is where the General was; `lethal` in his last 15%, a heavy blow before that. */
+  | { type: 'trample'; from: THREE.Vector3; dir: THREE.Vector3; lethal: boolean }
   /** Pulling up at the end of a run; `crashed` if it was the lot's edge that stopped him. */
-  | { type: 'skid'; pos: THREE.Vector3; crashed: boolean };
+  | { type: 'skid'; pos: THREE.Vector3; crashed: boolean }
+  /** The rocket launcher off his back and onto his shoulder: a sweep is coming, from corner `from` of the lot round to corner `to`. */
+  | { type: 'rocketWarn'; from: THREE.Vector3; to: THREE.Vector3 }
+  /** One rocket away, from `pos` along `dir` (unit) at `speed` m/s. */
+  | { type: 'rocket'; pos: THREE.Vector3; dir: THREE.Vector3; speed: number }
+  /** A rocket sweep or a rush (and the run back) is over: back to the cars. */
+  | { type: 'specialDone' };
+
+/**
+ * The ground a charge will cover, for the scene to paint on the lot: from
+ * where he is to where he will pull up. Moves with Ravi while he is lining
+ * up; `locked` once it no longer does (where it shows is where he goes).
+ * `back` for his run home after a rush.
+ */
+export interface ChargeLine {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  locked: boolean;
+  back: boolean;
+  /** Half the width of the ground he runs over: anyone this close to the line is run down. */
+  halfWidth: number;
+}
 
 /** What the General needs from the world. The scene builds this, bridging to the CarSystem. */
 export interface GeneralWorld {
@@ -254,6 +275,8 @@ export interface IGeneral {
   readonly vulnerable: boolean;
   /** Is he holding a car right now (its id), or -1. */
   readonly holding: number;
+  /** The charge he is lining up or making, or null. */
+  readonly chargeLine: ChargeLine | null;
   update(dt: number): void;
   dispose(): void;
 }

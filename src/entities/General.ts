@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Enemy } from './Enemy';
-import type { GeneralAction, GeneralEvent, GeneralWorld, IGeneral, ThrowKind } from '../scenes/Level8Contracts';
+import type { ChargeLine, GeneralAction, GeneralEvent, GeneralWorld, IGeneral, ThrowKind } from '../scenes/Level8Contracts';
 
 /**
  * THE GENERAL — commander of the POLICE FORCE, about 3.2 m of him, and the
@@ -30,9 +30,12 @@ import type { GeneralAction, GeneralEvent, GeneralWorld, IGeneral, ThrowKind } f
  * cutscenes. 'fight': his brain runs — DESIGN.md's fight rules: go and get
  * a car, heave it overhead, turn on Ravi and throw it (lob, drive or bowl),
  * again and again, quicker as he is hurt; stamp the ground if Ravi gets in
- * under him; beat his chest and roar as each third of him goes. What any of
- * it does to Ravi is the scene's business: he only says what is happening,
- * through onEvent.
+ * under him; beat his chest and roar as each third of him goes. Every few
+ * cars, something else: the rocket launcher off his back, swept across the
+ * lot from one corner to the next; or a rush straight at Ravi down a line
+ * he paints on the ground first, and straight back to where he was. What
+ * any of it does to Ravi is the scene's business: he only says what is
+ * happening, through onEvent.
  */
 
 export const GENERAL_SCALE = 1.85;
@@ -76,14 +79,39 @@ const CHARGE_SPEED = 15;
 const CHARGE_ACCEL = 24;
 /** Head down and pawing the ground before each run: the tell. */
 const PAW_TIME = 1.0;
-/** He steers at Ravi for this long after setting off, then he is committed. */
-const CHARGE_STEER = 0.3;
 /** How far past where Ravi was he carries on. */
 const OVERSHOOT = 10;
 /** Ravi this close to him, flat, at speed: run down. */
 const TRAMPLE_R = 1.75;
 /** Cars this close to his front go flying. */
 const RAM_R = 1.3;
+
+/** Cars thrown between his specials (the rockets, the rush), by phase. */
+const THROWS_PER_SPECIAL: Record<1 | 2 | 3, number> = { 1: 3, 2: 2, 3: 2 };
+/** Getting the launcher off his back and up onto his shoulder: the tell. And putting it away. */
+const SHOULDER_TIME = 1.25;
+const UNSHOULDER_TIME = 0.75;
+/** A rocket every this-many seconds through the sweep, by phase, at this speed (m/s). */
+const ROCKET_EVERY: Record<1 | 2 | 3, number> = { 1: 0.12, 2: 0.1, 3: 0.085 };
+const ROCKET_SPEED = 42;
+/** The sweep goes round at this rate (rad/s), in no less and no more time than these. */
+const SWEEP_RATE = 0.6;
+const SWEEP_MIN = 1.6;
+const SWEEP_MAX = 3.4;
+/**
+ * Each rocket is aimed to pass this high over the ground at Ravi's range:
+ * high enough over the rows between to get there, low enough that the car
+ * he is down behind takes it.
+ */
+const ROCKET_AT_H = 0.6;
+/** The rush: only at Ravi this near; the line shows this long before he goes, still for the last part of it. */
+const RUSH_RANGE = 60;
+const RUSH_PAW = 1.5;
+const RUSH_LOCK = 0.75;
+/** How far past where Ravi was a rush carries him. */
+const RUSH_OVERSHOOT = 4;
+/** The enraged charge's line stops following Ravi this long before he goes. */
+const RAGE_LOCK = 0.35;
 
 /**
  * How he fights in each phase. `pace` speeds his heavy animations up (the
@@ -150,6 +178,52 @@ const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _p1 = new THREE.Vector3();
+const _p2 = new THREE.Vector3();
+const _p3 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _q3 = new THREE.Quaternion();
+const _s1 = new THREE.Vector3();
+
+/**
+ * His rocket launcher: a four-tube pod, olive drab, with a pistol grip and
+ * a front grip under it and the sight on its left. Body units (he scales
+ * it); its own −Z is the muzzle end, the tubes' mouths at z = −0.5.
+ */
+function rocketLauncher(): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'rocketLauncher';
+  const olive = new THREE.MeshStandardMaterial({ color: 0x4e5534, roughness: 0.75 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x23251d, roughness: 0.55, metalness: 0.3 });
+  const black = new THREE.MeshBasicMaterial({ color: 0x060606 });
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material): void => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    b.position.set(x, y, z);
+    g.add(b);
+  };
+  box(0.2, 0.2, 0.92, 0, 0, 0, olive);
+  box(0.226, 0.226, 0.06, 0, 0, -0.44, dark);
+  box(0.226, 0.226, 0.06, 0, 0, 0.44, dark);
+  box(0.226, 0.03, 0.5, 0, 0.1, 0, dark);
+  box(0.045, 0.14, 0.06, 0, -0.17, -0.2, dark);
+  box(0.035, 0.035, 0.14, 0, -0.115, -0.25, dark);
+  box(0.04, 0.12, 0.05, -0.02, -0.16, -0.32, dark);
+  box(0.035, 0.08, 0.12, -0.125, 0.05, -0.14, dark);
+  // The four tubes' mouths, at both ends
+  const mouth = new THREE.CircleGeometry(0.043, 12);
+  for (const end of [-1, 1]) {
+    for (const x of [-0.05, 0.05]) {
+      for (const y of [-0.05, 0.05]) {
+        const c = new THREE.Mesh(mouth, black);
+        c.position.set(x, y, end * 0.4705);
+        if (end < 0) c.rotation.y = Math.PI;
+        g.add(c);
+      }
+    }
+  }
+  return g;
+}
 
 /** Pull `p` back inside `reach` of `from`, in place. */
 function inReach(p: THREE.Vector3, from: THREE.Vector3, reach: number): void {
@@ -243,6 +317,10 @@ type Act =
   | 'paw'
   | 'charge'
   | 'skid'
+  | 'shoulder'
+  | 'barrage'
+  | 'unshoulder'
+  | 'return'
   | 'death';
 
 /** What a walk is for: what he does when he gets there. */
@@ -286,6 +364,12 @@ export class General implements IGeneral {
   }
   get holding(): number {
     return this.carHeld;
+  }
+  get chargeLine(): ChargeLine | null {
+    if (!this.lineShown) return null;
+    this.line.locked = this.lineLocked;
+    this.line.back = this.lineBack;
+    return this.line;
   }
 
   // ---- The pose, and the shapes it is blended from
@@ -401,6 +485,26 @@ export class General implements IGeneral {
   private trampled = false;
   private skidCrashed = false;
 
+  // ---- The specials: the rocket sweep, and the rush and the run back
+  private throwsSince = 0;
+  private nextSpecial: 'rockets' | 'rush' = 'rockets';
+  private rushing = false;
+  private readonly home = new THREE.Vector3();
+  private lineShown = false;
+  private lineLocked = false;
+  private lineBack = false;
+  private readonly line: ChargeLine = { from: new THREE.Vector3(), to: new THREE.Vector3(), locked: false, back: false, halfWidth: TRAMPLE_R };
+  private sweepFrom = 0;
+  private sweepBy = 0;
+  private rocketT = 0;
+  private rocketN = 0;
+  private aimPitch = -0.1;
+  private recoil = 0;
+  /** The launcher, its seat on his back (chest-local), and how far it is from there onto his shoulder (0..1). */
+  private readonly launcher: THREE.Group;
+  private readonly backSeat = new THREE.Matrix4();
+  private lnch = 0;
+
   // ---- Dying
   private dying = false;
   private readonly deathFrom = new THREE.Vector3();
@@ -440,6 +544,15 @@ export class General implements IGeneral {
       liftR: 0
     };
     this.cadence = this.cadenceFor(TUNE[1].walk);
+    // The launcher, slung across his back, muzzle up over his right shoulder
+    this.launcher = rocketLauncher();
+    this.launcher.matrixAutoUpdate = false;
+    scene.add(this.launcher);
+    this.backSeat.compose(
+      new THREE.Vector3(0.02, -0.03, 0.27),
+      new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0.42, 0.9, 0.06).normalize()),
+      ONE
+    );
     // Start already stood in his idle, not blending into it from nothing
     this.idleShape(this.cur);
     this.from.copy(this.cur);
@@ -547,6 +660,7 @@ export class General implements IGeneral {
       this.act !== 'stagger' &&
       this.act !== 'paw' &&
       this.act !== 'charge' &&
+      this.act !== 'return' &&
       !this.scriptedThrow
     ) {
       this.staggerAcc = 0;
@@ -583,12 +697,15 @@ export class General implements IGeneral {
     e.pose = this.pose;
     // Last: the rig and the model posed off everything above
     e.update(dt);
+    if (this.recoil > 0) this.recoil = Math.max(0, this.recoil - dt * 7);
+    this.placeLauncher(dt);
   }
 
   dispose(): void {
     this.enemy.onStep = null;
     this.onEvent = null;
     this.scene.remove(this.enemy.root);
+    this.scene.remove(this.launcher);
   }
 
   // ===================================================================== the frame
@@ -634,14 +751,17 @@ export class General implements IGeneral {
       return;
     }
     // Ravi down: whatever he was doing, he stops to stand over it and roar
+    // (a run, a sweep and the run home play out first)
     if (!this.tgtAlive) {
       const a = this.act;
-      if (!this.gloated && a !== 'roar' && a !== 'stagger' && a !== 'stomp' && a !== 'charge' && a !== 'skid') this.decide();
+      const busy = a === 'roar' || a === 'stagger' || a === 'stomp' || a === 'charge' || a === 'skid' || a === 'return' || a === 'barrage' || a === 'unshoulder';
+      if (!this.gloated && !busy) this.decide();
       return;
     }
     if (this.pendingRage) {
       // Whatever he is in the middle of, he stops: the car goes down and he roars
       if (this.act !== 'stagger') {
+        this.endSpecial();
         this.pendingRage = false;
         this.pendingPhase = false;
         if (this.carHeld >= 0) this.dropCar();
@@ -745,8 +865,16 @@ export class General implements IGeneral {
         break;
       }
       case 'paw':
-        // Squaring up to him, quickly: this is where the run will go
-        this.turnToward(this.tgtPos.x, this.tgtPos.z, dt, 3.2, 8);
+        // Squaring up to him, quickly: this is where the run will go, and
+        // the line on the ground goes with him — until the last moment of
+        // it, when it stops: what it shows then is where he goes
+        if (this.actT < this.actDur - (this.rushing ? RUSH_LOCK : RAGE_LOCK)) {
+          this.turnToward(this.tgtPos.x, this.tgtPos.z, dt, 3.2, 8);
+          this.planRun();
+        } else {
+          this.lineLocked = true;
+          this.turnToward(this.line.to.x, this.line.to.z, dt, 3.2, 8);
+        }
         if (this.actT >= this.actDur) this.beginCharge();
         break;
       case 'charge':
@@ -755,6 +883,38 @@ export class General implements IGeneral {
       case 'skid':
         this.stepSkid(dt);
         break;
+      case 'return':
+        this.stepReturn(dt);
+        break;
+      case 'shoulder': {
+        // Round to where the sweep starts while he gets it up
+        const p = this.enemy.position;
+        const err = this.turnToward(p.x - Math.sin(this.sweepFrom) * 10, p.z - Math.cos(this.sweepFrom) * 10, dt, 2.4, 5);
+        if (Math.abs(err) > 0.3) {
+          this.walkW = 0.32;
+          this.cadence = this.cadenceFor(t.walk) * 1.4;
+        }
+        this.aimAt(dt);
+        if (this.actT >= this.actDur) this.endAct();
+        break;
+      }
+      case 'barrage': {
+        // Swinging round with the sweep, a rocket away every beat
+        const e = this.enemy;
+        const want = wrap(this.sweepFrom + this.sweepBy * clamp01(this.actT / this.actDur));
+        e.yaw = wrap(e.yaw + THREE.MathUtils.clamp(wrap(want - e.yaw), -5 * dt, 5 * dt));
+        e.root.rotation.y = e.yaw;
+        this.walkW = 0.3;
+        this.cadence = this.cadenceFor(t.walk) * 1.2;
+        this.aimAt(dt);
+        this.rocketT -= dt;
+        while (this.rocketT <= 0 && this.actT < this.actDur) {
+          this.rocketT += ROCKET_EVERY[this._phase];
+          this.fireRocket();
+        }
+        if (this.actT >= this.actDur) this.endAct();
+        break;
+      }
       case 'death':
         this.stepDeath();
         break;
@@ -818,6 +978,25 @@ export class General implements IGeneral {
       case 'walk':
         this.arrive();
         return;
+      case 'shoulder':
+        this.rocketT = 0;
+        this.rocketN = 0;
+        this.begin('barrage', this.sweepDur, 0.2);
+        return;
+      case 'barrage':
+        this.begin('unshoulder', UNSHOULDER_TIME, 0.25);
+        return;
+      case 'unshoulder':
+        this.throwsSince = 0;
+        this.emit({ type: 'specialDone' });
+        break;
+      case 'skid':
+        // A rush: straight back to where he came from
+        if (this.rushing) {
+          this.beginReturn();
+          return;
+        }
+        break;
     }
     if (this.mode === 'fight') this.decide();
     else this.beginIdle(Infinity);
@@ -847,6 +1026,7 @@ export class General implements IGeneral {
     if (!this.tgtSeen) this.sense();
     if (!this.tgtAlive) {
       // Ravi is down: stand over the lot, roar once, and wait
+      this.endSpecial();
       if (this.carHeld >= 0) this.dropCar();
       if (!this.gloated) {
         this.gloated = true;
@@ -872,6 +1052,21 @@ export class General implements IGeneral {
     }
     if (this.stompReady()) {
       this.beginStomp();
+      return;
+    }
+    // Every few cars, something else: the rockets, or a rush at him — the
+    // two in turn, but a rush only at a Ravi near enough to reach
+    if (!this.scriptedThrow && this.throwsSince >= THROWS_PER_SPECIAL[this._phase]) {
+      this.throwsSince = 0;
+      if (this.nextSpecial === 'rush' && this.flatDist(this.tgtPos) <= RUSH_RANGE) {
+        this.nextSpecial = 'rockets';
+        this.rushing = true;
+        this.home.copy(this.enemy.position);
+        this.beginPaw();
+      } else {
+        this.nextSpecial = 'rush';
+        this.beginRockets();
+      }
       return;
     }
     // Hidden from him behind the rows: a few strides along his ground to
@@ -1166,6 +1361,7 @@ export class General implements IGeneral {
     this.carHeld = -1;
     this.nextReleaseAt = this.time + t.cycle;
     this.repositioned = false;
+    if (!this.scriptedThrow) this.throwsSince++;
     this.emit({ type: 'throw', carId: id, kind: this.scriptedThrow ? 'lob' : kind, aim: aim.clone() });
   }
 
@@ -1235,6 +1431,7 @@ export class General implements IGeneral {
   }
 
   private beginStagger(): void {
+    this.endSpecial();
     if (this.carHeld >= 0) this.dropCar();
     // Whatever he was going to do with it, he isn't now
     if (this.act === 'reach' || this.act === 'lift') this.carId = -1;
@@ -1244,23 +1441,44 @@ export class General implements IGeneral {
     this.enemy.poseCurl = 0.5;
   }
 
-  /** Head down, a hoof scraping the ground: the tell before every run. */
+  /**
+   * Head down, a hoof scraping the ground: the tell before every run. The
+   * line he will run down goes onto the ground as he starts.
+   */
   private beginPaw(): void {
-    this.begin('paw', PAW_TIME, 0.25);
+    this.begin('paw', this.rushing ? RUSH_PAW : PAW_TIME, 0.25);
     this.enemy.poseCurl = 1;
+    this.lineShown = true;
+    this.lineLocked = false;
+    this.lineBack = false;
+    this.planRun();
     this.emit({ type: 'chargeWarn', pos: this.enemy.position.clone(), at: this.tgtPos.clone() });
   }
 
-  /** Off, at where Ravi is going to be. */
-  private beginCharge(): void {
+  /**
+   * Where the run goes from here: at Ravi and on past him, a rush only as
+   * far as the lot (it pulls up short of the fence) and the enraged charge
+   * on into it if that is where it leads. The line shows it, stopping at the
+   * fence either way.
+   */
+  private planRun(): void {
     const p = this.enemy.position;
-    _a.copy(this.tgtPos).addScaledVector(this.tgtVel, 0.3);
-    this.chargeDir.set(_a.x - p.x, 0, _a.z - p.z);
+    this.chargeDir.set(this.tgtPos.x - p.x, 0, this.tgtPos.z - p.z);
     const d = this.chargeDir.length();
-    if (d < 0.01) this.enemy.forwardDir(this.chargeDir);
+    if (d < 0.01) this.enemy.forwardDir(this.chargeDir).setY(0);
     this.chargeDir.normalize();
+    const edge = this.toEdge(p, this.chargeDir, 1.6);
+    this.chargeLeft = this.rushing ? Math.min(d + RUSH_OVERSHOOT, edge) : Math.min(70, d + OVERSHOOT);
+    const shown = Math.min(this.chargeLeft, edge);
+    this.line.from.set(p.x, 0, p.z);
+    this.line.to.set(p.x + this.chargeDir.x * shown, 0, p.z + this.chargeDir.z * shown);
+  }
+
+  /** Off, down the line. */
+  private beginCharge(): void {
+    if (!this.lineLocked) this.planRun();
+    this.lineLocked = true;
     this.chargeSpeed = 2;
-    this.chargeLeft = Math.min(70, d + OVERSHOOT);
     this.trampled = false;
     this.begin('charge', Infinity, 0.2);
     this.enemy.poseCurl = 1;
@@ -1268,45 +1486,24 @@ export class General implements IGeneral {
   }
 
   /**
-   * The run: flat out in a straight line, steering at him only for the first
-   * moment. Cars in the way go flying; Ravi in the way goes under him. He
-   * stops a way past where Ravi was, or at the edge of the lot.
+   * The run: flat out down the line he showed, no turning off it. Cars in
+   * the way go flying; Ravi in the way goes under him. He stops a way past
+   * where Ravi was, or at the edge of the lot.
    */
   private stepCharge(dt: number): void {
     const e = this.enemy;
     const p = e.position;
-    if (this.actT < CHARGE_STEER && this.tgtAlive) {
-      // Bend the run toward him, a little
-      const want = Math.atan2(-(this.tgtPos.x - p.x), -(this.tgtPos.z - p.z));
-      const have = Math.atan2(-this.chargeDir.x, -this.chargeDir.z);
-      const turn = THREE.MathUtils.clamp(wrap(want - have), -1.6 * dt, 1.6 * dt);
-      this.chargeDir.applyAxisAngle(UP, turn);
-    }
     e.yaw = Math.atan2(-this.chargeDir.x, -this.chargeDir.z);
     e.root.rotation.y = e.yaw;
     this.chargeSpeed = Math.min(CHARGE_SPEED, this.chargeSpeed + CHARGE_ACCEL * dt);
     const v = this.chargeSpeed;
     this.walkW = 1;
     this.cadence = 2.1 * (0.4 + 0.6 * (v / CHARGE_SPEED));
-    const step = v * dt;
+    const step = Math.min(v * dt, Math.max(0, this.chargeLeft));
     p.addScaledVector(this.chargeDir, step);
     this.chargeLeft -= step;
-
-    // Through the cars: his front, at bumper height
-    if (this.world.ram) {
-      _b.copy(p).addScaledVector(this.chargeDir, 0.9 * S).setY(p.y + 0.8);
-      const n = this.world.ram(_b, this.chargeDir, v, RAM_R);
-      if (n > 0) {
-        this.emit({ type: 'ram', pos: _b.clone(), count: n });
-        // Every car costs him a little speed, never all of it
-        this.chargeSpeed *= Math.pow(0.82, n);
-      }
-    }
-    // Ravi
-    if (!this.trampled && this.tgtAlive && v > 5 && this.flatDist(this.tgtPos) < TRAMPLE_R && this.tgtPos.y < p.y + 2.2) {
-      this.trampled = true;
-      this.emit({ type: 'trample', from: p.clone().addScaledVector(this.chargeDir, -1.2), dir: this.chargeDir.clone() });
-    }
+    this.line.from.set(p.x, 0, p.z);
+    this.ramAndTrample(v);
     // The edge of the lot pulls him up hard; the end of the run, gently
     const A = this.world.arena ?? this.zone;
     const m = 1.6;
@@ -1318,15 +1515,40 @@ export class General implements IGeneral {
     } else if (this.chargeLeft <= 0) this.beginSkid(false);
   }
 
+  /** At speed, his front through the cars and over Ravi. */
+  private ramAndTrample(v: number): void {
+    const p = this.enemy.position;
+    // Through the cars: his front, at bumper height
+    if (this.world.ram) {
+      _b.copy(p).addScaledVector(this.chargeDir, 0.9 * S).setY(p.y + 0.8);
+      const n = this.world.ram(_b, this.chargeDir, v, RAM_R);
+      if (n > 0) {
+        this.emit({ type: 'ram', pos: _b.clone(), count: n });
+        // Every car costs him a little speed, never all of it
+        this.chargeSpeed *= Math.pow(0.82, n);
+      }
+    }
+    // Ravi: run down — the end of him, once he's enraged
+    if (!this.trampled && this.tgtAlive && v > 5 && this.flatDist(this.tgtPos) < TRAMPLE_R && this.tgtPos.y < p.y + 2.2) {
+      this.trampled = true;
+      this.emit({ type: 'trample', from: p.clone().addScaledVector(this.chargeDir, -1.2), dir: this.chargeDir.clone(), lethal: this.enraged });
+    }
+  }
+
   private beginSkid(crashed: boolean): void {
     this.skidCrashed = crashed;
+    this.lineShown = false;
     if (crashed) this.chargeSpeed = Math.min(this.chargeSpeed, 3);
-    this.begin('skid', crashed ? 2.3 : 1.4, 0.15);
+    this.begin('skid', this.rushing ? (crashed ? 1.5 : 0.9) : crashed ? 2.3 : 1.4, 0.15);
     this.enemy.poseCurl = 0.6;
     this.emit({ type: 'skid', pos: this.enemy.position.clone(), crashed });
   }
 
-  /** Digging his heels in, sliding to a stop; then round to face Ravi for the next one. */
+  /**
+   * Digging his heels in, sliding to a stop; then round to face Ravi for the
+   * next one — or, after a rush, round toward home, with the line back there
+   * going down on the ground.
+   */
   private stepSkid(dt: number): void {
     const p = this.enemy.position;
     if (this.chargeSpeed > 0) {
@@ -1337,18 +1559,227 @@ export class General implements IGeneral {
       p.z = THREE.MathUtils.clamp(p.z, A.minZ + 1.6, A.maxZ - 1.6);
     }
     // Shaking it off, then coming round
-    const turnFrom = this.skidCrashed ? 1.3 : 0.5;
+    const turnFrom = this.rushing ? (this.skidCrashed ? 0.8 : 0.25) : this.skidCrashed ? 1.3 : 0.5;
     if (this.actT > turnFrom) {
-      const err = this.turnToward(this.tgtPos.x, this.tgtPos.z, dt, 2.2, 5);
+      const at = this.rushing ? this.home : this.tgtPos;
+      const err = this.turnToward(at.x, at.z, dt, this.rushing ? 4 : 2.2, 5);
       if (Math.abs(err) > 0.4) {
         this.walkW = 0.32;
         this.cadence = this.cadenceFor(this.tune.walk) * 1.4;
       }
     }
+    if (this.rushing && this.actT > turnFrom && this.flatDist(this.home) > 0.8) {
+      this.lineShown = true;
+      this.lineLocked = true;
+      this.lineBack = true;
+      this.line.from.set(p.x, 0, p.z);
+      this.line.to.set(this.home.x, 0, this.home.z);
+    }
     if (this.actT >= this.actDur) this.endAct();
   }
 
+  /** Back where he came from, as fast as he went: the rush is over, and the cars are waiting. */
+  private beginReturn(): void {
+    const p = this.enemy.position;
+    this.chargeDir.set(this.home.x - p.x, 0, this.home.z - p.z);
+    const d = this.chargeDir.length();
+    if (d < 0.8) {
+      this.finishRush();
+      return;
+    }
+    this.chargeDir.divideScalar(d);
+    this.chargeLeft = d;
+    this.chargeSpeed = 2;
+    this.trampled = false;
+    this.lineShown = true;
+    this.lineLocked = true;
+    this.lineBack = true;
+    this.begin('return', Infinity, 0.2);
+    this.enemy.poseCurl = 1;
+  }
+
+  /** Flat out home, coming round to face it as he goes, and pulling up on the spot. */
+  private stepReturn(dt: number): void {
+    const p = this.enemy.position;
+    const err = this.turnToward(this.home.x, this.home.z, dt, 7, 12);
+    const brake = Math.sqrt(2 * 22 * Math.max(0, this.chargeLeft)) + 1;
+    const accel = Math.abs(err) < 0.6 ? CHARGE_ACCEL : CHARGE_ACCEL * 0.3;
+    this.chargeSpeed = Math.min(CHARGE_SPEED, brake, this.chargeSpeed + accel * dt);
+    const v = this.chargeSpeed;
+    this.walkW = 1;
+    this.cadence = 2.1 * (0.4 + 0.6 * (v / CHARGE_SPEED));
+    const step = Math.min(v * dt, this.chargeLeft);
+    p.addScaledVector(this.chargeDir, step);
+    this.chargeLeft -= step;
+    this.line.from.set(p.x, 0, p.z);
+    this.ramAndTrample(v);
+    if (this.chargeLeft <= 0.02) this.finishRush();
+  }
+
+  private finishRush(): void {
+    this.rushing = false;
+    this.lineShown = false;
+    this.throwsSince = 0;
+    this.emit({ type: 'specialDone' });
+    // A breath, squaring up to Ravi; then the cars again
+    this.beginIdle(0.5);
+  }
+
+  /** Whatever special he was in the middle of, he isn't now: no line on the ground, the launcher back over his shoulder. */
+  private endSpecial(): void {
+    const a = this.act;
+    const was = this.rushing || a === 'shoulder' || a === 'barrage' || a === 'unshoulder' || a === 'return';
+    this.rushing = false;
+    this.lineShown = false;
+    if (was) this.emit({ type: 'specialDone' });
+  }
+
+  /** How far from `p` along `dir` (flat, unit) to the lot's edge, `m` in from it. */
+  private toEdge(p: THREE.Vector3, dir: THREE.Vector3, m: number): number {
+    const A = this.world.arena ?? this.zone;
+    let t = Infinity;
+    if (dir.x > 1e-6) t = Math.min(t, (A.maxX - m - p.x) / dir.x);
+    else if (dir.x < -1e-6) t = Math.min(t, (A.minX + m - p.x) / dir.x);
+    if (dir.z > 1e-6) t = Math.min(t, (A.maxZ - m - p.z) / dir.z);
+    else if (dir.z < -1e-6) t = Math.min(t, (A.minZ + m - p.z) / dir.z);
+    return Math.max(0, t);
+  }
+
+  // ------------------------------------------------------------- the rockets
+
+  private sweepDur = 2;
+
+  /**
+   * The launcher off his back: the sweep goes from one corner of the lot
+   * round to the next, across whichever side of it Ravi is in — so it
+   * passes over him wherever he is — starting from the corner further round
+   * from him, so he has the most time to get behind something.
+   */
+  private beginRockets(): void {
+    const A = this.world.arena ?? this.zone;
+    const p = this.enemy.position;
+    const cs: [number, number][] = [
+      [A.minX, A.minZ],
+      [A.maxX, A.minZ],
+      [A.maxX, A.maxZ],
+      [A.minX, A.maxZ]
+    ];
+    const yawTo = (x: number, z: number): number => Math.atan2(-(x - p.x), -(z - p.z));
+    const yr = yawTo(this.tgtPos.x, this.tgtPos.z);
+    let ia = -1;
+    for (let i = 0; i < 4; i++) {
+      const a = yawTo(cs[i][0], cs[i][1]);
+      const j = (i + 1) % 4;
+      const d = wrap(yawTo(cs[j][0], cs[j][1]) - a);
+      const r = wrap(yr - a);
+      if (d >= 0 ? r >= 0 && r <= d : r <= 0 && r >= d) {
+        ia = i;
+        break;
+      }
+    }
+    let from: THREE.Vector3;
+    let to: THREE.Vector3;
+    if (ia < 0) {
+      // (Outside the lot? Then just across him.)
+      this.sweepFrom = wrap(yr - 0.7);
+      this.sweepBy = 1.4;
+      from = new THREE.Vector3(p.x - Math.sin(this.sweepFrom) * 30, 0, p.z - Math.cos(this.sweepFrom) * 30);
+      to = new THREE.Vector3(p.x - Math.sin(yr + 0.7) * 30, 0, p.z - Math.cos(yr + 0.7) * 30);
+    } else {
+      let i0 = ia;
+      let i1 = (ia + 1) % 4;
+      const y0 = yawTo(cs[i0][0], cs[i0][1]);
+      const y1 = yawTo(cs[i1][0], cs[i1][1]);
+      if (Math.abs(wrap(yr - y0)) < Math.abs(wrap(y1 - yr))) {
+        const k = i0;
+        i0 = i1;
+        i1 = k;
+      }
+      this.sweepFrom = yawTo(cs[i0][0], cs[i0][1]);
+      this.sweepBy = wrap(yawTo(cs[i1][0], cs[i1][1]) - this.sweepFrom);
+      from = new THREE.Vector3(cs[i0][0], 0, cs[i0][1]);
+      to = new THREE.Vector3(cs[i1][0], 0, cs[i1][1]);
+    }
+    this.sweepDur = THREE.MathUtils.clamp(Math.abs(this.sweepBy) / SWEEP_RATE, SWEEP_MIN, SWEEP_MAX);
+    this.begin('shoulder', SHOULDER_TIME, 0.3);
+    this.enemy.poseCurl = 1;
+    this.emit({ type: 'rocketWarn', from, to });
+  }
+
+  /** The launcher's pitch: down at a man's knees at Ravi's range. */
+  private aimAt(dt: number): void {
+    const d = Math.max(6, this.flatDist(this.tgtPos));
+    const want = -Math.atan2(2.9 - ROCKET_AT_H, d);
+    this.aimPitch += (want - this.aimPitch) * Math.min(1, dt * 6);
+  }
+
+  /**
+   * One rocket, out of the next of the four tubes along where the launcher
+   * points now, at knee height at Ravi's range (or the fence, if that is
+   * nearer) and on into the ground beyond: whatever he is behind takes it.
+   */
+  private fireRocket(): void {
+    const e = this.enemy;
+    const p = e.position;
+    const fx = -Math.sin(e.yaw);
+    const fz = -Math.cos(e.yaw);
+    const i = this.rocketN++ % 4;
+    const m = new THREE.Vector3((i & 1 ? 1 : -1) * 0.05, (i & 2 ? 1 : -1) * 0.05, -0.5).applyMatrix4(this.launcher.matrix);
+    _c.set(fx, 0, fz);
+    const d = THREE.MathUtils.clamp(this.flatDist(this.tgtPos), 6, Math.max(6, this.toEdge(p, _c, 0.3)));
+    const aim = _a.set(p.x + fx * d, ROCKET_AT_H, p.z + fz * d);
+    this.scatter(aim, 0.6);
+    const dir = aim.sub(m).normalize();
+    this.recoil = 1;
+    this.emit({ type: 'rocket', pos: m, dir: dir.clone(), speed: ROCKET_SPEED });
+  }
+
+  /**
+   * Where the launcher is: across his back, off the chest so it leans and
+   * turns with him; on his right shoulder, aimed down the sweep; or on its
+   * way between, up over the shoulder. Placed from the pose he has just
+   * been given, so it rides him exactly.
+   */
+  private placeLauncher(dt: number): void {
+    const a = this.act;
+    const u = this.actDur > 0 && this.actDur < Infinity ? clamp01(this.actT / this.actDur) : 0;
+    if (a === 'shoulder') this.lnch = seg(u, 0.25, 0.75);
+    else if (a === 'barrage') this.lnch = 1;
+    else if (a === 'unshoulder') this.lnch = 1 - seg(u, 0.05, 0.6);
+    else this.lnch = Math.max(0, this.lnch - dt * 3);
+    const chest = this.enemy.chest;
+    chest.updateWorldMatrix(true, false);
+    const m = this.launcher.matrix;
+    m.multiplyMatrices(chest.matrixWorld, this.backSeat);
+    if (this.lnch > 0.001) {
+      const k = smooth(this.lnch);
+      m.decompose(_p1, _q1, _s1);
+      this.shoulderSeat(this.cur, _p2, _q2);
+      _p1.lerp(_p2, k);
+      _p1.y += Math.sin(Math.PI * k) * 0.3 * S;
+      _q1.slerp(_q2, k);
+      m.compose(_p1, _q1, _s1.setScalar(S));
+    }
+    this.launcher.matrixWorldNeedsUpdate = true;
+  }
+
+  /** The launcher on his right shoulder for shape `o`, aimed by aimPitch: world position and rotation. */
+  private shoulderSeat(o: Shape, pos: THREE.Vector3, q: THREE.Quaternion): void {
+    this.shoulder(1, o, _p3);
+    _p3.x -= 0.07;
+    _p3.y += 0.15 + 0.015 * this.recoil;
+    _p3.z += 0.02 + 0.06 * this.recoil;
+    this.toWorld(_p3, pos);
+    q.setFromAxisAngle(UP, this.enemy.yaw).multiply(_q3.setFromAxisAngle(X_AXIS, this.aimPitch + 0.05 * this.recoil));
+  }
+
+  /** A point on the launcher (its own frame), as it was last placed, in his body frame. */
+  private onLauncher(x: number, y: number, z: number, out: THREE.Vector3): THREE.Vector3 {
+    return this.toBody(_p3.set(x, y, z).applyMatrix4(this.launcher.matrix), out);
+  }
+
   private beginDeath(): void {
+    this.endSpecial();
     if (this.carHeld >= 0) this.dropCar();
     this.dying = true;
     this.scriptedThrow = false;
@@ -1537,6 +1968,14 @@ export class General implements IGeneral {
         break;
       case 'skid':
         this.skidShape(o);
+        break;
+      case 'return':
+        this.chargeShape(o);
+        break;
+      case 'shoulder':
+      case 'barrage':
+      case 'unshoulder':
+        this.rocketShape(o);
         break;
       case 'death':
         this.deathShape(o);
@@ -2002,6 +2441,42 @@ export class General implements IGeneral {
     o.headY = 0;
     o.headR = 0;
     o.roar = 0.75;
+  }
+
+  /**
+   * The launcher. Getting it: the right hand up over his shoulder for the
+   * end of it, and swinging it over onto the shoulder; then braced, feet
+   * wide, the chest turned a little right so the left hand comes across to
+   * the front grip, the right on the pistol grip, head down at the sight —
+   * each rocket kicking it back into him. Putting it away, the same
+   * backwards. The hands go where the launcher's grips are.
+   */
+  private rocketShape(o: Shape): void {
+    const a = this.act;
+    const u = clamp01(this.actT / this.actDur);
+    const up = smooth(this.lnch);
+    const hold = a === 'shoulder' ? seg(u, 0, 0.25) : a === 'unshoulder' ? 1 - seg(u, 0.6, 0.95) : 1;
+    o.stance = a === 'barrage' ? 0.3 : 0.7;
+    o.crouch = 0.12 + 0.04 * up;
+    o.liftL = o.liftR = 0;
+    o.carPitch = 0;
+    o.lean = 0.06 * up - 0.06 * this.recoil;
+    o.twist = -0.3 * up;
+    const dn = hipsDown(o.crouch, o.stance);
+    o.arms(0.43, 0.9 - dn, -0.06);
+    // Right: the end of it over his shoulder, then the pistol grip
+    this.onLauncher(0, 0, -0.4, _b);
+    this.onLauncher(0, -0.19, -0.2, _c);
+    _b.lerp(_c, up);
+    o.hR.lerp(_b, hold);
+    // Left: across to the front grip once it is up
+    this.onLauncher(-0.05, -0.14, -0.3, _c);
+    o.hL.lerp(_c, seg(up, 0.55, 1));
+    o.elbow.set(0.8, -0.35, 0.45);
+    o.headP = lerp(this.lookP, 0.12 - this.aimPitch * 0.5, up);
+    o.headY = lerp(this.lookY, -0.22, up);
+    o.headR = 0.06 * up;
+    o.roar = 0.1 + 0.25 * this.recoil;
   }
 
   /** Heels dug in and leaning back against it; dazed if it was the fence that stopped him. */

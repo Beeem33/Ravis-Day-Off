@@ -586,6 +586,54 @@ export class CarSystem implements ICarSystem {
     }
   }
 
+  /**
+   * How far along a→b (0 at a, 1 at b) the segment first meets a car or
+   * solid cover — the cover clearLine() counts — or -1 if it meets nothing:
+   * a rocket's flight. Not part of ICarSystem.
+   */
+  firstHit(a: THREE.Vector3, b: THREE.Vector3): number {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dz = b.z - a.z;
+    let best = 2;
+    for (const car of this.cars) {
+      if (!car.solid || segEnter(a, dx, dy, dz, car.aabb) < 0) continue;
+      for (const c of car.colliders) {
+        if (c.disabled) continue;
+        const t = segEnter(a, dx, dy, dz, c.box);
+        if (t >= 0 && t < best) best = t;
+      }
+    }
+    this.refreshStatic();
+    for (const c of this.staticTall) {
+      if (c.disabled) continue;
+      const t = segEnter(a, dx, dy, dz, c.box);
+      if (t >= 0 && t < best) best = t;
+    }
+    return best <= 1 ? best : -1;
+  }
+
+  /**
+   * A rocket going off at `pos`: the cars round it jump on their springs
+   * and the nearest one's alarm goes. Nothing is thrown about — a car flung
+   * onto Ravi behind it would make cover a trap — so the jolt stays under
+   * the speeds that knock a car out of its bay or crush. Not part of ICarSystem.
+   */
+  blast(pos: THREE.Vector3, radius: number): void {
+    for (const car of this.cars) {
+      if (car.state === 'held' || car.state === 'flying') continue;
+      const d = Math.hypot(car.origin.x - pos.x, car.origin.z - pos.z);
+      if (d > radius + 2.2) continue;
+      const k = 1 - d / (radius + 2.2);
+      const b = car.body;
+      b.wakeUp();
+      b.velocity.y += 1.3 * k;
+      b.angularVelocity.x += (Math.random() - 0.5) * 1.1 * k;
+      b.angularVelocity.z += (Math.random() - 0.5) * 1.1 * k;
+    }
+    this.alarmsNear(pos, radius + 2.2, 1);
+  }
+
   /** When each car was last rammed, so one charge hits it once. */
   private readonly rammedAt = new Map<number, number>();
 
@@ -1554,6 +1602,33 @@ function segHitsBox(a: THREE.Vector3, dx: number, dy: number, dz: number, box: T
     if (t0 > t1) return false;
   }
   return true;
+}
+
+/** Where segment a + t·d (t in 0..1) enters `box`: t, or -1 if it misses (0 if it starts inside). */
+function segEnter(a: THREE.Vector3, dx: number, dy: number, dz: number, box: THREE.Box3): number {
+  let t0 = 0;
+  let t1 = 1;
+  const o = [a.x, a.y, a.z];
+  const d = [dx, dy, dz];
+  const mn = [box.min.x, box.min.y, box.min.z];
+  const mx = [box.max.x, box.max.y, box.max.z];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-9) {
+      if (o[i] < mn[i] || o[i] > mx[i]) return -1;
+      continue;
+    }
+    let ta = (mn[i] - o[i]) / d[i];
+    let tb = (mx[i] - o[i]) / d[i];
+    if (ta > tb) {
+      const t = ta;
+      ta = tb;
+      tb = t;
+    }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return -1;
+  }
+  return t0;
 }
 
 function clampVec(v: CANNON.Vec3, max: number): void {

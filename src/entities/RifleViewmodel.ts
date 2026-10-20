@@ -68,6 +68,7 @@ export class RifleViewmodel {
   private magCentre = new THREE.Object3D();
   private flashSprite: THREE.Sprite;
   private flashLight: THREE.PointLight;
+  private flashCam: THREE.Camera;
   private magPivot: THREE.Object3D | null = null;
   private boltPivot: THREE.Object3D | null = null;
   private charmPivot: THREE.Object3D | null = null;
@@ -183,8 +184,13 @@ export class RifleViewmodel {
     // In the scene for good, at zero between shots: switching a light's
     // visibility moves the scene's light count, and that recompiles every
     // material in it — which it used to do on every single round.
+    // On the camera, not the gun: stowing the gun for the drink, the kick or
+    // a takedown hides it, and a light hidden with it took a five-second
+    // recompile of the whole level the first time. Moved to the muzzle while
+    // it flashes.
     this.flashLight = new THREE.PointLight(0xffb45e, 0, 5, 1.9);
-    this.muzzle.add(this.flashLight);
+    camera.add(this.flashLight);
+    this.flashCam = camera;
 
     withAK((scene) => {
       scene.traverse((o) => {
@@ -327,6 +333,7 @@ export class RifleViewmodel {
     this.flashSprite.visible = true;
     this.flashSprite.material.rotation = Math.random() * Math.PI * 2;
     this.flashLight.intensity = 4;
+    this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
     // The keychain gets a jolt off every shot
     this.charm.vSwing += 6 + Math.random() * 3;
     this.charm.vSide += (Math.random() - 0.5) * 5;
@@ -681,6 +688,7 @@ export class RifleViewmodel {
 
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
+      this.flashCam.worldToLocal(this.muzzle.getWorldPosition(this.flashLight.position));
       this.flashLight.intensity *= 0.55;
       if (this.flashTimer <= 0) {
         this.flashSprite.visible = false;

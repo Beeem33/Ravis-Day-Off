@@ -424,6 +424,9 @@ export class CoverGunner {
   /** Who he is shooting at this time up. */
   target: Enemy | null = null;
   private aimAt = new THREE.Vector3();
+  /** Where the left hand is going, eased toward each frame: it never jumps across him. */
+  private handL = new THREE.Vector3(-0.13, 0.4, -0.34);
+  private handGoal = new THREE.Vector3();
 
   /**
    * @param kneel where he kneels to shoot, facing over the desk
@@ -563,15 +566,21 @@ export class CoverGunner {
       p.foreR = THREE.MathUtils.lerp(p.foreR ?? 0, 2.7, Math.min(1, dt * 8));
     }
     this.armQ.slerp(this.wantQ, Math.min(1, dt * 10));
+    const g = this.handGoal;
     if (up) {
-      // Braced on the desk in front of him
-      p.handL!.copy(this.brace);
-      e.root.worldToLocal(p.handL!);
-      inReach(p.handL!, _c.set(-0.29, 1.02, 0), REACH);
+      // Braced on the desk in front of him — once he is round to face it.
+      // Coming up, the desk is still behind him or off to his right, and
+      // reaching for it there wrenched the arm back across his shoulders.
+      g.copy(this.brace);
+      e.root.worldToLocal(g);
+      if (g.z > -0.2 || g.x > 0.05) g.set(-0.24, 0.82, -0.24);
+      inReach(g, _c.set(-0.29, 1.02, 0), REACH);
     } else {
       // On his thigh
-      p.handL!.set(-0.13, 0.4, -0.34);
+      g.set(-0.13, 0.4, -0.34);
     }
+    this.handL.lerp(g, Math.min(1, dt * 9));
+    p.handL!.copy(this.handL);
     e.pose = p;
   }
 }
@@ -638,4 +647,88 @@ export function coweringPose(): Pose {
     head: new THREE.Euler(-0.55, 0, 0),
     lean: -0.35
   };
+}
+
+/**
+ * StandGunner — one of the staff whose fight is over (the agent he was
+ * punching went down): a pistol out, stood his ground, putting short
+ * bursts into the nearest agent and lowering it between. Only the right arm
+ * is posed; the left is the animation's, hanging at his side.
+ */
+export class StandGunner {
+  done = false;
+  private timer = 0.4 + Math.random() * 0.6;
+  private shots = 0;
+  private gap = 0;
+  private up = 0;
+  private armQ = new THREE.Quaternion();
+  private wantQ = new THREE.Quaternion();
+  private static LOW_ARM = new THREE.Quaternion().setFromUnitVectors(DOWN, new THREE.Vector3(0.1, -0.96, -0.26).normalize());
+  private readonly pose: Pose = { armR: this.armQ, foreR: 0.45 };
+  target: Enemy | null = null;
+  private aimAt = new THREE.Vector3();
+
+  constructor(
+    readonly e: Enemy,
+    private pick: (from: Enemy) => Enemy | null,
+    private hooks: FightHooks
+  ) {
+    e.equipPistol();
+    e.setKneeling(false);
+    e.setSlumped(false);
+    e.setFurious();
+    e.setWalk(0);
+    e.poseCurl = 1;
+    this.armQ.copy(StandGunner.LOW_ARM);
+    e.pose = this.pose;
+  }
+
+  end(): void {
+    if (this.done) return;
+    this.done = true;
+    this.e.pose = null;
+    this.e.poseCurl = null;
+  }
+
+  update(dt: number): void {
+    const e = this.e;
+    if (this.done || !e.alive) return;
+    this.timer -= dt;
+    if (this.target && !this.target.alive) this.target = null;
+    if (!this.target && this.timer <= 0) {
+      this.target = this.pick(e);
+      this.timer = 0.8;
+      if (this.target) {
+        this.shots = 2 + Math.floor(Math.random() * 3);
+        this.gap = 0.45;
+      }
+    }
+    const p = this.pose;
+    if (this.target) {
+      e.faceToward(this.target.position, dt, 6);
+      this.up = Math.min(1, this.up + dt * 4);
+      this.gap -= dt;
+      if (this.gap <= 0 && this.up > 0.9) {
+        this.hooks.fire(e, this.target);
+        this.shots--;
+        this.gap = 0.4 + Math.random() * 0.4;
+        if (this.shots <= 0) {
+          this.target = null;
+          this.timer = 1.2 + Math.random() * 1.6;
+        }
+      }
+    } else this.up = Math.max(0, this.up - dt * 3);
+    e.root.updateMatrixWorld();
+    if (this.target) {
+      const shoulder = e.shoulderR(_a);
+      this.aimAt.copy(this.target.position);
+      this.aimAt.y += 1.25;
+      e.root.worldToLocal(this.aimAt);
+      this.wantQ.setFromUnitVectors(DOWN, _b.copy(this.aimAt).sub(shoulder).normalize());
+      this.wantQ.slerp(StandGunner.LOW_ARM, 1 - this.up);
+    } else this.wantQ.copy(StandGunner.LOW_ARM);
+    p.foreR = THREE.MathUtils.lerp(p.foreR ?? 0, this.target ? 0.08 : 0.45, Math.min(1, dt * 8));
+    this.armQ.slerp(this.wantQ, Math.min(1, dt * 10));
+    e.pose = p;
+  }
 }

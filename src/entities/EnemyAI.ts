@@ -187,7 +187,8 @@ export class EnemyAI {
 
   update(dt: number): void {
     const enemy = this.enemy;
-    if (!enemy.alive) return;
+    // Dead, or in Ravi's arms with a knife coming
+    if (!enemy.alive || enemy.beingExecuted) return;
     const player = this.deps.player;
 
     const seen = this.canSeePlayer();

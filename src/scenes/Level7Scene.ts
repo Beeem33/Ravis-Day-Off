@@ -14,7 +14,7 @@ import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
-import { Brawl, CoverGunner, CoverShooter, GroundPound, coweringPose, type FightHooks } from '../entities/Skirmish';
+import { Brawl, CoverGunner, CoverShooter, GroundPound, StandGunner, coweringPose, type FightHooks } from '../entities/Skirmish';
 import { armWithAK, droppedAK } from '../entities/AkModel';
 import { FPSHUD } from '../ui/FPSHUD';
 import { dataDrive } from '../environment/OfficeProps';
@@ -91,6 +91,8 @@ interface Staff {
   hp: number;
   gunner: CoverGunner | null;
   brawl: Brawl | null;
+  /** Out of his fist fight: a pistol out, on his feet, shooting at the agents. */
+  stand: StandGunner | null;
   /** The face of the desk he is behind: where the agents' rounds go while he is down. */
   shield: THREE.Vector3 | null;
 }
@@ -283,6 +285,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
+    this.setupTakedown();
     this.dropKick = new DropKickViewmodel(this.player.camera);
     this.dropKick.onEvent = (e) => {
       if (e === 'launch') {
@@ -420,7 +423,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
     const e = new Enemy(pos, yaw, index, { name, civilian: true });
     this.scene.add(e.root);
     for (const p of e.parts) this.level.shootables.push(p);
-    const s: Staff = { e, hp: STAFF_HP, gunner: null, brawl: null, shield: null };
+    const s: Staff = { e, hp: STAFF_HP, gunner: null, brawl: null, stand: null, shield: null };
     this.staff.push(s);
     this.staffOf.set(e, s);
     return s;
@@ -553,12 +556,17 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
     if (this.playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
-    // ---- Deadbull (G) and the drop kick (Q), as downstairs
-    if (input.wasPressed('KeyG') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.dropKick.engaged) {
+    // ---- The knife (F), the Deadbull (G) and the drop kick (Q), as downstairs
+    const grab: Enemy[] = [];
+    for (const a of this.agents) if (a.e.alive && a.here && a.role !== 'pinned') grab.push(a.e);
+    this.stepTakedown(dt, grab, this.playable && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged, (on) =>
+      this.hud.setTakedownHint(on)
+    );
+    if (input.wasPressed('KeyG') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.dropKick.engaged && !this.inTakedown) {
       this.drink.start();
     }
     if (!this.player.alive) this.drink.abort();
-    if (input.wasPressed('KeyQ') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.drink.engaged && this.player.grounded) {
+    if (input.wasPressed('KeyQ') && this.playable && input.pointerLocked && !this.arsenal.reloading && !this.drink.engaged && !this.inTakedown && this.player.grounded) {
       if (this.dropKick.start()) {
         this.emote.cancel();
         this.player.cinematic = true;
@@ -575,7 +583,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
     }
     this.runKick(this.dropKick, dt);
     this.dropKick.update(dt);
-    const busy = this.drink.engaged || this.dropKick.engaged;
+    const busy = this.drink.engaged || this.dropKick.engaged || this.inTakedown;
     // 1/2/3, and the gun going down out of the way while his hands are full
     this.arsenal.preUpdate(dt, input, { canSwitch: this.playable && input.pointerLocked, busy });
 
@@ -584,6 +592,7 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.player.aiming = aiming;
     this.player.update(dt, this.level.colliders);
     this.dropKick.applyCamera(this.player);
+    this.holdTakedown();
 
     this.updateStory(dt);
     this.updateFight(dt);
@@ -596,7 +605,8 @@ export class Level7Scene extends CombatScene<Level7Data> {
     this.arsenal.updateViewmodels(dt, aiming);
     this.emote.update(dt, this.player);
     this.drink.update(dt, this.player);
-    const targetFov = 74 - this.arsenal.zoomFov;
+    const targetFov = 74 - this.arsenal.zoomFov - 10 * this.takedownCinema;
+    this.hud.setCinematic(this.takedownCinema > 0.5);
     if (Math.abs(this.player.camera.fov - targetFov) > 0.01) {
       this.player.camera.fov = targetFov;
       this.player.camera.updateProjectionMatrix();
@@ -736,13 +746,18 @@ export class Level7Scene extends CombatScene<Level7Data> {
   private updateFight(dt: number): void {
     for (const b of this.brawls) b.update(dt);
     this.pound?.update(dt);
-    for (const s of this.staff) s.gunner?.update(dt);
+    for (const s of this.staff) {
+      s.gunner?.update(dt);
+      s.stand?.update(dt);
+    }
 
     this.senseT -= dt;
     const sense = this.senseT <= 0;
     if (sense) this.senseT = 0.15;
     for (const a of this.agents) {
       if (!a.e.alive || !a.here) continue;
+      // A man in Ravi's arms is out of it
+      if (a.e.beingExecuted) continue;
       if (a.ai) {
         a.ai.update(dt);
         continue;
@@ -908,10 +923,8 @@ export class Level7Scene extends CombatScene<Level7Data> {
     if (a) a.brawl = null;
     if (s) {
       s.brawl = null;
-      if (s.e.alive) {
-        s.e.setShaken();
-        s.e.setHeadLook(this.player.camera.position);
-      }
+      // His man is down: he gets a pistol out and turns it on the rest of them
+      if (s.e.alive) this.arm(s);
     }
     if (a && a.e.alive && !a.ai) {
       a.e.slingWeapon(false);
@@ -922,6 +935,13 @@ export class Level7Scene extends CombatScene<Level7Data> {
         a.ai.setPatrolZone(a.e.position, 7);
       }
     }
+  }
+
+  /** One of the staff, done with his fist fight, onto his feet with a pistol. */
+  private arm(s: Staff): void {
+    if (s.stand || !s.e.alive) return;
+    s.e.setHeadLook(null);
+    s.stand = new StandGunner(s.e, (from) => this.agentTarget(from), this.hooks);
   }
 
   /** The nearest of the staff for an agent to shoot at: one of the gunners. */
@@ -1215,7 +1235,11 @@ export class Level7Scene extends CombatScene<Level7Data> {
       a.shooter?.end();
       a.shooter = null;
       if (a.brawl) this.endBrawl(a.brawl);
-      if (this.pound && victim === this.pound.agent) this.pound.end();
+      if (this.pound && victim === this.pound.agent) {
+        this.pound.end();
+        const p = this.staffOf.get(this.pound.staff);
+        if (p) this.arm(p);
+      }
       if (a.counted) this.remaining = Math.max(0, this.remaining - 1);
       bus.emit(Events.EnemyKilled, { name: victim.name, remaining: this.remaining, headshot, by });
       // The ones near him hear it
@@ -1228,6 +1252,8 @@ export class Level7Scene extends CombatScene<Level7Data> {
     }
     const s = this.staffOf.get(victim);
     if (s) {
+      s.stand?.end();
+      s.stand = null;
       if (s.brawl) this.endBrawl(s.brawl);
       if (this.pound && victim === this.pound.staff) this.pound.end();
       bus.emit(Events.EnemyKilled, { name: victim.name, remaining: this.remaining, headshot, by });
@@ -1248,6 +1274,22 @@ export class Level7Scene extends CombatScene<Level7Data> {
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
     if (byPlayer) this.ctx.bus.emit(Events.HitMarker, { lethal: true });
     this.afterDeath(enemy, byPlayer ? 'RAVI' : 'POLICE FORCE AGENT', headshot);
+  }
+
+  /** Grabbed: whatever he was in the middle of, he isn't now. */
+  protected onTakedownStart(victim: Enemy): void {
+    const a = this.agentOf.get(victim);
+    if (!a) return;
+    a.shooter?.end();
+    a.shooter = null;
+    if (a.brawl) this.endBrawl(a.brawl);
+    a.ai?.dispose();
+    a.ai = null;
+    a.wake = 0;
+    victim.setKneeling(false);
+    victim.pose = null;
+    victim.poseCurl = null;
+    victim.setHeadLook(null);
   }
 
   /** Who the boot would land on: an agent on his feet, never the staff, and not the man on the floor. */

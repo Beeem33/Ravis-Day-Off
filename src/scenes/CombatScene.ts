@@ -13,7 +13,7 @@ import type { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { HitmanVisual } from '../entities/HitmanVisual';
 import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
-import type { TakedownViewmodel } from '../entities/TakedownViewmodel';
+import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { RaviRagdoll, type GunKind } from '../entities/RaviRagdoll';
 
 /** The parts of a level's data that the shared combat code touches. */
@@ -406,6 +406,147 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
   }
 
   // -------------------------------------------------------------- takedown
+
+  /**
+   * The knife takedown, for any level that wants it (F next to an agent,
+   * from behind or in front): setupTakedown() once the player exists,
+   * stepTakedown() each frame before player.update(), holdTakedown() after
+   * it. The two original levels keep their own copies of the same thing.
+   */
+  protected tdVm: TakedownViewmodel | null = null;
+  protected tdVictim: Enemy | null = null;
+
+  protected setupTakedown(): void {
+    const { audio } = this.ctx;
+    const vm = new TakedownViewmodel(this.player.camera);
+    this.tdVm = vm;
+    vm.onEvent = (e, i) => {
+      const victim = this.tdVictim;
+      if (e === 'grab') {
+        if (victim) audio.enemyShout(1);
+      } else if (e === 'draw') {
+        audio.knifeDraw();
+      } else if (e === 'stab') {
+        if (victim && victim.alive) {
+          const wound = this.knifeWound(victim);
+          const spray = this.player.forwardDir().clone().multiplyScalar(0.45).add(new THREE.Vector3(0, 0.9, 0)).normalize();
+          audio.knifeStab();
+          victim.stabbed();
+          audio.enemyScream(i === 0 ? 1 : 0.6);
+          this.spatter(wound, spray, true);
+        }
+      } else if (e === 'caught') {
+        if (victim && victim.alive) {
+          victim.catchKnife();
+          audio.enemyGrunt('strain');
+          audio.scuff();
+        }
+      } else if (e === 'swing') {
+        audio.punchSwish();
+      } else if (e === 'punch') {
+        if (victim && victim.alive) {
+          if (i === 0) this.winded(victim);
+          else this.knockOut(victim);
+        }
+      } else if (e === 'release') {
+        if (victim && victim.alive) {
+          const wound = this.knifeWound(victim);
+          const slump = this.player.forwardDir().clone();
+          slump.y = -0.3;
+          this.killEnemy(victim, wound, slump.normalize(), true, false, 'torso', 0.2);
+          this.spatter(wound, slump.clone().negate().setY(0.4).normalize(), false);
+        }
+      } else if (e === 'done') {
+        this.tdVictim = null;
+        this.player.cinematic = false;
+      }
+    };
+  }
+
+  /** Nearest living one of `candidates` close enough, and ahead of Ravi, to grab. */
+  protected takedownTargetFrom(candidates: Enemy[]): Enemy | null {
+    if (!this.player.alive) return null;
+    const fwd = this.player.forwardDir();
+    let best: Enemy | null = null;
+    let bestD = 2.3;
+    for (const e of candidates) {
+      if (!e.alive || e.beingExecuted || e.civilian) continue;
+      const to = e.position.clone().sub(this.player.position);
+      if (Math.abs(to.y) > 1.2) continue;
+      to.y = 0;
+      const d = to.length();
+      if (d > bestD || d < 0.05) continue;
+      if (to.normalize().dot(fwd) < 0.5) continue;
+      best = e;
+      bestD = d;
+    }
+    return best;
+  }
+
+  /**
+   * The takedown's frame, before player.update(): who could be grabbed (the
+   * HUD's hint), F to start one when `canStart`, and the camera while one
+   * runs. Returns the target in reach (null if none, or one is running) so
+   * a level that has F for something else (the torch) can tell.
+   */
+  protected stepTakedown(dt: number, candidates: Enemy[], canStart: boolean, hint?: (on: boolean) => void): Enemy | null {
+    const vm = this.tdVm;
+    if (!vm) return null;
+    const { input } = this.ctx;
+    const target = this.tdVictim || !canStart ? null : this.takedownTargetFrom(candidates);
+    hint?.(!!target && input.pointerLocked);
+    if (target && input.wasPressed('KeyF') && input.pointerLocked) {
+      this.tdVictim = target;
+      this.player.cinematic = true;
+      this.player.aiming = false;
+      this.onTakedownStart(target);
+      target.beginExecution(this.world);
+      vm.start();
+    }
+    const victim = this.tdVictim;
+    if (victim) {
+      if (!this.player.alive) {
+        vm.abort();
+        this.tdVictim = null;
+        this.player.cinematic = false;
+      } else {
+        // He wrenches round to face Ravi; Ravi is pulled into grappling range
+        // and the view drags onto him
+        victim.faceToward(this.player.position, dt, 12);
+        const away = this.player.position.clone().sub(victim.position).setY(0).normalize();
+        const anchor = victim.position.clone().addScaledVector(away, vm.standOff);
+        anchor.y = this.player.position.y;
+        this.player.position.lerp(anchor, Math.min(1, dt * 6));
+        const dir = victim.position.clone().add(new THREE.Vector3(0, 1.32, 0)).sub(this.player.eyePosition());
+        let dYaw = Math.atan2(-dir.x, -dir.z) - this.player.yaw;
+        while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+        while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+        const k = Math.min(1, dt * 9);
+        this.player.yaw += dYaw * k;
+        this.player.pitch += (Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) - this.player.pitch) * k;
+      }
+    }
+    vm.update(dt);
+    return target;
+  }
+
+  /** A level's own clean-up as a man is grabbed: his fight, his AI. */
+  protected onTakedownStart(_victim: Enemy): void {}
+
+  /** Is a takedown running? */
+  protected get inTakedown(): boolean {
+    return this.tdVictim !== null;
+  }
+
+  /** After player.update(): the two of them in touch for the frame. */
+  protected holdTakedown(): void {
+    if (this.tdVm && this.tdVictim) this.holdOn(this.tdVm, this.tdVictim);
+  }
+
+  /** How far into the takedown's longer lens and letterbox (0..1). */
+  protected get takedownCinema(): number {
+    return this.tdVm ? this.tdVm.cinema : 0;
+  }
 
   /**
    * Where the takedown's blade goes in: 1.1m up and 13cm to Ravi's right of

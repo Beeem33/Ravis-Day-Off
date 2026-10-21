@@ -84,6 +84,8 @@ export interface CarRig {
   exhaust: THREE.Object3D;
   /** Where the driver sits, car-local: hip point, steering-wheel centre and the wheel's facing (toward the driver). */
   seat: { hip: THREE.Vector3; wheel: THREE.Vector3; wheelFacing: THREE.Vector3 };
+  /** The steering wheel (rigs with a cabin): turns about its own Z, out of its face toward the driver — + is anticlockwise as he sees it, a turn to the left. */
+  steeringWheel?: THREE.Object3D;
   /** Every mesh, each already tagged userData.surface = 'metal' (glass 'glass'), for the bullet raycast. */
   meshes: THREE.Mesh[];
 }

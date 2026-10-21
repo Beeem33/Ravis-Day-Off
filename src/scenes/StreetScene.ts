@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { StreetBuilder, STREET_ATMOSPHERE } from '../environment/StreetBuilder';
+import { StreetBuilder, STREET, STREET_ATMOSPHERE } from '../environment/StreetBuilder';
 import type { StreetData, RoadPos, RoadId, DriveInput, CopRig, JetRig, PoliceRig } from './StreetContracts';
 import type { CarRig } from './Level8Contracts';
-import { civic, bossCar } from '../environment/VehicleProps';
+import { civic, bossCar, WHEEL_RIM } from '../environment/VehicleProps';
 import { policeCruiser, copRig, privateJet } from '../environment/StreetProps';
 import { dataDrive } from '../environment/OfficeProps';
 import { RoadNet } from '../entities/RoadNet';
@@ -20,6 +20,10 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { Helicopter, HELI_HP } from '../entities/Helicopter';
 import { StreetMissiles, type MissileHit } from '../entities/StreetMissiles';
 import { RifleViewmodel } from '../entities/RifleViewmodel';
+import { WheelGrip, WHEEL_TURN, wheelInModel } from '../entities/WheelGrip';
+import { Debris } from '../fx/Debris';
+import { HighwayCollapse, type HolePlan } from '../fx/HighwayCollapse';
+import { cutDeck } from '../fx/DeckCut';
 import { rocketLauncher } from '../entities/General';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
@@ -84,6 +88,8 @@ export class StreetScene implements GameScene {
   private bossMan!: Enemy;
   private driver: THREE.Object3D | null = null;
   private driverRig: RaviRig | null = null;
+  /** His hands round the wheel, turning with it. */
+  private wheelGrip: WheelGrip | null = null;
   /** The bullet cracks on the windscreen, drawn over the closing shot. */
   private crackCanvas: HTMLCanvasElement | null = null;
 
@@ -114,6 +120,13 @@ export class StreetScene implements GameScene {
   private missiles!: StreetMissiles;
   // ---- The helicopters, and Ravi's AK for them
   private heliCraft!: Helicopter;
+  // ---- When one goes down: its pieces, and the side of the highway it brings down with it
+  private debris!: Debris;
+  private collapse!: HighwayCollapse;
+  /** The wreck on its way down: seconds since, how long it'll be in the air, where it lands, the hole it'll open. */
+  private crash: { t: number; tau: number; at: THREE.Vector3; plan: HolePlan | null; down: boolean } | null = null;
+  /** Ravi's car going down through the hole. */
+  private fall: { t: number; vel: THREE.Vector3; pitch: number; down: boolean } | null = null;
   private heli: Helicopter | null = null;
   private heliIndex = 0;
   private heliT = 0;
@@ -267,6 +280,17 @@ export class StreetScene implements GameScene {
     this.scene.add(this.bossMan.root);
 
     this.particles = new ParticleManager(this.scene, { smoke: 1600 });
+    // The highway can give way: the deck's own materials cut where it does, the falling pieces made of the same
+    const deckMat = (name: string): THREE.Material => (this.level.group.getObjectByName(`street-${name}`) as THREE.Mesh).material as THREE.Material;
+    this.collapse = new HighwayCollapse(this.scene, this.net, this.particles, { conc: deckMat('concrete'), asphalt: deckMat('asphalt') });
+    for (const name of ['asphalt', 'concrete', 'paint']) cutDeck(deckMat(name));
+    let thudCd = 0;
+    this.collapse.onThud = (pos) => {
+      if (this.lightT < thudCd) return;
+      thudCd = this.lightT + 0.12;
+      this.ctx.audio.stomp(this.camera.position.distanceTo(pos));
+    };
+    this.debris = new Debris(this.particles, (x, z) => this.floorAt(x, z));
     this.missiles = new StreetMissiles(this.scene, this.particles);
     this.missiles.onBurst = (pos, hit) => this.onMissileBurst(pos, hit);
     this.buildPassenger();
@@ -313,6 +337,7 @@ export class StreetScene implements GameScene {
     this.heliSound?.stop();
     this.missiles.dispose();
     this.heliCraft.dispose(this.scene);
+    this.collapse.dispose();
     this.jetSound?.stop();
     this.ctx.audio.stopBossMusic(1);
     this.traffic.dispose();
@@ -347,6 +372,13 @@ export class StreetScene implements GameScene {
     this.traffic.update(0.001, this.player.at, [this.player, this.boss.car, this.cop.car]);
   }
 
+  /** The Civic's wheel turned as he steers, his hands round it. */
+  private steerWheel(): void {
+    const a = -this.player.steerNow * WHEEL_TURN;
+    if (this.civicRig.steeringWheel) this.civicRig.steeringWheel.rotation.z = a;
+    this.wheelGrip?.update(a);
+  }
+
   /** Ravi at the wheel, seen through the glass: the whole modelled man, as Level 8's getaway sat him. */
   private buildDriver(): void {
     const rig = this.civicRig;
@@ -375,6 +407,7 @@ export class StreetScene implements GameScene {
       });
       this.driver = r.root;
       this.driverRig = r;
+      this.wheelGrip = new WheelGrip(r, { ...wheelInModel(rig.seat, 0), radius: WHEEL_RIM });
     });
   }
 
@@ -625,8 +658,10 @@ export class StreetScene implements GameScene {
     if (this.phase !== 'airport' && this.phase !== 'done') {
       this.boss.update(dt, this.player, this.traffic, this.cop.car);
       this.cop.update(dt, this.player, this.traffic, this.boss.car);
-      this.player.update(dt, input);
-      this.traffic.update(dt, this.player.at, [this.player, this.boss.car, this.cop.car]);
+      if (this.fall) this.updateFall(dt);
+      else this.player.update(dt, input);
+      const hz = this.collapse.laneHazards;
+      this.traffic.update(dt, this.player.at, hz.length ? [this.player, this.boss.car, this.cop.car, ...hz] : [this.player, this.boss.car, this.cop.car]);
       resolveCollisions([this.player, this.boss.car, this.cop.car], this.traffic);
       if (this.cop.mode === 'launch' && this.cop.merged) this.cop.mode = 'chase';
     } else {
@@ -638,6 +673,9 @@ export class StreetScene implements GameScene {
       this.startHeli();
     }
     this.updateHeli(dt);
+    this.updateCrash(dt);
+    this.debris.update(dt);
+    this.collapse.update(dt);
     this.updateMissiles(dt);
     this.updateRifle(dt);
     if (this.burning) {
@@ -656,6 +694,8 @@ export class StreetScene implements GameScene {
       this.player.applyTo(this.civicRig, dt);
       this.boss.car.applyTo(this.bossRig, dt);
       this.cop.car.applyTo(this.police, dt);
+      this.steerWheel();
+      if (this.fall) this.fallPose();
     }
     this.lamps();
     this.copMan.update(dt);
@@ -1681,6 +1721,9 @@ export class StreetScene implements GameScene {
     const p = this.player;
     const at = this.net.point(this.net.advance(p.at, 260, false, { road: p.at.road, s: 0, d: 0 }), new THREE.Vector3());
     at.y += 55;
+    // The same machine as last time, put back together: let go of its old wreckage
+    this.debris.clear();
+    this.crash = null;
     this.heliCraft.reset(at);
     this.heli = this.heliCraft;
     this.heliT = 0;
@@ -1735,17 +1778,153 @@ export class StreetScene implements GameScene {
       this.particles.exhaust(c, StreetScene.tmpB.set(0, 1, 0));
       if (h.hp < HELI_HP * 0.3 || h.state === 'down') this.particles.fire(c.setY(c.y + 0.4), 0.9, 1);
     }
-    // Down: into the ground off the side of the road, and up it goes
-    if (h.state === 'down' && (h.group.position.y < p.position.y + 0.8 || h.downT > 6)) {
-      const at = h.group.position.clone();
-      this.particles.explosion(at, 5);
-      this.ctx.audio.explosion(this.camera.position.distanceTo(at));
-      this.shake = Math.min(1.2, this.shake + 0.6);
-      h.hide();
-      this.heli = null;
-      this.heliSound?.stop();
-      this.heliSound = null;
+  }
+
+  /**
+   * Shot down: it goes up in the air — rotor blades, tail and skids flying
+   * off every way, the cabin burning — and the cabin, still carried on up
+   * the road, comes down on that side of the highway a couple of hundred
+   * metres on, where the deck gives way under it. Long enough in the air,
+   * and far enough on, for him to see where it's going and get over.
+   */
+  private shootDown(h: Helicopter, side: 1 | -1): void {
+    const { audio } = this.ctx;
+    const p = this.player;
+    const c = h.centre(new THREE.Vector3());
+    this.particles.explosion(c, 6);
+    this.particles.fire(c, 2.2, 1);
+    audio.explosion(this.camera.position.distanceTo(c));
+    this.shake = Math.min(1.4, this.shake + 0.7);
+    const pieces = h.shatter();
+    this.heli = null;
+    this.heliSound?.stop();
+    this.heliSound = null;
+    // Where the cabin comes down, and the hole it makes: the boss isn't to be under it
+    const tau = 2.6;
+    const v = Math.max(18, p.speed);
+    const sWant = p.at.s + v * (tau + 2.8) + 20;
+    const boss = this.boss.car;
+    const bossThere = (s0: number, s1: number): boolean => {
+      if (boss.at.road !== 'highway') return false;
+      const b = boss.at.s + boss.speed * tau;
+      return b > s0 && b < s1;
+    };
+    const plan = p.at.road === 'highway' ? this.collapse.plan(sWant, side, bossThere) : null;
+    if (plan) {
+      this.boss.hazards = this.collapse.driverHazards;
+      this.cop.hazards = this.collapse.driverHazards;
     }
+    const at = plan ? plan.aim.clone() : this.net.point({ road: p.at.road, s: sWant, d: side > 0 ? 3.5 : -8 }, new THREE.Vector3());
+    this.crash = { t: 0, tau, at, plan, down: false };
+    for (const piece of pieces) {
+      const cabin = piece.kind === 'cabin';
+      const d = this.debris.add({
+        obj: piece.obj,
+        vel: piece.vel,
+        spin: piece.spin,
+        size: piece.size,
+        fire: cabin ? 40 : piece.kind === 'tail' ? 6 : 0,
+        smoke: cabin ? 40 : piece.kind === 'tail' ? 12 : 2
+      });
+      if (cabin) {
+        // Thrown: from where it is to the deck at `at` in tau seconds, under gravity
+        const to = at.clone().setY(at.y + piece.size * 0.42);
+        d.vel.subVectors(to, piece.obj.position).divideScalar(tau);
+        d.vel.y += 0.5 * 9.8 * tau;
+        // It hits the road and stays there (the road may not)
+        d.onLand = () => {
+          this.crashImpact();
+          return true;
+        };
+      }
+    }
+  }
+
+  /** The cabin hits the road: up it goes, and — if there's a hole planned there — down goes the deck, and whatever's on it. */
+  private crashImpact(): void {
+    const c = this.crash;
+    if (!c || c.down) return;
+    c.down = true;
+    const { audio } = this.ctx;
+    this.particles.explosion(c.at, 7);
+    this.particles.fire(c.at, 2.4, 1);
+    audio.explosion(this.camera.position.distanceTo(c.at));
+    this.shake = Math.min(1.6, this.shake + 0.9);
+    if (!c.plan) return;
+    this.collapse.open(c.plan, c.at);
+    audio.giantFall();
+  }
+
+  /** The wreck's flight, and the road it brings down: if Ravi drives into the gap, down he goes too. */
+  private updateCrash(dt: number): void {
+    const c = this.crash;
+    if (c) {
+      c.t += dt;
+      if (!c.down && c.t > c.tau + 0.5) this.crashImpact();
+    }
+    const p = this.player;
+    if (this.phase === 'drive' && !this.fall && p.at.road === 'highway' && this.collapse.holeAt(p.position)) this.startFall();
+    // Whoever's on it when it goes — or can't stop in time after — goes down with it
+    if (this.collapse.anyOpen) {
+      for (const car of this.traffic.take((t) => this.collapse.holeAt(t.position))) this.collapse.dropCar(car.kind, car.colour, car.position, car.yaw, car.vel);
+    }
+  }
+
+  /** Over the edge of the hole: no road under him. */
+  private startFall(): void {
+    this.fall = { t: 0, vel: this.player.velocity.clone(), pitch: 0, down: false };
+    this.ctx.audio.tyreSqueal(0.5);
+    this.fail("THE ROAD WASN'T THERE");
+  }
+
+  /** Through the air with the speed he had, the nose going down, and into the ground eight metres under. */
+  private updateFall(dt: number): void {
+    const f = this.fall!;
+    const p = this.player;
+    f.t += dt;
+    if (f.down) return;
+    f.vel.y -= 9.8 * dt;
+    f.vel.x *= 1 - dt * 0.3;
+    f.vel.z *= 1 - dt * 0.3;
+    p.position.addScaledVector(f.vel, dt);
+    f.pitch = Math.min(0.9, f.pitch + dt * 1.1);
+    if (p.position.y > 0.05) return;
+    p.position.y = 0.05;
+    f.down = true;
+    f.vel.set(0, 0, 0);
+    this.ctx.audio.carCrash(0, true);
+    this.particles.dust(p.position, 4, 1.6);
+    this.particles.sparks(p.position, StreetScene.tmpA.set(0, 1, 0), 24, 0);
+    this.shake = 1.6;
+    this.hurt = 1;
+    for (let i = 0; i < 3 && this.cracks < 7; i++) {
+      this.cracks++;
+      this.crack(0.25 + Math.random() * 0.5, 0.2 + Math.random() * 0.4);
+    }
+  }
+
+  /** The Civic as it falls: nose down, on top of where it was put. */
+  private fallPose(): void {
+    const f = this.fall!;
+    this.civicRig.group.rotation.x -= f.pitch;
+    this.headPitch = -0.35 * Math.min(1, f.t * 1.5);
+  }
+
+  /** How high what's under (x, z) is near the highway: the deck where it's still there, else the ground. */
+  private floorAt(x: number, z: number): number {
+    const p = this.player;
+    const road = 'highway';
+    const len = this.net.roads[road].length;
+    let s = p.at.road === road ? p.at.s : 0;
+    let f = this.net.sample(road, s);
+    for (let i = 0; i < 2; i++) {
+      s = THREE.MathUtils.clamp(s + (x - f.pos.x) * f.tangent.x + (z - f.pos.z) * f.tangent.z, 0, len);
+      f = this.net.sample(road, s);
+    }
+    const la = (x - f.pos.x) * f.right.x + (z - f.pos.z) * f.right.z;
+    if (la < STREET.deck.far || la > STREET.deck.outer) return 0;
+    if (this.collapse.holeAt(StreetScene.tmpC.set(x, f.pos.y, z))) return 0;
+    return f.pos.y;
   }
 
   /** One of the gunner's rounds: into the car, past it, or through the glass in front of Ravi. */
@@ -1851,7 +2030,7 @@ export class StreetScene implements GameScene {
         if (h.hp <= 0) {
           const right = this.net.sample(this.player.at.road, this.player.at.s).right;
           const side = Math.sign((h.group.position.x - this.player.position.x) * right.x + (h.group.position.z - this.player.position.z) * right.z) || 1;
-          h.kill(right.clone().multiplyScalar(side));
+          this.shootDown(h, side > 0 ? 1 : -1);
           this.heliDown();
         }
       }
@@ -1867,7 +2046,14 @@ export class StreetScene implements GameScene {
     this.hp = Math.min(RAVI_HP, this.hp + 35);
     // A breather before the passenger's back at the window
     this.volleyCd = 6;
-    this.setObjective('HELICOPTER DOWN — STAY ON THE BOSS');
+    const plan = this.crash?.plan;
+    if (plan) {
+      // Where it's coming down, the road goes: get over
+      this.setObjective(plan.side > 0 ? "HELICOPTER DOWN — THE ROAD'S GOING, KEEP LEFT!" : "HELICOPTER DOWN — THE ROAD'S GOING, KEEP RIGHT!");
+      setTimeout(() => {
+        if (this.phase === 'drive') this.setObjective('STAY ON THE BOSS');
+      }, 7000);
+    } else this.setObjective('HELICOPTER DOWN — STAY ON THE BOSS');
     this.heliBar.classList.remove('on');
     this.cop.gapMin = 25;
     this.cop.gapMax = 60;

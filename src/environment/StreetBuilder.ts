@@ -67,10 +67,20 @@ const HW_STRAIGHT = 2660;
 const COP_S = 500;
 const EXIT_HALF = 2.75;
 const AIR_HALF = 3.75;
+/** The airfield in the gate frame (b, to the airport road's right): the runway's far end, and the perimeter fence past it. */
+const RUNWAY_B0 = -2000;
+const FIELD_B0 = RUNWAY_B0 - 80;
 const EXIT_PEEL = 4.6;
+/** The gantries over our side of the highway, and the median's lamp standards (every LAMP_EVERY from LAMP_FIRST), by highway s. */
+const HW_GANTRIES = [40, EXIT_S - 1600, EXIT_S - 800, EXIT_S - 25];
+const LAMP_FIRST = -HW_BACK + 20;
+const LAMP_EVERY = 50;
 
 /** The highway's cross-section, laterals from the right-hand lane's centre. */
 const HW = { R: 5.3, nearL: -10, medL: -10.8, farL: -25.6, bot: -1.6, colA: -4, colB: -18.2 } as const;
+/** Jersey barriers: height, and width at the foot. */
+const BAR_H = 0.85;
+const BAR_W = 0.6;
 
 /** Toward the sun: high in the south-south-west, early afternoon. Behind Ravi up the avenue, over his right shoulder on the highway. */
 const SUN_DIR = new THREE.Vector3(-0.35, 0.62, 0.7).normalize();
@@ -90,6 +100,8 @@ export const STREET = {
   deckHeight: DECK,
   city: { length: CITY_LEN, half: CITY_HALF, crossings: CROSS.slice(1) },
   highway: { length: HW_LEN, exitS: EXIT_S, missedExitS: MISSED_S, closureS: CLOSURE_S, copS: COP_S, halfLeft: 10, halfRight: HW.R },
+  /** The highway deck in section (offsets + to the road's right): our outer barrier's back, the far side's, our median barrier's face, our right edge, the median's middle; the underside below the surface, the barriers' height; the gantries and lamp standards along it. */
+  deck: { outer: HW.R + BAR_W, far: HW.farL - BAR_W, nearL: HW.nearL, edge: HW.R, median: (HW.nearL + HW.medL) / 2, underside: HW.bot, barrier: BAR_H, gantries: HW_GANTRIES, lampFirst: LAMP_FIRST, lampEvery: LAMP_EVERY },
   exitHalf: EXIT_HALF,
   airportHalf: AIR_HALF
 } as const;
@@ -710,8 +722,6 @@ function capAt(g: Geo, f: RoadSample, poly: Prof, facing: 1 | -1, col: RGBA): vo
 
 /** Jersey barrier faces, from the inner base out: [out, up]. */
 const JERSEY: [number, number][] = [[0, 0], [0.06, 0.08], [0.2, 0.33], [0.4, 0.85], [0.6, 0.85]];
-const BAR_H = 0.85;
-const BAR_W = 0.6;
 /** A barrier on the right edge at base b (inner face toward −lateral), outer top first. */
 const barR = (b: number): Prof => JERSEY.slice().reverse().map(([o, h]) => [b + o, h] as [number, number]);
 /** On the left edge at base b, inner base first. */
@@ -1491,23 +1501,50 @@ function signAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Regio
 
 
 /**
- * The billboards' posters, six of them on one canvas, each 1024 by 340:
- * local businesses, and the people in this story.
+ * The billboards' posters on one canvas, each 1024 by 340, two to a row:
+ * local businesses, the people in this story, and the state roads
+ * department's signs, short enough to read at a hundred miles an hour.
  */
 function billboardAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, Region> } {
   const W = 2048;
-  const H = 2048;
   const PW = 1024;
   const PH = 340;
-  const c = makeCanvas(W, H);
+  // Sized to the posters once they are all listed, below
+  const c = makeCanvas(W, PH);
   const g = c.getContext('2d')!;
   const fontOf = (px: number, bold = true): string => `${bold ? 'bold ' : ''}${px}px Arial, Helvetica, sans-serif`;
+  // Every line is shrunk, if it has to be, to fit its panel clear of the edges
+  const EDGE = 28;
   const say = (t: string, x: number, y: number, px: number, col: string, bold = true, align: CanvasTextAlign = 'left'): void => {
-    g.font = fontOf(px, bold);
+    const room = align === 'center' ? 2 * (Math.min(x, PW - x) - EDGE) : align === 'right' ? x - EDGE : PW - EDGE - x;
+    let s = px;
+    g.font = fontOf(s, bold);
+    const tw = g.measureText(t).width;
+    if (tw > room) {
+      s = Math.floor((px * room) / tw);
+      g.font = fontOf(s, bold);
+      while (s > 10 && g.measureText(t).width > room) g.font = fontOf(--s, bold);
+    }
     g.fillStyle = col;
     g.textAlign = align;
     g.textBaseline = 'middle';
     g.fillText(t, x, y);
+  };
+  /** A bullet hole, cracks running out of it. */
+  const hole = (x: number, y: number, r: number): void => {
+    g.strokeStyle = '#7a7a7a';
+    g.lineWidth = 2.5;
+    g.beginPath();
+    for (let k = 0; k < 6; k++) {
+      const a = k * 1.05 + r * 0.37;
+      g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      g.lineTo(x + Math.cos(a) * r * 2.4, y + Math.sin(a) * r * 2.4);
+    }
+    g.stroke();
+    g.fillStyle = '#1a1a1a';
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
   };
   const posters: { key: string; draw: () => void }[] = [
     {
@@ -1587,7 +1624,7 @@ function billboardAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, 
         grd.addColorStop(1, '#d9ecfb');
         g.fillStyle = grd;
         g.fillRect(0, 0, PW, PH);
-        drawPlane(g, 170, 170, 1.6, '#ffffff');
+        drawPlane(g, 170, 170, 220, '#ffffff');
         say('SKYLINE JET CHARTERS', 320, 125, 74, '#0f2a4a');
         say('LEAVE IT ALL BEHIND.', 324, 220, 54, '#0f2a4a', false);
       }
@@ -1603,8 +1640,314 @@ function billboardAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, 
         say("THE GENERAL'S SCRAP", PW / 2, 110, 82, '#e8c547', true, 'center');
         say('WE BUY ANY CAR. WE THROW THE REST.', PW / 2, 220, 44, '#ffffff', true, 'center');
       }
+    },
+    {
+      key: 'readthis',
+      draw: () => {
+        g.fillStyle = '#0b6b3a';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#ffffff';
+        g.lineWidth = 8;
+        g.strokeRect(16, 16, PW - 32, PH - 32);
+        say('IF YOU CAN READ THIS,', PW / 2, 84, 80, '#ffffff', true, 'center');
+        say("YOU'RE NOT GOING", PW / 2, 174, 88, '#ffffff', true, 'center');
+        say('FAST ENOUGH', PW / 2, 264, 88, '#ffd23a', true, 'center');
+      }
+    },
+    {
+      key: 'probablyfine',
+      draw: () => {
+        g.fillStyle = '#f28c1b';
+        g.fillRect(0, 0, PW, PH);
+        // Hazard stripes along the top and the bottom
+        g.fillStyle = '#111111';
+        g.fillRect(0, 0, PW, 26);
+        g.fillRect(0, PH - 26, PW, 26);
+        g.save();
+        g.beginPath();
+        g.rect(0, 0, PW, 26);
+        g.rect(0, PH - 26, PW, 26);
+        g.clip();
+        g.strokeStyle = '#f28c1b';
+        g.lineWidth = 12;
+        g.beginPath();
+        for (let x = -30; x < PW + 30; x += 48) {
+          g.moveTo(x, 26);
+          g.lineTo(x + 26, 0);
+          g.moveTo(x, PH);
+          g.lineTo(x + 26, PH - 26);
+        }
+        g.stroke();
+        g.restore();
+        say('THIS HIGHWAY IS', PW / 2, 92, 92, '#111111', true, 'center');
+        say('PROBABLY FINE', PW / 2, 190, 104, '#111111', true, 'center');
+        say('LAST INSPECTED 1974 · STATE ROADS DEPT.', PW / 2, 275, 34, '#111111', true, 'center');
+        // A crack running down the end of it
+        g.strokeStyle = '#2a1a0a';
+        g.lineWidth = 5;
+        g.beginPath();
+        g.moveTo(988, 26);
+        g.lineTo(968, 72);
+        g.lineTo(990, 112);
+        g.lineTo(956, 160);
+        g.lineTo(978, 206);
+        g.lineTo(952, 252);
+        g.lineTo(966, PH - 26);
+        g.moveTo(956, 160);
+        g.lineTo(946, 174);
+        g.stroke();
+      }
+    },
+    {
+      key: 'honk',
+      draw: () => {
+        g.fillStyle = '#f6f3ea';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#c41d1d';
+        g.lineWidth = 18;
+        g.strokeRect(9, 9, PW - 18, PH - 18);
+        say("HONK IF YOU'RE", PW / 2, 100, 100, '#111111', true, 'center');
+        say('BEING SHOT AT', PW / 2, 204, 100, '#c41d1d', true, 'center');
+        say('A REMINDER FROM THE STATE ROADS DEPT.', PW / 2, 286, 30, '#555555', true, 'center');
+        hole(66, 64, 11);
+        hole(962, 58, 9);
+        hole(952, 268, 13);
+      }
+    },
+    {
+      key: 'missedexit',
+      draw: () => {
+        g.fillStyle = '#1f4fa3';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#ffffff';
+        g.lineWidth = 8;
+        g.strokeRect(16, 16, PW - 32, PH - 32);
+        // A U-turn arrow
+        g.lineWidth = 26;
+        g.beginPath();
+        g.moveTo(70, 280);
+        g.lineTo(70, 150);
+        g.arc(125, 150, 55, Math.PI, 0);
+        g.lineTo(180, 205);
+        g.stroke();
+        g.fillStyle = '#ffffff';
+        g.beginPath();
+        g.moveTo(140, 200);
+        g.lineTo(220, 200);
+        g.lineTo(180, 260);
+        g.closePath();
+        g.fill();
+        say('MISSED YOUR EXIT?', 240, 112, 74, '#ffffff');
+        say('SO DID WE.', 244, 228, 110, '#ffd23a');
+      }
+    },
+    {
+      key: 'dayoff',
+      draw: () => {
+        const grd = g.createLinearGradient(0, 0, PW, 0);
+        grd.addColorStop(0, '#23272e');
+        grd.addColorStop(1, '#3d434d');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, PW, PH);
+        // A necktie, striped
+        g.fillStyle = '#c41d1d';
+        g.beginPath();
+        g.moveTo(110, 40);
+        g.lineTo(170, 40);
+        g.lineTo(158, 82);
+        g.lineTo(122, 82);
+        g.closePath();
+        g.fill();
+        g.beginPath();
+        g.moveTo(122, 88);
+        g.lineTo(158, 88);
+        g.lineTo(190, 250);
+        g.lineTo(140, 305);
+        g.lineTo(90, 250);
+        g.closePath();
+        g.fill();
+        g.save();
+        g.clip();
+        g.strokeStyle = '#8f1414';
+        g.lineWidth = 12;
+        g.beginPath();
+        for (const y of [130, 190, 250]) {
+          g.moveTo(80, y + 30);
+          g.lineTo(200, y - 30);
+        }
+        g.stroke();
+        g.restore();
+        say('DAY OFF?', 250, 100, 128, '#ffffff');
+        say('NEVER HEARD OF IT.', 254, 205, 70, '#ffcf3a');
+        say('— YOUR BOSS', PW - 44, 285, 42, '#c9ced6', false, 'right');
+      }
+    },
+    {
+      key: 'heli',
+      draw: () => {
+        const grd = g.createLinearGradient(0, 0, 0, PH);
+        grd.addColorStop(0, '#e3eef9');
+        grd.addColorStop(1, '#a9cbea');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, PW, PH);
+        // A helicopter: rotor, mast, body, tail, skids, window
+        g.fillStyle = '#1b2a3a';
+        g.fillRect(30, 104, 200, 8);
+        g.fillRect(120, 110, 10, 30);
+        g.beginPath();
+        g.ellipse(125, 180, 72, 44, 0, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.moveTo(180, 162);
+        g.lineTo(262, 172);
+        g.lineTo(262, 182);
+        g.lineTo(180, 200);
+        g.closePath();
+        g.fill();
+        g.fillRect(256, 146, 10, 56);
+        g.fillRect(70, 248, 120, 8);
+        g.fillRect(95, 218, 8, 32);
+        g.fillRect(150, 218, 8, 32);
+        g.fillStyle = '#8fc0ea';
+        g.beginPath();
+        g.ellipse(88, 170, 28, 20, 0, 0, Math.PI * 2);
+        g.fill();
+        say('HELICOPTER INSURANCE', 290, 84, 55, '#0f2a4a');
+        say('BECAUSE THINGS FALL.', 292, 180, 58, '#c41d1d');
+        say('ASK ABOUT OUR FALLING-CAR BUNDLE', 294, 268, 32, '#0f2a4a', false);
+      }
+    },
+    {
+      key: 'fallingcars',
+      draw: () => {
+        g.fillStyle = '#f7d117';
+        g.fillRect(0, 0, PW, PH);
+        g.strokeStyle = '#111111';
+        g.lineWidth = 14;
+        g.strokeRect(7, 7, PW - 14, PH - 14);
+        // A warning diamond, a car upside down in it and falling
+        g.lineWidth = 10;
+        g.beginPath();
+        g.moveTo(165, 38);
+        g.lineTo(297, 170);
+        g.lineTo(165, 302);
+        g.lineTo(33, 170);
+        g.closePath();
+        g.stroke();
+        g.fillStyle = '#111111';
+        g.fillRect(108, 168, 114, 32);
+        g.beginPath();
+        g.moveTo(128, 200);
+        g.lineTo(202, 200);
+        g.lineTo(188, 230);
+        g.lineTo(142, 230);
+        g.closePath();
+        g.fill();
+        for (const x of [132, 198]) {
+          g.beginPath();
+          g.arc(x, 160, 15, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.fillRect(132, 96, 7, 34);
+        g.fillRect(162, 88, 7, 42);
+        g.fillRect(191, 96, 7, 34);
+        say('FALLING CARS', 330, 115, 88, '#111111');
+        say('NEXT 2 MILES', 334, 230, 84, '#111111');
+      }
+    },
+    {
+      key: 'speedcam',
+      draw: () => {
+        g.fillStyle = '#121212';
+        g.fillRect(0, 0, PW, PH);
+        // The camera on its pole, asleep
+        g.fillStyle = '#7d848b';
+        g.fillRect(132, 205, 20, PH - 205);
+        g.fillRect(64, 96, 156, 20);
+        g.fillStyle = '#a3aab1';
+        g.fillRect(70, 112, 144, 98);
+        g.fillStyle = '#222222';
+        g.beginPath();
+        g.arc(142, 161, 36, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#3a4a5a';
+        g.beginPath();
+        g.arc(142, 161, 20, 0, Math.PI * 2);
+        g.fill();
+        say('z', 232, 92, 34, '#ffffff', true, 'center');
+        say('z', 252, 66, 42, '#ffffff', true, 'center');
+        say('Z', 276, 38, 52, '#ffffff', true, 'center');
+        say('SPEED CAMERA AHEAD', 300, 108, 58, '#f7d23a');
+        say('IT HAS GIVEN UP.', 302, 222, 78, '#ffffff');
+      }
+    },
+    {
+      key: 'brakes',
+      draw: () => {
+        g.fillStyle = '#c8102e';
+        g.fillRect(0, 0, PW, PH);
+        // A drilled brake disc and its calliper
+        g.fillStyle = '#c3c9d0';
+        g.beginPath();
+        g.arc(135, 170, 108, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#6b7178';
+        for (let k = 0; k < 10; k++) {
+          const a = (k / 10) * Math.PI * 2;
+          g.beginPath();
+          g.arc(135 + Math.cos(a) * 78, 170 + Math.sin(a) * 78, 8, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.fillStyle = '#8a9097';
+        g.beginPath();
+        g.arc(135, 170, 46, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = '#f7d23a';
+        g.lineWidth = 34;
+        g.beginPath();
+        g.arc(135, 170, 96, -1.1, -0.2);
+        g.stroke();
+        say("STOPPY'S BRAKES", 270, 112, 76, '#ffffff');
+        say('YOU CLEARLY NEED US.', 272, 226, 59, '#ffe14d');
+      }
+    },
+    {
+      key: 'dents',
+      draw: () => {
+        g.fillStyle = '#16324f';
+        g.fillRect(0, 0, PW, PH);
+        hole(58, 64, 9);
+        hole(236, 282, 10);
+        // A sticking plaster, slapped on at an angle
+        g.save();
+        g.translate(140, 172);
+        g.rotate(-0.55);
+        g.fillStyle = '#e3b17f';
+        g.beginPath();
+        g.arc(-80, 0, 40, Math.PI / 2, Math.PI * 1.5);
+        g.arc(80, 0, 40, -Math.PI / 2, Math.PI / 2);
+        g.closePath();
+        g.fill();
+        g.fillStyle = '#f6dcbf';
+        g.fillRect(-38, -28, 76, 56);
+        g.fillStyle = '#c99566';
+        for (const x of [-100, -80, -60, 60, 80, 100]) {
+          for (const y of [-14, 14]) {
+            g.beginPath();
+            g.arc(x, y, 4, 0, Math.PI * 2);
+            g.fill();
+          }
+        }
+        g.restore();
+        say('BULLET HOLE REPAIR', 290, 92, 63, '#ff9b3d');
+        say('WHILE-U-DRIVE', 292, 192, 80, '#ffffff');
+        say('NO QUESTIONS ASKED.', 294, 276, 36, '#9fb8d0');
+      }
     }
   ];
+  // Two to a row, as many rows as it takes (WebGL2 is fine with the odd height)
+  const H = PH * Math.ceil(posters.length / 2);
+  c.height = H;
   const regions: Record<string, Region> = {};
   posters.forEach((p, i) => {
     const x = (i % 2) * PW;
@@ -1907,7 +2250,7 @@ export class StreetBuilder {
   }
   private inAirport(x: number, z: number, m = 0): boolean {
     const [a, b] = this.toGate(x, z);
-    return a > -12 - m && a < 540 + m && b > -780 - m && b < 980 + m;
+    return a > -12 - m && a < 540 + m && b > FIELD_B0 - m && b < 980 + m;
   }
 
   /** Room for a footprint: off every road and deck, clear of the airport and of what's built. */
@@ -1959,7 +2302,7 @@ export class StreetBuilder {
         z1 = Math.max(z1, p.z);
       }
     }
-    for (const [a, b] of [[0, -780], [540, -780], [0, 980], [540, 980]] as const) {
+    for (const [a, b] of [[0, FIELD_B0], [540, FIELD_B0], [0, 980], [540, 980]] as const) {
       const [x, z] = this.ap(a, b);
       x0 = Math.min(x0, x);
       x1 = Math.max(x1, x);
@@ -2783,8 +3126,8 @@ export class StreetBuilder {
     const r = this.r;
     const ch = r.hwVis;
     const g = this.props;
-    const gantries = [40, EXIT_S - 1600, EXIT_S - 800, EXIT_S - 25];
-    for (let u = ch.s0 + 20; u < ch.s1; u += 50) {
+    const gantries = HW_GANTRIES;
+    for (let u = LAMP_FIRST; u < ch.s1; u += LAMP_EVERY) {
       if (gantries.some((q) => Math.abs(q - u) < 12)) continue;
       const f = ch.at(u);
       const base = pt(f, -10.4, BAR_H);
@@ -2943,9 +3286,17 @@ export class StreetBuilder {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     this.adMat = new THREE.MeshLambertMaterial({ map: tex });
-    const keys = Object.keys(ad.regions);
+    // The gag signs first, two to every old ad, so nothing repeats close by
+    const order = [
+      'readthis', 'honk', 'deadbull',
+      'fallingcars', 'dayoff', 'lawyer',
+      'heli', 'speedcam', 'doughnut',
+      'brakes', 'dents', 'scrap',
+      'probablyfine', 'missedexit', 'ravicall',
+      'jets'
+    ].filter((k) => k in ad.regions);
     let n = 0;
-    for (let u = 160; u < HW_LEN; u += 230 + rnd() * 90) {
+    for (let u = 160; u < HW_LEN; u += 150 + rnd() * 70) {
       if (nearExit(u)) continue;
       const side = n % 2 === 0 ? 1 : -1;
       const f = ch.at(u);
@@ -2958,7 +3309,7 @@ export class StreetBuilder {
       const nz = -f.tangent.z * Math.cos(a) - side * f.right.z * Math.sin(a);
       const nl = Math.hypot(nx, nz);
       if (!this.place({ x: c[0], z: c[2], ax: [nz / nl, -nx / nl], az: [nx / nl, nz / nl], hx: 7, hz: 2 }, 2)) continue;
-      this.billboard(c, [nx / nl, 0, nz / nl], 12, 4, DECK + 5.5, ad.regions[keys[n % keys.length]]);
+      this.billboard(c, [nx / nl, 0, nz / nl], 12, 4, DECK + 5.5, ad.regions[order[n % order.length]]);
       n++;
     }
 
@@ -3225,9 +3576,9 @@ export class StreetBuilder {
     // Surfaces
     rectAB(this.apron, 0, 240, -130, 160, 0, WHITE, 5);
     rectAB(this.asph, 240, 408, 45, 75, 0, C.asphaltDark, 5);
-    rectAB(this.asph, 408, 453, -700, 900, 0, C.runway, 5);
+    rectAB(this.asph, 408, 453, RUNWAY_B0, 900, 0, C.runway, 5);
     // A blast pad of grass-free gravel around the runway's ends
-    rectAB(this.asph, 404, 457, -760, -700, -0.02, C.asphaltPale, 5);
+    rectAB(this.asph, 404, 457, RUNWAY_B0 - 60, RUNWAY_B0, -0.02, C.asphaltPale, 5);
     rectAB(this.asph, 404, 457, 900, 960, -0.02, C.asphaltPale, 5);
 
     // Paint: taxi lines and edges in yellow, the runway in white
@@ -3242,9 +3593,9 @@ export class StreetBuilder {
     for (const da of [0, 0.6]) yl(384 + da, 45.5, 384 + da, 74.5, 0.25);
     for (let b = 46; b < 74; b += 1.8) for (const da of [1.6, 2.2]) yl(384 + da, b, 384 + da, b + 0.9, 0.25);
     for (const [a0, b0, a1, b1] of [[1, -129, 239, -129], [1, 159, 239, 159], [239, -129, 239, 44], [239, 76, 239, 159]]) yl(a0, b0, a1, b1, 0.2);
-    for (const a of [409.5, 451.5]) yl(a, -698, a, 898, 0.9, C.white);
-    for (let b = -660; b < 860; b += 50) yl(430.5, b, 430.5, b + 30, 0.9, C.white);
-    for (const b0 of [-696, 866]) {
+    for (const a of [409.5, 451.5]) yl(a, RUNWAY_B0 + 2, a, 898, 0.9, C.white);
+    for (let b = RUNWAY_B0 + 40; b < 860; b += 50) yl(430.5, b, 430.5, b + 30, 0.9, C.white);
+    for (const b0 of [RUNWAY_B0 + 4, 866]) {
       for (let k = 0; k < 8; k++) {
         for (const sd of [-1, 1]) {
           const a = 430.5 + sd * (3 + k * 2.4);
@@ -3253,10 +3604,10 @@ export class StreetBuilder {
       }
     }
     // Edge lights, and blue along the taxiway
-    for (let b = -700; b <= 900; b += 60) {
+    for (let b = RUNWAY_B0; b <= 900; b += 60) {
       for (const a of [407.2, 453.8]) {
         const [x, z] = ap(a, b);
-        boxAt(this.glow, x, 0, z, yawF, 0.22, 0.32, 0.22, b === -700 || b === 900 ? C.green : C.whiteLight);
+        boxAt(this.glow, x, 0, z, yawF, 0.22, 0.32, 0.22, b === RUNWAY_B0 || b === 900 ? C.green : C.whiteLight);
       }
     }
     for (let a = 245; a < 405; a += 30) {
@@ -3293,8 +3644,8 @@ export class StreetBuilder {
     this.postSign([gsx, 0, gsz], yawF, 'gate', 1.1, 1.1);
     // Fence along the front of the airfield and round it
     this.fenceRun([ap(0.3, 5.2), ap(0.3, 980)], 0);
-    this.fenceRun([ap(0.3, -5.0), ap(0.3, -780)], 0);
-    this.fenceRun([ap(0.3, 980), ap(540, 980), ap(540, -780), ap(0.3, -780)], 0);
+    this.fenceRun([ap(0.3, -5.0), ap(0.3, FIELD_B0)], 0);
+    this.fenceRun([ap(0.3, 980), ap(540, 980), ap(540, FIELD_B0), ap(0.3, FIELD_B0)], 0);
     this.block(...ap(0.3, 4.6), yawF, 0.25, 0.25, 0, 1.2);
     this.block(...ap(0.3, -4.4), yawF, 0.25, 0.25, 0, 1.2);
 

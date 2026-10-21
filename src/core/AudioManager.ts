@@ -171,7 +171,8 @@ export class AudioManager {
     this.ctx = new AudioContext();
     this.master = this.ctx.createGain();
     this.master.gain.value = this.masterVolume;
-    this.master.connect(this.ctx.destination);
+    // Dev convenience (?mute): everything runs, nothing reaches the speakers
+    if (!new URLSearchParams(location.search).has('mute')) this.master.connect(this.ctx.destination);
 
     this.sfxBus = this.ctx.createGain();
     this.sfxBus.gain.value = this.sfxVolume;

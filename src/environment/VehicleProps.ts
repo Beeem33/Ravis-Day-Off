@@ -415,8 +415,8 @@ export function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeo
 
 /** Which material a part takes: on the parked cars paint, trim, glass and lamps; the rigs split lamps by job. */
 export type Layer = 'paint' | 'primer' | 'trim' | 'glass' | 'head' | 'tail' | 'ind';
-/** Which moving piece of a rig it belongs to. ('sunroof': the Civic's sliding glass panel, in its own frame.) */
-export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap' | 'sunroof';
+/** Which moving piece of a rig it belongs to. ('sunroof': the Civic's sliding glass panel, in its own frame; 'wheel': the steering wheel, in its own frame — centred on the hub, its face toward the driver along +Z.) */
+export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap' | 'sunroof' | 'wheel';
 type WheelName = 'fl' | 'fr' | 'rl' | 'rr';
 export type WheelStyle = 'alloy' | 'exec' | 'steel' | 'steelBlack' | 'stub';
 
@@ -575,6 +575,9 @@ function bumperPlan(hw: number, e: number): P[] {
   pts.push([-hw + 0.2, e - 0.12], [-hw + 0.08, e - 0.17], [-hw + 0.08, e - 0.42]);
   return pts;
 }
+
+/** The steering wheel's rim: radius to the middle of its grip. */
+export const WHEEL_RIM = 0.185;
 
 /** Where the driver sits, car-local: left of centre, hip half a metre up, behind a raked wheel. */
 export function seatOf(m: Model): { hip: THREE.Vector3; wheel: THREE.Vector3; wheelFacing: THREE.Vector3 } {
@@ -1322,13 +1325,13 @@ function interior(k: Kit, m: Model, hw: number, notch: { front: number; rear: nu
   const dashTop = m.belt + 0.03;
   k.trim(box(2 * iw, dashTop - 0.58, notch.front - dashRear, 0, (dashTop + 0.58) / 2, -(notch.front + dashRear) / 2), C.dash);
   const st = seatOf(m);
-  const tilt = -Math.asin(st.wheelFacing.y);
-  const rim = new THREE.TorusGeometry(0.185, 0.02, 6, 18);
-  rim.rotateX(tilt);
-  rim.translate(st.wheel.x, st.wheel.y, st.wheel.z);
-  k.trim(rim, C.black);
-  k.trim(box(0.36, 0.03, 0.02, st.wheel.x, st.wheel.y, st.wheel.z, tilt), C.black);
-  k.trim(box(0.1, 0.09, 0.05, st.wheel.x, st.wheel.y, st.wheel.z - 0.01, tilt), C.black);
+  // The wheel itself turns (the rig's steeringWheel); the column stays put
+  const at = k.node;
+  k.node = 'wheel';
+  k.trim(new THREE.TorusGeometry(WHEEL_RIM, 0.02, 6, 18), C.black);
+  k.trim(box(0.36, 0.03, 0.02, 0, 0, 0), C.black);
+  k.trim(box(0.1, 0.09, 0.05, 0, 0, -0.01), C.black);
+  k.node = at;
   const column = new THREE.CylinderGeometry(0.03, 0.035, 0.34, 8);
   column.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), st.wheelFacing));
   column.translate(st.wheel.x - st.wheelFacing.x * 0.18, st.wheel.y - st.wheelFacing.y * 0.18, st.wheel.z - st.wheelFacing.z * 0.18);
@@ -1456,7 +1459,7 @@ export function bakedCar(kind: CarKind, wrecked = false): BakedCar {
   });
   const by: Record<keyof BakedCar, THREE.BufferGeometry[]> = { paint: [], trim: [], glass: [], lamps: [] };
   for (const part of parts) {
-    if (part.node === 'hubcap' || part.node === 'sunroof') continue;
+    if (part.node === 'hubcap' || part.node === 'sunroof' || part.node === 'wheel') continue;
     if (part.node !== 'body' && part.node !== 'door') part.g.applyMatrix4(wheelMatrix(m, part.node));
     const slot: keyof BakedCar =
       part.layer === 'paint' || part.layer === 'primer'
@@ -1562,9 +1565,24 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
 
   let hubcap: THREE.Object3D | null = null;
   let sunroof: THREE.Object3D | null = null;
+  let steeringWheel: THREE.Object3D | null = null;
   const parentOf = (node: Node): THREE.Object3D => {
     if (node === 'body') return body;
     if (node === 'door') return door;
+    if (node === 'wheel') {
+      if (!steeringWheel) {
+        // On its column: +Z out of its face toward the driver, rotation.z turns it
+        const st = seatOf(m);
+        const mount = new THREE.Group();
+        mount.position.copy(st.wheel).sub(body.position);
+        mount.rotation.x = -Math.asin(st.wheelFacing.y);
+        body.add(mount);
+        steeringWheel = new THREE.Group();
+        steeringWheel.name = 'steeringWheel';
+        mount.add(steeringWheel);
+      }
+      return steeringWheel;
+    }
     if (node === 'sunroof') {
       // Only the Civic has one; placed by its setOpen (see civic)
       if (!sunroof) {
@@ -1590,7 +1608,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const toNode = (node: Node): THREE.Matrix4 => {
     if (node === 'body') return new THREE.Matrix4().makeTranslation(0, -m.R, 0);
     if (node === 'door') return new THREE.Matrix4().makeTranslation(-hinge.x, -hinge.y, -hinge.z);
-    if (node === 'sunroof') return new THREE.Matrix4();
+    if (node === 'sunroof' || node === 'wheel') return new THREE.Matrix4();
     if (node === 'fr' || node === 'rr') return new THREE.Matrix4().makeRotationY(Math.PI);
     return new THREE.Matrix4();
   };
@@ -1648,6 +1666,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
     indicators: mats.indicators,
     exhaust,
     seat: seatOf(m),
+    ...(steeringWheel ? { steeringWheel } : {}),
     meshes,
     hubcap
   };

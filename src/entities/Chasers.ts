@@ -66,6 +66,8 @@ class RouteDriver {
   private unstick = 0;
   /** Debug/HUD: the room he saw in his line last frame. */
   room = 0;
+  /** Standing hazards the scene puts in the road (a hole where the deck fell in): steered round like a car stopped there. */
+  hazards: readonly ICar[] = [];
   /**
    * Where he steers from: his place on the route, except that a driver who
    * wants the exit counts himself on it as soon as he's within its overlap
@@ -149,7 +151,7 @@ class RouteDriver {
       o.hw = c.halfWidth * cr + c.halfLength * sr;
       o.road = c.at.road;
     }
-    for (const c of extra) {
+    for (const c of this.hazards.length ? [...extra, ...this.hazards] : extra) {
       if (!c || (c.at.road !== myRoad && c.at.road !== nextRoad && c.at.road !== prevRoad) || n >= this.obstacles.length) continue;
       const R = net.routeS(c.at);
       if (R < myR - behind || R > myR + 110) continue;

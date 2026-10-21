@@ -345,6 +345,22 @@ export class Traffic implements ITraffic {
     this.rebuildList();
   }
 
+  /** Lift the cars `which` picks out of the traffic, as they are now, for the scene to do with as it likes. */
+  take(which: (c: TrafficCarState) => boolean): { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] {
+    const out: { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] = [];
+    for (const c of this.pool) {
+      if (!c.active || !which(c)) continue;
+      const vel = c.wrecked ? c.vel.clone() : new THREE.Vector3(c.fx * c.speed, 0, c.fz * c.speed);
+      out.push({ kind: c.kind, colour: c.colour.clone(), position: c.position.clone(), yaw: c.yaw, vel });
+      this.kill(c);
+    }
+    if (out.length) {
+      this.rebuildList();
+      this.writeInstances();
+    }
+    return out;
+  }
+
   /** Everything off the road (a retry). The next update fills the window afresh. */
   reset(): void {
     for (const c of this.pool) if (c.active) this.kill(c);

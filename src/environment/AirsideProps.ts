@@ -9,7 +9,7 @@ import { bakedCar, box, cylX, cylZ, finish, halfBody, MODELS, roofTop } from './
  *
  * Laid out in StreetBuilder's gate frame: a metres on past the end of the
  * airport road along its tangent, b to the right of it (the apron is a 0..240,
- * the taxiway a 240..408 at b 45..75, the runway a 408..453 along b from −700
+ * the taxiway a 240..408 at b 45..75, the runway a 408..453 along b from −2000
  * to 900, its centreline a 430.5). Paved ground is the frame origin's height;
  * everything off the paving stands on the grass, 25 cm lower.
  *
@@ -21,13 +21,12 @@ import { bakedCar, box, cylX, cylZ, finish, halfBody, MODELS, roofTop } from './
  *    AIRSIDE SECURITY along its fascia; the security SUV on a hardstand
  *    behind it, white with an orange stripe, AIRPORT SECURITY on its doors and
  *    an amber light bar; a few traffic cones on the verges.
- *  - The airside fence along a = 405 (b −700..44 and 76..900) and in to the
+ *  - The airside fence along a = 405 (b −2000..44 and 76..900) and in to the
  *    gate's cabinets: 3 m chain-link on galvanised posts, outriggers leaning
  *    out over the landside with three strands of barbed wire, AUTHORISED
  *    PERSONNEL ONLY — RESTRICTED AREA plates along it.
  *  - Beyond the runway, on hardstands off its far edge: a baggage tug with
- *    two carts in tow, and a fuel bowser. On the runway itself, three loose
- *    baggage carts: obstacles for the chase.
+ *    two carts in tow, and a fuel bowser. The runway itself is clear.
  *
  * Static pieces are baked into one mesh per material (seven); the two halves
  * of the boom are their own meshes, under `gateArm`. Nothing here is a light.
@@ -46,7 +45,7 @@ export interface Airside {
   gateArm: THREE.Object3D;
   /** The middle of the gate line (a 398, b 60) on the paving, and the yaw facing on through it (+f, toward the runway). */
   gate: { pos: THREE.Vector3; yaw: number };
-  /** Fence (both runs and the returns to the cabinets), cabinets, hut, the SUV, the stop sign, the runway-side kit and the three carts on the runway. */
+  /** Fence (both runs and the returns to the cabinets), cabinets, hut, the SUV, the stop sign and the runway-side kit. */
   blockers: StreetBlocker[];
   /** The security hut: the middle of its floor, on the ground. */
   hut: THREE.Vector3;
@@ -671,8 +670,8 @@ export function buildAirside(frame: { origin: THREE.Vector3; f: THREE.Vector3; r
   {
     const H = 3.0;
     const runs: { pts: [number, number][]; out: [number, number][] }[] = [
-      // From the left cabinet out to the fence line, then away to the runway's far end (b −700)
-      { pts: [[GATE_A + 0.3, 44], [405, 44], [405, -700]], out: [[0, -1], [-1, 0]] },
+      // From the left cabinet out to the fence line, then away to the runway's far end (b −2000)
+      { pts: [[GATE_A + 0.3, 44], [405, 44], [405, -2000]], out: [[0, -1], [-1, 0]] },
       { pts: [[GATE_A + 0.3, 76], [405, 76], [405, 900]], out: [[0, 1], [-1, 0]] }
     ];
     const T = 0.6;
@@ -737,7 +736,7 @@ export function buildAirside(frame: { origin: THREE.Vector3; f: THREE.Vector3; r
       }
     }
     // The warning plates, on the landside face
-    for (const b of [30, 12, -15, -50, -95, -150, -220, -300, -400, -520, -640, 90, 110, 140, 185, 250, 340, 460, 600, 760, 880]) {
+    for (const b of [30, 12, -15, -50, -95, -150, -220, -300, -400, -520, -640, -780, -940, -1120, -1320, -1540, -1780, 90, 110, 140, 185, 250, 340, 460, 600, 760, 880]) {
       p.up(0.92, 0.62, 0.02, 0, 1.3, 0.05, COL.galv);
       p.sign(0.9, 0.6, 'restricted', 0, 1.61, 0.062, 0);
       p.into(bake, at(405, b));
@@ -762,13 +761,6 @@ export function buildAirside(frame: { origin: THREE.Vector3; f: THREE.Vector3; r
     fuelBowser(p);
     p.into(bake, at(463, -232, 0.02, Math.PI / 2));
     block(463, -231.9, Math.PI / 2, 1.3, 4.4, 0, 3.2);
-  }
-
-  // ---- loose on the runway: three carts in the way
-  for (const [a, b, turn, seed] of [[422, -150, 0.35, 5], [440, -320, -1.1, 17], [428, -470, 2.4, 31]] as const) {
-    baggageCart(p, seed);
-    p.into(bake, at(a, b, 0, turn));
-    block(a, b, turn, 0.8, 1.6, 0, 1.95);
   }
 
   // ---- one mesh per material

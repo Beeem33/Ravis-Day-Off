@@ -7,7 +7,7 @@ import { StreetBuilder, STREET_ATMOSPHERE } from '../environment/StreetBuilder';
 import { buildAirside, type Airside } from '../environment/AirsideProps';
 import type { StreetData, Road, RoadId, RoadSample, DriveInput, JetRig, StreetBlocker } from './StreetContracts';
 import type { CarRig, CivicRig } from './Level8Contracts';
-import { civic, bossCar } from '../environment/VehicleProps';
+import { civic, bossCar, WHEEL_RIM } from '../environment/VehicleProps';
 import { privateJet } from '../environment/StreetProps';
 import { RoadNet } from '../entities/RoadNet';
 import { DriveCar, CIVIC_TUNE } from '../entities/DriveCar';
@@ -15,15 +15,18 @@ import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
 import { RaviVisual, type RaviRig } from '../entities/RaviVisual';
 import { RaviStunt, type StuntPose } from '../entities/RaviStunt';
+import { WheelGrip, WHEEL_TURN, wheelInModel } from '../entities/WheelGrip';
 import { ParticleManager } from '../fx/ParticleManager';
 import { smooth, clamp01, wrapAngle } from './cutscene';
 
 /** m/s → mph. */
 const MPH = 2.237;
 /** The jet's run: how hard it pulls away, how fast it'll go on the ground, and where along the runway (gate-frame b) it unsticks. */
-const JET_ACCEL = 2.4;
-const JET_TOP = 42;
-const LIFT_B = -575;
+const JET_ACCEL = 2.2;
+const JET_TOP = 40;
+const LIFT_B = -1650;
+/** The runway's far end (gate-frame b): the road runs to it. */
+const RUNWAY_END = -2000;
 /** Where Ravi starts (the Civic as Level 10 left it, at the airside gate) and where the jet is. */
 const CIVIC_AT: [number, number] = [384, 60];
 const JET_AT: [number, number] = [430.5, 30];
@@ -66,6 +69,8 @@ export class AirportScene implements GameScene {
   private bossRig!: CarRig;
   private jet!: JetRig;
   private driver: RaviRig | null = null;
+  /** His hands round the wheel, turning with it, while he's sat at it. */
+  private wheelGrip: WheelGrip | null = null;
   private stunt: RaviStunt | null = null;
   /** The boss's two men by his car, and the airport's security team at the gate. */
   private guards: Enemy[] = [];
@@ -237,7 +242,7 @@ export class AirportScene implements GameScene {
       [352, 60], [372, 60], [390, 60], [404, 60], [413, 58], [420.5, 53.5], [426.5, 46], [429.7, 37], [430.5, 27], [430.5, 15]
     ];
     // Down the runway in even steps: a Catmull-Rom loops if one span is far longer than its neighbours
-    for (let b = 0; b >= -780; b -= 15) pts.push([430.5, b]);
+    for (let b = 0; b >= RUNWAY_END; b -= 15) pts.push([430.5, b]);
     // A Catmull-Rom through the points, finely, then evenly resampled every 2 m
     const ctrl = pts.map(([a, b]) => this.apt(a, b));
     const fine: THREE.Vector3[] = [];
@@ -396,7 +401,15 @@ export class AirportScene implements GameScene {
       this.driver = r;
       this.stunt = new RaviStunt(r);
       this.stunt.set('seated', 0);
+      this.wheelGrip = new WheelGrip(r, { ...wheelInModel(rig.seat, rig.seat.hip.y), radius: WHEEL_RIM });
     });
+  }
+
+  /** The Civic's wheel turned as he steers, and his hands round it while he's sat at it. */
+  private steerWheel(): void {
+    const a = -this.player.steerNow * WHEEL_TURN;
+    if (this.civicRig.steeringWheel) this.civicRig.steeringWheel.rotation.z = a;
+    if (this.pose === 'seated') this.wheelGrip?.update(a);
   }
 
   /** From the driver's seat the Civic must be a closed box: panels double-sided, glass clearer. */
@@ -549,6 +562,7 @@ export class AirportScene implements GameScene {
     this.updateJet(dt);
     this.player.update(dt, input);
     this.player.applyTo(this.civicRig, dt);
+    this.steerWheel();
     this.collideJet();
     this.updatePeople(dt);
     this.world.step(1 / 60, dt, 3);
@@ -596,7 +610,7 @@ export class AirportScene implements GameScene {
       const gap = this.jetRoute0 + this.jetS - this.net.routeS(p.at);
       let top = JET_TOP;
       // On his tail and flat out: catchable
-      if (gap < 90 && p.speed > 28) top = Math.min(top, Math.max(26, p.speed - 4.5));
+      if (gap < 120 && p.speed > 24) top = Math.min(top, Math.max(24, p.speed - 7));
       this.jetV = this.jetV < top ? Math.min(top, this.jetV + JET_ACCEL * dt) : Math.max(top, this.jetV - 4 * dt);
     }
     // In the leap it holds its speed until he's down on the wing, then (unseen, from on board) eases off a little

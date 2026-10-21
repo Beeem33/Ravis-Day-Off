@@ -16,6 +16,7 @@ import { Level8Scene } from './scenes/Level8Scene';
 import { StairwellScene } from './scenes/StairwellScene';
 import { StreetScene } from './scenes/StreetScene';
 import { AirportScene } from './scenes/AirportScene';
+import { RunwayScene } from './scenes/RunwayScene';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
@@ -108,6 +109,10 @@ bus.on(Events.AirportComplete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
 });
+bus.on(Events.RunwayComplete, () => {
+  // The alternate's end, for now: back to the menu
+  engine.setScene(new MainMenuScene(ctx));
+});
 bus.on(Events.RestartLevel7, () => {
   engine.setScene(new Level7Scene(ctx), 'LEVEL 7 — THE TOP FLOOR');
 });
@@ -143,7 +148,9 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   stairwell: () => ({ scene: new StairwellScene(ctx), title: 'LEVEL 8 — STAIRWELL B' }),
   level8: () => ({ scene: new Level8Scene(ctx), title: 'LEVEL 9 — THE PARKING LOT' }),
   street: () => ({ scene: new StreetScene(ctx), title: 'LEVEL 10 — THE STREET' }),
-  airport: () => ({ scene: new AirportScene(ctx), title: 'LEVEL 11 — THE AIRPORT' })
+  airport: () => ({ scene: new AirportScene(ctx), title: 'LEVEL 11 — THE AIRPORT' }),
+  // The alternate Level 11, from where Level 10 ends; reached only from here for now
+  runway: () => ({ scene: new RunwayScene(ctx), title: 'LEVEL 11 (ALTERNATE) — LEFT ON THE RUNWAY' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

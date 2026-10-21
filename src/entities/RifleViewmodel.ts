@@ -104,6 +104,13 @@ export class RifleViewmodel {
   private arms: FirstPersonArms;
   /** True while the emote borrows the left hand — hides the support hand. */
   hideSupportHand = false;
+  /** Where the left hand is while the right holds the rifle alone (the steering wheel), or null for both hands on it. */
+  private leftRest: { anchor: THREE.Object3D; grip: Grip; shoulder: THREE.Vector3 } | null = null;
+  /** 0 two-handed .. 1 held out in the right hand alone. */
+  private oneHand = 0;
+  /** Held out one-handed: further from the eye, the muzzle canted in a touch. */
+  private oneHandPos = new THREE.Vector3(0.19, -0.215, -0.52);
+  private oneHandRot = new THREE.Euler(0.03, -0.035, -0.06);
 
   // ---- Reload
   reloading = false;
@@ -298,6 +305,17 @@ export class RifleViewmodel {
     const centre = new THREE.Box3().setFromObject(copy).getCenter(new THREE.Vector3());
     copy.position.sub(centre);
     return g;
+  }
+
+  /**
+   * Fire it from the right hand alone, the left on `anchor` (the steering
+   * wheel) by `grip` in that anchor's frame, the arm reaching from `shoulder`
+   * (world); the left hand only comes off it to reload. Call each frame it
+   * holds — the grip's forearm moves as the wheel turns. null: both hands on
+   * the rifle again.
+   */
+  restLeftHand(anchor: THREE.Object3D | null, grip?: Grip, shoulder?: THREE.Vector3): void {
+    this.leftRest = anchor && grip && shoulder ? { anchor, grip, shoulder } : null;
   }
 
   /** Begin the reload animation. Returns false if one is already running. */
@@ -609,6 +627,14 @@ export class RifleViewmodel {
   private leftGrip(): Grip {
     if (!this.reloading) return GRIP_L;
     const t = this.reloadT;
+    // One-handed, the hand comes off the wheel for the mag and goes back to it after the rack
+    let home = GRIP_L;
+    const rest = this.leftRest;
+    if (rest) {
+      this.supportHand.updateWorldMatrix(true, false);
+      rest.anchor.updateWorldMatrix(true, false);
+      home = reframe(rest.grip, this.supportHand.matrixWorld.clone().invert().multiply(rest.anchor.matrixWorld));
+    }
     const ease = (x: number) => x * x * (3 - 2 * x);
     const c01 = (x: number) => Math.min(1, Math.max(0, x));
     this.supportHand.updateMatrix();
@@ -618,11 +644,11 @@ export class RifleViewmodel {
       onMag = reframe(GRIP_MAG, this.handMag.matrix);
     }
     const onHandle = reframe(GRIP_RACK, this.supportHand.matrix.clone().invert());
-    if (t < 0.34) return mixGrip(GRIP_L, onMag, ease(c01((t - 0.1) / 0.24)));
+    if (t < 0.34) return mixGrip(home, onMag, ease(c01((t - 0.1) / 0.24)));
     if (t < 1.46) return onMag;
     if (t < 1.76) return mixGrip(onMag, onHandle, ease(c01((t - 1.46) / 0.3)));
     if (t < 2.12) return onHandle;
-    return mixGrip(onHandle, GRIP_L, ease(c01((t - 2.12) / 0.23)));
+    return mixGrip(onHandle, home, ease(c01((t - 2.12) / 0.23)));
   }
 
   update(dt: number, player: FPSPlayer, mouseDX: number, mouseDY: number, aiming: boolean): void {
@@ -632,8 +658,10 @@ export class RifleViewmodel {
     this.trackMagVelocity(dt);
     this.aimBlend += ((aiming && !sprinting && !this.reloading ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 12);
     this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
+    this.oneHand += ((this.leftRest ? 1 : 0) - this.oneHand) * Math.min(1, dt * 8);
     const a = this.aimBlend;
     const sp = this.sprintBlend;
+    const oh = this.oneHand;
 
     const swayScale = 1 - 0.75 * a;
     this.swayX += (-mouseDX * 0.00009 * swayScale - this.swayX) * Math.min(1, dt * 10);
@@ -652,15 +680,22 @@ export class RifleViewmodel {
     // more than the round warrants.
     this.recoil = Math.max(0, this.recoil - dt * 9);
     this.boltKick = Math.max(0, this.boltKick - dt * 16);
-    const r = this.recoil * this.recoil * (1 - 0.35 * a) * RifleViewmodel.KICK;
+    // One hand holds it down far less well
+    const r = this.recoil * this.recoil * (1 - 0.35 * a) * RifleViewmodel.KICK * (1 + 0.7 * oh);
     if (this.boltPivot && !this.reloading) {
       const cycle = Math.sin(Math.min(1, this.boltKick) * Math.PI);
       this.boltPivot.position.x = 0.03 - 0.105 * cycle;
     }
 
-    const px = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.x, this.aimPos.x, a), this.sprintPos.x, sp);
-    const py = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.y, this.aimPos.y, a), this.sprintPos.y, sp);
-    const pz = THREE.MathUtils.lerp(THREE.MathUtils.lerp(this.basePos.z, this.aimPos.z, a), this.sprintPos.z, sp);
+    const lerp = THREE.MathUtils.lerp;
+    const bp = this.basePos;
+    const ohp = this.oneHandPos;
+    const px = lerp(lerp(lerp(bp.x, ohp.x, oh), this.aimPos.x, a), this.sprintPos.x, sp);
+    const py = lerp(lerp(lerp(bp.y, ohp.y, oh), this.aimPos.y, a), this.sprintPos.y, sp);
+    const pz = lerp(lerp(lerp(bp.z, ohp.z, oh), this.aimPos.z, a), this.sprintPos.z, sp);
+    const brX = lerp(this.baseRot.x, this.oneHandRot.x, oh);
+    const brY = lerp(this.baseRot.y, this.oneHandRot.y, oh);
+    const brZ = this.oneHandRot.z * oh;
 
     this.root.position.set(
       px + this.swayX + bobX + sprintSwayX + rlPosX,
@@ -668,9 +703,9 @@ export class RifleViewmodel {
       pz + r * 0.07 + rlPosZ
     );
     this.root.rotation.set(
-      -r * 0.22 + this.swayY * 3 + this.sprintRot.x * sp + rlX + this.baseRot.x * (1 - a),
-      this.swayX * 3 + this.sprintRot.y * sp + rlY + this.baseRot.y * (1 - a),
-      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ + (Math.random() - 0.5) * r * 0.04
+      -r * 0.22 + this.swayY * 3 + this.sprintRot.x * sp + rlX + brX * (1 - a),
+      this.swayX * 3 + this.sprintRot.y * sp + rlY + brY * (1 - a) + (Math.random() - 0.5) * r * 0.05 * oh,
+      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ + brZ * (1 - a) + (Math.random() - 0.5) * r * (0.04 + 0.08 * oh)
     );
 
     // Draw / stow: swing down out of frame
@@ -681,7 +716,10 @@ export class RifleViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
-    this.arms.set('l', this.supportHand, this.leftGrip());
+    const rest = this.leftRest;
+    if (rest && !this.reloading) this.arms.set('l', rest.anchor, rest.grip);
+    else this.arms.set('l', this.supportHand, this.leftGrip());
+    this.arms.shoulder('l', rest ? rest.shoulder : null, true);
     this.arms.update();
 
     this.updateCharm(dt);

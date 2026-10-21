@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RaviRig, elbowToward, type HandShape, type Side } from './RaviVisual';
+import { RaviRig, elbowToward, type Grip, type HandShape, type Side } from './RaviVisual';
 
 /**
  * WheelGrip — Ravi's hands round a steering wheel that turns.
@@ -31,6 +31,8 @@ export class WheelGrip {
   private readonly wU = new THREE.Vector3();
   private readonly shoulder: Record<Side, THREE.Vector3>;
   private readonly radius: number;
+  /** Each hand as update() last laid it, model space. */
+  private readonly holds: Record<Side, Grip | null> = { l: null, r: null };
   angle = 0;
 
   constructor(
@@ -65,9 +67,22 @@ export class WheelGrip {
       const sx = side === 'l' ? 1 : -1;
       const pole = new THREE.Vector3(sx * T.elbowOut, -T.elbowDown, -T.elbowBack);
       const S = this.shoulder[side];
-      r.reach(side, wrist, along, palm, elbowToward(wrist, S, pole), S, 0.5, false).hand(side, GRIP);
+      const toward = elbowToward(wrist, S, pole);
+      r.reach(side, wrist, along, palm, toward, S, 0.5, false).hand(side, GRIP);
+      this.holds[side] = { wrist, along, palm, toward, shape: GRIP };
     }
     r.apply();
+  }
+
+  /**
+   * One hand's hold on the rim as update() last laid it, and the shoulder
+   * it reaches from, in the rig's model space: for a first-person arm
+   * anchored on the rig's root to take the same hold (a viewmodel's, while
+   * his own arms are hidden). Null before the first update.
+   */
+  hold(side: Side): { grip: Grip; shoulder: THREE.Vector3 } | null {
+    const g = this.holds[side];
+    return g ? { grip: g, shoulder: this.shoulder[side] } : null;
   }
 }
 

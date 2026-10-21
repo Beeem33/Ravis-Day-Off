@@ -1973,11 +1973,19 @@ export class StreetScene implements GameScene {
     const armed = this.combat && this.phase === 'drive';
     r.stow += ((armed ? 0 : 1) - r.stow) * Math.min(1, dt * (armed ? 6 : 4));
     if (r.stow > 0.995) r.stow = 1;
-    // His own arms off the wheel while the rifle's up (the viewmodel's are his arms then)
+    // His own arms off the wheel while the rifle's up: the viewmodel's are his
+    // arms then — the right on the rifle, the left keeping his hold on the
+    // wheel from his own shoulder, until it comes over to reload
     const away = r.stow < 0.6;
     if (this.driverRig && away !== this.armsAway) {
       this.armsAway = away;
       for (const side of ['l', 'r']) this.driverRig.bones.get(`upperarm_${side}`)?.scale.setScalar(away ? 0.001 : 1);
+    }
+    const hold = this.wheelGrip?.hold('l');
+    if (this.driverRig && hold) {
+      const root = this.driverRig.root;
+      root.updateWorldMatrix(true, false);
+      r.restLeftHand(root, hold.grip, hold.shoulder.clone().applyMatrix4(root.matrixWorld));
     }
     const { dx, dy } = input.consumeMouseDelta();
     if (armed) {
@@ -2007,13 +2015,13 @@ export class StreetScene implements GameScene {
     r.fire();
     audio.rifleShot();
     this.shake = Math.min(0.5, this.shake + 0.04);
-    // Down the middle of his view
+    // Down the middle of his view, give or take what one hand can hold on a rifle
     const cam = this.camera;
     cam.updateMatrixWorld(true);
     const o = StreetScene.tmpA.setFromMatrixPosition(cam.matrixWorld);
     const dir = StreetScene.tmpB.set(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
-    dir.x += (Math.random() - 0.5) * 0.012;
-    dir.y += (Math.random() - 0.5) * 0.012;
+    dir.x += (Math.random() - 0.5) * 0.02;
+    dir.y += (Math.random() - 0.5) * 0.02;
     dir.normalize();
     let end = o.clone().addScaledVector(dir, 160);
     const h = this.heli;

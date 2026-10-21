@@ -1161,6 +1161,13 @@ export class Enemy {
     /** Hand targets in the body's own frame, reached by bending the elbow. */
     handR?: THREE.Vector3;
     handL?: THREE.Vector3;
+    /** How a placed hand is turned (model only), body frame: which way its palm faces and its thumb points. Both or neither. */
+    palmR?: THREE.Vector3;
+    thumbR?: THREE.Vector3;
+    palmL?: THREE.Vector3;
+    thumbL?: THREE.Vector3;
+    /** 0 open .. 1 a fist, held — rather than the fidget a placed hand otherwise has. */
+    curl?: number;
     /** Which way the elbows go when the hands are placed; x is mirrored for the left. */
     elbow?: THREE.Vector3;
     /** Shoulders and head moved by this, in the body's frame: hunching over a desk. */
@@ -2426,13 +2433,24 @@ export class Enemy {
         L.palm = palmL.set(0, 0, 1).applyQuaternion(q);
         curlR = curlL = 1;
       } else {
-        if (this.pose?.handR) {
+        const p = this.pose;
+        // Which way a placed hand is turned, if the pose says (body frame, into the world)
+        const turn = p && (p.palmR || p.palmL) ? this.root.getWorldQuaternion(Enemy._hq) : null;
+        if (p?.handR) {
           onRig(R, this.foreR);
-          curlR = this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 11);
+          if (turn && p.palmR && p.thumbR) {
+            R.palm = palmR.copy(p.palmR).normalize().applyQuaternion(turn);
+            R.thumb = thumbR.copy(p.thumbR).normalize().applyQuaternion(turn);
+          }
+          curlR = p.curl ?? this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 11);
         }
-        if (this.pose?.handL) {
+        if (p?.handL) {
           onRig(L, this.foreL);
-          curlL = this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 9 + 1);
+          if (turn && p.palmL && p.thumbL) {
+            L.palm = palmL.copy(p.palmL).normalize().applyQuaternion(turn);
+            L.thumb = thumbL.copy(p.thumbL).normalize().applyQuaternion(turn);
+          }
+          curlL = p.curl ?? this.poseCurl ?? 0.45 + 0.2 * Math.sin(at * 9 + 1);
         }
       }
     }
@@ -2520,6 +2538,23 @@ export class Enemy {
   setFurious(): void {
     if (!this.civilian) return;
     this.setMood(0.3, 0.95, 0, 0.95);
+  }
+
+  /** Staff only: mouth shut, eyes narrowed, set hard — getting ready for it. */
+  setSerious(): void {
+    if (!this.civilian) return;
+    this.setMood(0, 0.78, 0, 0.62);
+  }
+
+  /** The coworkers' kit for the fight (model only): a carrier that fits him, and a helmet in place of his cap. */
+  wearCrewKit(): void {
+    if (this.armoured) return;
+    if (!this.hitman) {
+      this.wearArmour();
+      return;
+    }
+    this.armoured = true;
+    this.hitman.addCrewKit();
   }
   /** The boss's fists, just under his chin either side of it, in the model's rest frame. */
   private static BOSS_FIST_R = new THREE.Vector3(0.04, 1.438, -0.1);

@@ -1508,6 +1508,7 @@ export class HitmanVisual {
     }
     cap.position.set(0, 1.672, 0.004);
     cap.rotation.x = -0.05;
+    cap.name = 'HitmanCap';
     this.hang(cap, 'Head');
 
     // A plain button-up: a row of black buttons down the front
@@ -3038,6 +3039,190 @@ export class HitmanVisual {
     // Under it, no hair to speak of
     this.model.traverse((o) => {
       if (o.name.startsWith('Hair_')) o.visible = false;
+    });
+  }
+
+  /**
+   * The coworkers' kit (staff only): a plate carrier cut from his own shirt
+   * — the torso of it let out a little and skinned to the same bones, so it
+   * bends as he sits and turns and never comes through him — with pouches
+   * and a pair of grenades on the front riding it; and a helmet where the
+   * cap was.
+   */
+  addCrewKit(): void {
+    const H = HitmanVisual;
+    const body = this.model.getObjectByName('HitmanBody_1') as THREE.SkinnedMesh | undefined;
+    if (body?.isSkinnedMesh) {
+      const vest = new THREE.SkinnedMesh(H.outfitGeo('crew:vest', () => H.crewVest(body.geometry)), H.crewVestMat());
+      vest.name = 'HitmanCrewVest';
+      body.parent!.add(vest);
+      vest.position.copy(body.position);
+      vest.quaternion.copy(body.quaternion);
+      vest.scale.copy(body.scale);
+      vest.bind(body.skeleton, body.bindMatrix);
+      vest.boundingSphere = this.cull;
+    }
+    const helmet = new THREE.Mesh(
+      H.outfitGeo('armour:helmet', () => H.helmetGeometry()),
+      H.outfitMat('armour:helmet', () => new THREE.MeshStandardMaterial({ name: 'HM_Helmet', color: 0x1f2329, roughness: 0.55, metalness: 0.15, side: THREE.DoubleSide }))
+    );
+    this.hang(helmet, 'Head');
+    this.model.traverse((o) => {
+      if (o.name.startsWith('Hair_') || o.name === 'HitmanCap') o.visible = false;
+    });
+  }
+
+  /** The crew's carrier: the shirt's torso let out 13 mm, its own weights; pouches and grenades on it, weighted like the cloth under them. */
+  private static crewVest(src: THREE.BufferGeometry): THREE.BufferGeometry {
+    const names = HitmanVisual.boneNames;
+    const ids = (list: string[]): Set<number> => new Set(list.map((n) => names.indexOf(n)).filter((i) => i >= 0));
+    const torso = ids(['Hips', 'Spine', 'Chest', 'UpperChest', 'Shoulder_L', 'Shoulder_R']);
+    const arm = ids(['UpperArm_L', 'UpperArm_R', 'LowerArm_L', 'LowerArm_R', 'Hand_L', 'Hand_R']);
+    const pos = src.attributes.position;
+    const nor = src.attributes.normal;
+    const ski = src.attributes.skinIndex;
+    const skw = src.attributes.skinWeight;
+    const idx = src.index!.array;
+    const g0 = src.groups[0] ?? { start: 0, count: idx.length };
+    // Torso only: above the belt, below the collar, nothing the arms carry
+    const keep = (v: number): boolean => {
+      const y = pos.getY(v);
+      if (y < 1.1 || y > 1.47) return false;
+      let onArm = 0;
+      let top = -1;
+      let topW = 0;
+      for (let k = 0; k < 4; k++) {
+        const b = ski.getComponent(v, k);
+        const w = skw.getComponent(v, k);
+        if (arm.has(b)) onArm += w;
+        if (w > topW) {
+          topW = w;
+          top = b;
+        }
+      }
+      return onArm < 0.2 && torso.has(top);
+    };
+    const OFF = 0.013;
+    const P: number[] = [];
+    const N: number[] = [];
+    const SI: number[] = [];
+    const SW: number[] = [];
+    const C: number[] = [];
+    const WEB: number[] = [];
+    const I: number[] = [];
+    const cloth = new THREE.Color(0x353b2c);
+    const map = new Map<number, number>();
+    const vert = (v: number): number => {
+      let j = map.get(v);
+      if (j !== undefined) return j;
+      j = P.length / 3;
+      map.set(v, j);
+      const nx = nor.getX(v);
+      const ny = nor.getY(v);
+      const nz = nor.getZ(v);
+      P.push(pos.getX(v) + nx * OFF, pos.getY(v) + ny * OFF, pos.getZ(v) + nz * OFF);
+      N.push(nx, ny, nz);
+      for (let k = 0; k < 4; k++) {
+        SI.push(ski.getComponent(v, k));
+        SW.push(skw.getComponent(v, k));
+      }
+      C.push(cloth.r, cloth.g, cloth.b);
+      WEB.push(1);
+      return j;
+    };
+    for (let i = g0.start; i < g0.start + g0.count; i += 3) {
+      const a = idx[i];
+      const b = idx[i + 1];
+      const c = idx[i + 2];
+      if (keep(a) && keep(b) && keep(c)) I.push(vert(a), vert(b), vert(c));
+    }
+    // The front of the shell, to stand things on
+    const tris: { t: THREE.Triangle; v: number[] }[] = [];
+    for (let i = 0; i < I.length; i += 3) {
+      const vs = [I[i], I[i + 1], I[i + 2]];
+      const t = new THREE.Triangle(...(vs.map((v) => new THREE.Vector3(P[v * 3], P[v * 3 + 1], P[v * 3 + 2])) as [THREE.Vector3, THREE.Vector3, THREE.Vector3]));
+      if (t.getNormal(new THREE.Vector3()).z < 0) tris.push({ t, v: vs });
+    }
+    const ray = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, 0, 1));
+    const hit = new THREE.Vector3();
+    const place = (geo: THREE.BufferGeometry, x: number, y: number, colour: number): void => {
+      ray.origin.set(x, y, -1);
+      let at: THREE.Vector3 | null = null;
+      let normal = new THREE.Vector3(0, 0, -1);
+      let near = 0;
+      for (const { t, v } of tris) {
+        if (ray.intersectTriangle(t.a, t.b, t.c, false, hit) && (!at || hit.z < at.z)) {
+          at = hit.clone();
+          normal = t.getNormal(new THREE.Vector3());
+          near = v[0];
+        }
+      }
+      if (!at) return;
+      geo.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), normal));
+      geo.translate(at.x, at.y, at.z);
+      const g = geo.index ? geo.toNonIndexed() : geo;
+      const gp = g.attributes.position;
+      const gn = g.attributes.normal;
+      const col = new THREE.Color(colour);
+      const base = P.length / 3;
+      for (let k = 0; k < gp.count; k++) {
+        P.push(gp.getX(k), gp.getY(k), gp.getZ(k));
+        N.push(gn.getX(k), gn.getY(k), gn.getZ(k));
+        for (let q = 0; q < 4; q++) {
+          SI.push(SI[near * 4 + q]);
+          SW.push(SW[near * 4 + q]);
+        }
+        C.push(col.r, col.g, col.b);
+        WEB.push(0);
+        I.push(base + k);
+      }
+    };
+    // Three magazine pouches across the bottom, a radio pouch up on the left, two grenades up on the right
+    for (const px of [-0.085, 0, 0.085]) {
+      const b = new THREE.BoxGeometry(0.07, 0.08, 0.034);
+      b.translate(0, 0, -0.017);
+      place(b, px, 1.17, 0x262a20);
+    }
+    const radio = new THREE.BoxGeometry(0.05, 0.09, 0.03);
+    radio.translate(0, 0, -0.015);
+    place(radio, -0.095, 1.35, 0x1c1f19);
+    for (const gy of [1.36, 1.28]) {
+      const egg = new THREE.SphereGeometry(0.026, 10, 8);
+      egg.scale(1, 1.25, 1);
+      egg.translate(0, 0, -0.024);
+      place(egg, 0.1, gy, 0x5a6638);
+    }
+    const g =new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    g.setAttribute('aWeb', new THREE.Float32BufferAttribute(WEB, 1));
+    g.setIndex(I);
+    g.computeBoundingSphere();
+    return g;
+  }
+
+  /** The carrier's cloth: olive-black, with rows of webbing across the front and back. */
+  private static crewVestMat(): THREE.Material {
+    return HitmanVisual.outfitMat('crew:vest', () => {
+      const m = new THREE.MeshStandardMaterial({ name: 'HM_CrewVest', vertexColors: true, roughness: 0.88 });
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader
+          .replace('#include <common>', '#include <common>\nattribute float aWeb;\nvarying float vWeb;\nvarying vec3 vBind;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWeb = aWeb;\nvBind = position;');
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vWeb;\nvarying vec3 vBind;')
+          .replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+            if (vWeb > 0.5 && vBind.y > 1.13 && vBind.y < 1.42 && abs(vBind.x) < 0.15) {
+              if (fract((vBind.y - 1.13) / 0.03) < 0.3) diffuseColor.rgb *= 0.52;
+            }`
+          );
+      };
+      return m;
     });
   }
 

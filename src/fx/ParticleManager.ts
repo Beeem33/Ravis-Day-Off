@@ -755,6 +755,12 @@ export class ParticleManager {
   private glow: ParticlePool; // muzzle sparks (additive)
   private streaks: SparkPool; // metal sparks (additive lines)
   private tracers: Tracer[] = [];
+  /**
+   * Spent tracers, kept to be used again. Never disposed: a disposed
+   * material lets its shader go once no other tracer is alive, and the next
+   * round fired would compile it all over again — every burst, a hitch.
+   */
+  private tracerPool: THREE.Mesh[] = [];
   private tracerGeo: THREE.CylinderGeometry;
   private scene: THREE.Scene;
   /** Last frame's step, so an emitter called every frame emits at a steady rate whatever the frame rate. */
@@ -800,7 +806,7 @@ export class ParticleManager {
       mat.opacity = Math.max(0, t.life / t.maxLife) * 0.75;
       if (t.life <= 0) {
         this.scene.remove(t.mesh);
-        mat.dispose();
+        this.tracerPool.push(t.mesh);
         this.tracers.splice(i, 1);
       }
     }
@@ -1287,21 +1293,31 @@ export class ParticleManager {
     this.smoke.clear();
     this.glow.clear();
     this.streaks.clear();
-    for (const t of this.tracers) this.scene.remove(t.mesh);
+    for (const t of this.tracers) {
+      this.scene.remove(t.mesh);
+      this.tracerPool.push(t.mesh);
+    }
     this.tracers.length = 0;
   }
 
   tracer(from: THREE.Vector3, to: THREE.Vector3, color = 0xffd9a0): void {
     const len = from.distanceTo(to);
     if (len < 0.4) return;
-    const mat = new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.75,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false
-    });
-    const mesh = new THREE.Mesh(this.tracerGeo, mat);
+    let mesh = this.tracerPool.pop();
+    if (mesh) {
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      mat.color.set(color);
+      mat.opacity = 0.75;
+    } else {
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.75,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      mesh = new THREE.Mesh(this.tracerGeo, mat);
+    }
     const dir = ParticleManager.tmpV.copy(to).sub(from).normalize();
     mesh.quaternion.setFromUnitVectors(ParticleManager.UP, dir);
     mesh.position.copy(from).addScaledVector(dir, len / 2);

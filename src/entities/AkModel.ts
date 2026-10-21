@@ -184,6 +184,23 @@ function withTemplate(fn: (t: THREE.Group) => void): void {
 }
 
 /**
+ * An AK hung on a wall rack: the whole textured model at an agent's scale,
+ * upright, barrel down −Z, so it reads properly from a metre away. The group
+ * comes back at once; the gun goes into it as soon as the model is there.
+ */
+export function rackAK(): THREE.Group {
+  const g = new THREE.Group();
+  withAK((copy) => {
+    // A plain issue rifle: none of Ravi's own touches (the bandage wraps, the charm on its chain)
+    copy.traverse((o) => {
+      if (/^(Wrap|Charm|Chain)/.test(o.name)) o.visible = false;
+    });
+    g.add(fullAK(copy));
+  });
+  return g;
+}
+
+/**
  * An AK lying on the floor where somebody dropped it: on its side, at an
  * agent's scale. The group comes back at once; the gun goes into it as soon
  * as the model is there.

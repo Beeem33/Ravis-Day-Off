@@ -3072,6 +3072,48 @@ export class HitmanVisual {
     });
   }
 
+  /**
+   * One of the floor's staff, off shift and his own man (staff only): his
+   * cap on or off (his hair under it), the shirt he came in, glasses.
+   */
+  restyleCrew(o: { cap?: boolean; shirt?: number; glasses?: boolean }): void {
+    const H = HitmanVisual;
+    if (o.cap === false) {
+      const cap = this.model.getObjectByName('HitmanCap');
+      if (cap) cap.visible = false;
+    }
+    if (o.shirt !== undefined) {
+      const shirt = H.outfitMat(`crew:shirt:${o.shirt}`, () => new THREE.MeshStandardMaterial({ name: 'HM_StaffShirt', color: o.shirt, roughness: 0.85 }));
+      this.model.traverse((x) => {
+        const m = x as THREE.Mesh;
+        if (!m.isMesh) return;
+        if (Array.isArray(m.material)) m.material = m.material.map((t) => (t.name === 'HM_StaffShirt' ? shirt : t));
+        else if (m.material.name === 'HM_StaffShirt') m.material = shirt;
+      });
+    }
+    if (o.glasses) {
+      const frame = H.outfitMat('crew:glasses', () => new THREE.MeshStandardMaterial({ name: 'HM_Frames', color: 0x17181a, roughness: 0.35, metalness: 0.3 }));
+      const glasses = new THREE.Group();
+      for (const sx of [-1, 1]) {
+        const rim = new THREE.Mesh(H.outfitGeo('crew:lens', () => new THREE.TorusGeometry(0.017, 0.0019, 5, 18)), frame);
+        rim.scale.set(1.15, 0.8, 1);
+        rim.position.set(sx * 0.032, 1.634, -0.089);
+        glasses.add(rim);
+        // The hinge out to his temple, and the arm back over his ear
+        const hinge = new THREE.Mesh(H.outfitGeo('crew:hinge', () => new THREE.BoxGeometry(0.024, 0.003, 0.003)), frame);
+        hinge.position.set(sx * 0.063, 1.637, -0.088);
+        glasses.add(hinge);
+        const arm = new THREE.Mesh(H.outfitGeo('crew:arm', () => new THREE.BoxGeometry(0.0025, 0.003, 0.09)), frame);
+        arm.position.set(sx * 0.075, 1.637, -0.044);
+        glasses.add(arm);
+      }
+      const bridge = new THREE.Mesh(H.outfitGeo('crew:bridge', () => new THREE.BoxGeometry(0.026, 0.003, 0.003)), frame);
+      bridge.position.set(0, 1.638, -0.091);
+      glasses.add(bridge);
+      this.hang(glasses, 'Head');
+    }
+  }
+
   /** The crew's carrier: the shirt's torso let out 13 mm, its own weights; pouches and grenades on it, weighted like the cloth under them. */
   private static crewVest(src: THREE.BufferGeometry): THREE.BufferGeometry {
     const names = HitmanVisual.boneNames;

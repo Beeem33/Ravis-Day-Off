@@ -2546,6 +2546,11 @@ export class Enemy {
     this.setMood(0, 0.78, 0, 0.62);
   }
 
+  /** Staff off shift, each his own man (model only): cap on or off, his own shirt, glasses. */
+  restyleCrew(o: { cap?: boolean; shirt?: number; glasses?: boolean }): void {
+    this.hitman?.restyleCrew(o);
+  }
+
   /** The coworkers' kit for the fight (model only): a carrier that fits him, and a helmet in place of his cap. */
   wearCrewKit(): void {
     if (this.armoured) return;

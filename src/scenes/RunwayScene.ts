@@ -198,6 +198,7 @@ export class RunwayScene implements GameScene {
   private sunsetOn = false;
   private skyMat: THREE.MeshBasicMaterial | null = null;
   private sunMat: THREE.MeshBasicMaterial | null = null;
+  private winMat: THREE.MeshLambertMaterial | null = null;
   private lights: { amb?: THREE.AmbientLight; hemi?: THREE.HemisphereLight; sun?: THREE.DirectionalLight } = {};
 
   // ---- Sound and UI
@@ -423,7 +424,18 @@ export class RunwayScene implements GameScene {
     };
     this.sanjay = mk('SANJAY', 6);
     this.dev = mk('DEV', 4);
-    this.crew = [this.sanjay, this.dev, mk('STAFF', 9), mk('STAFF', 15), mk('STAFF', 17), mk('STAFF', 21), mk('STAFF', 24)];
+    // Off shift, so each in his own shirt; some with the floor's cap still on, some not (indices picked for eight different faces)
+    this.crew = [this.sanjay, this.dev, mk('STAFF', 9), mk('STAFF', 7), mk('STAFF', 3), mk('STAFF', 5), mk('STAFF', 2)];
+    const looks: { cap?: boolean; shirt?: number; glasses?: boolean }[] = [
+      {},
+      { cap: false, shirt: 0xb8cce0, glasses: true },
+      { shirt: 0x9ea6af },
+      { cap: false, shirt: 0x8a4a46 },
+      { shirt: 0xb3c7a2 },
+      { cap: false, shirt: 0xdcc9a0 },
+      { cap: false, shirt: 0x4a5568 }
+    ];
+    this.crew.forEach((e, i) => e.restyleCrew(looks[i]));
     // Right bench: Sanjay and three; left: Dev beside Ravi and two more
     const places: { at: THREE.Vector3; yaw: number }[] = [
       { at: v.seats.right[0], yaw: Math.PI / 2 },
@@ -435,7 +447,7 @@ export class RunwayScene implements GameScene {
       { at: v.seats.right[3], yaw: Math.PI / 2 }
     ];
     this.crew.forEach((e, i) => this.seatOf.set(e, places[i]));
-    this.wheelman = mk('STAFF', 13);
+    this.wheelman = mk('STAFF', 8);
     const stain = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.012), new THREE.MeshStandardMaterial({ color: 0xd88a86, roughness: 0.5 }));
     stain.position.set(-0.02, -0.06, -0.141);
     this.sanjay.addChestPatch(stain);
@@ -927,12 +939,14 @@ export class RunwayScene implements GameScene {
   private updateBoard(): void {
     const t = this.beatT;
     const v = this.van;
-    // The furthest seats fill first
+    // The furthest seats fill first, one at the door at a time: each leaves when he'll get there
+    // a beat behind the man before him, however far he has to come
     this.crew.forEach((e, i) => {
       const order = [5, 6, 3, 4, 1, 2, 0][i];
-      if (t < 0.15 + order * 0.26 || this.walks.has(e) || e.root.parent === v.body) return;
-      const place = this.seatOf.get(e)!;
+      if (this.walks.has(e) || e.root.parent === v.body) return;
       const step = this.vanWorld(v.doorOut);
+      if (t < 0.9 + order * 0.45 - Math.hypot(e.position.x - step.x, e.position.z - step.z) / 3) return;
+      const place = this.seatOf.get(e)!;
       const inside = this.vanWorld(v.doorIn);
       const aisle = this.vanWorld(new THREE.Vector3(0, v.floorY, place.at.z));
       this.walk(e, [e.position.clone(), step, inside, aisle], 3, undefined, () => this.seatIn(e, place.at, place.yaw));
@@ -1051,7 +1065,10 @@ export class RunwayScene implements GameScene {
     if (cut(8.1)) {
       sanjay.wearCrewKit();
       this.ctx.audio.kickWhoosh();
+      this.ctx.audio.velcro();
     }
+    // The straps, ripped open and pressed home
+    if (cut(8.55) || cut(9.2)) this.ctx.audio.velcro();
 
     // Two across the aisle, helmets on
     if (shot === 'm-helmets') {
@@ -1065,7 +1082,11 @@ export class RunwayScene implements GameScene {
       s0.wearCrewKit();
       s1.wearCrewKit();
       this.ctx.audio.kickWhoosh();
+      this.ctx.audio.helmetKnock();
     }
+    // A knuckle rapped on one, to be sure
+    if (cut(10.75)) this.ctx.audio.helmetKnock();
+    if (cut(11.0)) this.ctx.audio.clink();
 
     // His own hands: the AK, loaded and racked
     if (cut(11.8)) this.rifle.stow = 0.6;
@@ -1078,7 +1099,11 @@ export class RunwayScene implements GameScene {
       dev.wearCrewKit();
       s2.wearCrewKit();
       if (this.grenadeProp) dev.holdProp(this.grenadeProp, 0.02);
+      this.ctx.audio.clink();
     }
+    // Its pin ring knocking; then home in the pouch
+    if (cut(15.1)) this.ctx.audio.clink();
+    if (cut(16.2)) this.ctx.audio.velcro();
     if (shot === 'm-grenade') {
       const k = smooth((t - 15.7) / 0.6);
       dev.pose = {
@@ -1093,6 +1118,7 @@ export class RunwayScene implements GameScene {
     // The red work light: everyone in kit now
     if (cut(19.4)) {
       for (const e of [s3, s4, this.wheelman]) e.wearCrewKit();
+      this.ctx.audio.velcro();
       v.light.intensity = 0.6;
       v.redLight.intensity = 6;
       v.lamp.emissiveIntensity = 0.25;
@@ -1197,6 +1223,48 @@ export class RunwayScene implements GameScene {
     const sun = new THREE.CanvasTexture(s);
     sun.colorSpace = THREE.SRGBColorSpace;
     this.sunMat = new THREE.MeshBasicMaterial({ map: sun, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false, side: THREE.DoubleSide });
+    // The offices lighting up as it gets dark: their own copy of the facade's material, its panes lit from
+    // an atlas of one bay eight by eight, a few warm and most dark, so no two tiles side by side match
+    const win = this.level.group.getObjectByName('street-windows') as THREE.Mesh | undefined;
+    if (win) {
+      const c2 = document.createElement('canvas');
+      c2.width = c2.height = 1024;
+      const lg = c2.getContext('2d')!;
+      lg.fillStyle = '#000';
+      lg.fillRect(0, 0, 1024, 1024);
+      const warm = ['#ffd38a', '#ffe2a8', '#fff0d2', '#ffc06a', '#dfe8ff'];
+      let seed = 11;
+      const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      for (let cy = 0; cy < 8; cy++) {
+        for (let cx = 0; cx < 8; cx++) {
+          const r = rnd();
+          if (r > 0.42) continue;
+          const x = cx * 128;
+          const y = cy * 128;
+          lg.fillStyle = warm[Math.floor(rnd() * warm.length) % warm.length];
+          // One side of the mullion only, now and then; a blind half down in some
+          if (r < 0.1) lg.fillRect(x + (rnd() < 0.5 ? 16 : 66), y + 16, 46, 86);
+          else lg.fillRect(x + 16, y + 16, 96, 86);
+          if (rnd() < 0.3) {
+            lg.fillStyle = 'rgba(0,0,0,0.6)';
+            lg.fillRect(x + 16, y + 16, 96, 32);
+          }
+          lg.fillStyle = '#000';
+          lg.fillRect(x + 62, y + 16, 4, 86);
+          lg.fillRect(x + 16, y + 54, 96, 3);
+        }
+      }
+      const lit = new THREE.CanvasTexture(c2);
+      lit.colorSpace = THREE.SRGBColorSpace;
+      lit.wrapS = lit.wrapT = THREE.RepeatWrapping;
+      lit.repeat.set(1 / 8, 1 / 8);
+      const m = (win.material as THREE.MeshLambertMaterial).clone();
+      m.emissive.set(0xffffff);
+      m.emissiveMap = lit;
+      m.emissiveIntensity = 0;
+      win.material = m;
+      this.winMat = m;
+    }
     this.level.group.traverse((o) => {
       if ((o as THREE.AmbientLight).isAmbientLight) this.lights.amb = o as THREE.AmbientLight;
       else if ((o as THREE.HemisphereLight).isHemisphereLight) this.lights.hemi = o as THREE.HemisphereLight;
@@ -1246,6 +1314,9 @@ export class RunwayScene implements GameScene {
       sun.intensity = THREE.MathUtils.lerp(2.1, 0.15, dusk);
       sun.position.copy(sun.target.position).addScaledVector(this.sunDir, 300);
     }
+    // Lights coming on: windows across the city, and the van's headlamps on the road
+    if (this.winMat) this.winMat.emissiveIntensity = 1.15 * smooth((u - 0.3) / 0.55);
+    for (const b of this.van.beams) b.intensity = 160 * smooth((u - 0.2) / 0.5);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(lerpC(0xd08868, 0x3c3450, dusk));
     this.ctx.engine.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.0, 0.92, dusk);
@@ -1423,8 +1494,25 @@ export class RunwayScene implements GameScene {
       w.s = Math.min(w.len, w.s + w.speed * dt);
       const dir = RunwayScene.tmpB;
       alongPath(w.pts, w.s, e.position, dir);
+      // A step up or down out of the van is a hop: an arc over the sill, feet together
+      let hop = false;
+      for (let i = 1, s0 = 0; i < w.pts.length; i++) {
+        const a = w.pts[i - 1];
+        const b = w.pts[i];
+        const l = a.distanceTo(b);
+        if (w.s <= s0 + l) {
+          if (Math.abs(b.y - a.y) > 0.3) {
+            const u = l > 0 ? (w.s - s0) / l : 1;
+            // Up and in needs to clear the sill; down and out is a drop
+            e.position.y += 4 * (b.y > a.y ? 0.32 : 0.3) * u * (1 - u);
+            hop = true;
+          }
+          break;
+        }
+        s0 += l;
+      }
       if (Math.hypot(dir.x, dir.z) > 1e-3) e.faceToward(RunwayScene.tmpC.copy(e.position).add(dir.setY(0)), dt, 10);
-      e.setWalk(w.s < w.len ? 0.7 : 0);
+      e.setWalk(w.s < w.len && !hop ? 0.7 : 0);
       e.cadence = 1.3;
       if (w.s >= w.len) {
         this.walks.delete(e);

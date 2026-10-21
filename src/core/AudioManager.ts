@@ -1062,6 +1062,26 @@ export class AudioManager {
     this.whoosh(0.26, 280, 1500, 360, 0.5, 1.6);
   }
 
+  /** A strap's velcro torn open and pressed home: a crackling rip. */
+  velcro(): void {
+    if (!this.ctx) return;
+    for (let i = 0; i < 9; i++) {
+      setTimeout(() => this.noise(0.022 + Math.random() * 0.02, 'bandpass', 2200 + Math.random() * 1800, 0.1 + Math.random() * 0.06, true, 1.5), i * 21 + Math.random() * 9);
+    }
+  }
+
+  /** A helmet's shell knocked on: hollow, plastic. */
+  helmetKnock(): void {
+    this.tone('triangle', 340, 220, 0.09, 0.22);
+    this.noise(0.05, 'bandpass', 900, 0.16, true, 2);
+  }
+
+  /** Small metal on metal: a grenade's pin ring, a buckle. */
+  clink(): void {
+    this.tone('sine', 3400, 3300, 0.12, 0.08);
+    this.tone('sine', 4700, 4600, 0.08, 0.05);
+  }
+
   /** A fist going past: shorter and higher than legs. */
   punchSwish(): void {
     this.whoosh(0.13, 700, 2400, 900, 0.32, 1.3);

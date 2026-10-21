@@ -38,6 +38,8 @@ export interface VanRig {
   redLight: THREE.PointLight;
   lamp: THREE.MeshStandardMaterial;
   headlights: THREE.MeshStandardMaterial;
+  /** The light the headlamps throw down the road ahead: off (0) until it's dark enough to want them. */
+  beams: THREE.SpotLight[];
   brakelights: THREE.MeshStandardMaterial;
   /** Every mesh the body carries (for render flags). */
   meshes: THREE.Mesh[];
@@ -69,7 +71,8 @@ export function crewVan(): VanRig {
   group.add(body);
   const meshes: THREE.Mesh[] = [];
 
-  const paint = new THREE.MeshStandardMaterial({ color: 0x7c838b, roughness: 0.38, metalness: 0.45 });
+  // Grey that reads as grey: little metalness, with no environment map for a metal to reflect
+  const paint = new THREE.MeshStandardMaterial({ color: 0x8e959d, roughness: 0.45, metalness: 0.12 });
   const plastic = new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.82 });
   const chrome = new THREE.MeshStandardMaterial({ color: 0xb9bec4, roughness: 0.25, metalness: 0.85 });
   const seam = new THREE.MeshStandardMaterial({ color: 0x3c4147, roughness: 0.6, metalness: 0.3 });
@@ -190,6 +193,15 @@ export function crewVan(): VanRig {
     box(0.09, 0.07, 0.04, amber, sx * 1.04, 0.99, -L / 2 - 0.015);
     // Fog lamps in the bumper
     box(0.12, 0.06, 0.03, headlights, sx * 0.78, 0.5, -L / 2 - 0.13);
+  }
+  // What they throw: down and ahead, a little out to each side
+  const beams: THREE.SpotLight[] = [];
+  for (const sx of [-1, 1]) {
+    const beam = new THREE.SpotLight(0xfff0d6, 0, 80, 0.5, 0.6, 1.5);
+    beam.position.set(sx * 0.83, 1.08 - AXLE, -L / 2 - 0.1);
+    beam.target.position.set(sx * 1.2, -AXLE, -L / 2 - 24);
+    body.add(beam, beam.target);
+    beams.push(beam);
   }
   box(W + 0.08, 0.28, 0.24, plastic, 0, 0.52, -L / 2 - 0.02);
   box(0.46, 0.11, 0.01, chrome, 0, 0.68, -L / 2 - 0.15);
@@ -362,6 +374,7 @@ export function crewVan(): VanRig {
     redLight,
     lamp,
     headlights,
+    beams,
     brakelights,
     meshes
   };

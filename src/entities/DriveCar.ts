@@ -34,6 +34,8 @@ export interface CarTune extends DriveTune {
   reverseSpeed?: number;
   /** How quickly the steering follows the input: rad/s-ish rates for the input (−1..1) ramp at standstill. Lower is smoother. */
   steerRate?: number;
+  /** How quickly the car's turning follows the wheels, 1/s: higher bites sooner. */
+  yawResp?: number;
 }
 
 type Full = Required<CarTune>;
@@ -45,6 +47,7 @@ function full(t: CarTune): Full {
     latMax: 10,
     reverseSpeed: 9,
     steerRate: 4.2,
+    yawResp: 10,
     ...t
   };
 }
@@ -56,16 +59,17 @@ export const CIVIC_TUNE: CarTune = {
   brake: 12,
   steerLow: 0.54,
   steerHigh: 0.012,
-  grip: 8,
   mass: 1100,
   length: 4.15,
   width: 1.76,
   wheelRadius: 0.3,
   wheelbase: 2.57,
-  // Arcade grip: it turns at speed far better than a real tired hatch would
-  latMax: 16,
+  // Arcade grip: it turns at speed far better than a real tired hatch would, and bites straight away
+  grip: 10,
+  latMax: 18,
   reverseSpeed: 9,
-  steerRate: 11
+  steerRate: 13,
+  yawResp: 16
 };
 
 /** The boss's big black saloon: a little faster than the Civic, heavier, planted. */
@@ -340,7 +344,7 @@ export class DriveCar implements ICar {
       wT = clamp(wT * 1.2 - Math.sign(vF) * this.steerNow * Math.min(1.9, av * 0.1), -2.7, 2.7);
     }
     // Low speed: the tyres hold the car to what the wheels say
-    const resp = hb ? 4.5 : 10 - 4 * this.slide;
+    const resp = hb ? 4.5 : t.yawResp - 4 * this.slide;
     this.yawRate += (wT - this.yawRate) * Math.min(1, resp * h);
 
     // ---- sideways: the tyres scrub the slip, up to what they can hold

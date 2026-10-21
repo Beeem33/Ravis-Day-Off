@@ -2145,15 +2145,16 @@ export class StreetScene implements GameScene {
     let fov = 68;
     switch (this.shot) {
       case 'chase': {
-        // Ravi's own eyes, in the driver's seat — steady: the car leans,
-        // lurches and swerves round him, his head doesn't. He keeps looking
-        // down the road (and, with a helicopter up, where the mouse puts his eyes)
+        // Ravi's own eyes, in the driver's seat — steady: the car leans and
+        // lurches round him, his head doesn't. He looks where the car's going,
+        // holding his gaze down the road against the first fifth of a swerve
+        // (and, with a helicopter up, where the mouse puts his eyes)
         this.eyeSteady(cam.position);
         const k = clamp01(Math.abs(p.speed) / 50);
         const fr = this.net.sample(p.at.road, p.at.s + 10);
         const off = wrapAngle(p.yaw - Math.atan2(-fr.tangent.x, -fr.tangent.z));
-        // Only part of a swerve reaches his eyes; spun right round, he goes with the car
-        const want = THREE.MathUtils.clamp(-off * 0.85 * clamp01((1.1 - Math.abs(off)) / 0.4), -0.6, 0.6);
+        // Steering turns the view with the car; spun right round, he goes with it entirely
+        const want = THREE.MathUtils.clamp(-off * 0.2 * clamp01((1.1 - Math.abs(off)) / 0.4), -0.15, 0.15);
         this.headSteady += (want - this.headSteady) * Math.min(1, dt * 10);
         this.lookSteady(this.headSteady + this.headYaw, this.headPitch, this.lookAt);
         fov = 74 + 8 * k;

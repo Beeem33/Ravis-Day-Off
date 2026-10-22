@@ -14,7 +14,7 @@ import { rackAK } from '../entities/AkModel';
 import { RoadNet } from '../entities/RoadNet';
 import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
-import { RaviVisual, FirstPersonArms, grip, mixGrip, type HandShape, type RaviRig } from '../entities/RaviVisual';
+import { RaviVisual, FirstPersonArms, grip, mixGrip, HAND, type RaviRig } from '../entities/RaviVisual';
 import { WheelGrip, wheelInModel } from '../entities/WheelGrip';
 import { RifleViewmodel } from '../entities/RifleViewmodel';
 import type { FPSPlayer } from '../entities/FPSPlayer';
@@ -133,18 +133,16 @@ const BADGE_GRIP = grip([0.06, -0.14, -0.024], [-0.22, 0.9, -0.36], [0, 0, 1], [
  * frame: the grenade at its origin, the camera's axes). Sat in the open palm,
  * palm up, the fingers out ahead of it; then closed round it.
  */
-const NADE_OPEN = grip([0.012, -0.05, 0.07], [-0.22, 0.12, -0.97], [0, 1, 0.08], [0.32, -0.45, 0.83], {
+const NADE_OPEN = grip([0.012, -0.066, 0.066], [-0.22, 0.12, -0.97], [0, 1, 0.08], [0.32, -0.45, 0.83], {
   fingers: [[16, 20, 10], [14, 18, 9], [16, 20, 10], [20, 24, 12]],
   thumb: [0.12, 0.18, 0.12],
   spread: 3
 });
-const NADE_SHUT = grip([0.012, -0.045, 0.062], [-0.22, 0.22, -0.95], [0, 1, 0.15], [0.32, -0.45, 0.83], {
-  fingers: [[80, 88, 58], [82, 90, 60], [84, 90, 60], [86, 92, 62]],
-  thumb: [0.6, 0.7, 0.55]
+// Wrapped round the egg's lower half, the fingertips on its skin, not through it
+const NADE_SHUT = grip([0.012, -0.064, 0.06], [-0.22, 0.22, -0.95], [0, 1, 0.15], [0.32, -0.45, 0.83], {
+  fingers: [[46, 50, 30], [48, 54, 32], [50, 56, 32], [54, 58, 34]],
+  thumb: [0.38, 0.42, 0.3]
 });
-/** Fingers laced together, the knuckles up under his chin. */
-const LACED: HandShape = { fingers: [[62, 74, 42], [66, 78, 44], [70, 80, 46], [74, 82, 48]], thumb: [0.35, 0.35, 0.25], spread: 2 };
-
 /**
  * The montage's shots, in order, and when each cuts in: the van on the
  * highway, the crew already in their kit; Ravi, closer and closer; and the
@@ -584,9 +582,8 @@ export class RunwayScene implements GameScene {
 
   /**
    * In the back of the van for the montage: sat on the left bench up by the
-   * cab, leant forward with his elbows on his thighs, his fingers laced and
-   * his knuckles up under his chin, eyes ahead. The trunk goes first; then his
-   * hands are put where his chin has ended up.
+   * cab, upright, his hands resting on his thighs. Where his head ends up is
+   * kept (van frame) for the shots that look at him.
    */
   private seatRaviInVan(): void {
     const r = this.driver;
@@ -596,26 +593,26 @@ export class RunwayScene implements GameScene {
     r.root.position.set(at.x, at.y - this.van.body.position.y, at.z);
     r.root.rotation.y = Math.PI / 2;
     const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
-    const pose = {
-      hips: V(0, 0.53, -0.16),
-      lean: [16, 14, 12, 8, -16, -26],
-      legs: {
-        l: { ankle: V(0.16, 0.09, 0.36), knee: V(0.2, 0.7, 1) },
-        r: { ankle: V(-0.16, 0.09, 0.36), knee: V(-0.2, 0.7, 1) }
-      },
-      arms: {}
-    };
-    r.seat(pose);
-    const clasp = r.at('head').add(V(0, -0.13, 0.115));
     r.seat({
-      ...pose,
+      hips: V(0, 0.53, -0.17),
+      lean: [2, 4, 3, 2, 0, -2],
+      legs: {
+        l: { ankle: V(0.15, 0.09, 0.32), knee: V(0.18, 0.7, 1) },
+        r: { ankle: V(-0.15, 0.09, 0.32), knee: V(-0.18, 0.7, 1) }
+      },
       arms: {
-        l: { wrist: clasp.clone().add(V(0.04, 0, -0.01)), along: V(-0.35, 1, 0.2), palm: V(-1, 0.1, -0.15), elbow: V(0.35, -1, 0.15), shape: LACED },
-        r: { wrist: clasp.clone().add(V(-0.04, 0, -0.01)), along: V(0.35, 1, 0.2), palm: V(1, 0.1, -0.15), elbow: V(-0.35, -1, 0.15), shape: LACED }
+        l: { wrist: V(0.13, 0.63, 0.12), along: V(-0.15, -0.2, 1), palm: V(-0.15, -1, 0.05), elbow: V(0.5, -0.2, -0.8), shape: HAND.relaxed },
+        r: { wrist: V(-0.13, 0.63, 0.12), along: V(0.15, -0.2, 1), palm: V(0.15, -1, 0.05), elbow: V(-0.5, -0.2, -0.8), shape: HAND.relaxed }
       }
     });
+    // His head in the van's frame: he faces +X, his model's left (+X) is the van's −Z
+    const h = r.at('head');
+    this.raviHead.set(at.x + h.z, at.y + h.y, at.z - h.x);
     r.root.visible = true;
   }
+
+  /** Where his head is, sat in the van (van frame), and so where his eyes are: a little forward of it and up. */
+  private readonly raviHead = new THREE.Vector3();
 
   /** The badge in Ravi's hand, and the AK for the montage: both on the camera. */
   private buildViewmodels(): void {
@@ -1240,7 +1237,7 @@ export class RunwayScene implements GameScene {
     if (!this.nadeRoot.visible) return;
     const u = t - t0;
     const a = this.nadeAnchor;
-    const held = new THREE.Vector3(0.025, -0.11, -0.32);
+    const held = new THREE.Vector3(0.025, -0.06, -0.32);
     const low = new THREE.Vector3(0.13, -0.5, -0.26);
     const pocket = new THREE.Vector3(0.34, -0.62, -0.04);
     if (u < 0.75) a.position.lerpVectors(low, held, smooth(u / 0.75));
@@ -2268,9 +2265,10 @@ export class RunwayScene implements GameScene {
       const head = r.bones.get('head');
       if (head) head.scale.setScalar(pov ? 0.001 : 1);
     }
-    // Him, sat up by the cab facing across the aisle (+X): his face, and his hands under his chin
+    // Him, sat up by the cab facing across the aisle (+X): his face, from his head; everything framed inside the letterbox's bars
     const ravi = v.seats.left[0];
-    const face = (dx = 0, dy = 0): THREE.Vector3 => W(ravi.x + 0.28 + dx, fy + 1.1 + dy, ravi.z);
+    const hd = this.raviHead;
+    const face = (dx = 0, dy = 0): THREE.Vector3 => W(hd.x + 0.09 + dx, hd.y + 0.04 + dy, hd.z);
     const span = (i: number): number => clamp01((t - SHOTS[i][1]) / (SHOTS[i + 1][1] - SHOTS[i][1]));
     const vpos = v.group.position;
     const fwd = RunwayScene.tmpA.set(0, 0, -1).applyQuaternion(v.group.quaternion);
@@ -2292,30 +2290,31 @@ export class RunwayScene implements GameScene {
         return { key, eye: W(-5 + k * 2, 15 - k * 2, 24 - k * 4), look: W(0, 1, -30), fov: 55, follow: 20, roll: 0 };
       }
       case 'm-ravi1': {
-        // Across the aisle from him, his whole self: elbows on his thighs, hands laced under his chin. Pushing in
+        // Across the aisle from him, all of him: sat up, hands on his thighs. Pushing in
         const k = smooth(span(3));
-        return { key, eye: W(1.02 - k * 0.32, fy + 1.06, ravi.z + 0.14 - k * 0.06), look: face(-0.06, -0.18), fov: 52, follow: 20, roll: 0 };
+        return { key, eye: W(1.0 - k * 0.22, fy + 1.08, ravi.z + 0.12 - k * 0.05), look: face(-0.1, -0.3), fov: 54, follow: 20, roll: 0 };
       }
       case 'm-ravi2': {
-        // Closer: his head and shoulders, his hands, still coming
+        // Closer: head and chest, still coming
         const k = smooth(span(4));
-        return { key, eye: W(0.52 - k * 0.24, fy + 1.1, ravi.z + 0.07 - k * 0.04), look: face(0, -0.06), fov: 42, follow: 20, roll: 0 };
+        return { key, eye: W(hd.x + 0.9 - k * 0.18, hd.y + 0.03, hd.z + 0.06 - k * 0.03), look: face(0, -0.03), fov: 40, follow: 20, roll: 0 };
       }
       case 'm-ravi3': {
-        // In on his eyes over his knuckles
+        // In on his face: brow to chin, all of it clear of the bars
         const k = span(5);
-        return { key, eye: W(0.16 - k * 0.12, fy + 1.11, ravi.z + 0.02), look: face(0, 0.0), fov: 36, follow: 20, roll: 0 };
+        return { key, eye: W(hd.x + 0.58 - k * 0.08, hd.y + 0.05, hd.z + 0.01), look: face(0, -0.01), fov: 36, follow: 20, roll: 0 };
       }
       case 'm-side': {
         // From his right, a little ahead of him, close and angled: the set of his face, the plan on the wall behind him
         const k = span(6);
-        return { key, eye: W(ravi.x + 0.62 - k * 0.04, fy + 1.15, ravi.z + 0.5 - k * 0.06), look: face(0.02, 0.02), fov: 34, follow: 20, roll: 0.03 };
+        return { key, eye: W(hd.x + 0.4 - k * 0.03, hd.y + 0.08, hd.z + 0.48 - k * 0.05), look: face(-0.02, -0.01), fov: 36, follow: 20, roll: 0.02 };
       }
       case 'm-grenade': {
-        // His own eyes, sat up a little, down at his hand; following it a touch as it goes to his pocket
+        // His own eyes, down at the hand he's holding up in front of him; following it a touch as it goes to his pocket
         const k = smooth((t - NADE_POCKET_AT) / 0.85);
-        const look = W(0.1, fy + 0.86, ravi.z + 0.06).lerp(W(0.05, fy + 0.74, ravi.z + 0.3), k * 0.5);
-        return { key, eye: W(ravi.x + 0.26, fy + 1.2, ravi.z), look, fov: 56, follow: 20, roll: 0 };
+        const eye = face(0.01, 0.04);
+        const look = W(hd.x + 0.62, hd.y - 0.42, hd.z + 0.02).lerp(W(hd.x + 0.5, hd.y - 0.62, hd.z + 0.25), k * 0.5);
+        return { key, eye, look, fov: 58, follow: 20, roll: 0 };
       }
       default: {
         // Leant up between the front seats, out of the screen: the sun gone down ahead, the city's lights coming

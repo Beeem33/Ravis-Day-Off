@@ -1082,6 +1082,20 @@ export class AudioManager {
     this.tone('sine', 4700, 4600, 0.08, 0.05);
   }
 
+  /** Something pushed down into a trouser pocket: two soft brushes of cloth. */
+  pocket(): void {
+    if (!this.ctx) return;
+    this.whoosh(0.22, 260, 900, 300, 0.16, 0.9);
+    setTimeout(() => this.noise(0.16, 'bandpass', 700, 0.08, true, 0.8), 140);
+  }
+
+  /** Something new in the inventory: a short bright rise of two notes. */
+  itemGet(): void {
+    this.tone('sine', 660, 660, 0.16, 0.09);
+    setTimeout(() => this.tone('sine', 990, 990, 0.32, 0.09), 110);
+    setTimeout(() => this.tone('triangle', 1980, 1980, 0.22, 0.025), 110);
+  }
+
   /** A fist going past: shorter and higher than legs. */
   punchSwish(): void {
     this.whoosh(0.13, 700, 2400, 900, 0.32, 1.3);

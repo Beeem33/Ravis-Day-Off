@@ -14,7 +14,7 @@ import { rackAK } from '../entities/AkModel';
 import { RoadNet } from '../entities/RoadNet';
 import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
-import { RaviVisual, FirstPersonArms, grip, HAND, type RaviRig } from '../entities/RaviVisual';
+import { RaviVisual, FirstPersonArms, grip, mixGrip, type HandShape, type RaviRig } from '../entities/RaviVisual';
 import { WheelGrip, wheelInModel } from '../entities/WheelGrip';
 import { RifleViewmodel } from '../entities/RifleViewmodel';
 import type { FPSPlayer } from '../entities/FPSPlayer';
@@ -128,11 +128,37 @@ const BADGE_GRIP = grip([0.06, -0.14, -0.024], [-0.22, 0.9, -0.36], [0, 0, 1], [
   thumb: [0.45, 0.35, 0.2]
 });
 
-/** The montage's shots, in order, and when each cuts in. */
+/**
+ * The grenade in Ravi's right hand, his own eyes looking down at it (anchor
+ * frame: the grenade at its origin, the camera's axes). Sat in the open palm,
+ * palm up, the fingers out ahead of it; then closed round it.
+ */
+const NADE_OPEN = grip([0.012, -0.05, 0.07], [-0.22, 0.12, -0.97], [0, 1, 0.08], [0.32, -0.45, 0.83], {
+  fingers: [[16, 20, 10], [14, 18, 9], [16, 20, 10], [20, 24, 12]],
+  thumb: [0.12, 0.18, 0.12],
+  spread: 3
+});
+const NADE_SHUT = grip([0.012, -0.045, 0.062], [-0.22, 0.22, -0.95], [0, 1, 0.15], [0.32, -0.45, 0.83], {
+  fingers: [[80, 88, 58], [82, 90, 60], [84, 90, 60], [86, 92, 62]],
+  thumb: [0.6, 0.7, 0.55]
+});
+/** Fingers laced together, the knuckles up under his chin. */
+const LACED: HandShape = { fingers: [[62, 74, 42], [66, 78, 44], [70, 80, 46], [74, 82, 48]], thumb: [0.35, 0.35, 0.25], spread: 2 };
+
+/**
+ * The montage's shots, in order, and when each cuts in: the van on the
+ * highway, the crew already in their kit; Ravi, closer and closer; and the
+ * grenade, from his own eyes.
+ */
 const SHOTS = [
-  ['m-sunset', 0], ['m-wide', 3], ['m-rack', 5.4], ['m-vest', 7.2], ['m-helmets', 9.8], ['m-load', 11.8],
-  ['m-grenade', 14.6], ['m-drone', 16.6], ['m-red', 19.4], ['m-bump', 21.8], ['m-ready', 23.8], ['m-ahead', 26.8]
+  ['m-sunset', 0], ['m-wide', 3.2], ['m-drone', 6.4], ['m-ravi1', 9.0], ['m-ravi2', 11.6], ['m-ravi3', 13.8],
+  ['m-side', 15.8], ['m-grenade', 18.8], ['m-ahead', 25.6]
 ] as const;
+/** In the grenade shot: when his fingers close on it, when it goes in his pocket, when the inventory says so. */
+const NADE_SHUT_AT = 21.0;
+const NADE_POCKET_AT = 22.4;
+const NOTICE_AT = 23.0;
+const NOTICE_FOR = 4.6;
 type ShotKey = (typeof SHOTS)[number][0];
 
 export class RunwayScene implements GameScene {
@@ -230,6 +256,10 @@ export class RunwayScene implements GameScene {
   private badgeAnchor = new THREE.Group();
   private badgeArms!: FirstPersonArms;
   private sanjayBadge!: THREE.Group;
+  /** The grenade he looks at in his hand, and his arm holding it: on the camera. */
+  private nadeRoot = new THREE.Group();
+  private nadeAnchor = new THREE.Group();
+  private nadeArms!: FirstPersonArms;
   private readonly handover = new THREE.Vector3();
   private grenadeProp: THREE.Group | null = null;
   private rifle!: RifleViewmodel;
@@ -258,6 +288,7 @@ export class RunwayScene implements GameScene {
   private fadeEl!: HTMLElement;
   private flashEl!: HTMLElement;
   private endCard!: HTMLElement;
+  private noticeEl!: HTMLElement;
   private crackCanvas: HTMLCanvasElement | null = null;
   private warmedUp = false;
   private unsubs: (() => void)[] = [];
@@ -551,7 +582,12 @@ export class RunwayScene implements GameScene {
     });
   }
 
-  /** In the back of the van for the montage: sat on the left bench up by the cab, elbows on his knees. */
+  /**
+   * In the back of the van for the montage: sat on the left bench up by the
+   * cab, leant forward with his elbows on his thighs, his fingers laced and
+   * his knuckles up under his chin, eyes ahead. The trunk goes first; then his
+   * hands are put where his chin has ended up.
+   */
   private seatRaviInVan(): void {
     const r = this.driver;
     if (!r) return;
@@ -560,16 +596,22 @@ export class RunwayScene implements GameScene {
     r.root.position.set(at.x, at.y - this.van.body.position.y, at.z);
     r.root.rotation.y = Math.PI / 2;
     const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
-    r.seat({
-      hips: V(0, 0.53, -0.18),
-      lean: [-4, 8, 8, 4, 2, -4],
+    const pose = {
+      hips: V(0, 0.53, -0.16),
+      lean: [16, 14, 12, 8, -16, -26],
       legs: {
-        l: { ankle: V(0.15, 0.09, 0.3), knee: V(0.2, 0.7, 1) },
-        r: { ankle: V(-0.15, 0.09, 0.3), knee: V(-0.2, 0.7, 1) }
+        l: { ankle: V(0.16, 0.09, 0.36), knee: V(0.2, 0.7, 1) },
+        r: { ankle: V(-0.16, 0.09, 0.36), knee: V(-0.2, 0.7, 1) }
       },
+      arms: {}
+    };
+    r.seat(pose);
+    const clasp = r.at('head').add(V(0, -0.13, 0.115));
+    r.seat({
+      ...pose,
       arms: {
-        l: { wrist: V(0.13, 0.62, 0.22), along: V(-0.3, -0.25, 1), palm: V(-0.2, -1, 0), elbow: V(0.7, -0.4, -0.3), shape: HAND.relaxed },
-        r: { wrist: V(-0.13, 0.62, 0.22), along: V(0.3, -0.25, 1), palm: V(0.2, -1, 0), elbow: V(-0.7, -0.4, -0.3), shape: HAND.relaxed }
+        l: { wrist: clasp.clone().add(V(0.04, 0, -0.01)), along: V(-0.35, 1, 0.2), palm: V(-1, 0.1, -0.15), elbow: V(0.35, -1, 0.15), shape: LACED },
+        r: { wrist: clasp.clone().add(V(-0.04, 0, -0.01)), along: V(0.35, 1, 0.2), palm: V(1, 0.1, -0.15), elbow: V(-0.35, -1, 0.15), shape: LACED }
       }
     });
     r.root.visible = true;
@@ -585,6 +627,12 @@ export class RunwayScene implements GameScene {
     this.badgeAnchor.userData.badge = badge;
     this.badgeArms = new FirstPersonArms(this.badgeRoot, this.camera).set('r', this.badgeAnchor, BADGE_GRIP);
     this.badgeRoot.visible = false;
+    // The grenade in his palm, for the montage
+    this.camera.add(this.nadeRoot);
+    this.nadeRoot.add(this.nadeAnchor);
+    this.nadeAnchor.add(grenade());
+    this.nadeArms = new FirstPersonArms(this.nadeRoot, this.camera).set('r', this.nadeAnchor, NADE_OPEN);
+    this.nadeRoot.visible = false;
     this.rifle = new RifleViewmodel(this.camera);
     this.rifle.stow = 1;
     this.rifle.onReloadEvent = (e) => {
@@ -625,6 +673,22 @@ export class RunwayScene implements GameScene {
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="rw-flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
       <div class="intro-fade" style="opacity:1;transition:opacity 0.8s"></div>
+      <style>
+        .rw-notice { position:absolute; left:50%; top:calc(12vh + 26px); transform:translate(-50%, -10px); display:flex; align-items:center; gap:16px;
+          padding:12px 22px 12px 14px; background:rgba(8,12,11,0.82); border:1px solid rgba(159,211,196,0.55); border-left:4px solid #9fd3c4;
+          font-family:'Courier New',monospace; color:#e8f4ec; text-shadow:0 1px 3px rgba(0,0,0,0.9); opacity:0; pointer-events:none;
+          transition:opacity 0.45s, transform 0.45s; }
+        .rw-notice.show { opacity:1; transform:translate(-50%, 0); }
+        .rw-notice canvas { width:52px; height:52px; }
+        .rw-notice .t { font-size:16px; letter-spacing:4px; font-weight:bold; }
+        .rw-notice .s { margin-top:6px; font-size:13px; letter-spacing:3px; color:#c9d6cf; }
+        .rw-notice .k { display:inline-block; padding:1px 8px; margin:0 6px; color:#050608; background:#f0efe9; border-radius:3px;
+          text-shadow:none; font-weight:bold; }
+      </style>
+      <div class="rw-notice">
+        <canvas width="104" height="104"></canvas>
+        <div><div class="t">GRENADES ADDED TO INVENTORY</div><div class="s">PRESS<span class="k">T</span>TO THROW A GRENADE</div></div>
+      </div>
       <div class="rw-end" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
         font-family:'Courier New',monospace;color:#e8f4ec;opacity:0;pointer-events:none;transition:opacity 1.2s">
         <div style="font-size:22px;letter-spacing:9px">TO BE CONTINUED</div>
@@ -638,6 +702,8 @@ export class RunwayScene implements GameScene {
     this.endCard = el.querySelector('.rw-end')!;
     this.crackCanvas = el.querySelector('.rw-cracks');
     this.sizeCracks();
+    this.noticeEl = el.querySelector('.rw-notice')!;
+    drawGrenadeIcon(this.noticeEl.querySelector('canvas')!);
   }
 
   private sizeCracks(): void {
@@ -755,6 +821,7 @@ export class RunwayScene implements GameScene {
     this.dialogue.update(dt);
     this.updateCamera(dt);
     if (this.badgeRoot.visible) this.badgeArms.update();
+    if (this.nadeRoot.visible) this.nadeArms.update();
     // (Every frame: it's what hides it while it's stowed)
     const fake = { sprinting: false, currentSpeed: 0, crouching: false, bob: { phase: 0, amount: 0 } } as unknown as FPSPlayer;
     this.rifle.update(dts, fake, 0, 0, false);
@@ -1069,11 +1136,13 @@ export class RunwayScene implements GameScene {
   // ------------------------------------------------------------ the montage
 
   /**
-   * Suiting up on the way, as the sun goes down: out on the highway, a run of
-   * short hard shots in the back of the van — the rack, Sanjay into his kit,
-   * helmets on, Ravi loading the AK, Dev with a grenade, the van from above
-   * and from the road, the crew in the red work light, a fist bump across the
-   * aisle, everyone armed and racking a round — and the last of the sun ahead.
+   * On the way, as the sun goes down: the van out on the highway, the crew
+   * in the back already in their kit with their rifles stood between their
+   * knees; then Ravi — elbows on his thighs, fingers laced under his chin —
+   * the camera pushing in on him shot by shot, and in close on his face from
+   * the side; then his own eyes on the grenade in his hand. He closes his
+   * fingers on it and puts it in his pocket, and the game tells the player
+   * what that means. The last of the sun ahead.
    */
   private startMontage(): void {
     this.setBeat('montage');
@@ -1092,10 +1161,17 @@ export class RunwayScene implements GameScene {
     this.vanEngine?.setSpeed(26, 0.6);
     this.vanEngine?.setGain(0.7);
     this.fadeEl.style.opacity = '0';
-    this.grenadeProp = grenade();
-    if (!this.vestProp) this.buildMontageProps();
-    for (const e of this.crew) e.setSerious();
-    this.wheelman.setSerious();
+    // Kitted out already, every one of them, rifles stood between their knees
+    for (const e of [...this.crew, this.wheelman]) {
+      e.wearCrewKit();
+      e.setSerious();
+    }
+    for (const e of this.crew) this.rifleBetweenKnees(e);
+    // The back lit for the drive: the dome lamp and the red work light at the back
+    const v = this.van;
+    v.light.intensity = 2.6;
+    v.redLight.intensity = 3.2;
+    v.lamp.emissiveIntensity = 0.9;
   }
 
   private shotAt(t: number): ShotKey {
@@ -1111,170 +1187,38 @@ export class RunwayScene implements GameScene {
     this.placeVanOnHighway(t, dt);
     this.applySunset(clamp01(t / MONTAGE_LEN));
     const cut = (at: number): boolean => t >= at && t - dt < at;
-    const shot = this.shotAt(t);
     // Hard cuts, a flash on some of them
-    const flash = [5.4, 8.1, 10.6, 11.8, 16.6, 19.4, 23.8].some((c) => t > c && t < c + 0.07);
+    const flash = [6.4, 9.0, 15.8, 18.8, 25.6].some((c) => t > c && t < c + 0.07);
     this.flashEl.style.opacity = flash ? '0.6' : '0';
-    const [sanjay, dev, s0, s1, s2, s3, s4] = this.crew;
-    const racks = [24.2, 24.55, 24.9, 25.25, 25.6, 25.95, 26.3];
-    const sat = (e: Enemy): void => {
-      const i = this.crew.indexOf(e);
-      const rack = Math.sin(Math.PI * clamp01((t - racks[i]) / 0.45));
-      e.pose = this.armed && this.kneeRifles.has(e) ? RIFLE_HANDS(t > racks[i] ? rack : 0) : SEATED_HANDS();
-    };
-    for (const e of this.crew) sat(e);
-
-    // The rack: a rifle lifted up off its hooks and away along the wall (one high at the back, where the shot looks, clear of their heads)
-    const rifle = v.rack[5];
-    if (shot === 'm-rack') {
-      const k = smooth((t - 5.9) / 1.1);
-      rifle.position.copy(this.rackHome(rifle)).add(RunwayScene.tmpA.set(-0.04 * k, 0.16 * k, -0.6 * k * k));
-      rifle.rotation.set(0.25 * k, 0, Math.PI / 2 - 0.15 * k);
-      if (cut(5.9)) this.ctx.audio.boltBack();
-    } else if (t > 7.2) rifle.visible = false;
-
-    // Sanjay: the vest up off his lap by its shoulders and over his head, the cut, and he's in it, pulling the straps tight
-    const vest = this.vestProp;
-    if (shot === 'm-vest' && t < 8.1) {
-      // Up off his lap to his chest, then up and over: hands wide on its shoulders, elbows out and down
-      const k1 = smooth((t - 7.25) / 0.35);
-      const k2 = smooth((t - 7.6) / 0.45);
-      const at = (sx: number): THREE.Vector3 =>
-        new THREE.Vector3(sx * 0.2, 0.8, -0.36).lerp(new THREE.Vector3(sx * 0.2, 1.0, -0.38), k1).lerp(new THREE.Vector3(sx * 0.19, 1.5, -0.14), k2);
-      sanjay.pose = {
-        handR: at(1),
-        handL: at(-1),
-        palmR: new THREE.Vector3(-0.3, 0, 1),
-        thumbR: new THREE.Vector3(0, 1, 0),
-        palmL: new THREE.Vector3(0.3, 0, 1),
-        thumbL: new THREE.Vector3(0, 1, 0),
-        elbow: new THREE.Vector3(1, -0.55, 0.15),
-        curl: 0.8,
-        lean: 0.12 * (1 - k2)
-      };
-      if (vest) this.holdBetween(vest, sanjay, at(1), at(-1), -0.24);
-    } else {
-      if (vest) vest.visible = false;
-      if (shot === 'm-vest') {
-        const tug = 0.03 * Math.sin((t - 8.1) * 10);
-        sanjay.pose = {
-          handR: new THREE.Vector3(0.12, 0.9 + tug, -0.18),
-          handL: new THREE.Vector3(-0.12, 0.9 - tug, -0.18),
-          palmR: new THREE.Vector3(0, 0, 1),
-          thumbR: new THREE.Vector3(0, 1, 0),
-          palmL: new THREE.Vector3(0, 0, 1),
-          thumbL: new THREE.Vector3(0, 1, 0),
-          elbow: new THREE.Vector3(1, -0.4, 0.4),
-          curl: 0.85
-        };
-      }
-    }
-    if (cut(8.1)) {
-      sanjay.wearCrewKit();
-      this.ctx.audio.kickWhoosh();
-      this.ctx.audio.velcro();
-    }
-    // The straps, ripped open and pressed home
-    if (cut(8.55) || cut(9.2)) this.ctx.audio.velcro();
-
-    // Two across the aisle, helmets on
-    // Up off the lap in both hands, held over the head, and pulled down onto it; then the hands come back down
-    if (shot === 'm-helmets') {
-      const k = t < 10.6 ? smooth((t - 9.8) / 0.5) : 1 - smooth((t - 10.9) / 0.6);
-      const on = smooth((t - 10.15) / 0.4);
-      [s0, s1].forEach((e, n) => {
-        const at = (sx: number): THREE.Vector3 => new THREE.Vector3(sx * 0.16, 0.66, -0.3).lerp(new THREE.Vector3(sx * 0.15, 1.46 - 0.13 * on, -0.02), k);
-        e.pose = {
-          handR: at(1),
-          handL: at(-1),
-          palmR: new THREE.Vector3(-1, 0, 0),
-          thumbR: new THREE.Vector3(0, 1, -0.4),
-          palmL: new THREE.Vector3(1, 0, 0),
-          thumbL: new THREE.Vector3(0, 1, -0.4),
-          elbow: new THREE.Vector3(1, 0.35, -0.4),
-          curl: 0.35
-        };
-        const h = this.helmetProps[n];
-        if (h && t < 10.6) this.holdBetween(h, e, at(1), at(-1), -0.02);
-        else if (h) h.visible = false;
-      });
-    } else for (const h of this.helmetProps) h.visible = false;
-    if (cut(10.6)) {
-      s0.wearCrewKit();
-      s1.wearCrewKit();
-      this.ctx.audio.kickWhoosh();
-      this.ctx.audio.helmetKnock();
-    }
-    // A knuckle rapped on one, to be sure
-    if (cut(10.75)) this.ctx.audio.helmetKnock();
-    if (cut(11.0)) this.ctx.audio.clink();
-
-    // His own hands: the AK, loaded and racked
-    if (cut(11.8)) this.rifle.stow = 0.6;
-    if (shot === 'm-load') this.rifle.stow += (0 - this.rifle.stow) * Math.min(1, dt * 6);
-    else this.rifle.stow = 1;
-    if (cut(12.2)) this.rifle.startReload();
-
-    // Dev, kitted, turning a grenade over in his hand, then onto his vest with it
-    if (cut(14.6)) {
-      dev.wearCrewKit();
-      s2.wearCrewKit();
-      if (this.grenadeProp) dev.holdProp(this.grenadeProp, 0.02);
-      this.ctx.audio.clink();
-    }
-    // Its pin ring knocking; then home in the pouch
-    if (cut(15.1)) this.ctx.audio.clink();
-    if (cut(16.2)) this.ctx.audio.velcro();
-    if (shot === 'm-grenade') {
-      const k = smooth((t - 15.7) / 0.6);
-      dev.pose = {
-        handR: new THREE.Vector3(0.08, 1.14 + 0.02 * Math.sin(t * 2), -0.32).lerp(new THREE.Vector3(0.1, 1.05, -0.16), k),
-        handL: new THREE.Vector3(-0.15, 0.62, -0.3),
-        head: new THREE.Euler(0.35 + 0.15 * k, 0.15, 0),
-        curl: 0.7
-      };
-    }
-    if (cut(16.6)) this.grenadeProp?.removeFromParent();
-
-    // The red work light: everyone in kit now
-    if (cut(19.4)) {
-      for (const e of [s3, s4, this.wheelman]) e.wearCrewKit();
-      this.ctx.audio.velcro();
-      v.light.intensity = 0.6;
-      v.redLight.intensity = 6;
-      v.lamp.emissiveIntensity = 0.25;
-    }
-    // A fist bump across the aisle: Dev and Sanjay
-    if (shot === 'm-bump') {
-      const k = t < 22.7 ? smooth((t - 21.9) / 0.8) : 1 - smooth((t - 23.0) / 0.6);
-      const mid = this.vanWorld(new THREE.Vector3(0, v.floorY + 1.0, (this.seatOf.get(dev)!.at.z + this.seatOf.get(sanjay)!.at.z) / 2));
-      for (const e of [dev, sanjay]) {
-        e.root.updateMatrixWorld(true);
-        const to = e.root.worldToLocal(mid.clone());
-        e.pose = { handR: new THREE.Vector3(0.15, 0.62, -0.3).lerp(to, k), handL: new THREE.Vector3(-0.15, 0.62, -0.3), elbow: new THREE.Vector3(0.6, -0.8, 0.1), curl: 1, lean: 0.34 * k };
-      }
-      if (cut(22.7)) this.ctx.audio.bodyThud(0.6);
-    }
-
-    // Everyone armed, rifles between their knees, racking a round one after another
-    if (cut(23.8)) {
-      this.armed = true;
-      for (const e of this.crew) this.rifleBetweenKnees(e);
-      v.light.intensity = 2.2;
-      v.redLight.intensity = 4;
-      v.lamp.emissiveIntensity = 0.8;
-    }
-    // Up front for the last shot: the lamp over the cab, so there's something to see by in it
-    if (cut(26.8)) {
-      v.light.position.set(0.2, 2.45 - v.body.position.y, -2.3);
-      v.light.intensity = 2.4;
-      v.redLight.intensity = 1.2;
-    }
-    for (const at of racks.map((r) => r + 0.12)) {
-      if (cut(at)) {
+    // Hands round their rifles; down the aisle, one and then another racks a round
+    const racks = [-1, -1, 4.3, -1, -1, 5.3, -1];
+    this.crew.forEach((e, i) => {
+      const rack = racks[i] > 0 ? Math.sin(Math.PI * clamp01((t - racks[i]) / 0.45)) : 0;
+      e.pose = this.kneeRifles.has(e) ? RIFLE_HANDS(rack) : SEATED_HANDS();
+      if (racks[i] > 0 && cut(racks[i] + 0.12)) {
         this.ctx.audio.boltBack();
         setTimeout(() => this.ctx.audio.boltForward(), 130);
       }
+    });
+
+    // On him for his shots: the dome lamp brought up over the front of the bay
+    if (cut(SHOTS[3][1])) {
+      v.light.position.set(0.45, 2.75 - v.body.position.y, -1.05);
+      v.light.intensity = 3.4;
+      v.redLight.intensity = 2.4;
+    }
+    // The grenade, from his own eyes
+    this.updateNade(t);
+    if (cut(NOTICE_AT)) {
+      this.noticeEl.classList.add('show');
+      this.ctx.audio.itemGet();
+    }
+    if (cut(NOTICE_AT + NOTICE_FOR)) this.noticeEl.classList.remove('show');
+    // Up front for the last shot: the lamp over the cab, so there's something to see by in it
+    if (cut(SHOTS[8][1])) {
+      v.light.position.set(0.2, 2.45 - v.body.position.y, -2.3);
+      v.light.intensity = 2.4;
+      v.redLight.intensity = 1.2;
     }
     if (t > MONTAGE_LEN - 1.1) this.fadeEl.style.opacity = '1';
     if (t > MONTAGE_LEN) {
@@ -1284,55 +1228,43 @@ export class RunwayScene implements GameScene {
     }
   }
 
+  /**
+   * His right hand coming up into view with the grenade sat in the open
+   * palm; held there, weighed; the fingers closing on it; a beat; then down
+   * and away to his trouser pocket.
+   */
+  private updateNade(t: number): void {
+    const t0 = SHOTS[7][1];
+    const on = t >= t0 && t < SHOTS[8][1];
+    this.nadeRoot.visible = on && t < NADE_POCKET_AT + 1.0;
+    if (!this.nadeRoot.visible) return;
+    const u = t - t0;
+    const a = this.nadeAnchor;
+    const held = new THREE.Vector3(0.025, -0.11, -0.32);
+    const low = new THREE.Vector3(0.13, -0.5, -0.26);
+    const pocket = new THREE.Vector3(0.34, -0.62, -0.04);
+    if (u < 0.75) a.position.lerpVectors(low, held, smooth(u / 0.75));
+    else if (t < NADE_POCKET_AT) {
+      // Held, and weighed once in the palm before the fingers go round it
+      const h = u - 0.75;
+      a.position.copy(held).add(RunwayScene.tmpA.set(Math.sin(h * 1.4) * 0.004, Math.sin(h * 2.1) * 0.003 + 0.012 * Math.sin(Math.PI * clamp01((u - 1.1) / 0.5)), 0));
+    } else a.position.lerpVectors(held, pocket, smooth((t - NADE_POCKET_AT) / 0.85));
+    const k = smooth((t - NADE_SHUT_AT) / 0.45);
+    // Shut, the fist turns a little, knuckles up, and squeezes
+    a.rotation.set(-0.1 * k, 0, 0.18 * k - 0.35 * smooth((t - NADE_POCKET_AT) / 0.85));
+    this.nadeArms.set('r', a, mixGrip(NADE_OPEN, NADE_SHUT, k));
+    if (Math.abs(t - NADE_SHUT_AT - 0.2) < 1 / 120) this.ctx.audio.clink();
+    if (Math.abs(t - NADE_POCKET_AT - 0.7) < 1 / 120) this.ctx.audio.pocket();
+  }
+
   private armed = false;
-  /** The vest Sanjay lifts over his head, the helmets two of them put on, and the rifles stood between their knees. */
-  private vestProp: THREE.Group | null = null;
-  private helmetProps: THREE.Mesh[] = [];
   private readonly kneeRifles = new Map<Enemy, THREE.Object3D>();
   private akButt = -1;
 
-  /** In the van's back for the montage: a vest and two helmets, hidden until they're in somebody's hands. */
-  private buildMontageProps(): void {
-    const kit = new THREE.MeshStandardMaterial({ color: 0x353b2c, roughness: 0.88 });
-    const strap = new THREE.MeshStandardMaterial({ color: 0x23271d, roughness: 0.9 });
-    const vest = new THREE.Group();
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.07), kit);
-    vest.add(panel);
-    for (const sx of [-1, 1]) {
-      const sh = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.2, 0.03), strap);
-      sh.position.set(sx * 0.13, 0.3, 0);
-      vest.add(sh);
-      const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.13, 0.05), strap);
-      pouch.position.set(sx * 0.11, -0.12, -0.055);
-      vest.add(pouch);
-    }
-    vest.visible = false;
-    this.van.body.add(vest);
-    this.vestProp = vest;
-    const shell = new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.6 });
-    for (let i = 0; i < 2; i++) {
-      const h = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), shell);
-      h.scale.set(1, 0.95, 1.12);
-      h.visible = false;
-      this.van.body.add(h);
-      this.helmetProps.push(h);
-    }
-  }
-
-  /** `prop` (riding on the van's body) held between `e`'s two hands at `a` and `b` (his own frame), `dy` up from their middle, square to him. */
-  private holdBetween(prop: THREE.Object3D, e: Enemy, a: THREE.Vector3, b: THREE.Vector3, dy: number): void {
-    e.root.updateMatrixWorld(true);
-    const mid = RunwayScene.tmpA.copy(a).add(b).multiplyScalar(0.5);
-    mid.y += dy;
-    e.root.localToWorld(mid);
-    this.van.body.updateMatrixWorld(true);
-    prop.position.copy(this.van.body.worldToLocal(mid));
-    prop.rotation.set(0, e.yaw, 0);
-    prop.visible = true;
-  }
-
   /** A rifle stood up between his knees, butt on the floor, its sights toward him: still, riding with the van. */
   private rifleBetweenKnees(e: Enemy): void {
+    if (this.kneeRifles.has(e)) return;
+    this.armed = true;
     const place = this.seatOf.get(e)!;
     const gun = rackAK();
     if (this.akButt < 0) {
@@ -1343,16 +1275,6 @@ export class RunwayScene implements GameScene {
     gun.position.set(place.at.x - Math.sin(place.yaw) * 0.3, place.at.y - this.van.body.position.y + this.akButt + 0.01, place.at.z - Math.cos(place.yaw) * 0.3);
     this.van.body.add(gun);
     this.kneeRifles.set(e, gun);
-  }
-
-  private readonly rackHomes = new Map<THREE.Object3D, THREE.Vector3>();
-  private rackHome(o: THREE.Object3D): THREE.Vector3 {
-    let p = this.rackHomes.get(o);
-    if (!p) {
-      p = o.position.clone();
-      this.rackHomes.set(o, p);
-    }
-    return p;
   }
 
   private updateEnd(): void {
@@ -2340,16 +2262,16 @@ export class RunwayScene implements GameScene {
     const W = (x: number, y: number, z: number): THREE.Vector3 => this.vanWorld(new THREE.Vector3(x, y, z));
     const key = this.shotAt(t);
     const r = this.driver;
-    const pov = key === 'm-load';
+    const pov = key === 'm-grenade';
     if (r) {
       r.root.visible = !pov;
       const head = r.bones.get('head');
       if (head) head.scale.setScalar(pov ? 0.001 : 1);
     }
+    // Him, sat up by the cab facing across the aisle (+X): his face, and his hands under his chin
     const ravi = v.seats.left[0];
-    const raviEye = (): THREE.Vector3 => W(ravi.x + 0.12, fy + 1.24, ravi.z - 0.05);
-    const seat = (e: Enemy): THREE.Vector3 => this.seatOf.get(e)!.at;
-    const [sanjay, dev, s0, s1] = this.crew;
+    const face = (dx = 0, dy = 0): THREE.Vector3 => W(ravi.x + 0.28 + dx, fy + 1.1 + dy, ravi.z);
+    const span = (i: number): number => clamp01((t - SHOTS[i][1]) / (SHOTS[i + 1][1] - SHOTS[i][1]));
     const vpos = v.group.position;
     const fwd = RunwayScene.tmpA.set(0, 0, -1).applyQuaternion(v.group.quaternion);
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(v.group.quaternion);
@@ -2360,57 +2282,44 @@ export class RunwayScene implements GameScene {
         return { key, eye: this.fixedCam, look: RunwayScene.tmpC.copy(vpos).setY(vpos.y + 1.6), fov: 44, follow: 6, roll: -0.05, world: true };
       }
       case 'm-wide': {
-        // From the back doors, pushing slowly in down the aisle
-        const k = (t - 3) / 2.4;
-        return { key, eye: W(0.1, fy + 1.75, 3.6 - k * 0.6), look: W(0, fy + 1.05, -2.8), fov: 64, follow: 8, roll: 0 };
-      }
-      case 'm-rack': {
-        // Tight on the rack as a rifle comes off it
-        return { key, eye: W(0.05, fy + 1.55, 1.75), look: W(1.1, fy + 1.45, 2.6), fov: 46, follow: 20, roll: 0.06 };
-      }
-      case 'm-vest': {
-        // Low, looking up at Sanjay
-        const s = seat(sanjay);
-        return { key, eye: W(-0.05, fy + 0.62, s.z - 0.7), look: W(s.x - 0.05, fy + 1.15, s.z), fov: 56, follow: 20, roll: 0.14 };
-      }
-      case 'm-helmets': {
-        // Down the aisle between the two of them
-        const a = seat(s0);
-        const b = seat(s1);
-        const z = (a.z + b.z) / 2;
-        return { key, eye: W(0.0, fy + 1.3, z - 1.4), look: W(0, fy + 1.2, z + 0.3), fov: 58, follow: 20, roll: -0.08 };
-      }
-      case 'm-load': {
-        // His own eyes: the AK, loaded
-        return { key, eye: raviEye(), look: W(0.4, fy + 0.85, ravi.z + 0.3), fov: 68, follow: 20, roll: 0 };
-      }
-      case 'm-grenade': {
-        // Dev, with a grenade, the pistols on the wall behind him
-        const d = seat(dev);
-        return { key, eye: W(0.35, fy + 1.3, d.z - 0.3), look: W(d.x + 0.12, fy + 1.15, d.z - 0.05), fov: 46, follow: 20, roll: 0.05 };
+        // From the back doors, pushing slowly in down the aisle: all of them in their kit, him up at the front, the road out of the screen
+        const k = span(1);
+        return { key, eye: W(0.1, fy + 1.75, 3.6 - k * 0.7), look: W(0, fy + 1.05, -2.8), fov: 64, follow: 8, roll: 0 };
       }
       case 'm-drone': {
         // High and behind, riding with it: the highway, the city, the sun going down ahead
-        return { key, eye: W(-5, 15, 24), look: W(0, 1, -30), fov: 55, follow: 20, roll: 0 };
+        const k = span(2);
+        return { key, eye: W(-5 + k * 2, 15 - k * 2, 24 - k * 4), look: W(0, 1, -30), fov: 55, follow: 20, roll: 0 };
       }
-      case 'm-red': {
-        // In the red work light, slowly along their faces
-        const k = (t - 19.4) / 2.4;
-        return { key, eye: W(-0.35, fy + 1.3, -0.2 + k * 1.6), look: W(0.7, fy + 1.25, 0.5 + k * 2.4), fov: 50, follow: 20, roll: 0.1 };
+      case 'm-ravi1': {
+        // Across the aisle from him, his whole self: elbows on his thighs, hands laced under his chin. Pushing in
+        const k = smooth(span(3));
+        return { key, eye: W(1.02 - k * 0.32, fy + 1.06, ravi.z + 0.14 - k * 0.06), look: face(-0.06, -0.18), fov: 52, follow: 20, roll: 0 };
       }
-      case 'm-bump': {
-        // Side on, close: knuckles across the aisle
-        const z = (seat(dev).z + seat(sanjay).z) / 2;
-        return { key, eye: W(0.05, fy + 1.12, z - 1.05), look: W(0, fy + 1.02, z), fov: 48, follow: 20, roll: 0 };
+      case 'm-ravi2': {
+        // Closer: his head and shoulders, his hands, still coming
+        const k = smooth(span(4));
+        return { key, eye: W(0.52 - k * 0.24, fy + 1.1, ravi.z + 0.07 - k * 0.04), look: face(0, -0.06), fov: 42, follow: 20, roll: 0 };
       }
-      case 'm-ready': {
-        // From up by the cab, looking back down the bay: all of them armed; a slow push and a lean
-        const k = (t - 23.8) / 3;
-        return { key, eye: W(-0.1, fy + 1.62, -1.75 + k * 0.5), look: W(0, fy + 1.0, 3.2), fov: 62, follow: 20, roll: -0.06 - 0.04 * k };
+      case 'm-ravi3': {
+        // In on his eyes over his knuckles
+        const k = span(5);
+        return { key, eye: W(0.16 - k * 0.12, fy + 1.11, ravi.z + 0.02), look: face(0, 0.0), fov: 36, follow: 20, roll: 0 };
+      }
+      case 'm-side': {
+        // From his right, a little ahead of him, close and angled: the set of his face, the plan on the wall behind him
+        const k = span(6);
+        return { key, eye: W(ravi.x + 0.62 - k * 0.04, fy + 1.15, ravi.z + 0.5 - k * 0.06), look: face(0.02, 0.02), fov: 34, follow: 20, roll: 0.03 };
+      }
+      case 'm-grenade': {
+        // His own eyes, sat up a little, down at his hand; following it a touch as it goes to his pocket
+        const k = smooth((t - NADE_POCKET_AT) / 0.85);
+        const look = W(0.1, fy + 0.86, ravi.z + 0.06).lerp(W(0.05, fy + 0.74, ravi.z + 0.3), k * 0.5);
+        return { key, eye: W(ravi.x + 0.26, fy + 1.2, ravi.z), look, fov: 56, follow: 20, roll: 0 };
       }
       default: {
         // Leant up between the front seats, out of the screen: the sun gone down ahead, the city's lights coming
-        const k = (t - 26.8) / 3.2;
+        const k = clamp01((t - SHOTS[8][1]) / (MONTAGE_LEN - SHOTS[8][1]));
         return { key, eye: W(0.2, fy + 1.38, -1.95 - k * 0.2), look: W(-0.05, fy + 1.0, -9), fov: 60, follow: 20, roll: 0 };
       }
     }
@@ -2450,6 +2359,51 @@ export class RunwayScene implements GameScene {
     for (const o of hidden) o.visible = false;
     for (const o of culled) o.frustumCulled = true;
   }
+}
+
+/** The notice's icon: a grenade, olive egg and grey spoon, its pin ring off the top. */
+function drawGrenadeIcon(c: HTMLCanvasElement): void {
+  const g = c.getContext('2d');
+  if (!g) return;
+  const w = c.width;
+  g.clearRect(0, 0, w, w);
+  g.save();
+  g.translate(w * 0.48, w * 0.58);
+  // The body: an egg, segmented
+  const body = g.createRadialGradient(-w * 0.08, -w * 0.1, w * 0.02, 0, 0, w * 0.3);
+  body.addColorStop(0, '#8a9a5a');
+  body.addColorStop(1, '#3d4826');
+  g.fillStyle = body;
+  g.beginPath();
+  g.ellipse(0, 0, w * 0.25, w * 0.3, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = 'rgba(20,26,12,0.7)';
+  g.lineWidth = w * 0.02;
+  for (const y of [-0.1, 0.08]) {
+    g.beginPath();
+    g.ellipse(0, y * w, w * 0.24, w * 0.05, 0, 0, Math.PI);
+    g.stroke();
+  }
+  g.beginPath();
+  g.moveTo(0, -w * 0.29);
+  g.lineTo(0, w * 0.29);
+  g.stroke();
+  // The fuse head, the spoon down its side, the ring
+  g.fillStyle = '#9aa0a6';
+  g.fillRect(-w * 0.08, -w * 0.38, w * 0.16, w * 0.1);
+  g.beginPath();
+  g.moveTo(w * 0.07, -w * 0.36);
+  g.quadraticCurveTo(w * 0.3, -w * 0.3, w * 0.27, w * 0.05);
+  g.lineTo(w * 0.22, w * 0.04);
+  g.quadraticCurveTo(w * 0.24, -w * 0.25, w * 0.06, -w * 0.29);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = '#c9cdd2';
+  g.lineWidth = w * 0.025;
+  g.beginPath();
+  g.arc(-w * 0.15, -w * 0.4, w * 0.08, 0, Math.PI * 2);
+  g.stroke();
+  g.restore();
 }
 
 /** The yaw that faces from `from` to `to`. */

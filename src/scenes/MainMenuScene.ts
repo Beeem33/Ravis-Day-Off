@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { CRTPass } from '../fx/CRTShader';
 import { MenuUI } from '../ui/MenuUI';
 import { RaviVisual, HAND, type HandShape, type RaviRig, type SeatPose } from '../entities/RaviVisual';
 
@@ -13,23 +12,24 @@ const V3 = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3
  * colour of the Bahamas, lying back in a pink frosted-doughnut float, a flip
  * phone at his ear, a bowl of curry steaming on the rim by his arm. The
  * camera sits behind him, looking past his head out to the horizon; the float
- * rides the small waves. The frame goes through the CRT shader.
+ * rides the small waves. A clean picture, as if a camera were really out there.
  *
  * Everything is in the float's frame, which is the model's: Y up, he faces
  * +Z, his left on +X (so his right hand, with the phone, is on −X).
  */
 
 /** The float: the ring's radius to the middle of its tube, and the tube's. */
-const RING_R = 0.62;
-const TUBE_R = 0.24;
+const RING_R = 0.5;
+const TUBE_R = 0.22;
 
 /** Lying back in the hole: hips low, the back on the rear of the ring, the legs over the front, the head up looking out. */
 const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
-  hips: V3(0, 0.12, 0.02),
+  hips: V3(0, 0.17, 0.0),
   lean: [-52, -6, -4, -2, 22, 18],
   legs: {
-    l: { ankle: V3(0.2, -0.02, 0.78), knee: V3(0.25, 1, 0.5), turn: 12 },
-    r: { ankle: V3(-0.17, 0.02, 0.8), knee: V3(-0.2, 1, 0.5), turn: -8 }
+    // Legs crossed at the ankle out over the front of the ring: the right over the left
+    l: { ankle: V3(-0.03, 0.06, 0.74), knee: V3(0.3, 1, 0.35), turn: -6 },
+    r: { ankle: V3(0.07, 0.16, 0.76), knee: V3(-0.3, 1, 0.35), turn: 10 }
   }
 };
 /** His grip on the phone: fingers round the back of it, thumb on the side. */
@@ -56,7 +56,6 @@ function waveAt(x: number, z: number, t: number): number {
 export class MainMenuScene implements GameScene {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
-  private crt: CRTPass;
   private ui: MenuUI | null = null;
   private unsubs: (() => void)[] = [];
   private musicRetry = 0;
@@ -82,7 +81,6 @@ export class MainMenuScene implements GameScene {
     this.buildFloat();
     this.buildProps();
     this.buildRavi();
-    this.crt = new CRTPass(window.innerWidth, window.innerHeight);
   }
 
   // ------------------------------------------------------------------- sea
@@ -192,9 +190,9 @@ export class MainMenuScene implements GameScene {
           vec3 col = mix(base, uSky * 1.05, clamp(fres, 0.0, 0.85));
           vec3 R = reflect(-V, N);
           float sp = max(dot(R, uSun), 0.0);
-          col += vec3(1.0, 0.95, 0.85) * (pow(sp, 260.0) * 3.0 + pow(sp, 30.0) * 0.18);
+          col += vec3(1.0, 0.95, 0.85) * (pow(sp, 260.0) * 3.0 + pow(sp, 60.0) * 0.1);
           // Foamy little crests on the near waves
-          col += vec3(0.55) * smoothstep(0.075, 0.11, vW.y) * (1.0 - smoothstep(10.0, 40.0, dist));
+          col += vec3(0.3) * smoothstep(0.13, 0.19, vW.y) * (1.0 - smoothstep(10.0, 40.0, dist));
           // Into the haze at the horizon
           col = mix(col, uSky, smoothstep(220.0, 440.0, dist));
           gl_FragColor = vec4(col, 1.0);
@@ -213,6 +211,75 @@ export class MainMenuScene implements GameScene {
     back.position.set(1.5, 3, -4);
     s.add(back);
     s.add(this.float);
+    this.buildIsland();
+  }
+
+  /**
+   * A little island off to the left, far out: a white sand beach round a
+   * lush green hump, palms leaning out over the water, softened by the haze.
+   */
+  private buildIsland(): void {
+    const s = this.scene;
+    // Haze for anything solid far off (the water and sky do their own)
+    s.fog = new THREE.Fog(0xb4dcf2, 120, 620);
+    const isle = new THREE.Group();
+    // Left of frame is +X (he, and the camera, look down +Z)
+    isle.position.set(98, -0.6, 265);
+    s.add(isle);
+    const sand = new THREE.Mesh(new THREE.CylinderGeometry(24, 28, 1.6, 40), new THREE.MeshStandardMaterial({ color: 0xf2e2b8, roughness: 1 }));
+    sand.scale.set(1.25, 1, 0.8);
+    isle.add(sand);
+    // The green: a few overlapping squashed domes, bumpy, deep and bright greens
+    const greens = [0x2f7d32, 0x3f9a3a, 0x276b2b, 0x4caf50];
+    const lumps: [number, number, number, number, number][] = [
+      [0, 0, 0, 17, 9], [-9, 0, 3, 11, 7], [10, 0, -2, 12, 6.5], [3, 0, -6, 9, 10.5], [-4, 0, -4, 8, 8]
+    ];
+    lumps.forEach(([x, , z, r, h], i) => {
+      const g = new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+      const p = g.getAttribute('position');
+      for (let k = 0; k < p.count; k++) {
+        const vx = p.getX(k);
+        const vy = p.getY(k);
+        const vz = p.getZ(k);
+        const n = 1 + 0.08 * Math.sin(vx * 7 + i) * Math.sin(vz * 6 - i) + 0.05 * Math.sin(vx * 17 + vz * 13);
+        p.setXYZ(k, vx * n, vy * n, vz * n);
+      }
+      g.computeVertexNormals();
+      const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: greens[i % greens.length], roughness: 0.9, flatShading: true }));
+      m.scale.set(r, h, r * 0.85);
+      m.position.set(x, 0.6, z);
+      isle.add(m);
+    });
+    // Palms round the beach, leaning out
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8a6a44, roughness: 0.9 });
+    const frondMat = new THREE.MeshStandardMaterial({ color: 0x2e8b3a, roughness: 0.8, side: THREE.DoubleSide });
+    const frond = new THREE.PlaneGeometry(1.6, 6);
+    frond.translate(0, 3, 0);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * Math.PI * 2 + Math.sin(i * 3.7) * 0.2;
+      const r = 17 + Math.sin(i * 5.1) * 3;
+      const palm = new THREE.Group();
+      palm.position.set(Math.cos(a) * r * 1.2, 0.8, Math.sin(a) * r * 0.8);
+      const h = 9 + (i % 3) * 2;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, h, 7), trunkMat);
+      trunk.position.y = h / 2;
+      palm.add(trunk);
+      for (let k = 0; k < 7; k++) {
+        const f = new THREE.Mesh(frond, frondMat);
+        f.position.y = h;
+        f.rotation.set(0, (k / 7) * Math.PI * 2, 1.1 + Math.sin(k * 2.3) * 0.2, 'YXZ');
+        palm.add(f);
+      }
+      // Leaning away from the middle of the island
+      palm.rotation.set(Math.sin(a) * 0.25, 0, -Math.cos(a) * 0.25);
+      isle.add(palm);
+    }
+    // Surf breaking white round the edge
+    const surf = new THREE.Mesh(new THREE.RingGeometry(0.98, 1.06, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+    surf.rotation.x = -Math.PI / 2;
+    surf.scale.set(30 * 1.12, 28 * 0.85, 1);
+    surf.position.y = 0.62;
+    isle.add(surf);
   }
 
   // ----------------------------------------------------------------- float
@@ -324,7 +391,7 @@ export class MainMenuScene implements GameScene {
     spoon.rotation.set(0, 0, 0.9);
     bowl.add(spoon);
     // Sat on top of the ring, out by his left elbow
-    bowl.position.set(0.56, TUBE_R - 0.004, 0.31);
+    bowl.position.set(0.44, TUBE_R - 0.004, 0.26);
     this.bowl = bowl;
     this.float.add(bowl);
     // Steam: a few soft wisps rising and fading
@@ -401,7 +468,7 @@ export class MainMenuScene implements GameScene {
       ...trunk,
       arms: {
         r: { wrist, along: upO.clone().addScaledVector(out, -0.25).normalize(), palm: out.clone().negate(), elbow: V3(-1, -0.6, 0.2), shape: PHONE_HAND },
-        l: { wrist: V3(0.43, 0.27, 0.1), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
+        l: { wrist: V3(0.36, 0.25, 0.06), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
       }
     });
   }
@@ -415,7 +482,6 @@ export class MainMenuScene implements GameScene {
       this.ctx.bus.on(Events.Resize, () => {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
-        this.crt.setSize(window.innerWidth, window.innerHeight);
       })
     );
     // Kick the music immediately if the browser lets us; otherwise the
@@ -448,7 +514,8 @@ export class MainMenuScene implements GameScene {
     const e = 0.4;
     const sx = (waveAt(f.position.x + e, f.position.z, time) - waveAt(f.position.x - e, f.position.z, time)) / (2 * e);
     const sz = (waveAt(f.position.x, f.position.z + e, time) - waveAt(f.position.x, f.position.z - e, time)) / (2 * e);
-    f.position.y = -0.07 + h;
+    // Riding high, as a float does with a man sat in it: the hole's above the water
+    f.position.y = 0.05 + h;
     f.rotation.set(sz * 0.8, Math.sin(time * 0.05) * 0.25, -sx * 0.8, 'YXZ');
     this.poseRavi(time);
 
@@ -463,7 +530,7 @@ export class MainMenuScene implements GameScene {
 
     // Behind him, a little above, looking past his head out to sea; drifting, with a touch of mouse parallax
     const cam = this.camera;
-    const local = V3(0.3 + Math.sin(time * 0.07) * 0.08 + this.mouse.x * 0.12, 0.98 - this.mouse.y * 0.07 + Math.sin(time * 0.05) * 0.04, -1.9);
+    const local = V3(0.3 + Math.sin(time * 0.07) * 0.08 + this.mouse.x * 0.12, 1.12 - this.mouse.y * 0.07 + Math.sin(time * 0.05) * 0.04, -2.35);
     const target = V3(-0.05, 0.42, 1.2);
     // Riding the float's yaw (not its rocking, which would be sickening)
     const yaw = new THREE.Quaternion().setFromAxisAngle(V3(0, 1, 0), f.rotation.y);
@@ -471,16 +538,16 @@ export class MainMenuScene implements GameScene {
     cam.lookAt(target.applyQuaternion(yaw).add(V3(f.position.x, f.position.y * 0.5, f.position.z)));
   }
 
-  private crtSize = new THREE.Vector2();
   private drawSize = new THREE.Vector2();
 
   render(renderer: THREE.WebGLRenderer): void {
-    // Built before the window had a size (a background tab), the CRT's buffer would be 0×0 and the frame black
+    // Built in a tab that had no size yet, the aspect would be 0/0 and nothing but the sky colour drawn
     renderer.getSize(this.drawSize);
-    if (!this.drawSize.equals(this.crtSize) && this.drawSize.x > 0 && this.drawSize.y > 0) {
-      this.crtSize.copy(this.drawSize);
-      this.crt.setSize(this.drawSize.x, this.drawSize.y);
+    const aspect = this.drawSize.y > 0 ? this.drawSize.x / this.drawSize.y : 0;
+    if (aspect > 0 && !(Math.abs(this.camera.aspect - aspect) <= 1e-3)) {
+      this.camera.aspect = aspect;
+      this.camera.updateProjectionMatrix();
     }
-    this.crt.render(renderer, this.scene, this.camera, performance.now() / 1000);
+    renderer.render(this.scene, this.camera);
   }
 }

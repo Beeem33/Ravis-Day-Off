@@ -87,8 +87,8 @@ const CRASH_SPEED = 4;
 const SCRAPE_SLIDE = 6;
 const ALARM_HIT = 5;
 const MAX_ALARMS = 2;
-/** AudioManager.carAlarm gives up after 12 s on its own. */
-const ALARM_LIFE = 12;
+/** AudioManager.carAlarm gives up after 6 s on its own. */
+const ALARM_LIFE = 6;
 
 const RING_POOL = 4;
 const RING_TIMEOUT = 3;

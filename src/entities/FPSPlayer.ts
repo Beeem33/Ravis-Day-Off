@@ -53,6 +53,9 @@ export class FPSPlayer {
   readonly velocity = new THREE.Vector3();
   yaw = 0;
   pitch = 0;
+  /** The settings menu's mouse sensitivity (a multiplier) and invert-Y, for every level. */
+  static lookScale = 1;
+  static invertY = false;
   sensitivity = 0.0021;
   alive = true;
   readonly maxHealth = MAX_HEALTH;
@@ -203,8 +206,8 @@ export class FPSPlayer {
     const { dx, dy } = input.consumeMouseDelta();
     this.lastMouseDX = dx;
     this.lastMouseDY = dy;
-    this.yaw -= dx * this.sensitivity;
-    this.pitch -= dy * this.sensitivity;
+    this.yaw -= dx * this.sensitivity * FPSPlayer.lookScale;
+    this.pitch -= dy * this.sensitivity * FPSPlayer.lookScale * (FPSPlayer.invertY ? -1 : 1);
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
 
     // ---- Crouch (with headroom check before standing)

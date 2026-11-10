@@ -281,6 +281,15 @@
     }
     .pause-menu button:hover { background: #c8221a; border-color: #ff4a3a; color: #fff; }
     .pause-menu .pm-hint { font-size: 11px; letter-spacing: 3px; opacity: 0.5; text-align: center; margin-top: 6px; }
+    .pause-menu .pm-page { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+    .pause-menu .pm-settings { display: none; gap: 14px; }
+    .pause-menu.settings .pm-main { display: none; }
+    .pause-menu.settings .pm-settings { display: flex; }
+    .pause-menu label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 12px; letter-spacing: 3px; }
+    .pause-menu label span { opacity: 0.7; }
+    .pause-menu input[type=range] { flex-basis: 100%; accent-color: #c8221a; cursor: pointer; }
+    .pause-menu label.pm-check { justify-content: flex-start; align-items: center; cursor: pointer; }
+    .pause-menu input[type=checkbox] { accent-color: #c8221a; width: 16px; height: 16px; }
 
     /* ---------- Between levels: covers the shader warm-up frame ---------- */
     .level-load {

@@ -2964,7 +2964,7 @@ export class AudioManager {
    * A car alarm going off, and staying off: whoops, the hi-lo, a fast yelp,
    * the horn honking, a pulsing beep — round and round, starting at a random
    * point in the cycle and a few per cent off pitch so a row of them don't
-   * play in lockstep. It runs until the returned stop() or for 12 s, which
+   * play in lockstep. It runs until the returned stop() or for 6 s, which
    * is how long anyone can stand one. A cheap horn speaker: all mids, no bass,
    * a bit of buzz. Quieter, and duller, with distance.
    */
@@ -2974,7 +2974,7 @@ export class AudioManager {
     const ctx = this.ctx;
     const d = this.far(dist);
     const t = ctx.currentTime;
-    const LIFE = 12;
+    const LIFE = 6;
     const end = t + LIFE;
     const a = this.atten(d, 110) * 0.8 + 0.2;
     const out = this.place(ctx, d, 0.09 * a, 0.14);
@@ -4961,7 +4961,7 @@ export class AudioManager {
       const now = ctx.currentTime;
       if (pack) {
         // A blowtorch: brighter, and quick to cough and catch
-        out.gain.setTargetAtTime((0.05 + 0.4 * thrust) * gainDist, now, 0.03);
+        out.gain.setTargetAtTime((0.008 + 0.05 * thrust) * gainDist, now, 0.03);
         roar.frequency.setTargetAtTime(700 + thrust * 2600, now, 0.05);
         roarG.gain.setTargetAtTime(0.5 + thrust * 0.5, now, 0.05);
         whineG.gain.setTargetAtTime(0, now, 0.05);
@@ -4983,7 +4983,8 @@ export class AudioManager {
       setDistance: (m: number): void => {
         if (stopped) return;
         const d = Math.max(1, fin(m, 50));
-        gainDist = Math.min(1, 40 / (d + 10));
+        // A jetpack falls away much faster with distance than a jet does
+        gainDist = pack ? Math.min(1, 10 / (d + 6)) : Math.min(1, 40 / (d + 10));
         air.frequency.setTargetAtTime(Math.max(900, 9000 - d * 18), ctx.currentTime, 0.2);
         apply();
       },

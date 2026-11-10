@@ -18,6 +18,7 @@ import { StreetScene } from './scenes/StreetScene';
 import { AirportScene } from './scenes/AirportScene';
 import { RunwayScene } from './scenes/RunwayScene';
 import { HQScene } from './scenes/HQScene';
+import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
@@ -179,11 +180,72 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
   el.innerHTML = `
     <div class="pm-box">
       <div class="pm-title">PAUSED</div>
-      <button data-act="resume">RESUME</button>
-      <button data-act="menu">QUIT TO MAIN MENU</button>
-      <div class="pm-hint">[ ESC ] RESUME</div>
+      <div class="pm-page pm-main">
+        <button data-act="resume">RESUME</button>
+        <button data-act="settings">SETTINGS</button>
+        <button data-act="menu">QUIT TO MAIN MENU</button>
+        <div class="pm-hint">[ ESC ] RESUME</div>
+      </div>
+      <div class="pm-page pm-settings">
+        <label>MASTER VOLUME <span data-out="master"></span><input type="range" min="0" max="100" step="1" data-set="master"></label>
+        <label>MUSIC <span data-out="music"></span><input type="range" min="0" max="100" step="1" data-set="music"></label>
+        <label>EFFECTS <span data-out="sfx"></span><input type="range" min="0" max="100" step="1" data-set="sfx"></label>
+        <label>MOUSE SENSITIVITY <span data-out="look"></span><input type="range" min="20" max="300" step="5" data-set="look"></label>
+        <label class="pm-check"><input type="checkbox" data-set="invert"> INVERT MOUSE Y</label>
+        <button data-act="back">BACK</button>
+        <div class="pm-hint">[ ESC ] BACK</div>
+      </div>
     </div>`;
   document.body.appendChild(el);
+  // ---- Settings: kept in this browser between visits
+  const settings = { master: 80, music: 75, sfx: 90, look: 100, invert: false };
+  try {
+    Object.assign(settings, JSON.parse(localStorage.getItem('ravi.settings') ?? '{}'));
+  } catch {
+    /* private window or blocked storage: the defaults */
+  }
+  const applySettings = (): void => {
+    audio.setMasterVolume(settings.master / 100);
+    audio.setMusicVolume(settings.music / 100);
+    audio.setSfxVolume(settings.sfx / 100);
+    FPSPlayer.lookScale = settings.look / 100;
+    FPSPlayer.invertY = settings.invert;
+  };
+  applySettings();
+  const syncSettings = (): void => {
+    for (const inp of el.querySelectorAll<HTMLInputElement>('[data-set]')) {
+      const k = inp.dataset.set as keyof typeof settings;
+      if (inp.type === 'checkbox') inp.checked = settings[k] as boolean;
+      else inp.value = String(settings[k]);
+    }
+    for (const o of el.querySelectorAll<HTMLElement>('[data-out]')) {
+      const k = o.dataset.out as keyof typeof settings;
+      o.textContent = k === 'look' ? (settings.look / 100).toFixed(2) + '×' : settings[k] + '%';
+    }
+  };
+  el.addEventListener('input', (e) => {
+    const inp = e.target as HTMLInputElement;
+    const k = inp.dataset.set as keyof typeof settings | undefined;
+    if (!k) return;
+    if (k === 'invert') settings.invert = inp.checked;
+    else (settings as Record<string, number | boolean>)[k] = Number(inp.value);
+    applySettings();
+    syncSettings();
+    try {
+      localStorage.setItem('ravi.settings', JSON.stringify(settings));
+    } catch {
+      /* not kept: fine for this visit */
+    }
+  });
+  const showSettings = (on: boolean): void => {
+    el.classList.toggle('settings', on);
+    if (!on) return;
+    // The main menu's audio page sets the volumes too: start from where they are
+    settings.master = Math.round(audio.masterVolume * 100);
+    settings.music = Math.round(audio.musicVolume * 100);
+    settings.sfx = Math.round(audio.sfxVolume * 100);
+    syncSettings();
+  };
   let paused = false;
   let pausedAt = 0;
   /** When a scene last sent us back to the menu itself (its own Esc on a death screen). */
@@ -201,13 +263,16 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
     engine.paused = on;
     audio.setPaused(on);
     el.classList.toggle('on', on);
+    el.classList.remove('settings');
     if (on) {
       pausedAt = performance.now();
       input.exitPointerLock();
     }
   };
   const act = (a: string | undefined): void => {
-    if (a === 'resume') {
+    if (a === 'settings') showSettings(true);
+    else if (a === 'back') showSettings(false);
+    else if (a === 'resume') {
       setPaused(false);
       input.requestPointerLock();
     } else if (a === 'menu') {
@@ -226,8 +291,9 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
     (e) => {
       if (!paused) return;
       e.stopPropagation();
-      if (e.code === 'Escape' && !e.repeat && performance.now() - pausedAt > 250) setPaused(false);
-      else if (e.code === 'Enter') act('resume');
+      if (e.code === 'Escape' && !e.repeat && el.classList.contains('settings')) showSettings(false);
+      else if (e.code === 'Escape' && !e.repeat && performance.now() - pausedAt > 250) setPaused(false);
+      else if (e.code === 'Enter' && !el.classList.contains('settings')) act('resume');
     },
     true
   );

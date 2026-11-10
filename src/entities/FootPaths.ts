@@ -65,9 +65,9 @@ export class FootPaths {
   /** `ground`: the height of the ground where the walking is, now. */
   constructor(private ground: () => number) {}
 
-  /** Walk `e` through `pts` (a leg that changes height is a step up or down), turning to `face` at the end. */
-  walk(e: Enemy, pts: THREE.Vector3[], speed: number, face?: THREE.Vector3, done?: () => void, backLast = false): void {
-    const legs = FootPaths.legTimes(pts, speed, this.ground() + 0.5);
+  /** Walk `e` through `pts` (a leg that changes height is a step up or down), turning to `face` at the end; `inside`: the pace in the van. */
+  walk(e: Enemy, pts: THREE.Vector3[], speed: number, face?: THREE.Vector3, done?: () => void, backLast = false, inside = WALK_IN): void {
+    const legs = FootPaths.legTimes(pts, speed, this.ground() + 0.5, inside);
     this.walks.set(e, {
       pts: pts.map((p) => p.clone()),
       legT: legs.t,
@@ -113,7 +113,7 @@ export class FootPaths {
    * at the slower pace indoors, for a leg up off the ground (above
    * `insideAbove`).
    */
-  static legTimes(pts: THREE.Vector3[], speed: number, insideAbove: number): { t: number[]; step: number[] } {
+  static legTimes(pts: THREE.Vector3[], speed: number, insideAbove: number, inside = WALK_IN): { t: number[]; step: number[] } {
     const t: number[] = [];
     const step: number[] = [];
     for (let i = 1; i < pts.length; i++) {
@@ -125,7 +125,7 @@ export class FootPaths {
         t.push(dy > 0 ? STEP_UP : STEP_DOWN);
         step.push(Math.sign(dy));
       } else {
-        t.push(Math.max(0.05, flat / (Math.min(a.y, b.y) > insideAbove ? Math.min(speed, WALK_IN) : speed)));
+        t.push(Math.max(0.05, flat / (Math.min(a.y, b.y) > insideAbove ? Math.min(speed, inside) : speed)));
         step.push(0);
       }
     }

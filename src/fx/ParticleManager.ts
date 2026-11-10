@@ -968,6 +968,32 @@ export class ParticleManager {
    * smoking — 1 a full burnout, 0.3 a chirp pulling away. A one-off call
    * spawns a puff at most; for a single burst pass a large amount.
    */
+  /**
+   * A column of thick smoke off something burning hard — a wreck: puffs
+   * rising steadily, spreading wide and leaning over with the wind, staying
+   * up a long while. Call every frame; `size` widens it.
+   */
+  smokeColumn(pos: THREE.Vector3, size = 1, amount = 1): void {
+    if (!(amount > 0)) return;
+    const n = Math.min(3, Math.floor(amount * 7 * size * this.frameDt + Math.random()));
+    for (let i = 0; i < n; i++) {
+      const p = this.smoke.spawn();
+      p.pos.set(pos.x + (Math.random() - 0.5) * 0.8 * size, pos.y + Math.random() * 0.5, pos.z + (Math.random() - 0.5) * 0.8 * size);
+      p.vel.set((Math.random() - 0.5) * 0.4, 1.7 + Math.random() * 1.2, (Math.random() - 0.5) * 0.4);
+      p.drag = 0.25;
+      p.lift = 0.9;
+      p.life = 5 + Math.random() * 3;
+      p.size0 = 1.0 * size;
+      p.size1 = (5 + Math.random() * 3) * size;
+      p.alpha = 0.42 + Math.random() * 0.15;
+      p.fadeIn = 0.15;
+      const shade = 0.14 + Math.random() * 0.07;
+      p.color.setRGB(shade * 1.08, shade, shade * 0.92);
+      p.floorY = pos.y;
+      p.wind = 1.4;
+    }
+  }
+
   tyreSmoke(pos: THREE.Vector3, dir: THREE.Vector3, amount = 1): void {
     if (!(amount > 0)) return;
     const n = Math.min(TYRE_SMOKE_CAP, Math.floor(amount * TYRE_SMOKE_RATE * this.frameDt + Math.random()));

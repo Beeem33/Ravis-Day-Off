@@ -4329,6 +4329,274 @@ export class AudioManager {
     }
   }
 
+  /**
+   * Rain, steady and everywhere: a wide hiss off the wet ground, a softer
+   * wash under it, the low drum of it on cars and roofs, and drops ticking
+   * close by. A loop: `set(k)` turns it up or down (1 out in it), `stop()`
+   * fades it away.
+   */
+  rainLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, ctx.currentTime);
+    out.gain.setTargetAtTime(1, ctx.currentTime, 0.8);
+    out.connect(this.sfxBus);
+    const layer = (type: BiquadFilterType, f: number, q: number, g: number, rate: number): AudioBufferSourceNode => {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      src.playbackRate.value = rate;
+      const flt = ctx.createBiquadFilter();
+      flt.type = type;
+      flt.frequency.value = f;
+      flt.Q.value = q;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      src.connect(flt).connect(gn).connect(out);
+      src.start(ctx.currentTime, Math.random() * 1.5);
+      return src;
+    };
+    const srcs = [
+      layer('highpass', 3600, 0.4, 0.055, 1),
+      layer('bandpass', 1300, 0.55, 0.075, 0.9),
+      layer('lowpass', 420, 0.7, 0.11, 0.55)
+    ];
+    // Drops close by: on a car roof, in a puddle, on his shoulders
+    let alive = true;
+    let timer = 0;
+    const tick = (): void => {
+      if (!alive || !this.ctx) return;
+      const n = 3 + Math.floor(Math.random() * 6);
+      for (let i = 0; i < n; i++) {
+        this.burst(out, {
+          at: Math.random() * 0.24,
+          D: 0.006 + Math.random() * 0.014,
+          type: 'bandpass',
+          f: 2200 + Math.random() * 5200,
+          q: 3 + Math.random() * 3,
+          gain: 0.02 + Math.random() * 0.045,
+          attack: 0.001
+        });
+      }
+      timer = window.setTimeout(tick, 240);
+    };
+    timer = window.setTimeout(tick, 240);
+    return {
+      set: (k: number) => out.gain.setTargetAtTime(Math.max(0, fin(k, 0)), ctx.currentTime, 0.3),
+      stop: () => {
+        if (!alive) return;
+        alive = false;
+        window.clearTimeout(timer);
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.35);
+        for (const src of srcs) src.stop(ctx.currentTime + 2);
+        window.setTimeout(() => out.disconnect(), 2300);
+      }
+    };
+  }
+
+  /**
+   * Thunder, `dist` metres off (the scene waits the sound's travel time
+   * before calling this). Close, it cracks first — a tearing rip — then
+   * booms; far off it is only the roll: long, low, rumbling up and down
+   * as the echo comes back off the cloud and the buildings.
+   */
+  thunder(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const near = Math.max(0, 1 - d / 1400);
+    const out = ctx.createGain();
+    out.gain.value = 0.5 + 0.55 * near;
+    out.connect(this.sfxBus);
+    const r = Math.random;
+    if (near > 0.6) {
+      this.burst(out, { D: 0.3, type: 'highpass', f: 1600, gain: 0.45 * near, attack: 0.002 });
+      this.crumple(out, 0, 0.25, 10, 0.3 * near, 500, 3200);
+      this.burst(out, { D: 0.8, type: 'bandpass', f: 900, f1: 260, q: 0.7, gain: 0.55 * near, attack: 0.004 });
+    }
+    const len = 3.8 + r() * 3;
+    this.burst(out, { D: len, type: 'lowpass', f: 150 + 220 * near, f1: 55, gain: 0.85, attack: 0.12 + (1 - near) * 0.5, rate: 0.35 });
+    for (let k = 0; k < 7; k++) {
+      const at = 0.1 + r() * len * 0.7;
+      this.burst(out, { at, D: 0.5 + r() * 1.3, type: 'lowpass', f: 80 + r() * 170, gain: 0.35 + r() * 0.45, attack: 0.07, rate: 0.4 });
+    }
+    this.partial(out, { D: 2.2, type: 'sine', f: 46 + r() * 10, f1: 26, gain: 0.45 + 0.4 * near, attack: 0.06 });
+  }
+
+  /**
+   * One round from an automated turret: a heavier gun than a rifle — a
+   * harder crack, more boom, the mechanism's clack — off a tower above
+   * the lot, so it carries.
+   */
+  turretShot(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 160) * 0.8 + 0.12;
+    const out = this.place(ctx, d, 0.7 * a, 0.22);
+    const r = Math.random;
+    this.burst(out, { D: 0.05, type: 'highpass', f: 1800 + r() * 600, gain: 0.55, attack: 0.001 });
+    this.burst(out, { D: 0.2, type: 'lowpass', f: 780, gain: 0.8 });
+    this.partial(out, { D: 0.2, type: 'square', f: 105 + r() * 15, f1: 34, gain: 0.32, attack: 0.002 });
+    this.partial(out, { at: 0.03, D: 0.05, type: 'triangle', f: 1900 + r() * 300, f1: 1300, gain: 0.08, attack: 0.001 });
+  }
+
+  /** A turret's servos slewing round onto somebody: a short whine. */
+  turretServo(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 45);
+    if (a <= 0.02) return;
+    const out = this.place(ctx, d, 0.22 * a, 0.05);
+    this.partial(out, { D: 0.45, type: 'sawtooth', f: 340, f1: 520, gain: 0.22, attack: 0.04 });
+    this.burst(out, { D: 0.4, type: 'bandpass', f: 2400, q: 3, gain: 0.08, attack: 0.04 });
+  }
+
+  /**
+   * A van at speed through a security gate: the bang of the bumper into the
+   * bars, the steel tearing and folding, the hinges going, the wire
+   * whipping, and the two leaves clanging down onto the road.
+   */
+  gateCrash(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 160) * 0.85 + 0.15;
+    const out = this.place(ctx, d, a, 0.32);
+    const r = Math.random;
+    this.burst(out, { D: 0.04, type: 'highpass', f: 1500, gain: 0.6, attack: 0.001 });
+    this.partial(out, { D: 0.8, type: 'sine', f: 70 + r() * 12, f1: 28, glide: 0.5, gain: 0.95 });
+    this.burst(out, { D: 0.35, type: 'lowpass', f: 520, gain: 0.9 });
+    this.crumple(out, 0, 0.18, 14, 0.85, 350, 2800);
+    this.crumple(out, 0.12, 0.4, 12, 0.55, 280, 2200);
+    this.clang(out, 0.02, 190 + r() * 40, 0.4, 1.4);
+    this.clang(out, 0.09, 260 + r() * 50, 0.3, 1.1);
+    // The leaves hitting the road
+    this.clang(out, 0.55 + r() * 0.15, 150 + r() * 30, 0.35, 1.6);
+    this.burst(out, { at: 0.55, D: 0.25, type: 'lowpass', f: 600, gain: 0.5 });
+    this.clang(out, 0.8 + r() * 0.2, 170 + r() * 30, 0.28, 1.4);
+    this.burst(out, { at: 0.82, D: 0.2, type: 'lowpass', f: 650, gain: 0.4 });
+    // The wire: thin whips
+    for (let k = 0; k < 4; k++) this.burst(out, { at: 0.05 + r() * 0.4, D: 0.12, type: 'bandpass', f: 3200, f1: 900, q: 6, gain: 0.12, attack: 0.002 });
+  }
+
+  /**
+   * A base alarm: the two-tone klaxon on the towers, whooping across the lot
+   * in the rain. A loop; `set(k)` turns it up or down, `stop()` lets it die.
+   */
+  klaxonLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const air = ctx.createBiquadFilter();
+    air.type = 'lowpass';
+    air.frequency.value = 3200;
+    out.connect(air).connect(this.lotBus(ctx));
+    const send = ctx.createGain();
+    send.gain.value = 0.3;
+    air.connect(send).connect(this.echoBus(ctx));
+    const speaker = ctx.createBiquadFilter();
+    speaker.type = 'bandpass';
+    speaker.frequency.value = 700;
+    speaker.Q.value = 0.8;
+    const buzz = ctx.createWaveShaper();
+    buzz.curve = driveCurve(2);
+    buzz.connect(speaker).connect(out);
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    // Whoop: rising, then a gap, over and over
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sawtooth';
+    lfo.frequency.value = 0.55;
+    const depth = ctx.createGain();
+    depth.gain.value = 170;
+    osc.frequency.value = 480;
+    lfo.connect(depth).connect(osc.frequency);
+    const gate = ctx.createGain();
+    gate.gain.value = 0.5;
+    const gl = ctx.createOscillator();
+    gl.type = 'square';
+    gl.frequency.value = 0.55;
+    const gd = ctx.createGain();
+    gd.gain.value = 0.5;
+    gl.connect(gd).connect(gate.gain);
+    osc.connect(gate).connect(buzz);
+    osc.start(t);
+    lfo.start(t);
+    gl.start(t);
+    let alive = true;
+    return {
+      set: (k: number) => out.gain.setTargetAtTime(Math.max(0, fin(k, 0)) * 0.16, ctx.currentTime, 0.25),
+      stop: () => {
+        if (!alive) return;
+        alive = false;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+        for (const o of [osc, lfo, gl]) o.stop(ctx.currentTime + 2.5);
+        window.setTimeout(() => out.disconnect(), 2700);
+      }
+    };
+  }
+
+  /** A grenade landing and skittering on wet tarmac: a dull tok and a short scrape. */
+  grenadeBounce(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 30);
+    if (a <= 0.02) return;
+    const out = this.place(ctx, d, 0.5 * a, 0.05);
+    this.partial(out, { D: 0.07, type: 'triangle', f: 820 + Math.random() * 200, f1: 500, gain: 0.35, attack: 0.001 });
+    this.burst(out, { D: 0.05, type: 'bandpass', f: 2400, q: 2, gain: 0.25, attack: 0.001 });
+    this.burst(out, { at: 0.04, D: 0.18, type: 'bandpass', f: 1500, q: 1.2, gain: 0.1, attack: 0.01 });
+  }
+
+  /** The pin coming out: the ring's scrape, the click, and the spoon flying off as it leaves the hand. */
+  grenadePin(): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const out = this.place(ctx, 0, 0.5, 0);
+    this.burst(out, { D: 0.08, type: 'bandpass', f: 3800, f1: 2400, q: 3, gain: 0.25, attack: 0.004 });
+    this.partial(out, { at: 0.07, D: 0.05, type: 'triangle', f: 2600, f1: 1900, gain: 0.25, attack: 0.001 });
+  }
+
+  /** Rockets back in the pack: the empty one sliding out, the full one in, the latch. */
+  launcherReload(at = 0): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const out = this.place(ctx, 0, 0.55, 0);
+    this.burst(out, { at, D: 0.35, type: 'bandpass', f: 900, f1: 1600, q: 1.5, gain: 0.25, attack: 0.03 });
+    this.clang(out, at + 0.55, 420, 0.12, 0.4);
+    this.burst(out, { at: at + 0.55, D: 0.06, type: 'lowpass', f: 700, gain: 0.4, attack: 0.002 });
+    this.partial(out, { at: at + 0.95, D: 0.05, type: 'square', f: 1400, f1: 900, gain: 0.2, attack: 0.001 });
+    this.burst(out, { at: at + 0.95, D: 0.04, type: 'highpass', f: 2600, gain: 0.3, attack: 0.001 });
+  }
+
+  /** Concrete and steel coming down: a tower folding, the floors going one onto another, the dust after. */
+  towerCollapse(dist: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const d = this.far(dist);
+    const a = this.atten(d, 220) * 0.8 + 0.2;
+    const out = this.place(ctx, d, a, 0.4);
+    const r = Math.random;
+    this.burst(out, { D: 2.6, type: 'lowpass', f: 260, f1: 90, gain: 0.85, attack: 0.15, rate: 0.5 });
+    this.partial(out, { at: 0.9, D: 1.4, type: 'sine', f: 58, f1: 24, gain: 0.8, attack: 0.01 });
+    this.burst(out, { at: 0.9, D: 0.5, type: 'lowpass', f: 700, gain: 0.8 });
+    this.crumple(out, 0.1, 1.2, 18, 0.5, 250, 1800);
+    this.clang(out, 0.4 + r() * 0.3, 120 + r() * 30, 0.25, 1.8);
+    this.clang(out, 1.0 + r() * 0.4, 160 + r() * 30, 0.2, 1.4);
+    for (let k = 0; k < 14; k++) {
+      const at = 1 + Math.pow(r(), 0.8) * 2.2;
+      this.burst(out, { at, D: 0.02 + r() * 0.05, type: 'bandpass', f: 600 + r() * 2400, q: 2, gain: (0.08 + r() * 0.12) * (1 - (at - 1) / 2.6), attack: 0.002 });
+    }
+  }
+
   sirenLoop(): { setDistance(m: number): void; stop(): void } {
     const idle = { setDistance: (): void => {}, stop: (): void => {} };
     if (!this.ctx) return idle;

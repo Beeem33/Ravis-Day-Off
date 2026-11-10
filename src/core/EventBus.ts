@@ -92,6 +92,10 @@ export const Events = {
   AirportComplete: 'airport-complete',
   /** Level 11's alternate played out: left on the runway, into the van, the crew suited up. */
   RunwayComplete: 'runway-complete',
+  /** {checkpoint: number} — the HQ assault again: 0 the gate crash, 1 the towers, 2 the advance. */
+  RestartHQ: 'restart-hq',
+  /** In under the stairs of the Exterminator Collective's headquarters. */
+  HQComplete: 'hq-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -112,7 +116,8 @@ export const LEVELS = [
   { id: 'level8', n: '9', name: 'THE PARKING LOT', blurb: 'The General' },
   { id: 'street', n: '10', name: 'THE STREET', blurb: 'After him, through traffic, to the airport' },
   { id: 'airport', n: '11', name: 'THE AIRPORT', blurb: 'Stop that jet' },
-  { id: 'runway', n: '11 ALT', name: 'LEFT ON THE RUNWAY', blurb: 'Alternate Level 11 — the jet gets away, and the van turns up' }
+  { id: 'runway', n: '11 ALT', name: 'LEFT ON THE RUNWAY', blurb: 'Alternate Level 11 — the jet gets away, and the van turns up' },
+  { id: 'hq', n: '12', name: 'THE EXTERMINATOR COLLECTIVE', blurb: 'Through the gates, the towers, and up to the headquarters' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

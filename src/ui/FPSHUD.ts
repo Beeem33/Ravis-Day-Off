@@ -127,7 +127,7 @@ export class FPSHUD {
     this.unsubs.push(
       this.bus.on<{ lethal: boolean }>(Events.HitMarker, () => this.flashHitmarker()),
       this.bus.on<{ name: string; remaining: number; headshot: boolean; by?: string }>(Events.EnemyKilled, (e) => {
-        this.counter.textContent = String(e.remaining);
+        if (!this.counterOwned) this.counter.textContent = String(e.remaining);
         this.addKillFeed(`<span class="you">${e.by ?? 'RAVI'}</span> ${e.headshot ? '⌖' : '✚'} ${e.name.toUpperCase()}`);
       }),
       // The bar itself is driven per-frame from the scene; the event is just
@@ -244,16 +244,17 @@ export class FPSHUD {
   private shownMagSize = -1;
 
   /** Rounds left in the magazine; blinks while reloading. */
-  setAmmo(rounds: number, magSize: number, reloading: boolean): void {
+  setAmmo(rounds: number, magSize: number, reloading: boolean, label = 'R RELOAD'): void {
     if (!this.ammoEl) {
       this.ammoEl = document.createElement('div');
       this.ammoEl.className = 'hud-ammo';
       this.hud.appendChild(this.ammoEl);
     }
-    if (magSize !== this.shownMagSize) {
+    if (magSize !== this.shownMagSize || label !== this.shownLabel) {
       // Weapon switch changed the magazine size — rebuild the readout
       this.shownMagSize = magSize;
-      this.ammoEl.innerHTML = `<div class="rounds"></div><div>/ ${magSize} &nbsp;·&nbsp; R RELOAD</div>`;
+      this.shownLabel = label;
+      this.ammoEl.innerHTML = `<div class="rounds"></div><div>/ ${magSize} &nbsp;·&nbsp; ${label}</div>`;
       this.shownAmmo = '';
     }
     const key = `${rounds}|${reloading}`;
@@ -262,6 +263,47 @@ export class FPSHUD {
     this.ammoEl.querySelector('.rounds')!.textContent = reloading ? '--' : String(rounds);
     this.ammoEl.classList.toggle('low', !reloading && rounds <= 3);
     this.ammoEl.classList.toggle('reloading', reloading);
+  }
+
+  private shownLabel = '';
+  private grenadeEl: HTMLElement | null = null;
+  private shownGrenades = -1;
+
+  /**
+   * Grenades carried, over the ammo: a little egg per grenade and the count,
+   * with the key to throw. Flashes when one is picked up.
+   */
+  setGrenades(n: number): void {
+    if (n === this.shownGrenades) return;
+    if (!this.grenadeEl) {
+      this.grenadeEl = document.createElement('div');
+      this.grenadeEl.className = 'hud-grenades';
+      this.hud.appendChild(this.grenadeEl);
+    }
+    const up = this.shownGrenades >= 0 && n > this.shownGrenades;
+    this.shownGrenades = n;
+    const el = this.grenadeEl;
+    el.innerHTML = `<span class="eggs">${'<i></i>'.repeat(Math.min(n, 6))}</span><span class="n">${n}</span><span class="k">T THROW</span>`;
+    el.classList.toggle('empty', n === 0);
+    if (up) {
+      el.classList.remove('got');
+      void el.offsetWidth;
+      el.classList.add('got');
+    }
+  }
+
+  /** The level's own count top left instead of the intruders: `null` hides it. */
+  private counterOwned = false;
+  setCounter(label: string | null, value?: number | string): void {
+    const box = this.counter.parentElement as HTMLElement;
+    this.counterOwned = true;
+    if (label === null) {
+      box.style.display = 'none';
+      return;
+    }
+    box.style.display = '';
+    box.firstChild!.textContent = label;
+    this.counter.textContent = String(value ?? '');
   }
 
   private takedownEl: HTMLElement | null = null;

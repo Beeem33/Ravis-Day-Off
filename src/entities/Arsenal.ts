@@ -134,6 +134,24 @@ export class Arsenal {
 
   // ------------------------------------------------------------- inventory
 
+  /** Grenades carried (T throws one, where a level has them). */
+  grenades = 0;
+  static readonly MAX_GRENADES = 6;
+
+  /** Picked some up: as many as he has room for. Returns how many were taken. */
+  addGrenades(n: number): number {
+    const took = Math.max(0, Math.min(n, Arsenal.MAX_GRENADES - this.grenades));
+    this.grenades += took;
+    return took;
+  }
+
+  /** One out of the pouch to throw, if there is one. */
+  takeGrenade(): boolean {
+    if (this.grenades <= 0) return false;
+    this.grenades--;
+    return true;
+  }
+
   owns(g: Gun): boolean {
     return this.owned.has(g);
   }

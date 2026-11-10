@@ -440,7 +440,7 @@ function linear(hex: number): [number, number, number] {
 
 // ---------------------------------------------------------------- textures
 
-function makeCanvas(w: number, h: number): HTMLCanvasElement {
+export function makeCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -448,7 +448,7 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement {
 }
 
 /** Repeat-wrapped, mipmapped and filtered smooth: at foot height Nearest turns asphalt into a mosaic. */
-function tiling(c: HTMLCanvasElement): THREE.CanvasTexture {
+export function tiling(c: HTMLCanvasElement): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
@@ -468,7 +468,7 @@ function once(c: HTMLCanvasElement): THREE.CanvasTexture {
  * the edges so the tile repeats without a seam — the patches are what keep
  * a big plain area from looking like a carpet of the same 5 m square.
  */
-function noiseTile(
+export function noiseTile(
   size: number,
   base: [number, number, number],
   o: { fine: number; blobs?: number; blobAmp?: number; tint?: [number, number, number]; specks?: number; speckAmp?: number }
@@ -509,7 +509,7 @@ function noiseTile(
 }
 
 /** Worn asphalt: grey grain, lighter chips of aggregate, darker patches, the odd hairline crack. */
-function asphaltCanvas(): HTMLCanvasElement {
+export function asphaltCanvas(): HTMLCanvasElement {
   const c = noiseTile(512, [99, 102, 106], { fine: 16, blobs: 30, blobAmp: 9, specks: 0.022, speckAmp: 46 });
   const g = c.getContext('2d')!;
   g.strokeStyle = 'rgba(38,40,43,0.55)';

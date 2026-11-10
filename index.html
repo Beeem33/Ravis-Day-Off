@@ -127,6 +127,21 @@
       font-size: 13px; letter-spacing: 2px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
     }
     .hud-ammo .rounds { font-size: 30px; font-weight: bold; line-height: 1; }
+    /* Grenades carried (FPSHUD.setGrenades): just above the ammo */
+    .hud-grenades {
+      position: absolute; right: 24px; bottom: 74px; display: flex; align-items: center; gap: 8px;
+      color: #e8f4ec; font-size: 12px; letter-spacing: 2px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+    .hud-grenades .eggs { display: flex; gap: 4px; }
+    .hud-grenades .eggs i {
+      width: 9px; height: 12px; border-radius: 50% 50% 46% 46%; background: #7d8a52;
+      box-shadow: inset -2px -2px 0 rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.8);
+    }
+    .hud-grenades .n { font-size: 18px; font-weight: bold; }
+    .hud-grenades .k { opacity: 0.7; }
+    .hud-grenades.empty .n { color: #ff5941; }
+    .hud-grenades.got { animation: nade-got 0.9s ease-out; }
+    @keyframes nade-got { 0% { color: #ffd85e; transform: scale(1.25); } 100% { color: #e8f4ec; transform: scale(1); } }
     .hud-ammo.low .rounds { color: #ff5941; }
     .hud-ammo.reloading .rounds { color: #9aa89e; animation: blink 0.5s steps(2) infinite; }
     .hud-bottom {

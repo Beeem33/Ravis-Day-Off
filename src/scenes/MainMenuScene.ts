@@ -24,12 +24,12 @@ const TUBE_R = 0.22;
 
 /** Lying back in the hole: hips low, the back on the rear of the ring, the legs over the front, the head up looking out. */
 const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
-  hips: V3(0, 0.05, 0.04),
+  hips: V3(0, 0.16, 0.14),
   lean: [-58, -8, -6, -2, 26, 22],
   legs: {
     // Legs crossed at the ankle out over the front of the ring: the right over the left
-    l: { ankle: V3(-0.04, 0.1, 0.86), knee: V3(0.25, 1, 0.4), turn: -6 },
-    r: { ankle: V3(0.06, 0.19, 0.88), knee: V3(-0.25, 1, 0.4), turn: 10 }
+    l: { ankle: V3(-0.05, 0.08, 0.85), knee: V3(0.15, 1, 0.3), turn: -6 },
+    r: { ankle: V3(0.06, 0.17, 0.87), knee: V3(-0.15, 1, 0.3), turn: 10 }
   }
 };
 // Dev builds: the pose, to tune it live from the console
@@ -252,7 +252,7 @@ export class MainMenuScene implements GameScene {
     s.fog = new THREE.Fog(0xb4dcf2, 140, 700);
     const isle = new THREE.Group();
     // Left of frame is +X (he, and the camera, look down +Z)
-    isle.position.set(98, -0.6, 265);
+    isle.position.set(150, -0.6, 420);
     s.add(isle);
     let seed = 7;
     const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -514,35 +514,112 @@ export class MainMenuScene implements GameScene {
     const profile = [V3(0, 0, 0), V3(0.045, 0, 0), V3(0.05, 0.008, 0), V3(0.075, 0.03, 0), V3(0.085, 0.06, 0), V3(0.08, 0.062, 0), V3(0.07, 0.034, 0), V3(0, 0.03, 0)].map((q) => new THREE.Vector2(q.x, q.y));
     const ceramic = new THREE.Mesh(new THREE.LatheGeometry(profile, 32), new THREE.MeshStandardMaterial({ color: 0xf6f3ec, roughness: 0.25 }));
     bowl.add(ceramic);
-    const curry = new THREE.Mesh(new THREE.CircleGeometry(0.075, 28), new THREE.MeshStandardMaterial({ color: 0xc9681c, roughness: 0.35 }));
+    // The curry itself: a glossy, slightly lumpy surface, darker at the edge where it's reduced
+    const sauce = (() => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d')!;
+      const grad = g.createRadialGradient(64, 64, 10, 64, 64, 64);
+      grad.addColorStop(0, '#d6782a');
+      grad.addColorStop(0.75, '#c2611a');
+      grad.addColorStop(1, '#8e3e10');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+      // Spice flecks and little pools of oil
+      for (let i = 0; i < 120; i++) {
+        g.fillStyle = Math.random() < 0.6 ? 'rgba(120,40,8,0.6)' : 'rgba(255,180,60,0.5)';
+        g.beginPath();
+        g.arc(Math.random() * 128, Math.random() * 128, 0.6 + Math.random() * 1.6, 0, Math.PI * 2);
+        g.fill();
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    const surf = new THREE.CircleGeometry(0.076, 28, 0, Math.PI * 2);
+    {
+      const p = surf.getAttribute('position');
+      for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 140) * Math.cos(p.getY(i) * 120) * 0.0025);
+      surf.computeVertexNormals();
+    }
+    const curry = new THREE.Mesh(surf, new THREE.MeshStandardMaterial({ map: sauce, roughness: 0.18, metalness: 0.05 }));
     curry.rotation.x = -Math.PI / 2;
     curry.position.y = 0.052;
     bowl.add(curry);
-    // Chunks in it, a mound of rice to one side, a leaf of coriander
-    const chunkCols = [0xe0b070, 0xa8421a, 0xd8c09a, 0x8a3a12];
-    for (let i = 0; i < 9; i++) {
-      const c = new THREE.Mesh(new THREE.DodecahedronGeometry(0.011 + Math.random() * 0.008, 0), new THREE.MeshStandardMaterial({ color: chunkCols[i % 4], roughness: 0.6 }));
+    // In it: cubes of potato, pieces of chicken, chickpeas, rings of red chilli
+    const potato = new THREE.MeshStandardMaterial({ color: 0xe8c070, roughness: 0.55 });
+    const chicken = new THREE.MeshStandardMaterial({ color: 0xc88a50, roughness: 0.6 });
+    const pea = new THREE.MeshStandardMaterial({ color: 0xd8b070, roughness: 0.5 });
+    const chilli = new THREE.MeshStandardMaterial({ color: 0xc8201a, roughness: 0.4 });
+    for (let i = 0; i < 18; i++) {
+      const k = i % 4;
+      const g =
+        k === 0 ? new THREE.BoxGeometry(0.016, 0.014, 0.016) :
+        k === 1 ? new THREE.DodecahedronGeometry(0.012 + Math.random() * 0.006, 0) :
+        k === 2 ? new THREE.SphereGeometry(0.006, 8, 6) :
+        new THREE.TorusGeometry(0.006, 0.0022, 5, 10);
+      const c = new THREE.Mesh(g, [potato, chicken, pea, chilli][k]);
       const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * 0.05;
-      c.position.set(Math.cos(a) * r + 0.012, 0.057, Math.sin(a) * r);
+      const r = Math.sqrt(Math.random()) * 0.055;
+      c.position.set(Math.cos(a) * r + 0.014, 0.056 + (k === 3 ? 0.002 : 0), Math.sin(a) * r);
+      c.rotation.set(k === 3 ? Math.PI / 2 : Math.random() * 3, Math.random() * 3, Math.random() * 3);
       bowl.add(c);
     }
-    const rice = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xfaf6ea, roughness: 0.9 }));
-    rice.scale.set(1, 0.6, 1);
-    rice.position.set(-0.03, 0.05, 0.01);
+    // A swirl of cream across the top
+    const swirl = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.0028, 5, 24, Math.PI * 1.4), new THREE.MeshStandardMaterial({ color: 0xfaf4e6, roughness: 0.4 }));
+    swirl.rotation.x = Math.PI / 2;
+    swirl.position.set(0.02, 0.0565, 0.005);
+    bowl.add(swirl);
+    // Rice heaped to one side: lumpy, grains on it
+    const riceGeo = new THREE.IcosahedronGeometry(0.036, 2);
+    {
+      const p = riceGeo.getAttribute('position');
+      for (let i = 0; i < p.count; i++) {
+        const k = 1 + (Math.random() - 0.5) * 0.12;
+        p.setXYZ(i, p.getX(i) * k, Math.max(0, p.getY(i)) * k, p.getZ(i) * k);
+      }
+      riceGeo.computeVertexNormals();
+    }
+    const riceMat = new THREE.MeshStandardMaterial({ color: 0xfaf6ea, roughness: 0.9 });
+    const rice = new THREE.Mesh(riceGeo, riceMat);
+    rice.scale.set(1, 0.65, 1);
+    rice.position.set(-0.032, 0.05, 0.01);
     bowl.add(rice);
-    for (let i = 0; i < 3; i++) {
-      const leaf = new THREE.Mesh(new THREE.CircleGeometry(0.008, 6), new THREE.MeshStandardMaterial({ color: 0x2f8a2a, roughness: 0.6, side: THREE.DoubleSide }));
-      leaf.rotation.x = -Math.PI / 2 + 0.3;
-      leaf.position.set(0.02 + i * 0.012, 0.064, -0.015 + i * 0.01);
+    for (let i = 0; i < 26; i++) {
+      const grain = new THREE.Mesh(new THREE.CapsuleGeometry(0.0016, 0.005, 2, 4), riceMat);
+      const a = Math.random() * Math.PI * 2;
+      const b = Math.random() * 1.2;
+      grain.position.set(-0.032 + Math.cos(a) * Math.sin(b) * 0.036, 0.05 + Math.cos(b) * 0.024, 0.01 + Math.sin(a) * Math.sin(b) * 0.036);
+      grain.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      bowl.add(grain);
+    }
+    // Coriander leaves scattered over it
+    for (let i = 0; i < 8; i++) {
+      const leaf = new THREE.Mesh(new THREE.CircleGeometry(0.007 + Math.random() * 0.003, 6), new THREE.MeshStandardMaterial({ color: i % 2 ? 0x2f8a2a : 0x3f9f35, roughness: 0.6, side: THREE.DoubleSide }));
+      leaf.rotation.set(-Math.PI / 2 + (Math.random() - 0.5) * 0.6, Math.random() * 3, 0);
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * 0.05;
+      leaf.position.set(Math.cos(a) * r + 0.01, 0.06, Math.sin(a) * r);
       bowl.add(leaf);
+    }
+    // A piece of naan leant on the rim
+    const naan = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 8), new THREE.MeshStandardMaterial({ color: 0xe6c08a, roughness: 0.85 }));
+    naan.scale.set(1.3, 0.12, 0.85);
+    naan.rotation.set(0.2, 0.4, 0.75);
+    naan.position.set(-0.07, 0.07, -0.03);
+    bowl.add(naan);
+    for (let i = 0; i < 5; i++) {
+      const char = new THREE.Mesh(new THREE.CircleGeometry(0.006, 6), new THREE.MeshStandardMaterial({ color: 0x8a5a2a, roughness: 0.9, side: THREE.DoubleSide }));
+      char.position.set((Math.random() - 0.5) * 0.08, 0.0065, (Math.random() - 0.5) * 0.05);
+      char.rotation.x = -Math.PI / 2;
+      naan.add(char);
     }
     const spoon = new THREE.Mesh(new THREE.CapsuleGeometry(0.004, 0.11, 2, 6), new THREE.MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.25, metalness: 0.8 }));
     spoon.position.set(0.04, 0.085, 0);
     spoon.rotation.set(0, 0, 0.9);
     bowl.add(spoon);
     // Sat on top of the ring, out by his left elbow
-    bowl.position.set(0.44, TUBE_R - 0.004, 0.26);
+    bowl.position.set(0.45, TUBE_R - 0.01, 0.33);
     this.bowl = bowl;
     this.float.add(bowl);
     // Steam: a few soft wisps rising and fading
@@ -557,9 +634,11 @@ export class MainMenuScene implements GameScene {
       g.fillRect(0, 0, 64, 64);
       return new THREE.CanvasTexture(c);
     })();
-    for (let i = 0; i < 6; i++) {
+    // Plenty of it, hot: big soft puffs and thinner wisps curling up through them
+    for (let i = 0; i < 16; i++) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: wisp, transparent: true, depthWrite: false, opacity: 0 }));
-      sp.userData.ph = i / 6;
+      sp.userData.ph = i / 16;
+      sp.userData.big = i % 3 === 0;
       bowl.add(sp);
       this.steam.push(sp);
     }
@@ -587,8 +666,9 @@ export class MainMenuScene implements GameScene {
     const talk = Math.sin(time * 1.7) * 2 + Math.sin(time * 0.6) * 3;
     const lean = [...RECLINE.lean];
     lean[5] += talk;
-    const twist = [0, 0, 0, 0, -6 + Math.sin(time * 0.31) * 4, -6 + Math.sin(time * 0.37) * 5];
-    const roll = [0, 0, 0, 0, 0, 10];
+    // Head up straight over his shoulders (tipped onto the phone, it hid his right shoulder)
+    const twist = [0, 0, 0, 0, Math.sin(time * 0.31) * 3, Math.sin(time * 0.37) * 4];
+    const roll = [0, 0, -3, -3, -4, -2];
     const breath = Math.sin(time * 0.9) * 1.2;
     lean[2] += breath;
     const trunk: SeatPose = { hips: RECLINE.hips, lean, twist, roll, legs: RECLINE.legs, arms: {} };
@@ -612,7 +692,7 @@ export class MainMenuScene implements GameScene {
     const upO = new THREE.Vector3().crossVectors(fwd, out).normalize();
     // Phone frame: its +Y up the phone (lid end), +Z out of its face; the face is to his head (−out)
     this.phone.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(upO, out.clone().negate()), upO, out.clone().negate()));
-    this.phone.position.copy(ear).addScaledVector(out, 0.022).addScaledVector(upO, -0.04);
+    this.phone.position.copy(ear).addScaledVector(out, 0.03).addScaledVector(upO, -0.04);
     // The hand round the back of the base: the wrist below and outside it
     // The hand cupped under and behind it, fingers up its back: the wrist just under the jaw line
     const wrist = this.phone.position.clone().addScaledVector(upO, -0.1).addScaledVector(out, 0.03).addScaledVector(fwd, 0.015);
@@ -620,8 +700,8 @@ export class MainMenuScene implements GameScene {
       ...trunk,
       arms: {
         // Elbow down and out in front of his chest, the forearm up to his ear — not cocked up behind his head
-        r: { wrist, along: upO.clone().addScaledVector(out, -0.15).normalize(), palm: out.clone().negate(), elbow: fwd.clone().multiplyScalar(0.7).add(V3(-0.5, -1, 0)).normalize(), shape: PHONE_HAND },
-        l: { wrist: V3(0.36, 0.25, 0.06), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
+        r: { wrist, along: upO.clone().addScaledVector(out, -0.15).normalize(), palm: out.clone().negate(), elbow: fwd.clone().multiplyScalar(0.35).add(V3(-1, -0.7, 0)).normalize(), shape: PHONE_HAND },
+        l: { wrist: V3(0.38, 0.32, 0.03), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
       }
     });
   }
@@ -683,11 +763,15 @@ export class MainMenuScene implements GameScene {
 
     // Steam off the curry
     for (const sp of this.steam) {
-      const u = (time * 0.35 + sp.userData.ph) % 1;
-      sp.position.set(Math.sin(time * 1.3 + sp.userData.ph * 9) * 0.015 * (1 + u * 2), 0.07 + u * 0.22, Math.cos(time * 1.1 + sp.userData.ph * 7) * 0.012);
-      const s = 0.04 + u * 0.09;
-      sp.scale.set(s, s, 1);
-      (sp.material as THREE.SpriteMaterial).opacity = Math.sin(Math.PI * u) * 0.5;
+      const big = sp.userData.big as boolean;
+      const ph = sp.userData.ph as number;
+      const u = (time * (big ? 0.28 : 0.42) + ph) % 1;
+      // Curling as it rises, drifting a little off with the breeze
+      const curl = Math.sin(time * 1.7 + ph * 11 + u * 6) * 0.02 * (0.5 + u * 1.5);
+      sp.position.set(curl + u * 0.03 + (ph - 0.5) * 0.06, 0.065 + u * (big ? 0.3 : 0.36), Math.cos(time * 1.3 + ph * 7 + u * 5) * 0.015 * (0.5 + u) + (ph - 0.5) * 0.03);
+      const s = big ? 0.06 + u * 0.16 : 0.025 + u * 0.08;
+      sp.scale.set(s, s * (big ? 1 : 1.6), 1);
+      (sp.material as THREE.SpriteMaterial).opacity = Math.sin(Math.PI * Math.min(1, u * 1.2)) * (big ? 0.42 : 0.6);
     }
 
     // Behind him, a little above, looking past his head out to sea; drifting, with a touch of mouse parallax

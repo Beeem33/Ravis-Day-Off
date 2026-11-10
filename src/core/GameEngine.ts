@@ -91,6 +91,16 @@ export class GameEngine {
     });
   }
 
+  /** Held by the pause menu: nothing updates or draws (the last frame stays up). */
+  paused = false;
+  /** Called whenever a new scene is asked for (the pause menu closes). */
+  onSceneChange: (() => void) | null = null;
+
+  /** A level is loading or warming up under its card. */
+  get loading(): boolean {
+    return this.pendingScene !== null || this.loadingCard !== null;
+  }
+
   /** The scene currently being driven. Read-only; use setScene to change it. */
   get currentScene(): GameScene | null {
     return this.scene;
@@ -114,6 +124,8 @@ export class GameEngine {
    * frame — which is when `CombatScene.warmUp` has finished.
    */
   setScene(scene: GameScene, label = ''): void {
+    this.paused = false;
+    this.onSceneChange?.();
     this.loadingCard = this.showLoading(label);
     // The swap is deferred by a frame on purpose. Building a level and then
     // compiling its shaders is one long synchronous block — around a second
@@ -186,6 +198,7 @@ export class GameEngine {
       const now = performance.now();
       let dt = (now - this.lastTime) / 1000;
       this.lastTime = now;
+      if (this.paused && !this.pendingScene) return;
       // Not while a level is loading or warming its shaders: those frames are
       // long for reasons that have nothing to do with the resolution
       if (!this.pendingScene && !this.loadingCard) this.adaptScale(dt);

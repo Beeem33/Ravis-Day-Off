@@ -15,6 +15,10 @@ export class InputManager {
 
   /** Optional hook fired when pointer lock is lost (e.g. user pressed Esc). */
   onPointerLockLost: (() => void) | null = null;
+  /** Fired when the player let go of the mouse themselves (Esc, or switching away) rather than the game releasing it. */
+  onUserUnlock: (() => void) | null = null;
+  /** The game itself asked for the release (a cutscene, a death screen): not the player. */
+  private codeExit = false;
 
   constructor(private element: HTMLElement) {
     // Dev convenience (?nolock): pretend the pointer is locked so gameplay
@@ -65,7 +69,12 @@ export class InputManager {
       const lost = this.pointerLocked && !locked;
       this.pointerLocked = locked;
       if (locked) this.hideLockHint();
-      if (lost) this.onPointerLockLost?.();
+      if (lost) {
+        const byUser = !this.codeExit;
+        this.onPointerLockLost?.();
+        if (byUser) this.onUserUnlock?.();
+      }
+      this.codeExit = false;
     });
   }
 
@@ -111,7 +120,10 @@ export class InputManager {
   }
 
   exitPointerLock(): void {
-    if (this.pointerLocked) document.exitPointerLock();
+    if (this.pointerLocked) {
+      this.codeExit = true;
+      document.exitPointerLock();
+    }
   }
 
   isDown(code: string): boolean {

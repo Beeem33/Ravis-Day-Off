@@ -261,6 +261,27 @@
       position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none;
     }
 
+    /* ---------- Pause (Esc in a level) ---------- */
+    .pause-menu {
+      position: fixed; inset: 0; z-index: 9000; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(2, 4, 8, 0.68); backdrop-filter: blur(3px);
+      font-family: 'Courier New', monospace; color: #e8e6df;
+    }
+    .pause-menu.on { display: flex; }
+    .pause-menu .pm-box {
+      display: flex; flex-direction: column; align-items: stretch; gap: 12px;
+      min-width: min(320px, 80vw); padding: 28px 30px;
+      border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(8, 10, 14, 0.82);
+    }
+    .pause-menu .pm-title { font-size: 30px; font-weight: bold; letter-spacing: 10px; text-align: center; margin-bottom: 10px; }
+    .pause-menu button {
+      font: inherit; font-size: 14px; letter-spacing: 4px; padding: 12px 16px; cursor: pointer;
+      color: #e8e6df; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.22);
+    }
+    .pause-menu button:hover { background: #c8221a; border-color: #ff4a3a; color: #fff; }
+    .pause-menu .pm-hint { font-size: 11px; letter-spacing: 3px; opacity: 0.5; text-align: center; margin-top: 6px; }
+
     /* ---------- Between levels: covers the shader warm-up frame ---------- */
     .level-load {
       position: absolute; inset: 0; background: #05070a; z-index: 40;

@@ -40,7 +40,7 @@ export interface CrewDeps {
 
 type State = 'idle' | 'run' | 'cover';
 
-const RUN = 5.6;
+const RUN = 4.8;
 const JOG = 3.2;
 const BODY = 0.38;
 const RANGE_MAN = 58;
@@ -130,6 +130,8 @@ export class CrewAI {
     if (this.wait > 0) {
       this.wait -= dt;
       e.setWalk(0);
+      e.setRun(false);
+      e.slingWeapon(false);
       this.lookAndShoot(dt, false);
       return;
     }
@@ -154,6 +156,9 @@ export class CrewAI {
     this.steer(to, Math.min(d, 1.6));
     e.position.addScaledVector(to, Math.min(d, sp * dt));
     e.faceToward(_b.copy(e.position).add(to), dt, 9);
+    // Running flat out the rifle goes over his back and both arms pump; it comes
+    // back into his hands for the last few steps in to the post
+    e.slingWeapon(sp > JOG);
     e.setAiming(false);
     e.setRun(sp > JOG);
     e.setWalk(1);
@@ -171,6 +176,9 @@ export class CrewAI {
   private updateCover(dt: number): void {
     const e = this.e;
     e.setRun(false);
+    e.slingWeapon(false);
+    // Down behind it he holds it properly: two hands, muzzle low
+    e.setRestCarry(true);
     // Settle onto the post itself
     if (this.post) {
       const p = this.post.pos;

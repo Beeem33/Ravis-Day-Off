@@ -29,6 +29,8 @@ export interface StrikeEvent {
   at: THREE.Vector3;
   /** How far from the listener, for the thunder. */
   dist: number;
+  /** Right on top of them: a crack rather than a roll, and a jolt. */
+  close: boolean;
 }
 
 export class Storm {
@@ -168,13 +170,18 @@ export class Storm {
             float ph = uTime * rate + aSeed.x * 7.0;
             float cyc = floor(ph);
             float u = fract(ph);
-            // A new spot each cycle
+            // A new spot each cycle — fixed on the ground, not on him: a point on a
+            // world lattice wrapped into the square round the camera, so a splash
+            // stays where it landed as he walks past it (the wrap only ever
+            // happens out at the square's edge, where they've faded to nothing)
             vec2 h = fract(vec2(sin(cyc * 12.9898 + aSeed.y * 78.233), sin(cyc * 39.346 + aSeed.x * 11.135)) * 43758.5453);
-            vec2 at = uCam.xz + (h * 2.0 - 1.0) * R;
+            vec2 lo = uCam.xz - R;
+            vec2 at = lo + mod(h * 2.0 * R - lo, 2.0 * R);
             float r = 0.03 + 0.11 * u;
             vec3 w = vec3(at.x, 0.012, at.y) + position * r;
             float inside = step(uShMin.x, w.x) * step(w.x, uShMax.x) * step(uShMin.z, w.z) * step(w.z, uShMax.z);
-            vA = (1.0 - u) * (1.0 - u) * (1.0 - smoothstep(R * 0.6, R, length(at - uCam.xz))) * (1.0 - inside);
+            vec2 off = abs(at - uCam.xz);
+            vA = (1.0 - u) * (1.0 - u) * (1.0 - smoothstep(R * 0.6, R * 0.95, max(off.x, off.y))) * (1.0 - inside);
             gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
           }
         `,
@@ -244,7 +251,7 @@ export class Storm {
             // Underside: dark, a little lighter where it's thin; lit up by the strike round where it was
             vec3 col = vec3(${dark.toFixed(3)}, ${(dark + 0.008).toFixed(3)}, ${(dark + 0.022).toFixed(3)}) * (0.8 + 0.6 * m);
             float near = exp(-distance(vW.xz, uStrike) / 520.0);
-            col += vec3(0.42, 0.45, 0.6) * uFlash * (0.12 + 1.3 * near) * (0.55 + 0.6 * n);
+            col += vec3(0.58, 0.62, 0.84) * uFlash * (0.2 + 1.6 * near) * (0.55 + 0.6 * n);
             // Fade out to the horizon so the edge of the plane never shows
             float far = distance(vW.xz, uCam.xz);
             alpha *= 1.0 - smoothstep(1500.0, 2400.0, far);
@@ -283,11 +290,17 @@ export class Storm {
   }
 
   /** Lightning, now: at `at` if given, otherwise somewhere out over the city or into the tower. */
-  strike(at?: THREE.Vector3): void {
+  strike(at?: THREE.Vector3, restrike = false): void {
     const L = this.listener();
     let p: THREE.Vector3;
+    const roll = Math.random();
     if (at) p = at.clone();
-    else if (this.tower && Math.random() < 0.3) {
+    else if (roll < 0.32) {
+      // Close: down into the city just past the walls, or the trees round the lot — big in the sky over them
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 3.4;
+      const r = 90 + Math.random() * 170;
+      p = new THREE.Vector3(L.x + Math.cos(a) * r, 0, L.z + Math.sin(a) * r);
+    } else if (this.tower && roll < 0.55) {
       // Into the tower, up in the cloud: it lights the whole black face of it
       const tw = this.tower;
       p = new THREE.Vector3(tw.x + (Math.random() - 0.5) * tw.half, CLOUD_DECK - 10 - Math.random() * 30, tw.z + tw.half * 0.8);
@@ -298,19 +311,25 @@ export class Storm {
     }
     this.strikeAt.copy(p);
     const dist = Math.hypot(p.x - L.x, p.z - L.z);
-    this.buildBolt(p, dist < 700 ? 4 : 3);
-    // Two to four pulses over half a second, the first and the last the brightest
-    const n = 2 + Math.floor(Math.random() * 3);
+    const close = dist < 300;
+    this.buildBolt(p, close ? 7 : dist < 700 ? 5 : 3);
+    // Three to six pulses over most of a second, the first and the last the brightest; a close one blinding
+    const n = 3 + Math.floor(Math.random() * 4);
     this.pulses = [];
     let t = 0;
+    const peak = close ? 1.35 : 1;
     for (let i = 0; i < n; i++) {
-      this.pulses.push({ at: t, k: i === 0 || i === n - 1 ? 1 : 0.45 + Math.random() * 0.35, len: 0.06 + Math.random() * 0.07 });
-      t += 0.07 + Math.random() * 0.14;
+      this.pulses.push({ at: t, k: (i === 0 || i === n - 1 ? 1 : 0.45 + Math.random() * 0.4) * peak, len: 0.06 + Math.random() * 0.09 });
+      t += 0.06 + Math.random() * 0.15;
     }
     this.strikeT = 0;
-    this.thunder.push({ t: THREE.MathUtils.clamp(dist / 343, 0.25, 4.5), dist });
-    this.onStrike?.({ at: p, dist });
+    this.thunder.push({ t: THREE.MathUtils.clamp(dist / 343, close ? 0.12 : 0.25, 4.5), dist });
+    this.onStrike?.({ at: p, dist, close });
+    // Often a second stroke down a new channel a moment later
+    if (!restrike && Math.random() < 0.4) this.restrikeT = 0.35 + Math.random() * 0.5;
   }
+
+  private restrikeT = -1;
 
   /**
    * The bolt from the cloud down to `to`: a jagged main channel, stepping
@@ -381,8 +400,12 @@ export class Storm {
     if (this.active) {
       this.next -= dt;
       if (this.next <= 0) {
-        this.next = 6 + Math.random() * 9;
+        this.next = 3 + Math.random() * 5.5;
         this.strike();
+      }
+      if (this.restrikeT > 0) {
+        this.restrikeT -= dt;
+        if (this.restrikeT <= 0) this.strike(undefined, true);
       }
     }
     let f = 0;
@@ -392,7 +415,7 @@ export class Storm {
         const u = (this.strikeT - p.at) / p.len;
         if (u >= 0 && u < 3) f = Math.max(f, p.k * (u < 1 ? 1 : Math.exp(-(u - 1) * 2.4)));
       }
-      if (this.strikeT > 1.2) this.strikeT = -10;
+      if (this.strikeT > 1.6) this.strikeT = -10;
     }
     this.flash = f;
     this.boltMat.opacity = f > 0.25 ? Math.min(1, f * 1.3) : 0;

@@ -1356,6 +1356,17 @@ export class Enemy {
     // A real gun has a grip and a handguard to hold, right where it says
     this.gripAt.copy(Enemy.RIFLE_GRIP);
     this.guardAt.copy(this.handguard);
+    this.gunEquipped = true;
+  }
+
+  private gunEquipped = false;
+  /**
+   * One of the staff with a real gun in his hands (the crew): he holds it the
+   * way the Collective's men do — fist on the grip, the other hand under the
+   * handguard — rather than the unarmed staff's empty hands.
+   */
+  private get armedStaff(): boolean {
+    return this.civilian && this.gunEquipped && this.rifle.visible;
   }
 
   /** In a plate carrier and a helmet: a man who will take a lot more stopping, and looks it. */
@@ -1423,6 +1434,12 @@ export class Enemy {
   private static REST_ELBOW = new THREE.Vector3(0.9, -0.6, 0.5);
   private restCarry = false;
   private restBlend = 0;
+  /** Shouldered (the crew's aim): the grip from the right shoulder, and where each elbow goes. */
+  private static AIM_GRIP = new THREE.Vector3(-0.1, -0.07, -0.26);
+  private static AIM_ELBOW_R = new THREE.Vector3(1, -0.55, 0.15);
+  private static AIM_ELBOW_L = new THREE.Vector3(0.25, -1, 0.1);
+  private static _aimDir = new THREE.Vector3();
+  private static _aimGrip = new THREE.Vector3();
   private static _rq = Array.from({ length: 8 }, () => new THREE.Quaternion());
   private static _rv = Array.from({ length: 5 }, () => new THREE.Vector3());
   private static _rm = new THREE.Matrix4();
@@ -1443,10 +1460,9 @@ export class Enemy {
    * solved onto the grip, the gun hung in that fist, and then the left arm
    * solved onto the handguard wherever the gun has put it.
    */
-  private holdAtRest(k: number): void {
+  private holdAtRest(k: number, gripAt = Enemy.REST_GRIP, dir = Enemy.REST_DIR, elbowR = Enemy.REST_ELBOW, elbowL = Enemy.REST_ELBOW, guardBack = 0.2): void {
     const [armR0, foreR0, armL0, foreL0, gun0, gunRest, tmp, fore] = Enemy._rq;
     const [up, zb, xb, grip, guard] = Enemy._rv;
-    const dir = Enemy.REST_DIR;
     up.set(0, 1, 0).addScaledVector(dir, -dir.y).normalize();
     zb.copy(dir).negate(); // the barrel runs down the weapon's −Z
     xb.crossVectors(up, zb);
@@ -1460,8 +1476,8 @@ export class Enemy {
     gun0.copy(armR0).multiply(foreR0).multiply(this.rifle.quaternion);
 
     // Right hand to the grip
-    grip.copy(Enemy.REST_GRIP).add(this.armR.position);
-    this.reachArm(this.armR, this.foreR, grip, 1, Enemy.REST_ELBOW);
+    grip.copy(gripAt).add(this.armR.position);
+    this.reachArm(this.armR, this.foreR, grip, 1, elbowR);
     this.armR.quaternion.copy(tmp.copy(armR0).slerp(this.armR.quaternion, k));
     this.foreR.quaternion.copy(tmp.copy(foreR0).slerp(this.foreR.quaternion, k));
 
@@ -1477,14 +1493,14 @@ export class Enemy {
     // it low takes it — walked up the right arm into the body frame
     guard
       .copy(this.handguard)
-      .lerp(Enemy.RIFLE_GRIP, 0.2)
+      .lerp(Enemy.RIFLE_GRIP, guardBack)
       .applyQuaternion(this.rifle.quaternion)
       .add(this.rifle.position)
       .applyQuaternion(this.foreR.quaternion)
       .add(this.foreR.position)
       .applyQuaternion(this.armR.quaternion)
       .add(this.armR.position);
-    this.reachArm(this.armL, this.foreL, guard, -1, Enemy.REST_ELBOW);
+    this.reachArm(this.armL, this.foreL, guard, -1, elbowL);
     this.armL.quaternion.copy(tmp.copy(armL0).slerp(this.armL.quaternion, k));
     this.foreL.quaternion.copy(tmp.copy(foreL0).slerp(this.foreL.quaternion, k));
   }
@@ -2402,7 +2418,7 @@ export class Enemy {
         R.thumb = thumbR.set(0, 0, -1).applyQuaternion(hq);
         R.palm = palmR.set(-1, 0, 0).applyQuaternion(hq);
         curlR = 1;
-      } else if (!this.civilian && !this.boss && !this.general && !this.rifleDropped && !this.slung && this.rifle.visible) {
+      } else if ((!this.civilian || this.armedStaff) && !this.boss && !this.general && !this.rifleDropped && !this.slung && this.rifle.visible) {
         // Right fist round the grip, thumb up it (it rakes back a little)
         this.rifle.updateWorldMatrix(true, false);
         this.rifle.getWorldQuaternion(hq);
@@ -2602,7 +2618,9 @@ export class Enemy {
     this.plantNow = 0;
     if (this.walkSpeed > 0.05 || stride > 0.02) {
       const was = this.walkPhase;
-      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed) * this.cadence * (1 + 0.5 * this.runBlend);
+      // A run is longer strides, not a frantic cadence: at the old 1.5× the feet
+      // went round faster than the ground went by and it read as cartoon wheels
+      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed) * this.cadence * (1 + 0.16 * this.runBlend);
       // A foot comes down at the far end of its swing — the left when the
       // phase passes π/2 (its thigh furthest forward), the right at 3π/2 —
       // which is where the bob below has the body lowest, its weight landing.
@@ -2613,20 +2631,26 @@ export class Enemy {
         if (k1 !== k0) this.stepPending = ((k1 % 2) + 2) % 2 === 0 ? 'l' : 'r';
       }
     }
-    const swing = Math.sin(this.walkPhase) * (0.55 + 0.33 * this.runBlend) * stride;
+    const swing = Math.sin(this.walkPhase) * (0.55 + 0.22 * this.runBlend) * stride;
     if (this.legsPlanted) {
       // Square again after a planted pose (see legsPlanted)
       this.legsPlanted = false;
       this.legL.rotation.set(0, 0, 0);
       this.legR.rotation.set(0, 0, 0);
     }
-    this.legL.rotation.x = swing;
-    this.legR.rotation.x = -swing;
+    // Running, the thighs work further in front than behind (the knee drives
+    // up and forward; the leg only trails a little), which also sits the hips
+    // under the forward lean instead of the legs swinging round behind it
+    const drive = 0.16 * run;
+    this.legL.rotation.x = swing + drive;
+    this.legR.rotation.x = -swing + drive;
     // Knees bend BACKWARD (negative x — +x swings a limb forward) and only
     // while that leg is behind the body, heel coming up towards the seat.
     // Bending them forward on the front swing broke the leg the wrong way.
-    this.shinL.rotation.x = -Math.max(0, -swing) * (1.05 + 0.75 * run) - Math.max(0, swing) * 0.55 * run;
-    this.shinR.rotation.x = -Math.max(0, swing) * (1.05 + 0.75 * run) - Math.max(0, -swing) * 0.55 * run;
+    // Running, the heel kicks up behind and the knee stays folded through the
+    // forward swing, foot under it — not a straight leg flung out in front.
+    this.shinL.rotation.x = -Math.max(0, -swing) * (1.05 + 1.0 * run) - Math.max(0, swing) * 0.7 * run - 0.25 * run;
+    this.shinR.rotation.x = -Math.max(0, swing) * (1.05 + 1.0 * run) - Math.max(0, -swing) * 0.7 * run - 0.25 * run;
 
     // Body rise and fall, twice per cycle. Highest when a leg is directly
     // underneath (legs passing, swing ≈ 0) and lowest when they are split
@@ -2685,7 +2709,7 @@ export class Enemy {
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
     this.aimBlend += (this.aimTarget - this.aimBlend) * Math.min(1, dt * 8);
-    const armSwing = -swing * (0.7 + 0.5 * run);
+    const armSwing = -swing * (0.7 + 0.25 * run);
     // (+x rotation swings a hanging arm FORWARD — the old negative sign put them behind the back)
     const raise = (1.25 + this.aimPitch) * this.aimBlend;
     if (this.twisted) {
@@ -2726,9 +2750,17 @@ export class Enemy {
         this.gripRifle(this.aimBlend);
       }
       // Or at rest: held low across the body, the arms solved onto it
-      const restGoal = this.restCarry && this.aimTarget === 0 && !this.civilian && !this.general ? 1 : 0;
+      const restGoal = this.restCarry && this.aimTarget === 0 && (!this.civilian || this.armedStaff) && !this.general ? 1 : 0;
       this.restBlend += (restGoal - this.restBlend) * Math.min(1, dt * 6);
-      if (this.restBlend > 0.001) this.holdAtRest(this.restBlend);
+      if (this.armedStaff && this.aimBlend > 0.01 && this.aimBlend >= this.restBlend) {
+        // The crew shoulder it properly: stock in the shoulder, fist on the grip
+        // just in front of it, elbow out, the other hand forward on the
+        // handguard — not held out at arm's length at the belt
+        const aim = Enemy._aimDir.set(0, Math.sin(this.aimPitch), -Math.cos(this.aimPitch));
+        Enemy._aimGrip.copy(Enemy.AIM_GRIP);
+        Enemy._aimGrip.y += Math.sin(this.aimPitch) * 0.12;
+        this.holdAtRest(this.aimBlend, Enemy._aimGrip, aim, Enemy.AIM_ELBOW_R, Enemy.AIM_ELBOW_L, -0.15);
+      } else if (this.restBlend > 0.001) this.holdAtRest(this.restBlend);
       else this.rifle.position.copy(Enemy.RIFLE_HELD);
     } else if (this.gunBody) {
       // Dropped while still alive (takedown): the visual tracks the physics

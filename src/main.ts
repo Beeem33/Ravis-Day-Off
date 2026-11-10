@@ -169,6 +169,90 @@ bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   engine.setScene(scene, title);
 });
 
+// Dev builds only: a handle for poking at the game from the console
+if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { bus, engine, input, Events };
+
+// ---- Pause: Esc in any level holds the game and puts up a menu over it
+{
+  const el = document.createElement('div');
+  el.className = 'pause-menu';
+  el.innerHTML = `
+    <div class="pm-box">
+      <div class="pm-title">PAUSED</div>
+      <button data-act="resume">RESUME</button>
+      <button data-act="menu">QUIT TO MAIN MENU</button>
+      <div class="pm-hint">[ ESC ] RESUME</div>
+    </div>`;
+  document.body.appendChild(el);
+  let paused = false;
+  let pausedAt = 0;
+  /** When a scene last sent us back to the menu itself (its own Esc on a death screen). */
+  let menuAsked = -1e9;
+  bus.on(Events.ReturnToMenu, () => {
+    menuAsked = performance.now();
+  });
+  const inLevel = (): boolean => {
+    const s = engine.currentScene;
+    return !!s && !(s instanceof MainMenuScene) && !engine.loading;
+  };
+  const setPaused = (on: boolean): void => {
+    if (on === paused) return;
+    paused = on;
+    engine.paused = on;
+    audio.setPaused(on);
+    el.classList.toggle('on', on);
+    if (on) {
+      pausedAt = performance.now();
+      input.exitPointerLock();
+    }
+  };
+  const act = (a: string | undefined): void => {
+    if (a === 'resume') {
+      setPaused(false);
+      input.requestPointerLock();
+    } else if (a === 'menu') {
+      setPaused(false);
+      bus.emit(Events.ReturnToMenu);
+    }
+  };
+  engine.onSceneChange = () => setPaused(false);
+  // The player let go of the mouse (Esc while it was captured, or tabbing away)
+  input.onUserUnlock = () => {
+    if (inLevel()) setPaused(true);
+  };
+  // While paused nothing reaches the game: keys and clicks stop here
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!paused) return;
+      e.stopPropagation();
+      if (e.code === 'Escape' && !e.repeat && performance.now() - pausedAt > 250) setPaused(false);
+      else if (e.code === 'Enter') act('resume');
+    },
+    true
+  );
+  for (const type of ['mousedown', 'mouseup', 'click']) {
+    window.addEventListener(
+      type,
+      (e) => {
+        if (!paused) return;
+        e.stopPropagation();
+        if (type !== 'click') return;
+        const b = (e.target as HTMLElement | null)?.closest?.('[data-act]') as HTMLElement | null;
+        act(b?.dataset.act);
+      },
+      true
+    );
+  }
+  // Esc with the mouse already free (a cutscene): the scenes see it first, so a
+  // death screen's own Esc (back to the menu) wins
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Escape' || e.repeat || paused || !inLevel()) return;
+    if (performance.now() - menuAsked < 150) return;
+    setPaused(true);
+  });
+}
+
 engine.uiRoot = uiRoot;
 engine.setScene(new MainMenuScene(ctx));
 // The agents' model and Ravi's own load behind the menu; a level asked for

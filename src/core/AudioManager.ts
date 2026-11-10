@@ -4897,6 +4897,22 @@ export class AudioManager {
    * quietens them as the jet goes away; stop() fades out.
    */
   jetEngine(): { setThrust(k: number): void; setDistance(m: number): void; stop(): void } {
+    return this.thrusterLoop(false);
+  }
+
+  /** A jetpack: a ragged blowtorch roar and hiss, no turbine whine; sputters when setThrust jumps about. */
+  jetpackLoop(): { setThrust(k: number): void; setDistance(m: number): void; stop(): void } {
+    return this.thrusterLoop(true);
+  }
+
+  /** Whole game paused: everything in the audio graph holds where it is. */
+  setPaused(on: boolean): void {
+    if (!this.ctx) return;
+    if (on && this.ctx.state === 'running') void this.ctx.suspend();
+    else if (!on && this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
+  private thrusterLoop(pack: boolean): { setThrust(k: number): void; setDistance(m: number): void; stop(): void } {
     const idle = { setThrust: (): void => {}, setDistance: (): void => {}, stop: (): void => {} };
     if (!this.ctx) return idle;
     const ctx = this.ctx;
@@ -4925,7 +4941,7 @@ export class AudioManager {
     whine.frequency.value = 2400;
     whine.Q.value = 2;
     const whineG = ctx.createGain();
-    whineG.gain.value = 0.05;
+    whineG.gain.value = pack ? 0 : 0.05;
     whine.connect(whineG).connect(out);
     const oscs: OscillatorNode[] = [];
     for (const det of [0, 9]) {
@@ -4943,6 +4959,14 @@ export class AudioManager {
     let stopped = false;
     const apply = (): void => {
       const now = ctx.currentTime;
+      if (pack) {
+        // A blowtorch: brighter, and quick to cough and catch
+        out.gain.setTargetAtTime((0.05 + 0.4 * thrust) * gainDist, now, 0.03);
+        roar.frequency.setTargetAtTime(700 + thrust * 2600, now, 0.05);
+        roarG.gain.setTargetAtTime(0.5 + thrust * 0.5, now, 0.05);
+        whineG.gain.setTargetAtTime(0, now, 0.05);
+        return;
+      }
       out.gain.setTargetAtTime((0.16 + 0.5 * thrust) * gainDist, now, 0.15);
       roar.frequency.setTargetAtTime(220 + thrust * 1400, now, 0.4);
       roarG.gain.setTargetAtTime(0.4 + thrust * 0.6, now, 0.3);

@@ -22,6 +22,7 @@ import { OutpostTower, type TurretTarget } from '../entities/OutpostTower';
 import { LauncherViewmodel, launcherModel } from '../entities/LauncherViewmodel';
 import { GrenadeThrow, Grenades } from '../entities/Grenades';
 import { CrewAI, type CrewTarget } from '../entities/CrewAI';
+import { JetpackTrooper } from '../entities/JetpackTrooper';
 import { FootPaths, WALK } from '../entities/FootPaths';
 import { RaviVisual, HAND, type RaviRig, type HandShape } from '../entities/RaviVisual';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -54,13 +55,15 @@ import { track, smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
 type Phase = 'arrive' | 'towers' | 'advance' | 'talk' | 'hole' | 'ending';
 
 /** What it takes to put one of the Collective's men down. */
-const AGENT_HP = 100;
-const ARMOURED_HP = 150;
+const AGENT_HP = 80;
+const ARMOURED_HP = 120;
+/** The jetpack men: no plates (they'd never get off the ground), and one good burst brings them down. */
+const JET_HP = 70;
 const AK_DAMAGE: Record<string, number> = { torso: 25, arm: 18, leg: 18, head: 100 };
 const GUN_SCALE: Record<Gun, number> = { rifle: 1, pistol: 1.2, shotgun: 0.45 };
 const ARMOUR_LETS = { torso: 0.6, head: 0.5 };
 /** The crew's rounds hurt them less than Ravi's: they're there to help, not to win it for him. */
-const CREW_SCALE = 0.65;
+const CREW_SCALE = 0.9;
 /** A grenade going off: kills inside KILL, hurts Ravi inside HURT. */
 const NADE_KILL = 4.4;
 const NADE_HURT = 4.6;
@@ -79,14 +82,14 @@ const T = {
   cutC: 6.3,
   door: 6.5,
   crewOut: 6.9,
-  raviUp: 8.7,
-  hand: 11.8,
-  reach: 12.15,
-  take: 12.6,
-  control: 13.9
+  raviUp: 9.4,
+  hand: 12.6,
+  reach: 12.95,
+  take: 13.4,
+  control: 14.7
 };
-/** When each of the crew gets up: Sanjay and Dev first, the rest after Ravi's out of the way. */
-const CREW_UP = [6.9, 7.3, 9.9, 10.25, 10.6, 10.95, 11.3];
+/** When each of the crew gets up: five of them first, then Ravi, then the last two at his back. */
+const CREW_UP = [6.9, 7.3, 7.75, 8.2, 8.65, 11.3, 11.75];
 const VAN_FROM = 64;
 const VAN_SPEED = 22;
 
@@ -139,6 +142,19 @@ export class HQScene extends CombatScene<HQData> {
   private agentOf = new Map<Enemy, Agent>();
   private spawned = 0;
   private spawnT = 0;
+  /** At the wheel the whole time: he got them here and he's keeping the engine running. */
+  private driver: Enemy | null = null;
+  // ---- The jetpack men
+  private jets: JetpackTrooper[] = [];
+  private jetOf = new Map<Enemy, JetpackTrooper>();
+  private jetLoops = new Map<JetpackTrooper, { setThrust(k: number): void; setDistance(m: number): void; stop(): void }>();
+  /** Who brought each one down (Ravi, or the crew). */
+  private jetByRavi = new Map<JetpackTrooper, boolean>();
+  private jetT = 12;
+  private jetsSpawned = 0;
+  private jetWarned = false;
+  /** The next bang somewhere out in the lot. */
+  private boomT = 5;
 
   private phase: Phase = 'arrive';
   private phaseT = 0;
@@ -157,7 +173,7 @@ export class HQScene extends CombatScene<HQData> {
   private klaxon: { set(k: number): void; stop(): void } | null = null;
   private shake = 0;
   private readonly bg = new THREE.Color(0x0c1018);
-  private readonly bgFlash = new THREE.Color(0x323a50);
+  private readonly bgFlash = new THREE.Color(0x485270);
   private readonly moonCol = new THREE.Color(0x8ea4d0);
 
   // ---- The gate
@@ -238,7 +254,8 @@ export class HQScene extends CombatScene<HQData> {
     this.storm.shelterMax.copy(L.shelter.max);
     this.storm.onThunder = (d) => audio.thunder(d);
     this.storm.onStrike = (s) => {
-      if (s.dist < 500) this.shake = Math.max(this.shake, 0.15);
+      if (s.close) this.shake = Math.max(this.shake, 0.4);
+      else if (s.dist < 500) this.shake = Math.max(this.shake, 0.18);
     };
     this.scene.add(this.storm.group);
 
@@ -260,6 +277,12 @@ export class HQScene extends CombatScene<HQData> {
     this.cars = new CarSystem({ scene: this.scene, world: this.world, level: L, particles: this.particles, audio });
     for (const s of L.parked) this.cars.addParked(s);
     this.cars.settle();
+    // A few already burnt out from the fighting before they got here, three of them still alight
+    {
+      let seed = 4242;
+      const rnd = (): number => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      for (let i = 0; i < 8; i++) this.cars.burn(Math.floor(rnd() * this.cars.count), i < 3 ? Infinity : 0);
+    }
 
     // ---- The van
     this.van = crewVan();
@@ -363,6 +386,8 @@ export class HQScene extends CombatScene<HQData> {
   exit(): void {
     for (const u of this.unsubs) u();
     for (const a of this.agents) a.ai?.dispose();
+    for (const l of this.jetLoops.values()) l.stop();
+    this.jetLoops.clear();
     this.rain?.stop();
     this.klaxon?.stop();
     this.ctx.audio.stopBossMusic(1);
@@ -450,9 +475,33 @@ export class HQScene extends CombatScene<HQData> {
       );
     }
     this.sanjay = this.crew[0];
+    // The wheelman: one more off the floor, kitted out like the rest, never leaves his seat
+    const d = new Enemy(V(0, -60, 0), 0, 8, { name: 'WHEELMAN', civilian: true });
+    d.restyleCrew({ cap: false });
+    d.wearCrewKit();
+    d.setSerious();
+    d.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+    });
+    this.driver = d;
     const stain = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.012), new THREE.MeshStandardMaterial({ color: 0xd88a86, roughness: 0.5 }));
     stain.position.set(-0.02, -0.06, -0.141);
     this.sanjay.addChestPatch(stain);
+  }
+
+  /** The wheelman in the driver's seat, hands on the wheel (the van's own frame). */
+  private seatDriver(): void {
+    const d = this.driver;
+    if (!d) return;
+    const v = this.van;
+    const at = v.seats.driver;
+    v.body.add(d.root);
+    d.position.set(at.x, at.y - v.body.position.y, at.z);
+    d.yaw = 0;
+    d.root.rotation.y = 0;
+    d.setWalk(0);
+    d.setSitting(true, true);
+    d.pose = { handR: V(0.17, 1.02, -0.42), handL: V(-0.17, 1.02, -0.42), curl: 0.85 };
   }
 
   /** Ravi's whole body, for the shots that see him: his AK slung on his back. */
@@ -568,6 +617,7 @@ export class HQScene extends CombatScene<HQData> {
     this.player.cinematic = true;
     // The van on the road, coming
     this.placeVan(0);
+    this.seatDriver();
     // The crew in the back, Ravi up front on the left bench
     const v = this.van;
     const seats = [v.seats.right[0], v.seats.left[2], v.seats.right[1], v.seats.left[3], v.seats.right[2], v.seats.left[4], v.seats.right[3]];
@@ -969,6 +1019,7 @@ export class HQScene extends CombatScene<HQData> {
       this.player.yaw = s.yaw;
       this.player.pitch = 0.08;
       this.placeVan(T.stop + 2);
+      this.seatDriver();
       this.van.setDoor(1);
       this.gateWrecked();
       this.crew.forEach((e, i) => {
@@ -1005,8 +1056,8 @@ export class HQScene extends CombatScene<HQData> {
     this.ctx.audio.startBossMusic();
     this.ctx.input.requestPointerLock();
     // The Collective come out to meet them
-    for (let i = 0; i < 5; i++) this.spawnAgent(L.spawns.near[i % L.spawns.near.length]);
-    this.spawnT = 6;
+    for (let i = 0; i < 8; i++) this.spawnAgent(L.spawns.near[i % L.spawns.near.length]);
+    this.spawnT = 4;
     this.barkT = 5;
     this.say([{ who: 'DEV', text: 'Contact! They’re coming out from the towers!', dur: 2.6 }], 1.5);
   }
@@ -1073,9 +1124,9 @@ export class HQScene extends CombatScene<HQData> {
     // Reinforcements: keep a few coming, from further up once the near pair's down
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
-    const cap = 12 + this.towersDown() * 3;
-    if (this.spawnT <= 0 && alive < 6 && this.spawned < cap) {
-      this.spawnT = 4 + Math.random() * 3;
+    const cap = 22 + this.towersDown() * 4;
+    if (this.spawnT <= 0 && alive < 9 && this.spawned < cap) {
+      this.spawnT = 2.4 + Math.random() * 2.4;
       const pool = this.towers[0].alive || this.towers[1].alive ? this.level.spawns.near : this.level.spawns.far;
       this.spawnAgent(this.pickSpawn(pool));
     }
@@ -1105,6 +1156,7 @@ export class HQScene extends CombatScene<HQData> {
       this.fadeEl.style.opacity = '0';
       this.skipEl.classList.add('gone');
       this.placeVan(T.stop + 2);
+      this.seatDriver();
       this.van.setDoor(1);
       this.gateWrecked();
       this.vanCollider();
@@ -1134,9 +1186,9 @@ export class HQScene extends CombatScene<HQData> {
     this.dropLauncher(!restart);
     this.hud.setCounter(null);
     this.setObjective('OBJECTIVE: ADVANCE TO THE EC HEADQUARTERS');
-    for (let i = 0; i < 4; i++) this.spawnAgent(this.pickSpawn(L.spawns.podium));
-    this.spawnT = 5;
-    this.advanceSpawned = 4;
+    for (let i = 0; i < 7; i++) this.spawnAgent(this.pickSpawn(L.spawns.podium));
+    this.spawnT = 4;
+    this.advanceSpawned = 7;
     this.stairsMoved = false;
   }
 
@@ -1168,8 +1220,8 @@ export class HQScene extends CombatScene<HQData> {
     const p = this.player.position;
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
-    if (this.spawnT <= 0 && alive < 6 && this.advanceSpawned < 14) {
-      this.spawnT = 4.5 + Math.random() * 3;
+    if (this.spawnT <= 0 && alive < 9 && this.advanceSpawned < 26) {
+      this.spawnT = 2.8 + Math.random() * 2.5;
       this.advanceSpawned++;
       this.spawnAgent(this.pickSpawn(L.spawns.podium));
     }
@@ -1200,6 +1252,7 @@ export class HQScene extends CombatScene<HQData> {
     const mark = V(this.stage.x + 0.5, 0, this.stage.z - 1.35);
     s.position.set(this.stage.x + 6.5, 0, this.stage.z + 5.5);
     s.setAiming(false);
+    s.slingWeapon(false);
     s.setRestCarry(true);
     this.paths.walk(s, [s.position.clone(), mark], 4.6, this.stage.clone().setY(1.5));
     s.setRun(true);
@@ -1500,6 +1553,143 @@ export class HQScene extends CombatScene<HQData> {
     }
   }
 
+  // ------------------------------------------------------------- jetpacks
+
+  /** One of the jetpack men, coming in high from the building's end of the lot. */
+  private spawnJet(): void {
+    const L = this.level;
+    const p = this.player.position;
+    const from = V((Math.random() - 0.5) * 80, 24 + Math.random() * 8, Math.max(-175, p.z - 70 - Math.random() * 20));
+    const e = new Enemy(from, 0, 360 + this.jetsSpawned, { name: 'EC JETPACK' });
+    armWithAK(e);
+    e.setAiming(true);
+    this.scene.add(e.root);
+    e.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+    });
+    for (const part of e.parts) L.shootables.push(part);
+    const a: Agent = { e, hp: JET_HP, armour: false, ai: null, pooled: false, push: 0 };
+    this.agents.push(a);
+    this.agentOf.set(e, a);
+    this.spawned++;
+    const jet = new JetpackTrooper(e, {
+      target: () => this.player.position,
+      fire: (x) => this.enemyFire(x),
+      crash: (t, at, vel) => this.jetCrash(t, at, vel),
+      particles: this.particles
+    });
+    jet.pack.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+    });
+    this.jets.push(jet);
+    this.jetOf.set(e, jet);
+    this.jetLoops.set(jet, this.ctx.audio.jetpackLoop());
+    this.jetsSpawned++;
+    if (!this.jetWarned) {
+      this.jetWarned = true;
+      this.say([{ who: 'DEV', text: 'Jetpacks! Up high — shoot them out of the sky!', dur: 2.6 }]);
+    }
+  }
+
+  private updateJets(dt: number): void {
+    // More of them while the fight's on: one or two up at a time
+    if ((this.phase === 'towers' || this.phase === 'advance') && this.player.alive) {
+      this.jetT -= dt;
+      const up = this.jets.filter((j) => j.alive).length;
+      if (this.jetT <= 0 && up < 2 && this.jetsSpawned < 12) {
+        this.jetT = 13 + Math.random() * 9;
+        this.spawnJet();
+      }
+    }
+    const cam = this.player.camera.position;
+    for (let i = this.jets.length - 1; i >= 0; i--) {
+      const j = this.jets[i];
+      j.update(dt);
+      const loop = this.jetLoops.get(j);
+      if (loop) {
+        loop.setDistance(j.e.position.distanceTo(cam));
+        loop.setThrust(j.thrust);
+      }
+      if (j.state === 'done') this.jets.splice(i, 1);
+    }
+  }
+
+  /** Shot down (by a round, or caught in a blast): into its death spiral. */
+  private downJet(j: JetpackTrooper, dir: THREE.Vector3, byRavi: boolean): void {
+    if (!j.alive) return;
+    this.jetByRavi.set(j, byRavi);
+    j.shotDown(dir);
+    this.ctx.audio.electricCrackle(j.e.position.distanceTo(this.player.camera.position));
+    if (byRavi) this.ctx.bus.emit(Events.HitMarker, { lethal: true });
+  }
+
+  /** Into the ground: the pack blows, he's thrown, the pack goes cartwheeling off burning. */
+  private jetCrash(j: JetpackTrooper, at: THREE.Vector3, vel: THREE.Vector3): void {
+    this.jetLoops.get(j)?.stop();
+    this.jetLoops.delete(j);
+    const e = j.e;
+    // The pack, off him and flying
+    const pk = j.pack;
+    const wp = new THREE.Vector3();
+    const wq = new THREE.Quaternion();
+    pk.getWorldPosition(wp);
+    pk.getWorldQuaternion(wq);
+    pk.removeFromParent();
+    this.scene.add(pk);
+    pk.position.copy(wp).setY(Math.max(0.5, wp.y));
+    pk.quaternion.copy(wq);
+    const ox = (Math.random() - 0.5) * 6;
+    const oz = (Math.random() - 0.5) * 6;
+    this.debrisFx.add({ obj: pk, vel: V(vel.x * 0.25 + ox, 7 + Math.random() * 4, vel.z * 0.25 + oz), spin: V((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 16), size: 0.35, fire: 7, smoke: 10 });
+    const ground = at.clone().setY(0.4);
+    this.explode(ground, V(0, 1, 0), 'grenade', this.jetByRavi.get(j) ?? true);
+    this.particles.sparks(ground, V(0, 1, 0), 50);
+    // And him: thrown up out of it
+    if (e.alive) {
+      const dir = vel.clone().normalize();
+      this.killEnemy(e, e.position.clone().setY(Math.max(0.6, e.position.y + 0.8)), dir, this.jetByRavi.get(j) ?? true, false, 'torso', 1.6, { wound: false });
+      e.launch(V(vel.x * 0.3 + (Math.random() - 0.5) * 3, 6 + Math.random() * 3, vel.z * 0.3 + (Math.random() - 0.5) * 3));
+    }
+  }
+
+  /** Somewhere out in the lot, every few seconds: the crew's grenades, the Collective's, a car going up. */
+  private updateBooms(dt: number): void {
+    if ((this.phase !== 'towers' && this.phase !== 'advance') || !this.player.alive) return;
+    this.boomT -= dt;
+    if (this.boomT > 0) return;
+    this.boomT = 3.5 + Math.random() * 5.5;
+    const p = this.player.position;
+    const ok = (x: number, z: number): boolean => {
+      if (Math.hypot(x - p.x, z - p.z) < 17) return false;
+      if (Math.abs(x) > 70 || z > -6 || z < -172) return false;
+      for (const c of this.crew) if (Math.hypot(x - c.position.x, z - c.position.z) < 7) return false;
+      return true;
+    };
+    // Sometimes it's one of the cars
+    if (Math.random() < 0.35 && this.cars.count) {
+      const pos = new THREE.Vector3();
+      for (let k = 0; k < 12; k++) {
+        const id = Math.floor(Math.random() * this.cars.count);
+        if (this.cars.state(id) !== 'parked') continue;
+        this.cars.position(id, pos);
+        if (!ok(pos.x, pos.z) || pos.distanceTo(p) > 70) continue;
+        this.cars.rocketBlast(pos.clone().add(V((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2)), 3.2, p);
+        this.explode(pos.clone().setY(0.6), V(0, 1, 0), 'grenade', false);
+        return;
+      }
+    }
+    for (let k = 0; k < 10; k++) {
+      const x = p.x + (Math.random() - 0.5) * 100;
+      const z = p.z - 8 - Math.random() * 55;
+      if (!ok(x, z)) continue;
+      const at = V(x, 0.3, z);
+      this.explode(at, V(0, 1, 0), 'grenade', false);
+      this.particles.dust(at, 3, 1.2);
+      this.particles.concreteChips(at, V(0, 1, 0), 0x6a6862);
+      return;
+    }
+  }
+
   /** In the opening, nobody's out yet to fight. */
   private get cutsceneFreeze(): boolean {
     return this.phase === 'arrive';
@@ -1508,7 +1698,12 @@ export class HQScene extends CombatScene<HQData> {
   /** What the crew can shoot at: the Collective's men, and the towers' guns. */
   private crewTargets(): CrewTarget[] {
     const out: CrewTarget[] = [];
-    for (const a of this.agents) if (a.e.alive) out.push({ pos: a.e.position.clone().setY(a.e.position.y + 1.42), kind: 'man', ref: a });
+    for (const a of this.agents) {
+      if (!a.e.alive) continue;
+      const jet = this.jetOf.get(a.e);
+      if (jet && !jet.alive) continue;
+      out.push({ pos: a.e.position.clone().setY(a.e.position.y + 1.42), kind: 'man', ref: a });
+    }
     for (const tw of this.towers) if (tw.alive) out.push({ pos: tw.gunWorld(), kind: 'turret', ref: tw });
     return out;
   }
@@ -1541,7 +1736,7 @@ export class HQScene extends CombatScene<HQData> {
     bus.emit(Events.Sound, { position: enemy.position.clone(), radius: 25, kind: 'gunshot' });
     const muzzle = enemy.muzzleWorld();
     const speed = Math.min(1, player.currentSpeed / 6.6);
-    let chance = 0.58 - dist * 0.022 - speed * 0.25 - (player.crouching ? 0.1 : 0);
+    let chance = 0.45 - dist * 0.02 - speed * 0.25 - (player.crouching ? 0.1 : 0);
     const chest = player.eyePosition();
     chest.y -= player.crouching ? 0.3 : 0.45;
     const to = chest.clone().sub(muzzle);
@@ -1637,7 +1832,7 @@ export class HQScene extends CombatScene<HQData> {
       tw.userData.next -= dt;
       if (tw.target?.ravi) tw.target.pos.copy(p.eyePosition()).setY(p.position.y + (p.crouching ? 0.75 : 1.25));
       if (tw.userData.next > 0) continue;
-      tw.userData.next = 1.4 + Math.random() * 1.6;
+      tw.userData.next = 0.5 + Math.random() * 0.8;
       const gun = tw.gunWorld(HQScene.tmpB);
       chest.copy(p.position).setY(p.position.y + (p.crouching ? 0.75 : 1.25));
       const seesRavi = p.alive && !this.cutscene && tw.canReach(chest) && this.clearLine(gun, chest);
@@ -1705,7 +1900,8 @@ export class HQScene extends CombatScene<HQData> {
   private turretOdds(tw: OutpostTower): number {
     const p = this.player;
     const gun = tw.gunWorld(HQScene.tmpB);
-    let k = 0.52 - Math.max(0, gun.distanceTo(p.position) - 30) * 0.004;
+    // (They fire twice as often as they did: each burst's odds are a bit lower to keep a hit on him rare)
+    let k = 0.38 - Math.max(0, gun.distanceTo(p.position) - 30) * 0.004;
     const speed = Math.min(1, p.currentSpeed / 6.6);
     k *= 1 - 0.5 * speed;
     if (p.crouching) k *= 0.4;
@@ -1778,7 +1974,7 @@ export class HQScene extends CombatScene<HQData> {
     return best <= 1 ? { t: best, direct: false } : null;
   }
 
-  private explode(pos: THREE.Vector3, dir: THREE.Vector3, kind: 'rocket' | 'grenade'): void {
+  private explode(pos: THREE.Vector3, dir: THREE.Vector3, kind: 'rocket' | 'grenade', byRavi = true): void {
     const { audio } = this.ctx;
     const p = this.player;
     const at = pos.clone();
@@ -1803,6 +1999,12 @@ export class HQScene extends CombatScene<HQData> {
     for (const a of this.agents) {
       const e = a.e;
       if (!e.alive) continue;
+      // A jetpack man caught in it: the pack's gone
+      const jet = this.jetOf.get(e);
+      if (jet) {
+        if (jet.alive && e.position.distanceTo(at) < kill + 1) this.downJet(jet, HQScene.tmpA.copy(e.position).sub(at).normalize(), byRavi);
+        continue;
+      }
       const d = Math.hypot(e.position.x - at.x, e.position.z - at.z);
       if (d > kill * 1.6) continue;
       if (d > kill) {
@@ -1814,18 +2016,21 @@ export class HQScene extends CombatScene<HQData> {
       if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
       away.normalize();
       const chest = e.position.clone().setY(e.position.y + 1.2);
-      this.killEnemy(e, chest, away.clone().setY(0.6).normalize(), true, false, 'torso', 2.4, { wound: false });
+      this.killEnemy(e, chest, away.clone().setY(0.6).normalize(), byRavi, false, 'torso', 2.4, { wound: false });
       const k = (1 - d / kill) * (big ? 9 : 7) + 2;
       e.launch(V(away.x * k, 3 + k * 0.5, away.z * k));
     }
     for (let i = 0; i < this.crew.length; i++) if (this.crew[i].position.distanceTo(at) < 7) this.crewAI[i].flinch();
-    this.cars.blast(at, big ? 5 : 3.5);
+    // A rocket among the cars throws them: the nearest blow up, the rest flip (none onto Ravi)
+    if (big) this.cars.rocketBlast(at, 7.5, p.alive ? p.position : null);
+    else this.cars.blast(at, 3.5);
     // Ravi, if he's too close
     if (p.alive && !this.cutscene) {
       const d = Math.hypot(p.position.x - at.x, p.position.z - at.z);
       const hurt = big ? ROCKET_HURT : NADE_HURT;
-      if (d < hurt * 0.4) this.hurtRavi(4, kind === 'rocket' ? 'HIS OWN ROCKET' : 'HIS OWN GRENADE');
-      else if (d < hurt) this.hurtRavi(d < hurt * 0.7 ? 2 : 1, kind === 'rocket' ? 'HIS OWN ROCKET' : 'HIS OWN GRENADE');
+      const by = !byRavi ? 'A BLAST' : kind === 'rocket' ? 'HIS OWN ROCKET' : 'HIS OWN GRENADE';
+      if (d < hurt * 0.4) this.hurtRavi(4, by);
+      else if (d < hurt) this.hurtRavi(d < hurt * 0.7 ? 2 : 1, by);
     }
     void dir;
   }
@@ -1906,7 +2111,7 @@ export class HQScene extends CombatScene<HQData> {
     // ---- Ravi in control: the knife, the drink, the boot, a grenade, the launcher and the guns
     const cut = this.cutscene;
     const free = this.playable && input.pointerLocked;
-    const tdTarget = this.stepTakedown(dt, this.agents.filter((a) => a.e.alive).map((a) => a.e), !cut && this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged && !this.nadeVm.busy && !this.launcherUp, (on) => this.hud.setTakedownHint(on));
+    const tdTarget = this.stepTakedown(dt, this.agents.filter((a) => a.e.alive && !this.jetOf.has(a.e)).map((a) => a.e), !cut && this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged && !this.nadeVm.busy && !this.launcherUp, (on) => this.hud.setTakedownHint(on));
     void tdTarget;
     if (input.wasPressed('KeyG') && !this.inTakedown && free && !this.arsenal.reloading && !this.dropKick.engaged && !this.nadeVm.busy) this.drink.start();
     if (!this.player.alive) this.drink.abort();
@@ -2006,6 +2211,8 @@ export class HQScene extends CombatScene<HQData> {
     // ---- Everyone else
     this.updateTurrets(dt);
     this.updateAgents(dt);
+    this.updateJets(dt);
+    this.updateBooms(dt);
     if (this.phase !== 'arrive') {
       if (this.phase !== 'talk' && this.phase !== 'ending') {
         this.paths.update(dt);
@@ -2019,6 +2226,7 @@ export class HQScene extends CombatScene<HQData> {
       }
     }
     for (const e of this.crew) e.update(dt);
+    this.driver?.update(dt);
     this.rockets.update(dt);
     this.debrisFx.update(dt);
     this.updateBarks(dt);
@@ -2114,12 +2322,12 @@ export class HQScene extends CombatScene<HQData> {
     const target = HQScene.tmpA.set(Math.round(p.x / 4) * 4, 0, Math.round(p.z / 4) * 4);
     sh.target.position.copy(target);
     sh.position.copy(target).add(HQScene.tmpB.set(70, 160, 95));
-    sh.intensity = 0.55 + 3.6 * f;
+    sh.intensity = 0.55 + 6.5 * f;
     sh.color.copy(this.moonCol).lerp(HQScene.WHITE, f);
-    this.hemi.intensity = 0.9 + 1.1 * f;
+    this.hemi.intensity = 0.9 + 2.6 * f;
     (this.scene.background as THREE.Color).copy(this.bg).lerp(this.bgFlash, f);
     (this.scene.fog as THREE.FogExp2).color.copy(this.bg).lerp(this.bgFlash, f * 0.8);
-    this.scene.environmentIntensity = 0.6 + 0.9 * f;
+    this.scene.environmentIntensity = 0.6 + 1.6 * f;
     // Blast light dying away; borrowed in the talk as a soft fill on their faces
     this.blastK = Math.max(0, this.blastK - dt * 3.2);
     if (this.phase === 'talk' && this.blastK < 0.05) {
@@ -2171,6 +2379,13 @@ export class HQScene extends CombatScene<HQData> {
     // The work lamp by the hole, on a bad connection
     const flick = Math.sin(this.t * 17) * Math.sin(this.t * 5.3);
     L.hole.light.intensity = flick < -0.8 ? 2 : 13 + 4 * flick;
+    // The drums burning about the lot
+    for (const b of L.burning) {
+      const d = b.distanceTo(p);
+      if (d > 95) continue;
+      this.particles.fire(b, 0.75, 1);
+      if (Math.random() < dt * 1.2) this.particles.smokeColumn(HQScene.tmpC.copy(b).setY(2.2), 0.7, 0.6);
+    }
     // Rain quieter under the stairs
     const under = L.shelter.containsPoint(p);
     this.rain?.set(under ? 0.45 : 1);
@@ -2195,7 +2410,19 @@ export class HQScene extends CombatScene<HQData> {
     const plated = a.armour && (head || part === 'torso');
     let dmg = (AK_DAMAGE[part] ?? AK_DAMAGE.torso) * (byRavi ? GUN_SCALE[this.arsenal.firing] : CREW_SCALE);
     if (plated) dmg *= head ? ARMOUR_LETS.head : ARMOUR_LETS.torso;
+    const jet = this.jetOf.get(enemy);
+    if (jet && !jet.alive) {
+      // Already going down: the rounds spark off him and the pack
+      this.particles.sparks(point, HQScene.tmpB.copy(dir).negate(), 6);
+      if (byRavi) this.ctx.bus.emit(Events.HitMarker, { lethal: false });
+      return true;
+    }
     a.hp -= dmg;
+    if (a.hp <= 0 && jet) {
+      this.particles.bloodSpray(point, dir, false, -1);
+      this.downJet(jet, dir, byRavi);
+      return true;
+    }
     if (a.hp <= 0) return false;
     const { audio, bus } = this.ctx;
     const d = point.distanceTo(this.player.position);
@@ -2244,7 +2471,7 @@ export class HQScene extends CombatScene<HQData> {
 
   private kickTarget(): Enemy | null {
     if (!this.playable) return null;
-    return this.kickTargetFrom(this.agents.filter((a) => a.e.alive).map((a) => a.e));
+    return this.kickTargetFrom(this.agents.filter((a) => a.e.alive && !this.jetOf.has(a.e)).map((a) => a.e));
   }
 
   // ================================================================== input

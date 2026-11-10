@@ -634,6 +634,95 @@ export class CarSystem implements ICarSystem {
     this.alarmsNear(pos, radius + 2.2, 1);
   }
 
+  /** Wrecks on fire: the car and how many seconds it has left to burn. */
+  private readonly fires: { car: Car; t: number }[] = [];
+
+  /**
+   * A rocket landing among the cars (not the jolt of blast(): this one
+   * throws them). Every car within `radius` goes — the nearest ones blow up,
+   * thrown high and rolled and left burning, the rest flip over away from it.
+   * None that are near `keepClear` (Ravi), so cover never lands on him.
+   * Returns how many went. Not part of ICarSystem.
+   */
+  rocketBlast(pos: THREE.Vector3, radius: number, keepClear: THREE.Vector3 | null): number {
+    let n = 0;
+    for (const car of this.cars) {
+      if (car.state === 'held') continue;
+      const d = Math.hypot(car.origin.x - pos.x, car.origin.z - pos.z);
+      if (d > radius) continue;
+      if (keepClear && Math.hypot(car.origin.x - keepClear.x, car.origin.z - keepClear.z) < 7) continue;
+      const k = 1 - d / radius;
+      const boom = d < radius * 0.45 || Math.random() < 0.15 + 0.45 * k;
+      let ax = car.origin.x - pos.x;
+      let az = car.origin.z - pos.z;
+      const l = Math.hypot(ax, az) || 1;
+      ax /= l;
+      az /= l;
+      const b = car.body;
+      b.wakeUp();
+      // Rolled over away from the blast: about up × away
+      const roll = boom ? 4.5 + Math.random() * 4 : 3.8 + 3 * k;
+      if (boom) b.velocity.set(ax * (3 + 4 * k), 7 + 6 * k + Math.random() * 3, az * (3 + 4 * k));
+      else b.velocity.set(ax * (2 + 2 * k), 4.6 + 3 * k, az * (2 + 2 * k));
+      b.angularVelocity.set(az * roll, (Math.random() - 0.5) * (boom ? 4 : 2), -ax * roll);
+      b.aabbNeedsUpdate = true;
+      if (car.state === 'parked' || car.state === 'pile') {
+        this.freePileSlot(car);
+        car.state = 'flying';
+        car.flyTime = 0;
+        car.whooshed = true;
+      }
+      if (car.solid) this.setSolid(car, false);
+      car.lastImpact = this.world.time;
+      if (boom) {
+        const at = _v2.set(car.origin.x, car.origin.y + 0.8, car.origin.z);
+        this.particles.explosion(at, 3.4);
+        this.particles.sparks(at, _v.set(0, 1, 0), 30);
+        this.audio.explosion(this.playerDist(at));
+        this.burn(car, 22 + Math.random() * 18);
+      }
+      n++;
+    }
+    if (n) this.alarmsNear(pos, radius + 6, 2);
+    return n;
+  }
+
+  /** Burnt out: the paint charred black, on fire for `seconds` (Infinity: for good). Not part of ICarSystem. */
+  burn(car: Car | number, seconds: number): void {
+    const c = typeof car === 'number' ? this.cars[car] : car;
+    if (!c) return;
+    c.colour.setHex(0x1b1917);
+    c.set.meshes[0].setColorAt(c.slot, c.colour);
+    if (c.set.meshes[0].instanceColor) c.set.meshes[0].instanceColor.needsUpdate = true;
+    const f = this.fires.find((x) => x.car === c);
+    if (f) f.t = Math.max(f.t, seconds);
+    else if (seconds > 0) this.fires.push({ car: c, t: seconds });
+  }
+
+  /** How many cars there are (ids run 0..count-1). Not part of ICarSystem. */
+  get count(): number {
+    return this.cars.length;
+  }
+
+  private updateFires(dt: number): void {
+    for (let i = this.fires.length - 1; i >= 0; i--) {
+      const f = this.fires[i];
+      f.t -= dt;
+      if (f.t <= 0) {
+        this.fires.splice(i, 1);
+        continue;
+      }
+      const o = f.car.origin;
+      const d = this.playerDist(o);
+      if (d > 130) continue;
+      // Up through where the cabin was, whichever way up it's lying
+      const at = _v2.set(o.x, o.y + 0.9, o.z);
+      const k = Math.min(1, f.t / 6);
+      this.particles.fire(at, 1.3 * k + 0.3, 1);
+      if (Math.random() < dt * 2) this.particles.smokeColumn(at.setY(o.y + 2), 1.1, 1);
+    }
+  }
+
   /** When each car was last rammed, so one charge hits it once. */
   private readonly rammedAt = new Map<number, number>();
 
@@ -767,6 +856,7 @@ export class CarSystem implements ICarSystem {
     // The scene says when a cutscene has him (not player.cinematic, which the
     // drop kick sets too — a kick under a falling car must not be a shield)
     if (player.alive && !this.suspendCrush) this.crushChecks(player);
+    this.updateFires(dt);
     this.updateRings(dt);
     this.recycleTimer -= dt;
     if (this.recycleTimer <= 0) {

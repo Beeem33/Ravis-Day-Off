@@ -26,8 +26,8 @@ const CABIN_H = 2.6;
 /** The gun's pivot above the footing. */
 const GUN_Y = CABIN_Y + CABIN_H + 0.75;
 const RANGE = 72;
-const BURST = 7;
-const BURST_GAP = 0.085;
+const BURST = 11;
+const BURST_GAP = 0.06;
 
 export type TowerEvent = 'servo' | 'lock' | 'shot' | 'boom' | 'crash' | 'creak';
 
@@ -252,8 +252,10 @@ export class OutpostTower {
     lens.rotation.y = Math.PI;
     lamp.add(can, lens);
     this.pitchPivot.add(lamp);
-    // The beam: a long cone of light out of the lamp, down the gun's line
-    const cone = new THREE.CylinderGeometry(0.22, 4.2, 70, 18, 1, true);
+    // The beam: a long cone of light out of the lamp, down the gun's line —
+    // narrow at the lens, opening out as it goes (the cylinder's top is the
+    // far end once it's turned down −Z)
+    const cone = new THREE.CylinderGeometry(4.2, 0.22, 70, 18, 1, true);
     cone.rotateX(-Math.PI / 2);
     cone.translate(0, 0, -35);
     this.beamMat = M.beam.clone();
@@ -314,7 +316,7 @@ export class OutpostTower {
     let dy = wantYaw - this.yaw;
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
-    const rate = tg ? 1.9 : 0.6;
+    const rate = tg ? 2.6 : 0.6;
     const step = THREE.MathUtils.clamp(dy, -rate * dt, rate * dt);
     this.yaw += step;
     this.pitch += THREE.MathUtils.clamp(wantPitch - this.pitch, -dt * 1.2, dt * 1.2);
@@ -352,11 +354,11 @@ export class OutpostTower {
     if (Math.abs(dy) < 0.06) {
       if (this.lockT === 0) this.onEvent?.('lock', this.gunWorld(_b));
       this.lockT += dt;
-      if (this.lockT > 0.55) {
-        this.burstLeft = BURST + Math.floor(Math.random() * 3);
+      if (this.lockT > 0.4) {
+        this.burstLeft = BURST + Math.floor(Math.random() * 4);
         this.burstT = 0;
         this.lockT = 0;
-        this.coolT = 1.5 + Math.random() * 1.4;
+        this.coolT = 0.6 + Math.random() * 0.7;
       }
     }
   }

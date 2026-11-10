@@ -84,6 +84,8 @@ export interface HQData extends CombatLevel {
   posts: { van: Post[]; mid: Post[]; far: Post[]; stairs: Post[] };
   /** Where the Collective's men come from: by the towers, and out of the podium. */
   spawns: { near: HQSpawn[]; far: HQSpawn[]; podium: HQSpawn[] };
+  /** Oil drums left burning about the lot: where the flames go. */
+  burning: THREE.Vector3[];
   /** For the reflections: a little scene of the sky and the lights, to bake into an environment map. */
   envScene: THREE.Scene;
   /** The ground's wet sheen, for the lightning to brighten. */
@@ -419,6 +421,7 @@ export class HQBuilder {
       { pos: V(34, 0, -106), yaw: -0.3 }
     ];
     this.buildCover(towers);
+    const burning = this.buildDebris(parked);
     const lights = this.buildPoles();
     const trees = this.buildTrees();
     const hq = this.buildHeadquarters();
@@ -449,10 +452,12 @@ export class HQBuilder {
       beams: hq.beams,
       cloudTint: this.cloudTintOut!,
       scud: this.scudOut,
-      vanStop: { pos: V(2.6, 0, -24), yaw: 0.32 },
+      // Slewed round side-on across the drive at the end of its skid, the sliding
+      // door on the gate side: they get out with the whole van between them and the towers
+      vanStop: { pos: V(1.5, 0, -24.5), yaw: -Math.PI / 2 },
       starts: [
-        { pos: V(7.6, 0, -23.5), yaw: 0.1 },
-        { pos: V(7.6, 0, -23.5), yaw: 0.1 },
+        { pos: V(2.4, 0, -20.4), yaw: -1.28 },
+        { pos: V(2.4, 0, -20.4), yaw: -1.28 },
         { pos: V(4, 0, -90), yaw: 0 }
       ],
       posts: {
@@ -524,6 +529,7 @@ export class HQBuilder {
         ]
       },
       envScene: this.envScene,
+      burning,
       ground,
       lamps: lights
     };
@@ -936,12 +942,16 @@ export class HQBuilder {
     }
     // By the gate, where the guards were
     for (const x of [-22, -20.5, 20.5, 22]) twalls.push({ x, z: -9 });
+    // Pairs of them up the drive and between the rows: something to stand up behind all the way to the stairs
+    for (const [x, z] of [[-4.5, -37], [4.2, -43], [-6, -60], [5.5, -75], [-2, -86], [6, -96], [-7, -114], [3, -122], [-3, -146], [6, -150], [-21, -50], [21, -54], [-22, -92], [22, -90], [-20, -132], [18, -130]]) {
+      twalls.push({ x, z }, { x: x + 1.5, z });
+    }
     this.instanced(twall, M.darkConcrete, twalls, V(1.5, 3.85, 0.5), { occlude: true });
 
     // ---- Sandbag nests: a horseshoe of bags at the foot of each tower, and a couple in the open
     const bagRow = (len: number): THREE.BufferGeometry => {
       const parts: THREE.BufferGeometry[] = [];
-      for (let layer = 0; layer < 4; layer++) {
+      for (let layer = 0; layer < 6; layer++) {
         const off = layer % 2 ? 0.3 : 0;
         for (let x = -len / 2 + 0.3 + off; x < len / 2 - 0.25; x += 0.6) {
           const b = new THREE.SphereGeometry(0.32, 8, 5);
@@ -960,7 +970,7 @@ export class HQBuilder {
       nests.push({ x: t.pos.x + 3.6, z: t.pos.z, ry: Math.PI / 2 });
     }
     nests.push({ x: -17, z: -60 }, { x: 18, z: -98 }, { x: -24, z: -138 }, { x: 25, z: -140 });
-    this.instanced(bags, M.sandbag, nests, V(4.2, 1.0, 0.7), { surface: 'wood' });
+    this.instanced(bags, M.sandbag, nests, V(4.2, 1.5, 0.7), { surface: 'wood' });
 
     // ---- Shipping containers: big hard cover in the open, a few stacked two high
     const ctex = tiling(containerCanvas());
@@ -1053,6 +1063,150 @@ export class HQBuilder {
     const bollards: Place[] = [];
     for (const sx of [-1, 1]) for (let z = -8; z > -26; z -= 3.5) bollards.push({ x: sx * 9.6, z });
     this.instanced(bollard, M.concrete, bollards, V(0.6, 1.05, 0.6), {});
+  }
+
+  /**
+   * What the fight has already left lying about, and more to get behind: the
+   * Collective's own black vans parked across the lot, stacked concrete
+   * blocks, oil drums (a few of them burning), and the litter of it all —
+   * broken concrete, tyres, planks and sheet metal. Returns where the fires are.
+   */
+  private buildDebris(parked: ParkedSlot[]): THREE.Vector3[] {
+    const M = this.M;
+    const r = lcg(771);
+    const near = (x: number, z: number, pad: number): boolean => {
+      for (const c of this.colliders) {
+        const b = c.box;
+        if (b.max.y < 0.2) continue;
+        if (x > b.min.x - pad && x < b.max.x + pad && z > b.min.z - pad && z < b.max.z + pad) return true;
+      }
+      for (const p of parked) if (Math.abs(x - p.x) < 1.2 + pad && Math.abs(z - p.z) < 2.6 + pad) return true;
+      // The van's skid and where the crew get out
+      if (Math.abs(x - 1.5) < 7 && z > -31 && z < -16) return true;
+      return false;
+    };
+    const spot = (pad: number, zMin = -168, zMax = -8, xMax = LOT_X - 4): { x: number; z: number } | null => {
+      for (let k = 0; k < 40; k++) {
+        const x = (r() * 2 - 1) * xMax;
+        const z = zMin + r() * (zMax - zMin);
+        if (!near(x, z, pad)) return { x, z };
+      }
+      return null;
+    };
+
+    // ---- The Collective's vans: black, the logo down the sides; hard cover, head high
+    const logoTex = new THREE.CanvasTexture(logoCanvas());
+    logoTex.colorSpace = THREE.SRGBColorSpace;
+    logoTex.anisotropy = 4;
+    const vanPaint = new THREE.MeshStandardMaterial({ color: 0x141518, roughness: 0.32, metalness: 0.55, envMapIntensity: 1.2 });
+    const vanGlass = new THREE.MeshStandardMaterial({ color: 0x07090c, roughness: 0.05, metalness: 0.6, envMapIntensity: 1.6 });
+    const rubber = new THREE.MeshStandardMaterial({ color: 0x111112, roughness: 0.92 });
+    const logoMat = new THREE.MeshStandardMaterial({ map: logoTex, roughness: 0.35, metalness: 0.3, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    // Built nose to +X
+    const vanBody = merge([
+      box(4.6, 2.05, 2.2, -0.5, 0.42, 0),
+      box(1.3, 1.2, 2.15, 2.35, 0.42, 0),
+      box(0.7, 0.62, 2.1, 1.95, 1.62, 0),
+      box(5.9, 0.16, 2.0, 0.1, 0.3, 0),
+      box(0.18, 0.32, 2.24, 3.05, 0.34, 0),
+      box(0.12, 0.3, 2.24, -2.84, 0.38, 0)
+    ]);
+    const screen = new THREE.BoxGeometry(0.04, 0.62, 1.96);
+    screen.rotateZ(-0.62);
+    screen.translate(2.48, 1.86, 0);
+    const vanWin = merge([screen, box(0.64, 0.46, 2.14, 1.92, 1.68, 0)]);
+    const wheelGeo = merge(([[-1.9, 1.02], [-1.9, -1.02], [2.15, 1.02], [2.15, -1.02]] as const).map(([x, z]) => {
+      const w = new THREE.CylinderGeometry(0.4, 0.4, 0.28, 14);
+      w.rotateX(Math.PI / 2);
+      w.translate(x, 0.4, z);
+      return w;
+    }));
+    const logos = merge([1, -1].map((s) => {
+      const p = new THREE.PlaneGeometry(1.9, 0.95);
+      if (s < 0) p.rotateY(Math.PI);
+      p.translate(-0.55, 1.48, s * 1.106);
+      return p;
+    }));
+    const vans: Place[] = [{ x: 7, z: -52, ry: Math.PI / 2 }, { x: -5, z: -92 }, { x: 5, z: -130, ry: Math.PI }, { x: -26, z: -46 }, { x: 27, z: -112, ry: Math.PI / 2 }];
+    this.instanced(vanBody, vanPaint, vans, V(6.1, 2.5, 2.2), { occlude: true, surface: 'metal' });
+    this.instanced(vanWin, vanGlass, vans, null, { surface: 'metal' });
+    this.instanced(wheelGeo, rubber, vans, null, { surface: 'wood' });
+    this.instanced(logos, logoMat, vans, null, { surface: 'metal', cast: false });
+
+    // ---- Concrete blocks stacked two high: stand up behind them
+    const blockGeo = merge([box(1.6, 0.74, 0.8, 0, 0, 0), box(1.6, 0.74, 0.8, 0, 0.76, 0)]);
+    worldUVs(blockGeo, 1.6);
+    const blocks: Place[] = [{ x: 18, z: -58 }, { x: -20, z: -62 }, { x: 22, z: -100 }, { x: -19, z: -104 }, { x: 17, z: -140 }, { x: -17, z: -136 }, { x: 12.6, z: -62, ry: Math.PI / 2 }, { x: -13, z: -104, ry: Math.PI / 2 }];
+    this.instanced(blockGeo, M.concrete, blocks, V(1.6, 1.5, 0.8), { occlude: true });
+
+    // ---- Oil drums: some standing (cover of a sort), some knocked over; a few burning
+    const drumColours = [0x6b2a22, 0x2d4a5e, 0x3e5a35, 0x7a6420, 0x4a4a48];
+    const drumUp: Place[] = [];
+    const drumDown: Place[] = [];
+    const burning: THREE.Vector3[] = [];
+    for (let i = 0; i < 26; i++) {
+      const s = spot(0.8);
+      if (!s) continue;
+      const colour = drumColours[Math.floor(r() * drumColours.length)];
+      if (i % 3 === 2) drumDown.push({ x: s.x, z: s.z, ry: r() * Math.PI * 2, colour });
+      else {
+        drumUp.push({ x: s.x, z: s.z, colour });
+        // Clusters: a second one beside it
+        if (r() < 0.5 && !near(s.x + 0.7, s.z, 0.3)) drumUp.push({ x: s.x + 0.68, z: s.z + (r() - 0.5) * 0.3, colour });
+        if (burning.length < 7 && r() < 0.45) burning.push(V(s.x, 0.95, s.z));
+      }
+    }
+    const drumGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.9, 14);
+    drumGeo.translate(0, 0.45, 0);
+    const drumMat = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.45 });
+    this.instanced(drumGeo, drumMat, drumUp, V(0.6, 0.9, 0.6), { surface: 'metal', colours: true });
+    const drumSide = new THREE.CylinderGeometry(0.3, 0.3, 0.9, 14);
+    drumSide.rotateZ(Math.PI / 2);
+    drumSide.translate(0, 0.3, 0);
+    this.instanced(drumSide, drumMat, drumDown, null, { surface: 'metal', colours: true });
+
+    // ---- Broken concrete everywhere, thickest round the cover that's been shot up
+    const chunk = new THREE.DodecahedronGeometry(1, 0);
+    chunk.scale(1, 0.62, 1);
+    const rubble: Place[] = [];
+    for (let i = 0; i < 260; i++) {
+      const s = spot(0.05);
+      if (!s) continue;
+      const k = 0.08 + Math.pow(r(), 2.2) * 0.42;
+      rubble.push({ x: s.x, z: s.z, s: k, y: k * 0.25, ry: r() * Math.PI * 2 });
+      // A spray of smaller bits round the bigger ones
+      if (k > 0.25) for (let j = 0; j < 4; j++) rubble.push({ x: s.x + (r() - 0.5) * 1.6, z: s.z + (r() - 0.5) * 1.6, s: 0.05 + r() * 0.1, y: 0.02, ry: r() * 6 });
+    }
+    this.instanced(chunk, M.darkConcrete, rubble, null, {});
+
+    // ---- Tyres, flat or in short stacks
+    const tyreGeo = new THREE.TorusGeometry(0.33, 0.12, 8, 18);
+    tyreGeo.rotateX(Math.PI / 2);
+    const tyres: Place[] = [];
+    for (let i = 0; i < 18; i++) {
+      const s = spot(0.5);
+      if (!s) continue;
+      const n = r() < 0.4 ? 2 + Math.floor(r() * 2) : 1;
+      for (let j = 0; j < n; j++) tyres.push({ x: s.x + (r() - 0.5) * 0.08, z: s.z + (r() - 0.5) * 0.08, y: 0.12 + j * 0.23, ry: r() * 6 });
+    }
+    this.instanced(tyreGeo, rubber, tyres, null, { surface: 'wood' });
+
+    // ---- Planks and sheet metal lying flat
+    const plank = box(1.9, 0.04, 0.22, 0, 0, 0);
+    const planks: Place[] = [];
+    for (let i = 0; i < 40; i++) {
+      const s = spot(0.2);
+      if (s) planks.push({ x: s.x, z: s.z, ry: r() * Math.PI, y: (i % 4) * 0.04 });
+    }
+    this.instanced(plank, new THREE.MeshStandardMaterial({ color: 0x5a4630, roughness: 0.9 }), planks, null, { surface: 'wood' });
+    const sheet = box(1.3, 0.025, 0.9, 0, 0, 0);
+    const sheets: Place[] = [];
+    for (let i = 0; i < 22; i++) {
+      const s = spot(0.3);
+      if (s) sheets.push({ x: s.x, z: s.z, ry: r() * Math.PI, y: 0.005 });
+    }
+    this.instanced(sheet, M.steel, sheets, null, { surface: 'metal' });
+    return burning;
   }
 
   private planterSpots: THREE.Vector3[] = [];

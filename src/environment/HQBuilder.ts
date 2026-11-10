@@ -73,6 +73,9 @@ export interface HQData extends CombatLevel {
   aviation: THREE.MeshBasicMaterial;
   /** Searchlights on the podium roof, sweeping the cloud. */
   beams: THREE.Object3D[];
+  /** The colour the tower goes into the cloud toward (the scene keeps it to the cloud's, flash and all); and the cloud banks round it. */
+  cloudTint: { value: THREE.Color };
+  scud: THREE.Sprite[];
   /** The van's line in through the gate and where it ends up. */
   vanStop: { pos: THREE.Vector3; yaw: number };
   /** Where Ravi stands to fight from at each checkpoint: 1 the towers, 2 the advance. */
@@ -237,7 +240,7 @@ function towerCanvases(): { map: HTMLCanvasElement; glow: HTMLCanvasElement } {
     g.fillRect(b * bw - 1, 0, 2, H);
   }
   // Lit: only a few floors, and only some of the windows on them; a cold light, one or two warm
-  const lit = [2, 3, 7, 12, 13, 19, 26, 33, 34, 41];
+  const lit = [2, 3, 7, 12, 13, 19, 23, 24];
   for (const f of lit) {
     const y = H - (f + 1) * fh;
     const warm = r() < 0.25;
@@ -314,6 +317,25 @@ function signCanvas(lines: string[]): HTMLCanvasElement {
   g.textAlign = 'center';
   g.font = 'bold 52px Arial, sans-serif';
   lines.forEach((l, i) => g.fillText(l, 256, 86 + i * 70));
+  return c;
+}
+
+/** A bank of cloud: soft lumps, lighter on top, its edges breaking up. */
+function cloudPuffCanvas(): HTMLCanvasElement {
+  const c = makeCanvas(256, 128);
+  const g = c.getContext('2d')!;
+  const r = lcg(55);
+  for (let i = 0; i < 40; i++) {
+    const x = 30 + r() * 196;
+    const y = 40 + r() * 50;
+    const rad = 14 + r() * 30;
+    const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+    const k = 0.75 + r() * 0.25;
+    gr.addColorStop(0, `rgba(${Math.round(255 * k)},${Math.round(255 * k)},${Math.round(255 * k)},0.5)`);
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 256, 128);
+  }
   return c;
 }
 
@@ -425,6 +447,8 @@ export class HQBuilder {
       entranceLight: hq.entrance,
       aviation: hq.aviation,
       beams: hq.beams,
+      cloudTint: this.cloudTintOut!,
+      scud: this.scudOut,
       vanStop: { pos: V(2.6, 0, -24), yaw: 0.32 },
       starts: [
         { pos: V(7.6, 0, -23.5), yaw: 0.1 },
@@ -1032,6 +1056,8 @@ export class HQBuilder {
   }
 
   private planterSpots: THREE.Vector3[] = [];
+  private scudOut: THREE.Sprite[] = [];
+  private cloudTintOut: { value: THREE.Color } | null = null;
 
   // ---------------------------------------------------------------- lights
 
@@ -1298,16 +1324,61 @@ export class HQBuilder {
         uv.setXY(i, across, v);
       }
     }
+    // Going up into the cloud: from a hundred metres up it fades into the cloud's own colour, raggedly
+    const cloudTint = { value: new THREE.Color(0.09, 0.098, 0.115) };
+    towerMat.onBeforeCompile = (sh) => {
+      sh.uniforms.uCloudTint = cloudTint;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;\nuniform vec3 uCloudTint;')
+        .replace(
+          '#include <fog_fragment>',
+          `#include <fog_fragment>
+          float wisp = sin(vWorldP.x * 0.07 + vWorldP.y * 0.05) * 6.0 + sin(vWorldP.z * 0.09 - vWorldP.y * 0.031) * 5.0;
+          float into = smoothstep(96.0, 158.0, vWorldP.y + wisp);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, uCloudTint, into);`
+        );
+    };
+    towerMat.customProgramCacheKey = () => 'hq-tower-cloud';
     const towerMesh = new THREE.Mesh(tower, towerMat);
     towerMesh.name = 'skyscraper';
     towerMesh.receiveShadow = true;
     this.group.add(towerMesh);
     // Vertical fins up the front, catching the lightning
+    // Its fins stop where the cloud has it
     const fins: THREE.BufferGeometry[] = [];
-    for (let k = -6; k <= 6; k++) fins.push(box(0.35, TOWER_H - 6, 0.9, TOWER_X + k * 4.15, H + 6, TOWER_Z + TOWER_HALF + 0.45));
-    for (let k = -6; k <= 6; k++) fins.push(box(0.9, TOWER_H - 6, 0.35, TOWER_X + TOWER_HALF + 0.45, H + 6, TOWER_Z + k * 4.15));
-    for (let k = -6; k <= 6; k++) fins.push(box(0.9, TOWER_H - 6, 0.35, TOWER_X - TOWER_HALF - 0.45, H + 6, TOWER_Z + k * 4.15));
-    this.group.add(new THREE.Mesh(merge(fins), new THREE.MeshStandardMaterial({ color: 0x0b0c0f, roughness: 0.3, metalness: 0.9, envMapIntensity: 1.2 })));
+    const finH = 150;
+    for (let k = -6; k <= 6; k++) fins.push(box(0.35, finH, 0.9, TOWER_X + k * 4.15, H + 6, TOWER_Z + TOWER_HALF + 0.45));
+    for (let k = -6; k <= 6; k++) fins.push(box(0.9, finH, 0.35, TOWER_X + TOWER_HALF + 0.45, H + 6, TOWER_Z + k * 4.15));
+    for (let k = -6; k <= 6; k++) fins.push(box(0.9, finH, 0.35, TOWER_X - TOWER_HALF - 0.45, H + 6, TOWER_Z + k * 4.15));
+    const finMat = new THREE.MeshStandardMaterial({ color: 0x0b0c0f, roughness: 0.3, metalness: 0.9, envMapIntensity: 1.2 });
+    finMat.onBeforeCompile = towerMat.onBeforeCompile;
+    finMat.customProgramCacheKey = () => 'hq-tower-fin-cloud';
+    this.group.add(new THREE.Mesh(merge(fins), finMat));
+    // Cloud banks hanging round it under the deck, drifting: they swallow it
+    const scudTex = new THREE.CanvasTexture(cloudPuffCanvas());
+    const scud: THREE.Sprite[] = [];
+    const rs = lcg(808);
+    for (let i = 0; i < 26; i++) {
+      const m = new THREE.SpriteMaterial({ map: scudTex, color: 0x24272e, transparent: true, opacity: 0.85, depthWrite: false, fog: false });
+      const sp = new THREE.Sprite(m);
+      const a = rs() * Math.PI * 2;
+      const r = TOWER_HALF + 8 + rs() * 55;
+      const y = 104 + rs() * 52;
+      sp.position.set(TOWER_X + Math.cos(a) * r, y, TOWER_Z + Math.sin(a) * r);
+      const s = 70 + rs() * 80;
+      sp.scale.set(s, s * (0.35 + rs() * 0.2), 1);
+      sp.userData.a = a;
+      sp.userData.r = r;
+      sp.userData.w = (rs() < 0.5 ? -1 : 1) * (0.004 + rs() * 0.006);
+      sp.renderOrder = 3;
+      this.group.add(sp);
+      scud.push(sp);
+    }
+    this.scudOut = scud;
+    this.cloudTintOut = cloudTint;
     // The lobby: tall glass doors at the head of the stairs, a canopy over them, cold light inside
     const lobby = new THREE.Mesh(new THREE.PlaneGeometry(16, 6.5), new THREE.MeshStandardMaterial({ color: 0x0c1218, emissive: 0x6f8fb8, emissiveIntensity: 0.55, roughness: 0.1, metalness: 0.6 }));
     lobby.position.set(0, H + 3.25, TOWER_Z + TOWER_HALF + 0.02);
@@ -1330,7 +1401,7 @@ export class HQBuilder {
     const aviation = new THREE.MeshBasicMaterial({ color: 0xff2010, fog: false, toneMapped: false });
     const red = new THREE.SphereGeometry(0.5, 8, 6);
     const reds: THREE.BufferGeometry[] = [];
-    for (let y = H + 30; y < 300; y += 34) {
+    for (let y = H + 26; y < 150; y += 30) {
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
         const g = red.clone();
         g.translate(TOWER_X + sx * (TOWER_HALF + 0.6), y, TOWER_Z + sz * (TOWER_HALF + 0.6));

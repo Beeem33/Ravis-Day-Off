@@ -157,7 +157,7 @@ export class HQScene extends CombatScene<HQData> {
   private klaxon: { set(k: number): void; stop(): void } | null = null;
   private shake = 0;
   private readonly bg = new THREE.Color(0x0c1018);
-  private readonly bgFlash = new THREE.Color(0x4a5470);
+  private readonly bgFlash = new THREE.Color(0x323a50);
   private readonly moonCol = new THREE.Color(0x8ea4d0);
 
   // ---- The gate
@@ -2150,6 +2150,14 @@ export class HQScene extends CombatScene<HQData> {
     }
     tr.trunks.instanceMatrix.needsUpdate = true;
     tr.crowns.instanceMatrix.needsUpdate = true;
+    // The cloud the tower goes into, and the banks round it, lit by the lightning; drifting
+    L.cloudTint.value.setRGB(0.09 + 0.3 * f, 0.098 + 0.32 * f, 0.115 + 0.4 * f);
+    for (const sp of L.scud) {
+      sp.userData.a += sp.userData.w * dt;
+      sp.position.x = L.tower.x + Math.cos(sp.userData.a) * sp.userData.r;
+      sp.position.z = L.tower.z + Math.sin(sp.userData.a) * sp.userData.r;
+      (sp.material as THREE.SpriteMaterial).color.setRGB(0.022 + 0.14 * f, 0.025 + 0.15 * f, 0.032 + 0.19 * f);
+    }
     // The red lights up the tower, blinking; the searchlights sweeping the cloud
     L.aviation.color.setRGB(Math.sin(this.t * 2.2) > 0 ? 1 : 0.12, 0.08, 0.04);
     L.beams.forEach((b, i) => {

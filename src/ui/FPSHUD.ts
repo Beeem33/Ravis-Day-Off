@@ -261,7 +261,8 @@ export class FPSHUD {
     if (key === this.shownAmmo) return;
     this.shownAmmo = key;
     this.ammoEl.querySelector('.rounds')!.textContent = reloading ? '--' : String(rounds);
-    this.ammoEl.classList.toggle('low', !reloading && rounds <= 3);
+    // Low: the last few in a magazine (a one-shot weapon's single round isn't 'low')
+    this.ammoEl.classList.toggle('low', !reloading && magSize > 3 && rounds <= 3);
     this.ammoEl.classList.toggle('reloading', reloading);
   }
 

@@ -244,7 +244,7 @@ export class Storm {
             // Underside: dark, a little lighter where it's thin; lit up by the strike round where it was
             vec3 col = vec3(${dark.toFixed(3)}, ${(dark + 0.008).toFixed(3)}, ${(dark + 0.022).toFixed(3)}) * (0.8 + 0.6 * m);
             float near = exp(-distance(vW.xz, uStrike) / 520.0);
-            col += vec3(0.62, 0.66, 0.85) * uFlash * (0.25 + 1.4 * near) * (0.6 + 0.6 * n);
+            col += vec3(0.42, 0.45, 0.6) * uFlash * (0.12 + 1.3 * near) * (0.55 + 0.6 * n);
             // Fade out to the horizon so the edge of the plane never shows
             float far = distance(vW.xz, uCam.xz);
             alpha *= 1.0 - smoothstep(1500.0, 2400.0, far);
@@ -352,12 +352,12 @@ export class Storm {
       return pts;
     };
     const main = channel(top, to, 22, 26);
-    ribbon(main, 2.2);
+    ribbon(main, 4.2);
     for (let f = 0; f < forks; f++) {
       const i = 3 + Math.floor(Math.random() * (main.length - 8));
       const from = main[i];
       const end = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * 140, -(30 + Math.random() * 60), (Math.random() - 0.5) * 140));
-      ribbon(channel(from, end, 8, 14), 1.1);
+      ribbon(channel(from, end, 8, 14), 2.0);
     }
     const g = this.bolt.geometry;
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

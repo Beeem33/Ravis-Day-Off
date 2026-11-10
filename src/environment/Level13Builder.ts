@@ -72,6 +72,12 @@ export interface Level13Data extends CombatLevel {
   sludge: THREE.Box3[];
   sludgeMats: THREE.ShaderMaterial[];
   flies: THREE.Vector3[];
+  /** Ledge runs the rats scurry along (each a start and an end). */
+  ratRuns: [THREE.Vector3, THREE.Vector3][];
+  /** Trash floating on the sludge, to bob. */
+  floaters: THREE.Object3D[];
+  /** Above each ladder, where its marker lamp's light goes. */
+  ladderTops: THREE.Vector3[];
   lever: { pivot: THREE.Group; at: THREE.Vector3 };
   mover: { group: THREE.Group; collider: Collider; from: THREE.Vector3; to: THREE.Vector3; size: THREE.Vector3 };
   door: { slab: THREE.Group; collider: Collider; front: THREE.Vector3; plant: THREE.Vector3 };
@@ -339,13 +345,18 @@ function sludgeMaterial(): THREE.ShaderMaterial {
         float n = noise(p + vec2(uTime * 0.12, uTime * 0.05)) * 0.6 + noise(p * 2.7 - uTime * 0.09) * 0.4;
         float scum = smoothstep(0.55, 0.8, noise(vW.xz * 0.35 + uTime * 0.02));
         float bub = step(0.985, hash(floor(vW.xz * 6.0) + floor(uTime * 1.5)));
-        vec3 col = mix(vec3(0.07, 0.13, 0.03), vec3(0.2, 0.32, 0.06), n);
-        col = mix(col, vec3(0.28, 0.3, 0.12), scum * 0.7);
+        vec3 col = mix(vec3(0.06, 0.11, 0.025), vec3(0.17, 0.27, 0.05), n);
+        col = mix(col, vec3(0.26, 0.27, 0.1), scum * 0.75);
+        // Brown spots of muck drifting in it, and a darker crust round them
+        float muck = noise(vW.xz * 1.1 + vec2(uTime * 0.03, -uTime * 0.02) + 31.0) * 0.65 + noise(vW.xz * 3.3 - uTime * 0.02) * 0.35;
+        float spot = smoothstep(0.6, 0.7, muck);
+        col = mix(col, vec3(0.05, 0.06, 0.02), smoothstep(0.54, 0.6, muck) * (1.0 - spot) * 0.6);
+        col = mix(col, vec3(0.24, 0.15, 0.06) * (0.8 + 0.4 * noise(vW.xz * 9.0)), spot);
         col += vec3(0.25, 0.4, 0.08) * bub;
         // A sick sheen
         col += vec3(0.05, 0.09, 0.02) * pow(n, 4.0) * 3.0;
         float f = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
-        gl_FragColor = vec4(mix(col, fogColor, f), 0.94);
+        gl_FragColor = vec4(mix(col, fogColor, f), 0.985);
       }
     `,
     transparent: true
@@ -395,6 +406,9 @@ export class Level13Builder {
   private sewerLights: THREE.PointLight[] = [];
   private hallLights: THREE.PointLight[] = [];
   private fogLayers: THREE.Mesh[] = [];
+  private ratRuns: [THREE.Vector3, THREE.Vector3][] = [];
+  private floaters: THREE.Object3D[] = [];
+  private ladderTops: THREE.Vector3[] = [];
 
   build(): Level13Data {
     this.makeMaterials();
@@ -423,6 +437,9 @@ export class Level13Builder {
       sludge: this.sludge,
       sludgeMats: this.sludgeMats,
       flies: [V(-112, 31.2, 0.5), V(-99, 31, -2), V(-98, 31.4, -32), V(-94, 31.1, -35), V(-104, 31.6, -29), V(-78, 31.2, -31), V(-64, 31.4, -30)],
+      ratRuns: this.ratRuns,
+      floaters: this.floaters,
+      ladderTops: this.ladderTops,
       lever: route.lever,
       mover: route.mover,
       door: route.door,
@@ -450,7 +467,7 @@ export class Level13Builder {
       darkSteel: new THREE.MeshStandardMaterial({ color: 0x3a3e43, roughness: 0.5, metalness: 0.7 }),
       rust: new THREE.MeshStandardMaterial({ color: 0x5a4434, roughness: 0.75, metalness: 0.4 }),
       grating: new THREE.MeshStandardMaterial({ map: grate, color: 0xb0b4b8, roughness: 0.5, metalness: 0.65, alphaTest: 0.5, side: THREE.DoubleSide }),
-      yellow: new THREE.MeshStandardMaterial({ color: 0xc8a020, roughness: 0.5, metalness: 0.3 }),
+      yellow: new THREE.MeshStandardMaterial({ color: 0xc8a020, roughness: 0.5, metalness: 0.3, emissive: 0x2a1c00 }),
       hazard: new THREE.MeshStandardMaterial({ map: haz, roughness: 0.6 }),
       crate: new THREE.MeshStandardMaterial({ map: crate, roughness: 0.75 }),
       pipe: new THREE.MeshStandardMaterial({ color: 0x4e5a48, roughness: 0.6, metalness: 0.5 }),
@@ -654,6 +671,142 @@ export class Level13Builder {
       this.group.add(l);
       this.sewerLights.push(l);
     }
+    // ---- Rounder: brick vaults over the tunnels and rooms, springing from a metre up the walls
+    const vault = (x0: number, z0: number, x1: number, z1: number): void => {
+      const alongX = x1 - x0 >= z1 - z0;
+      const len = alongX ? x1 - x0 : z1 - z0;
+      const half = (alongX ? z1 - z0 : x1 - x0) / 2;
+      const g = new THREE.CylinderGeometry(half, half, len, 20, 1, true, -Math.PI / 2, Math.PI);
+      // Lying along the run, the open side down; squashed to fit under the 4 m ceiling
+      g.rotateZ(Math.PI / 2);
+      if (!alongX) g.rotateY(Math.PI / 2);
+      g.scale(alongX ? 1 : 1, 2.95 / half, alongX ? 1 : 1);
+      g.translate((x0 + x1) / 2, SEW_Y + 1.0, (z0 + z1) / 2);
+      worldUVs(g, 2);
+      const m = new THREE.Mesh(g, this.M.brick.clone());
+      (m.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+      this.group.add(m);
+      // Ribs every few metres, the way old sewers are built
+      for (let k = 2; k < len; k += 4) {
+        const rib = new THREE.TorusGeometry(half - 0.05, 0.09, 4, 18, Math.PI);
+        if (alongX) rib.rotateY(Math.PI / 2);
+        rib.scale(1, 2.95 / half, 1);
+        rib.translate(alongX ? x0 + k : (x0 + x1) / 2, SEW_Y + 1.0, alongX ? (z0 + z1) / 2 : z0 + k);
+        this.add(M.darkConcrete, rib);
+      }
+    };
+    vault(-133, -3, -105, 3);
+    vault(-105, -5, -93, 5);
+    vault(-102, -26, -96, -5);
+    vault(-107, -38, -89, -26);
+    vault(-89, -34, -66, -28);
+    // ---- More pipes: down the walls, across the vaults, valves on them, one dribbling
+    pipeRun(V(-118, 30, 2.75), V(-118, 34, 2.75), 0.18, M.rust);
+    pipeRun(V(-110, 30, -2.75), V(-110, 33.6, -2.75), 0.12, M.pipe);
+    pipeRun(V(-126, 33.2, -2.6), V(-126, 33.2, 2.6), 0.1, M.darkSteel);
+    pipeRun(V(-104.5, 32.2, -4.6), V(-93.5, 32.2, -4.6), 0.2, M.pipe);
+    pipeRun(V(-104.6, 30, 4.6), V(-104.6, 34, 4.6), 0.28, M.rust);
+    pipeRun(V(-101.7, 31.6, -8), V(-101.7, 31.6, -24), 0.12, M.darkSteel);
+    pipeRun(V(-106.5, 33.2, -27), V(-89.5, 33.2, -27), 0.3, M.pipe);
+    pipeRun(V(-95, 30, -37.6), V(-95, 34, -37.6), 0.16, M.darkSteel);
+    pipeRun(V(-80, 30, -33.6), V(-80, 34, -33.6), 0.22, M.rust);
+    pipeRun(V(-74, 32.1, -28.4), V(-68, 32.1, -28.4), 0.1, M.darkSteel);
+    const valveMat = new THREE.MeshStandardMaterial({ color: 0x9a2a1c, roughness: 0.5, metalness: 0.5 });
+    for (const [x, y, z, ry] of [[-118, 31.4, 2.45, 0], [-104.3, 31.2, 4.3, 0], [-80, 31.3, -33.3, 0], [-95, 31.5, -37.3, 0], [-110, 31.6, -2.5, 0]] as const) {
+      const w = new THREE.TorusGeometry(0.16, 0.025, 6, 14);
+      w.rotateY(ry);
+      w.translate(x, y, z);
+      this.group.add(new THREE.Mesh(w, valveMat));
+      this.add(M.darkSteel, box(0.04, 0.04, 0.18, x, y - 0.02, z));
+    }
+    // ---- Trash: crushed bottles, cans, wrappers, takeaway boxes, an apple core, newspaper —
+    // on the ledges, and some of it floating in the sludge
+    const bottleMat = new THREE.MeshStandardMaterial({ color: 0x9cc8e0, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.7 });
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x2a6ad0, roughness: 0.5 });
+    const canMats = [0xc8241c, 0x1c6ac8, 0xd8c020, 0x2a8a3a].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.35, metalness: 0.7 }));
+    const paperMats = [0xe8e2d0, 0xd8c8a0, 0xffffff, 0xf0d040, 0xd03a2a].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, side: THREE.DoubleSide }));
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0xb8a070, roughness: 0.9 });
+    const coreMat = new THREE.MeshStandardMaterial({ color: 0xc8b070, roughness: 0.8 });
+    const bottle = (() => {
+      const g = new THREE.CylinderGeometry(0.035, 0.04, 0.22, 10, 4);
+      const p = g.getAttribute('position');
+      for (let i = 0; i < p.count; i++) {
+        // Crushed: squashed flat in the middle and kinked
+        const y = p.getY(i);
+        p.setZ(i, p.getZ(i) * (0.35 + 0.4 * Math.abs(Math.sin(y * 20))));
+        p.setX(i, p.getX(i) + Math.sin(y * 30) * 0.008);
+      }
+      g.rotateZ(Math.PI / 2);
+      g.computeVertexNormals();
+      return g;
+    })();
+    const trashAt = (x: number, z: number, onSludge: boolean): void => {
+      const y = onSludge ? SLUDGE_Y + 0.01 : SEW_Y;
+      const k = Math.floor(r() * 7);
+      const ry = r() * Math.PI * 2;
+      let m: THREE.Mesh;
+      if (k <= 1) {
+        m = new THREE.Mesh(bottle, bottleMat);
+        m.position.set(x, y + 0.03, z);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.02, 8), capMat);
+        cap.rotation.z = Math.PI / 2;
+        cap.position.set(0.12, 0, 0);
+        m.add(cap);
+      } else if (k === 2) {
+        m = new THREE.Mesh(new THREE.CylinderGeometry(0.033, 0.033, 0.07, 10), canMats[Math.floor(r() * canMats.length)]);
+        m.scale.set(1, 0.5 + r() * 0.5, 1);
+        m.rotation.z = Math.PI / 2;
+        m.position.set(x, y + 0.03, z);
+      } else if (k === 3) {
+        // A takeaway box, lid open
+        m = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.22), boxMat);
+        m.position.set(x, y + 0.03, z);
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.01, 0.22), boxMat);
+        lid.position.set(0, 0.06, -0.15);
+        lid.rotation.x = -1.2;
+        m.add(lid);
+        const food = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.02, 8), new THREE.MeshStandardMaterial({ color: 0xa86a2a, roughness: 0.8 }));
+        food.position.y = 0.03;
+        m.add(food);
+      } else if (k === 4) {
+        m = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), coreMat);
+        m.scale.set(0.8, 1.3, 0.8);
+        m.position.set(x, y + 0.03, z);
+      } else {
+        // Wrapper, newspaper: a crumpled sheet
+        const g = new THREE.PlaneGeometry(0.25 + r() * 0.3, 0.2 + r() * 0.25, 4, 4);
+        const p = g.getAttribute('position');
+        for (let i = 0; i < p.count; i++) p.setZ(i, (r() - 0.5) * 0.05);
+        g.rotateX(-Math.PI / 2);
+        g.computeVertexNormals();
+        m = new THREE.Mesh(g, paperMats[Math.floor(r() * paperMats.length)]);
+        m.position.set(x, y + 0.012, z);
+      }
+      m.rotation.y = ry;
+      this.group.add(m);
+      if (onSludge) this.floaters.push(m);
+    };
+    for (let i = 0; i < 140; i++) {
+      const x = -132 + r() * 70;
+      const z = -38 + r() * 42;
+      const cx = Math.floor(x);
+      const cz = Math.floor(z);
+      if (!isOpen(cx, cz)) continue;
+      const wet = isChan(cx, cz);
+      if (wet && r() < 0.4) continue;
+      trashAt(x, z, wet);
+    }
+    // Where the rats run: along the ledges, either side of the channel
+    this.ratRuns.push(
+      [V(-131, SEW_Y, 2.2), V(-102, SEW_Y, 2.2)],
+      [V(-130, SEW_Y, -2.3), V(-104, SEW_Y, -2.3)],
+      [V(-103, SEW_Y, -6), V(-103, SEW_Y, -25)],
+      [V(-96.6, SEW_Y, -6), V(-96.6, SEW_Y, -25)],
+      [V(-106, SEW_Y, -37), V(-90, SEW_Y, -37)],
+      [V(-88, SEW_Y, -33.3), V(-67, SEW_Y, -33.3)],
+      [V(-88, SEW_Y, -28.6), V(-68, SEW_Y, -28.6)]
+    );
+
     // Muck heaped in corners, a dead rat's worth of debris
     for (let i = 0; i < 40; i++) {
       const x = -132 + r() * 70;
@@ -699,19 +852,23 @@ export class Level13Builder {
     const fz = -Math.cos(face);
     const sx = Math.cos(face);
     const sz = -Math.sin(face);
-    const off = -0.08; // proud of the wall, toward the climber
+    const off = 0.08; // proud of the wall, toward the climber (he faces `face`, so back along it)
     for (const s of [-0.24, 0.24]) {
-      const g = new THREE.BoxGeometry(0.05, h, 0.07);
+      const g = new THREE.BoxGeometry(0.065, h, 0.08);
       g.translate(at.x + sx * s - fx * off, at.y + h / 2, at.z + sz * s - fz * off);
       this.add(M.yellow, g);
     }
     for (let y = 0.3; y < h; y += 0.3) {
-      const g = new THREE.CylinderGeometry(0.018, 0.018, 0.48, 6);
+      const g = new THREE.CylinderGeometry(0.024, 0.024, 0.48, 6);
       g.rotateZ(Math.PI / 2);
       g.rotateY(face);
       g.translate(at.x - fx * off, at.y + y, at.z - fz * off);
       this.add(M.yellow, g);
     }
+    // A lamp at the top and a glow at the foot, so he can find it
+    this.add(M.lamp, box(0.36, 0.14, 0.14, at.x - fx * off, at.y + h + 0.05, at.z - fz * off));
+    this.add(M.hazard, box(Math.abs(fx) > 0.5 ? 0.02 : 0.62, 0.3, Math.abs(fx) > 0.5 ? 0.62 : 0.02, at.x - fx * (off + 0.02), at.y + 1.6, at.z - fz * (off + 0.02)));
+    this.ladderTops.push(V(at.x - fx * 0.5, at.y + h + 0.4, at.z - fz * 0.5));
     if (cage) {
       for (let y = 2.4; y < h; y += 0.9) {
         const ring = new THREE.TorusGeometry(0.42, 0.018, 4, 16, Math.PI);
@@ -1041,10 +1198,15 @@ export class Level13Builder {
     const door = this.buildDoor();
     // ---- The turrets' mounts are the scene's (it builds the guns); here, the sites
     const turrets: TurretSite[] = [
-      { pos: V(-44.5, H1 + 7, -50), yaw: Math.PI, half: 0.42, rate: 0.55, pitch: -0.32, mount: 'post' },
-      { pos: V(-17, H1 + 6, -15), yaw: 1.65, half: 0.58, rate: 0.42, pitch: -0.27, mount: 'post' },
-      { pos: V(17, H2 + 7, 22), yaw: 1.57, half: 0.55, rate: 0.5, pitch: -0.36, mount: 'post' },
-      { pos: V(43, H3 + 8, 25), yaw: Math.PI, half: 0.5, rate: 0.48, pitch: -0.38, mount: 'post' }
+      // Each sweeps one walkway and nothing else: the platforms between them are never in two beams
+      // (or any), so there's always somewhere to wait. S1 only — not the first junction:
+      { pos: V(-44.5, H1 + 7, -50), yaw: Math.PI + 0.1, half: 0.3, rate: 0.5, pitch: -0.3, mount: 'post' },
+      // S2's middle stretch, clear of both ends
+      { pos: V(-17, H1 + 6, -15), yaw: 1.75, half: 0.42, rate: 0.42, pitch: -0.28, mount: 'post' },
+      // S4, short of the platforms at either end
+      { pos: V(17, H2 + 7, 22), yaw: 1.57, half: 0.42, rate: 0.45, pitch: -0.35, mount: 'post' },
+      // S5
+      { pos: V(43, H3 + 8, 25), yaw: Math.PI, half: 0.4, rate: 0.45, pitch: -0.34, mount: 'post' }
     ];
     // Their posts: steel columns up from the abyss, a bracket out to the gun
     for (const t of turrets) {

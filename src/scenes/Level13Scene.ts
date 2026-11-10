@@ -38,10 +38,10 @@ const smooth = (x: number): number => {
 /** Wading: the most he can make through the sludge. */
 const WADE = 2.3;
 const CLIMB = 2.4;
-const TURRET_RANGE = 48;
+const TURRET_RANGE = 30;
 /** How wide the beam is that it sees down: either side of where it points, and up and down. */
-const SEE_YAW = 0.2;
-const SEE_PITCH = 0.32;
+const SEE_YAW = 0.1;
+const SEE_PITCH = 0.22;
 
 // ================================================================ turrets
 
@@ -145,6 +145,18 @@ class Sentry {
     while (dy < -Math.PI) dy += Math.PI * 2;
     const dp = Math.atan2(p.y - e.y, flat) - this.pitch;
     return Math.abs(dy) < SEE_YAW && Math.abs(dp) < SEE_PITCH;
+  }
+
+  /** Inside the stretch it guards (a little past its sweep): once locked, it won't follow him off it. */
+  inZone(p: THREE.Vector3): boolean {
+    const e = this.eye(Sentry.tmp);
+    const dx = p.x - e.x;
+    const dz = p.z - e.z;
+    if (Math.hypot(dx, dz) > TURRET_RANGE) return false;
+    let dy = Math.atan2(-dx, -dz) - this.site.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    return Math.abs(dy) < this.site.half + SEE_YAW + 0.04;
   }
 
   muzzle(i: number, out = new THREE.Vector3()): THREE.Vector3 {
@@ -352,8 +364,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
   enter(): void {
     const { bus, input, audio } = this.ctx;
-    this.scene.background = new THREE.Color(0x0d1109);
-    this.scene.fog = new THREE.FogExp2(0x0d1109, 0.034);
+    this.scene.background = new THREE.Color(0x1e2a14);
+    this.scene.fog = new THREE.FogExp2(0x1e2a14, 0.06);
     this.level = new Level13Builder().build();
     const L = this.level;
     this.scene.add(L.group);
@@ -408,6 +420,13 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (this.checkpoint >= 3) this.callMover(true);
     this.syncMover();
     this.buildFlies();
+    this.buildRats();
+    // A warm lamp over every ladder, so he can see where they go up
+    for (const p of L.ladderTops) {
+      const l = new THREE.PointLight(0xffc060, 9, 7, 1.6);
+      l.position.copy(p);
+      this.scene.add(l);
+    }
     this.buildDrops();
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
@@ -621,6 +640,11 @@ export class Level13Scene extends CombatScene<Level13Data> {
     // ---- The world
     this.updateAtmosphere(dt);
     this.updateFlies(dt);
+    this.updateRats(dt);
+    for (const [i, f] of L.floaters.entries()) {
+      f.position.y = SLUDGE_Y + 0.012 + Math.sin(this.t * 1.3 + i) * 0.008;
+      f.rotation.y += Math.sin(this.t * 0.2 + i) * dt * 0.05;
+    }
     this.updateDrops(dt);
     for (const c of L.carts) {
       const len = c.to - c.from;
@@ -713,6 +737,78 @@ export class Level13Scene extends CombatScene<Level13Data> {
         this.ctx.audio.splash(false);
         this.splashAt(V(p.position.x, SLUDGE_Y, p.position.z), 8, 1.4);
       }
+    }
+  }
+
+  // ------------------------------------------------------------ rats
+
+  private rats: { g: THREE.Group; tail: THREE.Object3D; run: number; u: number; dir: number; speed: number; pause: number; ph: number }[] = [];
+
+  /** A rat: grey-brown body, pointed head, pink ears and a long tail. */
+  private buildRats(): void {
+    const fur = new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 0.95 });
+    const pink = new THREE.MeshStandardMaterial({ color: 0xc88a84, roughness: 0.7 });
+    const eye = new THREE.MeshBasicMaterial({ color: 0x080808 });
+    const runs = this.level.ratRuns;
+    for (let i = 0; i < 11; i++) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), fur);
+      body.scale.set(0.9, 0.75, 1.6);
+      body.position.y = 0.06;
+      const head = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.11, 8), fur);
+      head.rotation.x = -Math.PI / 2;
+      head.position.set(0, 0.065, -0.15);
+      for (const s of [-1, 1]) {
+        const ear = new THREE.Mesh(new THREE.CircleGeometry(0.018, 8), pink);
+        ear.position.set(s * 0.028, 0.1, -0.12);
+        g.add(ear);
+        const e = new THREE.Mesh(new THREE.SphereGeometry(0.007, 6, 4), eye);
+        e.position.set(s * 0.022, 0.08, -0.16);
+        g.add(e);
+      }
+      const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.008, 0.2, 5), pink);
+      tail.geometry.translate(0, -0.1, 0);
+      tail.rotation.x = -Math.PI / 2 - 0.15;
+      tail.position.set(0, 0.04, 0.1);
+      g.add(body, head, tail);
+      g.scale.setScalar(1.3);
+      this.scene.add(g);
+      this.rats.push({ g, tail, run: i % runs.length, u: Math.random(), dir: Math.random() < 0.5 ? 1 : -1, speed: 1.4 + Math.random() * 1.4, pause: Math.random() * 2, ph: Math.random() * 10 });
+    }
+  }
+
+  /** Scurrying along the ledges: a dash, a stop to sniff, on again or back; off fast if he comes near. */
+  private updateRats(dt: number): void {
+    const runs = this.level.ratRuns;
+    const p = this.player.position;
+    for (const r of this.rats) {
+      const [a, b] = runs[r.run];
+      const len = a.distanceTo(b);
+      const at = Level13Scene.tmpA.lerpVectors(a, b, r.u);
+      const near = Math.hypot(at.x - p.x, at.z - p.z) < 3 && Math.abs(at.y - p.y) < 1.5;
+      if (near) {
+        // Away from him, fast
+        const ahead = Level13Scene.tmpB.lerpVectors(a, b, THREE.MathUtils.clamp(r.u + 0.02 * r.dir, 0, 1));
+        if (Math.hypot(ahead.x - p.x, ahead.z - p.z) < Math.hypot(at.x - p.x, at.z - p.z)) r.dir = -r.dir;
+        r.pause = 0;
+      }
+      if (r.pause > 0 && !near) {
+        r.pause -= dt;
+      } else {
+        r.u += (r.dir * r.speed * (near ? 2.2 : 1) * dt) / len;
+        if (r.u > 1 || r.u < 0) {
+          r.u = THREE.MathUtils.clamp(r.u, 0, 1);
+          r.dir = -r.dir;
+        }
+        if (Math.random() < dt * 0.5) r.pause = 0.4 + Math.random() * 1.8;
+        if (Math.random() < dt * 0.15) r.dir = -r.dir;
+      }
+      const moving = r.pause <= 0 || near;
+      r.ph += dt * (moving ? 22 : 3);
+      at.lerpVectors(a, b, r.u);
+      r.g.position.set(at.x, at.y + (moving ? Math.abs(Math.sin(r.ph)) * 0.012 : 0), at.z);
+      r.g.rotation.y = Math.atan2(-(b.x - a.x) * r.dir, -(b.z - a.z) * r.dir);
+      r.tail.rotation.y = Math.sin(r.ph * 0.5) * 0.5;
     }
   }
 
@@ -816,7 +912,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     for (const s of this.sentries) {
       const from = s.eye(Level13Scene.tmpB);
       const near = from.distanceTo(eye) < TURRET_RANGE + 5;
-      const sees = near && p.alive && this.phase === 'play' && !this.falling && (s.state === 'sweep' ? s.inBeam(eye) : true) && this.clearLine(from, eye);
+      const sees = near && p.alive && this.phase === 'play' && !this.falling && (s.state === 'sweep' ? s.inBeam(eye) : s.inZone(eye)) && this.clearLine(from, eye);
       const ev = s.update(dt, sees, eye);
       if (ev === 'lock') {
         audio.lockBeep();
@@ -1107,7 +1203,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const k = inSewer ? 0 : 1;
     // Fog and sky: the sewer's green murk, the hall's grey haze
     const fog = this.scene.fog as THREE.FogExp2;
-    const want = inSewer ? 0.034 : 0.0135;
+    // Thick in the sewer; in the hall enough that the next turret along is a shape in the murk
+    const want = inSewer ? 0.06 : 0.036;
     fog.density += (want - fog.density) * Math.min(1, dt * 2);
     const col = (this.scene.background as THREE.Color);
     col.lerp(inSewer ? SEWER_COL : HALL_COL, Math.min(1, dt * 2));
@@ -1183,6 +1280,6 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
 const HALL_TMP = new THREE.Vector3();
 const HALL_TMP2 = new THREE.Vector3();
-const SEWER_COL = new THREE.Color(0x0d1109);
+const SEWER_COL = new THREE.Color(0x1e2a14);
 const HALL_COL = new THREE.Color(0x3a3f42);
 void H3;

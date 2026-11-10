@@ -142,6 +142,8 @@ export class OutpostTower {
   /** Coming down: how far into it, which way it falls. */
   private fall: { t: number; dir: THREE.Vector3; axis: THREE.Vector3; landed: boolean; booms: number[] } | null = null;
   private fires: THREE.Vector3[] = [];
+  private ball: THREE.Mesh;
+  private ballT = -1;
   private fireT = 0;
   private sparkT = 0;
 
@@ -268,6 +270,36 @@ export class OutpostTower {
     this.light = new THREE.PointLight(0xc9d8ff, 30, 30, 1.7);
     this.light.position.set(0, CABIN_Y - 0.6, 0);
     this.upper.add(this.light);
+
+    // The fireball when it goes: an expanding shell, built now (hidden) so its shader's compiled up front
+    this.ball = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 22, 14),
+      new THREE.ShaderMaterial({
+        uniforms: { uT: { value: 0 }, uFade: { value: 0 }, uHeat: { value: 1 } },
+        vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vP; uniform float uT;
+          float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+          void main(){ vP = position; vec3 p = position * (1.0 + 0.1 * sin(position.x * 3.1 + uT * 9.0) * sin(position.y * 2.7 - uT * 7.0)); vec4 mv = modelViewMatrix * vec4(p, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: `uniform float uT; uniform float uFade; uniform float uHeat; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+          float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+          float noise(vec3 p){ vec3 i = floor(p); vec3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                       mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+          void main(){
+            float n = noise(vP * 2.6 + vec3(0.0, -uT * 3.0, 0.0)) * 0.6 + noise(vP * 6.0 - uT * 4.0) * 0.4;
+            float core = pow(max(dot(vN, vV), 0.0), 1.6);
+            float a = smoothstep(0.0, 0.55, core) * (0.55 + 0.45 * n) * uFade;
+            vec3 hot = mix(vec3(1.0, 0.95, 0.75), vec3(1.0, 0.55, 0.12), 1.0 - core * uHeat);
+            vec3 col = mix(vec3(0.55, 0.12, 0.02), hot, smoothstep(0.3, 0.9, n * core + 0.25 * uHeat));
+            gl_FragColor = vec4(col * (1.6 + 1.2 * n), a);
+          }`,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    this.ball.visible = false;
+    this.ball.position.set(0, CABIN_Y + 1.5, 0);
+    this.group.add(this.ball);
 
     this.bounds = new THREE.Box3(V(at.x - 2.6, 0, at.z - 2.6), V(at.x + 2.6, GUN_Y + 0.8, at.z + 2.6));
     this.yaw = yaw;
@@ -422,11 +454,24 @@ export class OutpostTower {
       const sp = 3 + Math.random() * 6;
       debris.add({ obj: m, vel: V(Math.cos(a) * sp, 3 + Math.random() * 5, Math.sin(a) * sp), spin: V((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10), size: 0.5 * s });
     }
-    particles.explosion(_b.copy(hit), 4.5);
-    particles.explosion(_b.set(this.pos.x, this.pos.y + CABIN_Y + 1.3, this.pos.z), 5.5);
-    particles.sparks(_b, V(0, 1, 0), 40);
+    // A huge one: the rocket's hit, the cabin going up round it in a ring of
+    // secondary blasts, a fireball rolling up off the top, sparks everywhere
+    particles.explosion(_b.copy(hit), 8);
+    const cab = _a.set(this.pos.x, this.pos.y + CABIN_Y + 1.3, this.pos.z).clone();
+    particles.explosion(cab, 11);
+    for (let k = 0; k < 5; k++) {
+      const ang = (k / 5) * Math.PI * 2 + Math.random() * 0.6;
+      particles.explosion(cab.clone().add(V(Math.cos(ang) * 3.2, (Math.random() - 0.3) * 2.5, Math.sin(ang) * 3.2)), 5 + Math.random() * 3);
+    }
+    particles.explosion(cab.clone().add(V(0, 5, 0)), 7);
+    particles.sparks(cab, V(0, 1, 0), 140);
+    particles.fire(cab, 4, 3);
+    _b.copy(cab);
     this.light.color.set(0xff8a3a);
-    this.light.intensity = 900;
+    this.light.intensity = 2600;
+    this.light.distance = 70;
+    this.ballT = 0;
+    this.ball.visible = true;
     this.onEvent?.('boom', _b.clone());
   }
 
@@ -434,6 +479,22 @@ export class OutpostTower {
   private updateFall(dt: number): void {
     const f = this.fall!;
     f.t += dt;
+    // The fireball: out to twenty-odd metres across in half a second, burning down to red as it goes
+    if (this.ballT >= 0) {
+      this.ballT += dt;
+      const u = this.ballT;
+      const k = 1 - Math.pow(1 - Math.min(1, u / 0.55), 3);
+      this.ball.scale.setScalar(2 + 8.5 * k);
+      this.ball.position.y = CABIN_Y + 1.5 + 3 * u;
+      const m = this.ball.material as THREE.ShaderMaterial;
+      m.uniforms.uT.value = u;
+      m.uniforms.uFade.value = Math.min(1, u / 0.06) * Math.max(0, 1 - u / 1.1);
+      m.uniforms.uHeat.value = Math.max(0, 1 - u / 0.7);
+      if (u > 1.1) {
+        this.ball.visible = false;
+        this.ballT = -1;
+      }
+    }
     const t = f.t;
     // The flash dying to the fire's glow
     this.light.intensity = THREE.MathUtils.lerp(this.light.intensity, 34 + 16 * Math.sin(t * 13) * Math.sin(t * 7.3), Math.min(1, dt * 4));

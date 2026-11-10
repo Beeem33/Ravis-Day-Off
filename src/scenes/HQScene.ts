@@ -242,7 +242,6 @@ export class HQScene extends CombatScene<HQData> {
     this.player.camera.far = 3200;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
-    this.ragdollOnDeath(() => (this.launcherUp ? null : this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
 
     this.particles = new ParticleManager(this.scene, { smoke: 1500 });
     this.flashPool = new MuzzleFlashPool(this.scene, 3);
@@ -275,6 +274,10 @@ export class HQScene extends CombatScene<HQData> {
     });
     // Their colliders weren't there when the physics world was built
     this.world = this.createPhysicsWorld(L.colliders);
+    // Ravi's ragdoll goes in this world, the one that's stepped: hooked up
+    // before it, his body went into the first one, never moved, and he died
+    // stood in a T
+    this.ragdollOnDeath(() => (this.launcherUp ? null : this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
 
     // ---- Parked cars
     this.cars = new CarSystem({ scene: this.scene, world: this.world, level: L, particles: this.particles, audio });
@@ -2133,6 +2136,10 @@ export class HQScene extends CombatScene<HQData> {
 
   private towerDown(tw: OutpostTower, at: THREE.Vector3): void {
     tw.destroy(at, this.debrisFx, this.particles, this.scene);
+    // Close to it when it goes, he feels it
+    const d = Math.hypot(this.player.position.x - tw.pos.x, this.player.position.z - tw.pos.z);
+    if (d < 45) this.shake = Math.max(this.shake, 0.55 + 0.6 * (1 - d / 45));
+    this.flashBlast(tw.gunWorld(), 1.4);
     const n = this.towersDown();
     this.hud.setCounter('TOWERS STANDING', 4 - n);
     this.setObjective(n < 4 ? `DESTROY THE OUTPOST TOWERS (${n}/4)` : '');

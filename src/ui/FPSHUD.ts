@@ -164,11 +164,11 @@ export class FPSHUD {
   destroy(): void {
     for (const u of this.unsubs) u();
     this.hud.remove();
-    // The bars live beside the HUD, and the grade is on the game canvas —
-    // neither goes with it, and a level quit mid-takedown would otherwise
-    // hand the menu a letterboxed, desaturated picture.
+    // The bars live beside the HUD and don't go with it: a level quit
+    // mid-takedown would otherwise hand the menu a letterboxed picture.
+    // (The takedown no longer grades the canvas: in a night level the
+    // contrast boost crushed everything to black.)
     for (const bar of this.cineBars) bar.remove();
-    this.gradeCanvas(false);
   }
 
   private cineBars: HTMLElement[] = [];
@@ -196,14 +196,6 @@ export class FPSHUD {
     for (const bar of this.cineBars) bar.style.transform = on ? 'scaleY(1)' : 'scaleY(0)';
     this.hud.style.transition = 'opacity .3s';
     this.hud.style.opacity = on ? '0' : '1';
-    this.gradeCanvas(on);
-  }
-
-  private gradeCanvas(on: boolean): void {
-    const canvas = document.querySelector<HTMLCanvasElement>('#app canvas');
-    if (!canvas) return;
-    canvas.style.transition = 'filter .4s';
-    canvas.style.filter = on ? 'saturate(0.75) contrast(1.12) brightness(0.95)' : '';
   }
 
   private flashHitmarker(): void {

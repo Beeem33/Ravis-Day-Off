@@ -51,6 +51,11 @@ export class Enemy {
   /** Eased walkSpeed, so strides start and stop smoothly. */
   private strideBlend = 0;
   private walkSpeed = 0; // 0 idle .. 1 full stride
+  /** Running rather than walking (0..1, eased): a longer, quicker stride, knees up, leaning into it. */
+  private runTarget = 0;
+  private runBlend = 0;
+  /** Radians the aim is tipped up (+) or down (−) from level: arms, rifle and head together, as far as he is aiming. */
+  private aimPitch = 0;
   private aimBlend = 0; // 0 relaxed .. 1 weapon raised
   private world: CANNON.World | null = null;
   private deadTimer = 0;
@@ -1987,6 +1992,14 @@ export class Enemy {
   setWalk(speed01: number): void {
     this.walkSpeed = speed01;
   }
+  /** Run instead of walk: with setWalk(1), a proper run — longer and quicker strides, knees up, a lean, the arms pumping. */
+  setRun(on: boolean): void {
+    this.runTarget = on ? 1 : 0;
+  }
+  /** Aim up (+) or down (−) this many radians from level, at something above or below him. */
+  setAimPitch(rad: number): void {
+    this.aimPitch = THREE.MathUtils.clamp(rad, -0.6, 0.9);
+  }
   setAiming(aiming: boolean): void {
     this.aimTarget = aiming ? 1 : 0;
   }
@@ -2584,10 +2597,12 @@ export class Enemy {
     // Ease the stride in and out so starting and stopping isn't a snap
     this.strideBlend += (this.walkSpeed - this.strideBlend) * Math.min(1, dt * 6);
     const stride = this.strideBlend;
+    this.runBlend += (this.runTarget - this.runBlend) * Math.min(1, dt * 5);
+    const run = this.runBlend * stride;
     this.plantNow = 0;
     if (this.walkSpeed > 0.05 || stride > 0.02) {
       const was = this.walkPhase;
-      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed) * this.cadence;
+      this.walkPhase += dt * 7.5 * (0.5 + this.walkSpeed) * this.cadence * (1 + 0.5 * this.runBlend);
       // A foot comes down at the far end of its swing — the left when the
       // phase passes π/2 (its thigh furthest forward), the right at 3π/2 —
       // which is where the bob below has the body lowest, its weight landing.
@@ -2598,7 +2613,7 @@ export class Enemy {
         if (k1 !== k0) this.stepPending = ((k1 % 2) + 2) % 2 === 0 ? 'l' : 'r';
       }
     }
-    const swing = Math.sin(this.walkPhase) * 0.55 * stride;
+    const swing = Math.sin(this.walkPhase) * (0.55 + 0.33 * this.runBlend) * stride;
     if (this.legsPlanted) {
       // Square again after a planted pose (see legsPlanted)
       this.legsPlanted = false;
@@ -2610,16 +2625,16 @@ export class Enemy {
     // Knees bend BACKWARD (negative x — +x swings a limb forward) and only
     // while that leg is behind the body, heel coming up towards the seat.
     // Bending them forward on the front swing broke the leg the wrong way.
-    this.shinL.rotation.x = -Math.max(0, -swing) * 1.05;
-    this.shinR.rotation.x = -Math.max(0, swing) * 1.05;
+    this.shinL.rotation.x = -Math.max(0, -swing) * (1.05 + 0.75 * run) - Math.max(0, swing) * 0.55 * run;
+    this.shinR.rotation.x = -Math.max(0, swing) * (1.05 + 0.75 * run) - Math.max(0, -swing) * 0.55 * run;
 
     // Body rise and fall, twice per cycle. Highest when a leg is directly
     // underneath (legs passing, swing ≈ 0) and lowest when they are split
     // widest. Keying this to cos put it exactly out of phase — the body sank
     // at the top of each step, which is what made the walk bounce wrongly.
-    const bob = -Math.abs(Math.sin(this.walkPhase)) * 0.042 * stride;
+    const bob = -Math.abs(Math.sin(this.walkPhase)) * (0.042 + 0.035 * run) * stride;
     const sway = Math.sin(this.walkPhase) * 0.018 * stride; // weight shifting side to side
-    const lean = 0.13 * stride; // leaning into the walk
+    const lean = (0.13 + 0.2 * run) * stride; // leaning into the walk, and further into a run
 
     // ---- Sitting: hips drop to seat height, thighs forward, shins back down
     this.sitBlend += (this.sitTarget - this.sitBlend) * Math.min(1, dt * 4.5);
@@ -2670,9 +2685,9 @@ export class Enemy {
 
     // Aim blend: arms swing while patrolling, raise the rifle when aiming
     this.aimBlend += (this.aimTarget - this.aimBlend) * Math.min(1, dt * 8);
-    const armSwing = -swing * 0.7;
+    const armSwing = -swing * (0.7 + 0.5 * run);
     // (+x rotation swings a hanging arm FORWARD — the old negative sign put them behind the back)
-    const raise = 1.25 * this.aimBlend;
+    const raise = (1.25 + this.aimPitch) * this.aimBlend;
     if (this.twisted) {
       // Square again after a twist (see twisted): X and Z are set below
       this.twisted = false;
@@ -2684,8 +2699,8 @@ export class Enemy {
     this.armL.rotation.x = raise * 0.9 - armSwing * (1 - this.aimBlend);
     this.armL.rotation.z = 0.35 * this.aimBlend;
     // Elbows: bent to hold the rifle when aiming, loose swing while walking
-    this.foreR.rotation.x = 0.45 * this.aimBlend + Math.max(0, armSwing) * 0.6 * (1 - this.aimBlend);
-    this.foreL.rotation.x = 0.8 * this.aimBlend + Math.max(0, -armSwing) * 0.6 * (1 - this.aimBlend);
+    this.foreR.rotation.x = 0.45 * this.aimBlend + (Math.max(0, armSwing) * 0.6 + 1.1 * run) * (1 - this.aimBlend);
+    this.foreL.rotation.x = 0.8 * this.aimBlend + (Math.max(0, -armSwing) * 0.6 + 1.1 * run) * (1 - this.aimBlend);
     // Bring the weapon in to the centreline as it comes up. Held out at the
     // right shoulder the handguard is 0.8m from the left shoulder — further
     // than the arm is long — so the support hand could never reach it.
@@ -2701,7 +2716,7 @@ export class Enemy {
     // whole parent rotation instead and set the pose we actually want.
     // (Skip all of it once the rifle is on the floor as its own body.)
     if (!this.rifleDropped && !this.slung) {
-      Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend), 0, 0); // muzzle dips when carried
+      Enemy._rifleEuler.set(-0.15 * (1 - this.aimBlend) + this.aimPitch * this.aimBlend, 0, 0); // muzzle dips when carried; tips with the aim
       Enemy._rifleQuat.copy(this.armR.quaternion).multiply(this.foreR.quaternion).invert();
       this.rifle.quaternion.copy(Enemy._rifleQuat).multiply(Enemy._rifleAim.setFromEuler(Enemy._rifleEuler));
 

@@ -544,6 +544,8 @@ export class HQScene extends CombatScene<HQData> {
         color:#f2f2ee;font-size:17px;letter-spacing:.5px;text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.9);opacity:0;transition:opacity .25s"></div>
       <div class="intro-skip">[ ENTER ] SKIP</div>
       <div class="intro-fade" style="opacity:1"></div>
+      <div class="hq-whiteout" style="position:absolute;inset:0;pointer-events:none;opacity:0;
+        background:radial-gradient(ellipse at center, rgba(255,246,220,1) 0%, rgba(255,170,80,0.85) 60%, rgba(255,120,40,0.6) 100%)"></div>
       <div class="hq-card" style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;
         opacity:0;transition:opacity 1.2s;pointer-events:none;color:#e8e6df;letter-spacing:8px">
         <div style="font-size:13px;opacity:.6;letter-spacing:6px;margin-bottom:18px">LEVEL 12 — THE EXTERMINATOR COLLECTIVE</div>
@@ -559,6 +561,7 @@ export class HQScene extends CombatScene<HQData> {
     this.letterbox = el.querySelector('.intro-letterbox')!;
     this.card = el.querySelector('.hq-card')!;
     this.skipEl = el.querySelector('.intro-skip')!;
+    this.whiteout = el.querySelector('.hq-whiteout')!;
   }
 
   /** The objective: announced across the middle, then kept top left. */
@@ -2136,10 +2139,20 @@ export class HQScene extends CombatScene<HQData> {
 
   private towerDown(tw: OutpostTower, at: THREE.Vector3): void {
     tw.destroy(at, this.debrisFx, this.particles, this.scene);
-    // Close to it when it goes, he feels it
+    // A big deal: the screen flashes, time stutters for a moment, the ground
+    // shakes (hard close up, still felt from across the lot), a deep boom
     const d = Math.hypot(this.player.position.x - tw.pos.x, this.player.position.z - tw.pos.z);
-    if (d < 45) this.shake = Math.max(this.shake, 0.55 + 0.6 * (1 - d / 45));
-    this.flashBlast(tw.gunWorld(), 1.4);
+    if (d < 95) this.shake = Math.max(this.shake, 0.6 + 0.85 * Math.max(0, 1 - d / 60));
+    this.flashBlast(tw.gunWorld(), 1.6);
+    this.slowT = 0.55;
+    this.whiteout.style.transition = 'none';
+    this.whiteout.style.opacity = String(THREE.MathUtils.clamp(0.95 - d / 140, 0.35, 0.85));
+    void this.whiteout.offsetWidth;
+    this.whiteout.style.transition = 'opacity 0.9s ease-out';
+    this.whiteout.style.opacity = '0';
+    this.ctx.audio.explosion(d * 0.4);
+    this.later(0.12, () => this.ctx.audio.explosion(d * 0.6));
+    this.later(0.35, () => this.ctx.audio.towerCollapse(d * 0.7));
     const n = this.towersDown();
     this.hud.setCounter('TOWERS STANDING', 4 - n);
     this.setObjective(n < 4 ? `DESTROY THE OUTPOST TOWERS (${n}/4)` : '');
@@ -2155,8 +2168,16 @@ export class HQScene extends CombatScene<HQData> {
 
   // ================================================================== frame
 
+  /** A tower's just gone: half a second of slow motion, and the white-orange flash over the screen. */
+  private slowT = 0;
+  private whiteout!: HTMLElement;
+
   update(dt: number, _time: number): void {
     const { input } = this.ctx;
+    if (this.slowT > 0) {
+      this.slowT -= dt;
+      dt *= 0.35;
+    }
     this.t += dt;
     this.phaseT += dt;
     this.dtLast = dt;

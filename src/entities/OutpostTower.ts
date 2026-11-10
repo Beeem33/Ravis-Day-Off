@@ -144,6 +144,8 @@ export class OutpostTower {
   private fires: THREE.Vector3[] = [];
   private ball: THREE.Mesh;
   private ballT = -1;
+  private ball2: THREE.Mesh;
+  private ring: THREE.Mesh;
   private fireT = 0;
   private sparkT = 0;
 
@@ -300,6 +302,17 @@ export class OutpostTower {
     this.ball.visible = false;
     this.ball.position.set(0, CABIN_Y + 1.5, 0);
     this.group.add(this.ball);
+    // A second one lower down the legs, a beat later; and the shockwave across the ground
+    this.ball2 = new THREE.Mesh(this.ball.geometry, (this.ball.material as THREE.ShaderMaterial).clone());
+    this.ball2.visible = false;
+    this.ball2.position.set(0, 6, 0);
+    this.group.add(this.ball2);
+    const ring = new THREE.RingGeometry(0.82, 1, 48, 1);
+    ring.rotateX(-Math.PI / 2);
+    this.ring = new THREE.Mesh(ring, new THREE.MeshBasicMaterial({ color: 0xffc890, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+    this.ring.visible = false;
+    this.ring.position.y = 0.25;
+    this.group.add(this.ring);
 
     this.bounds = new THREE.Box3(V(at.x - 2.6, 0, at.z - 2.6), V(at.x + 2.6, GUN_Y + 0.8, at.z + 2.6));
     this.yaw = yaw;
@@ -434,16 +447,16 @@ export class OutpostTower {
     const plate = new THREE.BoxGeometry(1.2, 0.9, 0.08);
     const chunk = new THREE.DodecahedronGeometry(0.35, 0);
     const top = _b.set(this.pos.x, this.pos.y + CABIN_Y + 1.2, this.pos.z);
-    for (let k = 0; k < 7; k++) {
+    for (let k = 0; k < 14; k++) {
       const m = new THREE.Mesh(plate, k % 2 ? M.armour : M.wreck);
       m.position.copy(top).add(V((Math.random() - 0.5) * 2, Math.random() * 1.5, (Math.random() - 0.5) * 2));
       m.castShadow = true;
       scene.add(m);
       const a = Math.random() * Math.PI * 2;
       const sp = 5 + Math.random() * 7;
-      debris.add({ obj: m, vel: V(Math.cos(a) * sp, 4 + Math.random() * 7, Math.sin(a) * sp), spin: V((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14), size: 0.6, fire: k < 2 ? 4 : 0, smoke: k < 4 ? 5 : 0 });
+      debris.add({ obj: m, vel: V(Math.cos(a) * sp * 1.5, 6 + Math.random() * 10, Math.sin(a) * sp * 1.5), spin: V((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14), size: 0.6, fire: k < 6 ? 5 : 0, smoke: k < 9 ? 6 : 0 });
     }
-    for (let k = 0; k < 9; k++) {
+    for (let k = 0; k < 18; k++) {
       const m = new THREE.Mesh(chunk, M.concrete);
       const s = 0.6 + Math.random() * 0.9;
       m.scale.setScalar(s);
@@ -452,7 +465,7 @@ export class OutpostTower {
       scene.add(m);
       const a = Math.random() * Math.PI * 2;
       const sp = 3 + Math.random() * 6;
-      debris.add({ obj: m, vel: V(Math.cos(a) * sp, 3 + Math.random() * 5, Math.sin(a) * sp), spin: V((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10), size: 0.5 * s });
+      debris.add({ obj: m, vel: V(Math.cos(a) * sp * 1.6, 4 + Math.random() * 8, Math.sin(a) * sp * 1.6), spin: V((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10), size: 0.5 * s, fire: k < 4 ? 3 : 0, smoke: k < 6 ? 4 : 0 });
     }
     // A huge one: the rocket's hit, the cabin going up round it in a ring of
     // secondary blasts, a fireball rolling up off the top, sparks everywhere
@@ -463,7 +476,11 @@ export class OutpostTower {
       const ang = (k / 5) * Math.PI * 2 + Math.random() * 0.6;
       particles.explosion(cab.clone().add(V(Math.cos(ang) * 3.2, (Math.random() - 0.3) * 2.5, Math.sin(ang) * 3.2)), 5 + Math.random() * 3);
     }
-    particles.explosion(cab.clone().add(V(0, 5, 0)), 7);
+    particles.explosion(cab.clone().add(V(0, 5, 0)), 9);
+    particles.explosion(cab.clone().add(V(0, 10, 0)), 8);
+    // Down the legs too, and on the ground round the foot
+    for (let k = 0; k < 4; k++) particles.explosion(V(this.pos.x + (Math.random() - 0.5) * 4, 2 + k * 2.5, this.pos.z + (Math.random() - 0.5) * 4), 5 + Math.random() * 2);
+    for (let k = 0; k < 3; k++) particles.smokeColumn(cab.clone().add(V((Math.random() - 0.5) * 4, 2 + k * 3, (Math.random() - 0.5) * 4)), 3, 2);
     particles.sparks(cab, V(0, 1, 0), 140);
     particles.fire(cab, 4, 3);
     _b.copy(cab);
@@ -472,6 +489,8 @@ export class OutpostTower {
     this.light.distance = 70;
     this.ballT = 0;
     this.ball.visible = true;
+    this.ball2.visible = true;
+    this.ring.visible = true;
     this.onEvent?.('boom', _b.clone());
   }
 
@@ -484,14 +503,28 @@ export class OutpostTower {
       this.ballT += dt;
       const u = this.ballT;
       const k = 1 - Math.pow(1 - Math.min(1, u / 0.55), 3);
-      this.ball.scale.setScalar(2 + 8.5 * k);
+      this.ball.scale.setScalar(2 + 14 * k);
       this.ball.position.y = CABIN_Y + 1.5 + 3 * u;
       const m = this.ball.material as THREE.ShaderMaterial;
       m.uniforms.uT.value = u;
       m.uniforms.uFade.value = Math.min(1, u / 0.06) * Math.max(0, 1 - u / 1.1);
       m.uniforms.uHeat.value = Math.max(0, 1 - u / 0.7);
+      // The lower one, a beat behind
+      const u2 = u - 0.16;
+      const k2 = 1 - Math.pow(1 - THREE.MathUtils.clamp(u2 / 0.5, 0, 1), 3);
+      this.ball2.scale.setScalar(1 + 8 * k2);
+      const m2 = this.ball2.material as THREE.ShaderMaterial;
+      m2.uniforms.uT.value = u2 + 3;
+      m2.uniforms.uFade.value = u2 < 0 ? 0 : Math.min(1, u2 / 0.06) * Math.max(0, 1 - u2 / 0.9);
+      m2.uniforms.uHeat.value = Math.max(0, 1 - u2 / 0.6);
+      // The shockwave: a ring of light racing out across the ground
+      const kr = Math.min(1, u / 0.7);
+      this.ring.scale.setScalar(2 + 42 * (1 - Math.pow(1 - kr, 2)));
+      (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - kr);
       if (u > 1.1) {
         this.ball.visible = false;
+        this.ball2.visible = false;
+        this.ring.visible = false;
         this.ballT = -1;
       }
     }
@@ -574,7 +607,7 @@ export class OutpostTower {
     const ev = this.onEvent;
     this.particlesRef = null;
     this.onEvent = null;
-    const quiet = { explosion() {}, sparks() {}, fire() {}, dust() {} } as unknown as ParticleManager;
+    const quiet = { explosion() {}, sparks() {}, fire() {}, dust() {}, smokeColumn() {} } as unknown as ParticleManager;
     this.destroy(this.pos.clone().add(V(-Math.sign(this.pos.x) || 1, 4, 1.5)), debris, quiet, scene);
     for (let i = 0; i < 400 && !this.fall!.landed; i++) this.updateFall(1 / 60);
     this.particlesRef = P;

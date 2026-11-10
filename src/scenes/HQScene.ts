@@ -73,6 +73,9 @@ const ROCKET_HURT = 5.0;
 const TOWER_REACH = 2.8;
 /** How often the dead drop a grenade. */
 const DROP_CHANCE = 0.34;
+/** How many of the Collective come at them in each phase, all of whom have to go down before they can move on. */
+const TOWER_QUOTA = 24;
+const ADVANCE_QUOTA = 22;
 /** The arrival's beats (seconds). */
 const T = {
   klaxon: 1.1,
@@ -1057,6 +1060,7 @@ export class HQScene extends CombatScene<HQData> {
     this.ctx.input.requestPointerLock();
     // The Collective come out to meet them
     for (let i = 0; i < 8; i++) this.spawnAgent(L.spawns.near[i % L.spawns.near.length]);
+    this.phaseSpawned = 8;
     this.spawnT = 4;
     this.barkT = 5;
     this.say([{ who: 'DEV', text: 'Contact! They’re coming out from the towers!', dur: 2.6 }], 1.5);
@@ -1124,11 +1128,11 @@ export class HQScene extends CombatScene<HQData> {
     // Reinforcements: keep a few coming, from further up once the near pair's down
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
-    const cap = 22 + this.towersDown() * 4;
-    if (this.spawnT <= 0 && alive < 9 && this.spawned < cap) {
+    if (this.spawnT <= 0 && alive < 9 && this.phaseSpawned < TOWER_QUOTA) {
       this.spawnT = 2.4 + Math.random() * 2.4;
       const pool = this.towers[0].alive || this.towers[1].alive ? this.level.spawns.near : this.level.spawns.far;
       this.spawnAgent(this.pickSpawn(pool));
+      this.phaseSpawned++;
     }
     // The crew move up as the near towers fall
     if (!this.towers[0].alive && !this.towers[1].alive && !this.movedMid) {
@@ -1136,8 +1140,44 @@ export class HQScene extends CombatScene<HQData> {
       this.crewAI.forEach((c, i) => c.goTo(this.level.posts.mid[i], 0.4 + (i % 3) * 1.2));
       this.say([{ who: 'SANJAY', text: 'Two down! Move up — next row!', dur: 2.6 }]);
     }
-    if (this.towersDown() >= 4 && this.phaseT > 0.5) this.startAdvance(false);
+    // All four down isn't enough: every one of the Collective's men out here has to be dealt with too
+    if (this.towersDown() >= 4 && this.phaseT > 0.5) {
+      const left = this.enemiesLeft();
+      this.showLeft(left, 'TOWERS DOWN — CLEAR OUT THE EC FORCES');
+      if (left === 0) this.startAdvance(false);
+    }
   }
+
+  /** The Collective's men still to deal with in this phase: those still to come and those up. */
+  private enemiesLeft(): number {
+    const towers = this.phase === 'towers';
+    const quota = towers ? TOWER_QUOTA : ADVANCE_QUOTA;
+    const spawned = towers ? this.phaseSpawned : this.advanceSpawned;
+    return Math.max(0, quota - spawned) + this.agents.filter((a) => a.e.alive).length;
+  }
+
+  private leftShown = -1;
+  private leftWhat = '';
+  /** The count on the HUD and in the objective, when it changes. */
+  private showLeft(left: number, what: string): void {
+    if (left === this.leftShown && what === this.leftWhat) return;
+    this.leftShown = left;
+    this.hud.setCounter('EC FORCES LEFT', left);
+    if (left > 0) {
+      // The banner across the middle only when the job changes; after that just the line top left
+      const text = `${what} (${left} LEFT)`;
+      if (what !== this.leftWhat) this.setObjective(text);
+      else {
+        this.objective.textContent = text;
+        this.objective.style.opacity = '1';
+      }
+      this.leftWhat = what;
+    }
+    // The last few come looking for him, so nobody's left hiding somewhere
+    if (left > 0 && left <= 4) for (const a of this.agents) if (a.e.alive) a.ai?.alert(this.player.position);
+  }
+
+  private phaseSpawned = 0;
 
   private movedMid = false;
 
@@ -1220,7 +1260,7 @@ export class HQScene extends CombatScene<HQData> {
     const p = this.player.position;
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
-    if (this.spawnT <= 0 && alive < 9 && this.advanceSpawned < 26) {
+    if (this.spawnT <= 0 && alive < 9 && this.advanceSpawned < ADVANCE_QUOTA) {
       this.spawnT = 2.8 + Math.random() * 2.5;
       this.advanceSpawned++;
       this.spawnAgent(this.pickSpawn(L.spawns.podium));
@@ -1231,7 +1271,16 @@ export class HQScene extends CombatScene<HQData> {
       this.crewAI.forEach((c, i) => c.goTo(L.posts.stairs[i], i % 2 ? 2 : 0.2));
       this.say([{ who: 'MARCUS', text: 'Stairs ahead! Get to the columns!', dur: 2.4 }]);
     }
-    if (p.z < -157.5 && this.player.alive) this.startTalk();
+    // In to the stairs only once the lot's clear
+    const left = this.enemiesLeft();
+    this.showLeft(left, p.z < -150 ? 'CLEAR THE AREA BEFORE YOU GO IN' : 'ADVANCE TO THE EC HEADQUARTERS — CLEAR THEM OUT');
+    if (left === 0 && this.leftShown !== -2) {
+      this.leftShown = -2;
+      this.hud.setCounter(null);
+      this.setObjective('OBJECTIVE: GET TO THE FOOT OF THE STAIRS');
+      this.say([{ who: 'SANJAY', text: "That's the last of them! Ravi — the stairs!", dur: 2.6 }]);
+    }
+    if (left === 0 && p.z < -157.5 && this.player.alive) this.startTalk();
   }
 
   // ---------------------------------------------------------------- 4 talk
@@ -1596,7 +1645,9 @@ export class HQScene extends CombatScene<HQData> {
     if ((this.phase === 'towers' || this.phase === 'advance') && this.player.alive) {
       this.jetT -= dt;
       const up = this.jets.filter((j) => j.alive).length;
-      if (this.jetT <= 0 && up < 2 && this.jetsSpawned < 12) {
+      // Only while there are more of them to come on the ground (the count to clear stays finite)
+      const more = this.phase === 'towers' ? this.phaseSpawned < TOWER_QUOTA : this.advanceSpawned < ADVANCE_QUOTA;
+      if (this.jetT <= 0 && up < 2 && this.jetsSpawned < 12 && more) {
         this.jetT = 13 + Math.random() * 9;
         this.spawnJet();
       }
@@ -1840,7 +1891,7 @@ export class HQScene extends CombatScene<HQData> {
         tw.target = { pos: chest.clone(), ravi: true };
         continue;
       }
-      const crew = this.crew.filter((e) => e.root.parent === this.scene && tw.canReach(e.position));
+      const crew = this.crew.filter((e) => e.alive && e.root.parent === this.scene && tw.canReach(e.position));
       const c = crew[Math.floor(Math.random() * crew.length)];
       if (c && Math.random() < 0.8) tw.target = { pos: c.position.clone().setY(1.2), ravi: false };
       else tw.target = null;
@@ -2020,10 +2071,17 @@ export class HQScene extends CombatScene<HQData> {
       const k = (1 - d / kill) * (big ? 9 : 7) + 2;
       e.launch(V(away.x * k, 3 + k * 0.5, away.z * k));
     }
-    for (let i = 0; i < this.crew.length; i++) if (this.crew[i].position.distanceTo(at) < 7) this.crewAI[i].flinch();
+    // The crew: caught close by it, they're killed and thrown (all but Sanjay, who has to get Ravi inside); further out, they duck
+    for (let i = 0; i < this.crew.length; i++) {
+      const c = this.crew[i];
+      if (!c.alive || c.root.parent !== this.scene) continue;
+      const d = Math.hypot(c.position.x - at.x, c.position.z - at.z);
+      if (d < kill && c !== this.sanjay && !this.cutscene) this.killCrew(i, at, kill, big);
+      else if (d < 7) this.crewAI[i].flinch();
+    }
     // A rocket among the cars throws them: the nearest blow up, the rest flip (none onto Ravi)
-    if (big) this.cars.rocketBlast(at, 7.5, p.alive ? p.position : null);
-    else this.cars.blast(at, 3.5);
+    // Among the cars it throws them: the nearest blow up, the rest flip (none onto Ravi); a grenade's reach is shorter
+    this.cars.rocketBlast(at, big ? 7.5 : 4.8, p.alive ? p.position : null);
     // Ravi, if he's too close
     if (p.alive && !this.cutscene) {
       const d = Math.hypot(p.position.x - at.x, p.position.z - at.z);
@@ -2033,6 +2091,22 @@ export class HQScene extends CombatScene<HQData> {
       else if (d < hurt) this.hurtRavi(d < hurt * 0.7 ? 2 : 1, by);
     }
     void dir;
+  }
+
+  /** One of the crew blown off his feet by a blast at `at`: dead, thrown away from it, his AI stood down. */
+  private killCrew(i: number, at: THREE.Vector3, reach: number, big: boolean): void {
+    const e = this.crew[i];
+    const away = HQScene.tmpA.set(e.position.x - at.x, 0, e.position.z - at.z);
+    if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
+    away.normalize();
+    const d = Math.hypot(e.position.x - at.x, e.position.z - at.z);
+    const chest = e.position.clone().setY(e.position.y + 1.2);
+    e.die(chest, away.clone().setY(0.6).normalize(), this.world, 'torso', 2.4, { wound: false });
+    const k = (1 - d / reach) * (big ? 9 : 7) + 2;
+    e.launch(V(away.x * k, 3 + k * 0.5, away.z * k));
+    this.crewAI[i].state = 'idle';
+    this.spatter(chest, away.clone().setY(0.3).normalize(), true);
+    this.later(1.2, () => this.poolUnder(e));
   }
 
   /** Somewhere out in the lot, a grenade or a car going up: seen and heard, nobody hurt. */

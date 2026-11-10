@@ -106,6 +106,8 @@ export class CrewAI {
 
   update(dt: number): void {
     const e = this.e;
+    // Killed (a blast): the ragdoll has him now
+    if (!e.alive) return;
     this.flinchT = Math.max(0, this.flinchT - dt);
     if (this.state === 'run') this.updateRun(dt);
     else if (this.state === 'cover') this.updateCover(dt);
@@ -369,7 +371,7 @@ export class CrewAI {
       }
     }
     for (const o of this.deps.all()) {
-      if (o === e) continue;
+      if (o === e || !o.alive) continue;
       const dx = e.position.x - o.position.x;
       const dz = e.position.z - o.position.z;
       const d = Math.hypot(dx, dz);

@@ -1,7 +1,7 @@
 import { EventBus, Events } from '../core/EventBus';
 
 /**
- * FPSHUD — crosshair, hit markers, kill feed, intruder counter, damage
+ * FPSHUD — crosshair, hit markers, intruder counter, damage
  * flash, a boss's health bar, interaction prompts, and the death /
  * shift-complete overlays. Pure DOM on top of the WebGL canvas.
  */
@@ -9,7 +9,6 @@ export class FPSHUD {
   private root: HTMLElement;
   private hud!: HTMLElement;
   private hitmarker!: HTMLElement;
-  private killfeed!: HTMLElement;
   private counter!: HTMLElement;
   private alertBanner!: HTMLElement;
   private deathOverlay!: HTMLElement;
@@ -64,7 +63,6 @@ export class FPSHUD {
         </div>
         <span class="hp-num"></span>
       </div>
-      <div class="killfeed"></div>
       <div class="alert-banner">! CONTACT !</div>
       <div class="hud-bottom">
         WASD move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; C crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
@@ -84,7 +82,6 @@ export class FPSHUD {
     this.root.appendChild(el);
     this.hud = el;
     this.hitmarker = el.querySelector('.hitmarker')!;
-    this.killfeed = el.querySelector('.killfeed')!;
     this.counter = el.querySelector('.hud-topleft .big')!;
     this.alertBanner = el.querySelector('.alert-banner')!;
     this.deathOverlay = el.querySelector('#death-overlay')!;
@@ -128,7 +125,6 @@ export class FPSHUD {
       this.bus.on<{ lethal: boolean }>(Events.HitMarker, () => this.flashHitmarker()),
       this.bus.on<{ name: string; remaining: number; headshot: boolean; by?: string }>(Events.EnemyKilled, (e) => {
         if (!this.counterOwned) this.counter.textContent = String(e.remaining);
-        this.addKillFeed(`<span class="you">${e.by ?? 'RAVI'}</span> ${e.headshot ? '⌖' : '✚'} ${e.name.toUpperCase()}`);
       }),
       // The bar itself is driven per-frame from the scene; the event is just
       // the impact cue.
@@ -218,15 +214,6 @@ export class FPSHUD {
       this.hitmarker.classList.remove('show');
       this.hitmarker.classList.add('fade');
     }, 70);
-  }
-
-  private addKillFeed(html: string): void {
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    this.killfeed.prepend(div);
-    window.setTimeout(() => div.classList.add('old'), 4200);
-    window.setTimeout(() => div.remove(), 5600);
-    while (this.killfeed.children.length > 6) this.killfeed.lastChild?.remove();
   }
 
   /** Took real damage — heavier flash than a near miss. */

@@ -96,6 +96,10 @@ export const Events = {
   RestartHQ: 'restart-hq',
   /** In under the stairs of the Exterminator Collective's headquarters. */
   HQComplete: 'hq-complete',
+  /** {checkpoint: number} — Level 13 again: 0 the tube and the sewer, 1 the hall, 2 the lever, 3 the last ladder. */
+  RestartLevel13: 'restart-level13',
+  /** The door at the end of the walkways blown. */
+  Level13Complete: 'level13-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -117,7 +121,8 @@ export const LEVELS = [
   { id: 'street', n: '10', name: 'THE STREET', blurb: 'After him, through traffic, to the airport' },
   { id: 'airport', n: '11', name: 'THE AIRPORT', blurb: 'Stop that jet' },
   { id: 'runway', n: '11 ALT', name: 'LEFT ON THE RUNWAY', blurb: 'Alternate Level 11 — the jet gets away, and the van turns up' },
-  { id: 'hq', n: '12', name: 'THE EXTERMINATOR COLLECTIVE', blurb: 'Through the gates, the towers, and up to the headquarters' }
+  { id: 'hq', n: '12', name: 'THE EXTERMINATOR COLLECTIVE', blurb: 'Through the gates, the towers, and up to the headquarters' },
+  { id: 'level13', n: '13', name: 'THE UNDERWORKS', blurb: 'Down the tube, through the sewers, across the walkways over the abyss' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

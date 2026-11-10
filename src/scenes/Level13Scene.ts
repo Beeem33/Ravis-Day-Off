@@ -1,0 +1,1188 @@
+import * as THREE from 'three';
+import type { GameContext } from '../main';
+import { Events } from '../core/EventBus';
+import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SLUDGE_Y, H1, H2, H3, FALL_Y, HALL } from '../environment/Level13Builder';
+import { grenade as grenadeModel } from '../environment/VanProps';
+import { CombatScene } from './CombatScene';
+import { BloodDecalSystem } from '../fx/BloodDecalSystem';
+import { ParticleManager } from '../fx/ParticleManager';
+import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
+import { FPSPlayer } from '../entities/FPSPlayer';
+import { Arsenal, loadoutFor } from '../entities/Arsenal';
+import type { Enemy } from '../entities/Enemy';
+import type { Collider } from '../environment/OfficeLevelBuilder';
+import { FPSHUD } from '../ui/FPSHUD';
+
+/**
+ * Level13Scene — inside the Exterminator Collective.
+ *
+ *  1. The tube. Through the hole under the stairs and down a pipe in the
+ *     dark, faster and faster, out of an outlet high in a sewer wall and
+ *     down into the sludge.
+ *  2. The sewers: green, buzzing, wading. Through to a chamber with a
+ *     ladder up a shaft.
+ *  3. The hall: a route of walkways over an abyss. Ladders, a walkway with
+ *     no rails, a broken span crossed on beams, a lever that calls a
+ *     platform over a gap. Sentry turrets sweep the walkways; in the beam
+ *     and in sight, they lock on and fire. Fall, and that's it.
+ *  4. The door at the end: a grenade planted on it, and it goes.
+ */
+
+type Phase = 'tube' | 'play' | 'plant' | 'done';
+
+const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+const smooth = (x: number): number => {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
+};
+/** Wading: the most he can make through the sludge. */
+const WADE = 2.3;
+const CLIMB = 2.4;
+const TURRET_RANGE = 48;
+/** How wide the beam is that it sees down: either side of where it points, and up and down. */
+const SEE_YAW = 0.2;
+const SEE_PITCH = 0.32;
+
+// ================================================================ turrets
+
+/**
+ * A sentry turret on its post: it sweeps back and forth with its light; if
+ * Ravi is in the beam and nothing's between, it stops, locks (beep, the beam
+ * goes red), tracks him and fires bursts until it's lost him for a moment.
+ */
+class Sentry {
+  readonly group = new THREE.Group();
+  readonly yawG = new THREE.Group();
+  readonly pitchG = new THREE.Group();
+  readonly meshes: THREE.Mesh[] = [];
+  private beamMat: THREE.ShaderMaterial;
+  private muzzles: THREE.Object3D[] = [];
+  yaw: number;
+  pitch: number;
+  private ph = Math.random() * 6;
+  state: 'sweep' | 'lock' | 'fire' | 'lost' = 'sweep';
+  private t = 0;
+  private burst = 0;
+  private shotT = 0;
+  private lostT = 0;
+  recoil = 0;
+
+  constructor(readonly site: TurretSite) {
+    this.yaw = site.yaw;
+    this.pitch = site.pitch;
+    this.group.position.copy(site.pos);
+    const dark = new THREE.MeshStandardMaterial({ color: 0x24272b, roughness: 0.45, metalness: 0.8 });
+    const plate = new THREE.MeshStandardMaterial({ color: 0x55595f, roughness: 0.5, metalness: 0.6 });
+    const lens = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xeaf2ff, emissiveIntensity: 3 });
+    const red = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 3 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 0.35, 14), dark);
+    base.position.y = -0.45;
+    this.group.add(base, this.yawG);
+    this.yawG.add(this.pitchG);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.9), plate);
+    const cheeks = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.32, 0.5), dark);
+    cheeks.position.z = 0.1;
+    this.pitchG.add(body, cheeks);
+    for (const x of [-0.15, 0.15]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 1.1, 8), dark);
+      b.rotation.x = Math.PI / 2;
+      b.position.set(x, -0.05, -0.95);
+      this.pitchG.add(b);
+      const m = new THREE.Object3D();
+      m.position.set(x, -0.05, -1.52);
+      this.pitchG.add(m);
+      this.muzzles.push(m);
+    }
+    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.25, 12), dark);
+    lamp.rotation.x = Math.PI / 2;
+    lamp.position.set(0, 0.32, -0.4);
+    const l = new THREE.Mesh(new THREE.CircleGeometry(0.11, 12), lens);
+    l.position.set(0, 0.32, -0.53);
+    l.rotation.y = Math.PI;
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), red);
+    eye.position.set(0.25, 0.1, -0.46);
+    this.pitchG.add(lamp, l, eye);
+    for (const m of [base, body, cheeks]) {
+      m.userData.surface = 'metal';
+      m.userData.noDecal = true;
+      this.meshes.push(m);
+    }
+    // The beam: narrow at the lamp, opening out down the line it sees along
+    const len = TURRET_RANGE;
+    const cone = new THREE.CylinderGeometry(Math.tan(SEE_YAW) * len, 0.1, len, 20, 1, true);
+    cone.rotateX(-Math.PI / 2);
+    cone.translate(0, 0, -len / 2);
+    this.beamMat = new THREE.ShaderMaterial({
+      uniforms: { uCol: { value: new THREE.Color(0.85, 0.92, 1) }, uK: { value: 1 } },
+      vertexShader: `varying float vZ; varying vec3 vN; varying vec3 vV; void main(){ vZ = -position.z / ${len.toFixed(1)}; vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform vec3 uCol; uniform float uK; varying float vZ; varying vec3 vN; varying vec3 vV; void main(){ float rim = pow(1.0 - abs(dot(vN, vV)), 0.6); float a = 0.12 * (1.0 - vZ) * (1.0 - vZ) * (0.35 + 0.65 * (1.0 - rim)) * uK; gl_FragColor = vec4(uCol, a); }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide
+    });
+    const beam = new THREE.Mesh(cone, this.beamMat);
+    beam.position.set(0, 0.32, -0.55);
+    beam.frustumCulled = false;
+    beam.renderOrder = 6;
+    this.pitchG.add(beam);
+  }
+
+  /** The gun's eye, in the world. */
+  eye(out = new THREE.Vector3()): THREE.Vector3 {
+    return out.copy(this.site.pos).add(V(0, 0.32, 0));
+  }
+
+  /** Is `p` inside the beam (by angle and range, not by what's in the way)? */
+  inBeam(p: THREE.Vector3): boolean {
+    const e = this.eye(Sentry.tmp);
+    const dx = p.x - e.x;
+    const dz = p.z - e.z;
+    const flat = Math.hypot(dx, dz);
+    if (flat > TURRET_RANGE || flat < 1) return false;
+    let dy = Math.atan2(-dx, -dz) - this.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    const dp = Math.atan2(p.y - e.y, flat) - this.pitch;
+    return Math.abs(dy) < SEE_YAW && Math.abs(dp) < SEE_PITCH;
+  }
+
+  muzzle(i: number, out = new THREE.Vector3()): THREE.Vector3 {
+    return this.muzzles[i % 2].getWorldPosition(out);
+  }
+
+  /**
+   * One frame. `sees`: is Ravi in the beam with a clear line to him; `aim`
+   * his eye. Returns 'lock' the moment it locks, 'shot' for every round.
+   */
+  update(dt: number, sees: boolean, aim: THREE.Vector3): 'lock' | 'shot' | null {
+    this.t += dt;
+    this.recoil = Math.max(0, this.recoil - dt * 10);
+    let out: 'lock' | 'shot' | null = null;
+    const track = (rate: number): void => {
+      const e = this.eye(Sentry.tmp);
+      const want = Math.atan2(-(aim.x - e.x), -(aim.z - e.z));
+      let d = want - this.yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      this.yaw += THREE.MathUtils.clamp(d, -rate * dt, rate * dt);
+      const wp = Math.atan2(aim.y - e.y, Math.hypot(aim.x - e.x, aim.z - e.z));
+      this.pitch += THREE.MathUtils.clamp(wp - this.pitch, -rate * dt, rate * dt);
+    };
+    if (this.state === 'sweep') {
+      this.ph += dt * this.site.rate;
+      const want = this.site.yaw + Math.sin(this.ph) * this.site.half;
+      this.yaw += THREE.MathUtils.clamp(want - this.yaw, -dt * 1.5, dt * 1.5);
+      this.pitch += (this.site.pitch - this.pitch) * Math.min(1, dt * 2);
+      if (sees) {
+        this.state = 'lock';
+        this.t = 0;
+        out = 'lock';
+      }
+    } else if (this.state === 'lock') {
+      track(2.4);
+      if (this.t > 0.85) {
+        this.state = 'fire';
+        this.burst = 8;
+        this.shotT = 0;
+      }
+    } else if (this.state === 'fire') {
+      track(2.2);
+      this.shotT -= dt;
+      if (this.shotT <= 0 && this.burst > 0) {
+        this.burst--;
+        this.shotT = 0.085;
+        this.recoil = 1;
+        out = 'shot';
+      }
+      if (this.burst <= 0) {
+        this.state = sees ? 'lock' : 'lost';
+        this.t = sees ? 0.25 : 0;
+        this.lostT = 0;
+      }
+    } else {
+      // Lost him: holds where he was a moment, then back to sweeping
+      this.lostT += dt;
+      if (sees) {
+        this.state = 'lock';
+        this.t = 0.2;
+      } else if (this.lostT > 1.4) {
+        this.state = 'sweep';
+        this.ph = Math.asin(THREE.MathUtils.clamp((this.yaw - this.site.yaw) / this.site.half, -1, 1));
+      }
+    }
+    this.yawG.rotation.y = this.yaw;
+    this.pitchG.rotation.x = this.pitch;
+    this.pitchG.position.z = this.recoil * 0.05;
+    const hot = this.state === 'lock' || this.state === 'fire';
+    this.beamMat.uniforms.uCol.value.setRGB(hot ? 1 : 0.85, hot ? 0.18 : 0.92, hot ? 0.12 : 1);
+    this.beamMat.uniforms.uK.value = hot ? 1.5 : 1;
+    return out;
+  }
+
+  private static tmp = new THREE.Vector3();
+}
+
+// ================================================================ the plant
+
+/**
+ * Ravi's hands for the door: the right brings the grenade up and presses it
+ * to the door, the left pulls the pin, and the grenade's left there (the
+ * scene takes it off the hand into the world).
+ */
+class PlantHands {
+  readonly root = new THREE.Group();
+  private armR = new THREE.Group();
+  private armL = new THREE.Group();
+  readonly nade: THREE.Group;
+  private ring: THREE.Object3D;
+
+  constructor(camera: THREE.Camera) {
+    camera.add(this.root);
+    this.root.visible = false;
+    const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
+    const sleeve = new THREE.MeshStandardMaterial({ color: 0x4d6f9c, roughness: 0.9 });
+    const mk = (g: THREE.Group): void => {
+      const fore = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.66), skin);
+      fore.position.set(0, -0.02, 0.36);
+      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.078, 0.09), sleeve);
+      cuff.position.set(0, -0.02, 0.2);
+      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.09), skin);
+      g.add(fore, cuff, hand);
+    };
+    mk(this.armR);
+    mk(this.armL);
+    this.nade = grenadeModel();
+    this.nade.scale.setScalar(1.15);
+    this.nade.position.set(0, 0.03, -0.06);
+    this.armR.add(this.nade);
+    this.ring = this.nade.children[2];
+    this.root.add(this.armR, this.armL);
+  }
+
+  /** `t` seconds into the plant: up, pressed on, pin pulled (0.9 s), let go (1.25 s), hands back. */
+  pose(t: number): void {
+    this.root.visible = t < 2.2;
+    const up = smooth(t / 0.5);
+    const press = smooth((t - 0.45) / 0.3);
+    const back = smooth((t - 1.35) / 0.5);
+    this.armR.position.set(0.32 - 0.24 * up - 0.02 * press, -0.5 + 0.38 * up - 0.4 * back, -0.25 - 0.15 * up - 0.18 * press + 0.2 * back);
+    this.armR.rotation.set(-0.3 + 0.35 * up, 0.25 * (1 - up), 0);
+    // The left comes in to take the ring
+    const lIn = smooth((t - 0.55) / 0.3) * (1 - smooth((t - 1.05) / 0.35));
+    const yank = smooth((t - 0.85) / 0.12);
+    this.armL.position.set(-0.36 + 0.29 * lIn - 0.12 * yank, -0.55 + 0.46 * lIn - 0.06 * yank, -0.3 - 0.27 * lIn + 0.16 * yank);
+    this.armL.rotation.set(-0.2 + 0.3 * lIn, -0.4 * lIn, 0);
+    // The ring off with the left hand
+    if (yank > 0.5 && this.ring.parent === this.nade) {
+      this.ring.removeFromParent();
+      this.armL.add(this.ring);
+      this.ring.position.set(0, -0.02, -0.05);
+    }
+  }
+}
+
+// ================================================================ scene
+
+export class Level13Scene extends CombatScene<Level13Data> {
+  private arsenal!: Arsenal;
+  private hud!: FPSHUD;
+  private phase: Phase = 'play';
+  private phaseT = 0;
+  private t = 0;
+  private dead = false;
+  private checkpoint = 0;
+  private sentries: Sentry[] = [];
+  private climbing: Ladder | null = null;
+  private rungT = 0;
+  private wadeT = 0;
+  private wasInSludge = false;
+  /** The flies: one Points cloud per swarm, and each fly's own wander. */
+  private flies: { pts: THREE.Points; base: THREE.Vector3; seed: Float32Array }[] = [];
+  private fliesSound: { setDistance(m: number): void; stop(): void } | null = null;
+  private ambience: { mix(s: number, h: number): void; stop(): void } | null = null;
+  private winch: { set(k: number): void; setDistance(m: number): void; stop(): void } | null = null;
+  // ---- Droplets (sludge splashes)
+  private drops!: THREE.Points;
+  private dropVel: THREE.Vector3[] = [];
+  private dropLife: number[] = [];
+  private dropNext = 0;
+  // ---- The lever and the platform it calls
+  private leverPulled = false;
+  private leverT = -1;
+  private moverState: 'parked' | 'coming' | 'docked' | 'going' | 'arrived' = 'parked';
+  private moverT = 0;
+  private moverOnT = 0;
+  private moverRails: Collider[] = [];
+  private moverPrev = new THREE.Vector3();
+  // ---- The door
+  private hands!: PlantHands;
+  private planted: THREE.Group | null = null;
+  private beepT = 0;
+  private slab: { vel: THREE.Vector3; spin: THREE.Vector3 } | null = null;
+  private handedOff = false;
+  private falling = false;
+  private fallT = 0;
+  private shake = 0;
+  private flick: number[] = [];
+
+  private ui!: HTMLElement;
+  private banner!: HTMLElement;
+  private fadeEl!: HTMLElement;
+  private letterbox!: HTMLElement;
+  private murk!: HTMLElement;
+  private card!: HTMLElement;
+  private skipEl!: HTMLElement;
+  private unsubs: (() => void)[] = [];
+  private clickHandler = (): void => this.onClick();
+  private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
+  private ray = new THREE.Ray();
+  private hemi!: THREE.HemisphereLight;
+  private sun!: THREE.DirectionalLight;
+  private static tmpA = new THREE.Vector3();
+  private static tmpB = new THREE.Vector3();
+  private static tmpC = new THREE.Vector3();
+
+  /** `from`: the checkpoint — 0 the tube and the sewer, 1 the hall, 2 the lever, 3 the last ladder. */
+  constructor(ctx: GameContext, private from = 0) {
+    super(ctx);
+  }
+
+  // ============================================================ lifecycle
+
+  enter(): void {
+    const { bus, input, audio } = this.ctx;
+    this.scene.background = new THREE.Color(0x0d1109);
+    this.scene.fog = new THREE.FogExp2(0x0d1109, 0.034);
+    this.level = new Level13Builder().build();
+    const L = this.level;
+    this.scene.add(L.group);
+    this.world = this.createPhysicsWorld(L.colliders);
+    this.checkpoint = Math.min(this.from, L.checkpoints.length - 1);
+    const start = L.checkpoints[this.checkpoint];
+    this.player = new FPSPlayer(start.pos.clone(), start.yaw, input, audio, bus);
+    this.player.camera.far = 600;
+    this.player.camera.updateProjectionMatrix();
+    this.scene.add(this.player.camera);
+    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
+
+    this.particles = new ParticleManager(this.scene);
+    this.flashPool = new MuzzleFlashPool(this.scene, 4);
+    this.decals = new BloodDecalSystem(this.scene);
+    this.arsenal = new Arsenal(
+      {
+        player: this.player,
+        audio,
+        bus,
+        world: this.world,
+        particles: this.particles,
+        castBullet: (o, d) => this.castBullet(o, d, null),
+        addDebris: (m, b) => this.addDebris(m, b),
+        dropMagazine: (p) => this.dropMagazine(p)
+      },
+      loadoutFor('hq'),
+      'rifle'
+    );
+    this.hands = new PlantHands(this.player.camera);
+
+    // Light: a cold wash from the roof over the hall, very little in the sewer but its lamps
+    this.hemi = new THREE.HemisphereLight(0x9aa4ad, 0x1a1c1c, 0.5);
+    this.sun = new THREE.DirectionalLight(0xc8d4e0, 0.6);
+    this.sun.position.set(20, 140, 30);
+    this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.flick = L.lights.sewer.map(() => Math.random() * 10);
+
+    // Turrets
+    for (const site of L.turrets) {
+      const s = new Sentry(site);
+      this.scene.add(s.group);
+      for (const m of s.meshes) L.shootables.push(m);
+      this.sentries.push(s);
+    }
+    // The platform's end rails
+    for (let i = 0; i < 2; i++) {
+      const c: Collider = { box: new THREE.Box3() };
+      L.colliders.push(c);
+      this.moverRails.push(c);
+    }
+    if (this.checkpoint >= 3) this.callMover(true);
+    this.syncMover();
+    this.buildFlies();
+    this.buildDrops();
+
+    this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
+    this.hud.setCounter(null);
+    this.hud.setGrenades(1);
+    this.hud.setAmmo(...this.arsenal.ammoReadout());
+    this.buildUI();
+
+    this.unsubs.push(
+      bus.on(Events.Resize, () => {
+        this.player.camera.aspect = window.innerWidth / window.innerHeight;
+        this.player.camera.updateProjectionMatrix();
+      }),
+      bus.on(Events.PlayerDied, () => {
+        this.dead = true;
+      })
+    );
+    document.addEventListener('click', this.clickHandler);
+    document.addEventListener('keydown', this.keyHandler);
+    this.ambience = audio.undergroundLoop();
+    this.fliesSound = audio.fliesLoop();
+    this.winch = audio.winchLoop();
+
+    if (this.from === 0) this.startTube();
+    else this.startPlay();
+  }
+
+  exit(): void {
+    for (const u of this.unsubs) u();
+    document.removeEventListener('click', this.clickHandler);
+    document.removeEventListener('keydown', this.keyHandler);
+    this.ambience?.stop();
+    this.fliesSound?.stop();
+    this.winch?.stop();
+    this.hud.destroy();
+    this.flashPool.dispose();
+    this.ui.remove();
+  }
+
+  private buildUI(): void {
+    const el = document.createElement('div');
+    el.id = 'intro-ui';
+    el.innerHTML = `
+      <div class="l13-murk" style="position:absolute;inset:0;pointer-events:none;opacity:0;
+        background:radial-gradient(ellipse at center, rgba(70,110,20,0.75) 0%, rgba(20,40,6,0.97) 100%)"></div>
+      <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
+      <div class="intro-objective"></div>
+      <div class="intro-skip">[ ENTER ] SKIP</div>
+      <div class="intro-fade" style="opacity:1"></div>
+      <div class="hq-card" style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        opacity:0;transition:opacity 1.2s;pointer-events:none;color:#e8e6df;letter-spacing:8px">
+        <div style="font-size:13px;opacity:.6;letter-spacing:6px;margin-bottom:18px">LEVEL 13 — THE UNDERWORKS</div>
+        <div style="font-size:42px;font-weight:bold">TO BE CONTINUED</div>
+      </div>
+    `;
+    this.ctx.uiRoot.appendChild(el);
+    this.ui = el;
+    this.murk = el.querySelector('.l13-murk')!;
+    this.letterbox = el.querySelector('.intro-letterbox')!;
+    this.banner = el.querySelector('.intro-objective')!;
+    this.skipEl = el.querySelector('.intro-skip')!;
+    this.fadeEl = el.querySelector('.intro-fade')!;
+    this.card = el.querySelector('.hq-card')!;
+  }
+
+  private setObjective(text: string): void {
+    if (this.banner.textContent === text) return;
+    this.banner.textContent = text;
+    this.banner.classList.remove('show');
+    void this.banner.offsetWidth;
+    if (text) this.banner.classList.add('show');
+  }
+
+  private cinema(on: boolean): void {
+    this.letterbox.classList.toggle('open', !on);
+    if (on) this.hud.hide();
+    else this.hud.show();
+  }
+
+  // ============================================================ the tube
+
+  private startTube(): void {
+    this.phase = 'tube';
+    this.phaseT = 0;
+    this.player.cinematic = true;
+    this.cinema(true);
+    this.fadeEl.style.transition = 'opacity 0.8s';
+    this.fadeEl.style.opacity = '0';
+    this.ctx.audio.slideWhoosh(4.3);
+  }
+
+  /** Down the tube, out of the outlet, into the sludge, up on his feet. */
+  private updateTube(dt: number): void {
+    const t = this.phaseT;
+    const L = this.level;
+    const cam = this.player.camera;
+    const SLIDE = 4.2;
+    if (t < SLIDE) {
+      // Faster and faster: the tube's length eased in, and a roll as it bends
+      const u = Math.min(0.995, Math.pow(t / SLIDE, 1.7));
+      const p = L.tube.getPointAt(u);
+      const ahead = L.tube.getPointAt(Math.min(1, u + 0.03));
+      cam.position.copy(p).add(V(0, -0.35, 0));
+      cam.up.set(Math.sin(t * 2.3) * 0.25, 1, Math.cos(t * 1.7) * 0.15).normalize();
+      cam.lookAt(ahead.clone().add(V(0, -0.5, 0)));
+      cam.up.set(0, 1, 0);
+      this.shake = 0.25 + 0.3 * u;
+      return;
+    }
+    // Out of the outlet and down: a short arc, then in
+    const k = t - SLIDE;
+    const o = L.outlet;
+    const x = o.x + 0.6 + 3.2 * k;
+    const y = o.y - 0.1 + 1.2 * k - 9 * k * k;
+    const eyeY = Math.max(SLUDGE_Y - 0.35, y);
+    if (y <= SLUDGE_Y && !this.wasInSludge) {
+      this.wasInSludge = true;
+      this.ctx.audio.splash(true);
+      this.splashAt(V(x, SLUDGE_Y, 0), 60, 4.2);
+      this.shake = 0.8;
+    }
+    const under = this.wasInSludge ? smooth((k - 0.55) / 0.7) : 0;
+    // Under, then up on his feet out of it
+    const standEye = CH_Y + 1.63;
+    cam.position.set(Math.min(x, -128.5), this.wasInSludge ? THREE.MathUtils.lerp(SLUDGE_Y - 0.35, standEye, under) : eyeY, 0);
+    const look = V(cam.position.x + 3, cam.position.y - 1.2 + 1.2 * under, 0);
+    cam.lookAt(look);
+    this.murk.style.opacity = this.wasInSludge ? String(Math.max(0, 1 - under * 1.6)) : '0';
+    if (k > 1.6) this.startPlay();
+  }
+
+  // ============================================================ play
+
+  private startPlay(): void {
+    const L = this.level;
+    this.phase = 'play';
+    this.phaseT = 0;
+    this.player.cinematic = false;
+    this.cinema(false);
+    this.murk.style.opacity = '0';
+    this.skipEl.classList.add('gone');
+    this.fadeEl.style.transition = 'opacity 0.8s';
+    this.fadeEl.style.opacity = '0';
+    const s = L.checkpoints[this.checkpoint];
+    this.player.position.copy(s.pos);
+    this.player.yaw = s.yaw;
+    this.player.pitch = 0;
+    this.player.camera.fov = 74;
+    this.player.camera.updateProjectionMatrix();
+    this.setObjective(this.checkpoint === 0 ? 'FIND A WAY UP OUT OF THE SEWERS' : 'CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT');
+    this.ctx.input.requestPointerLock();
+  }
+
+  private get playable(): boolean {
+    return this.phase === 'play' && this.player.alive && !this.falling;
+  }
+
+  update(dt: number, _time: number): void {
+    const { input } = this.ctx;
+    this.t += dt;
+    this.phaseT += dt;
+    for (let i = this.timers.length - 1; i >= 0; i--) {
+      if (this.t < this.timers[i].at) continue;
+      const f = this.timers[i].fn;
+      this.timers.splice(i, 1);
+      f();
+    }
+    if (this.playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
+    const L = this.level;
+    const p = this.player;
+
+    if (this.phase === 'tube') this.updateTube(dt);
+
+    // ---- The platform carries whoever's stood on it
+    this.updateMover(dt);
+
+    // ---- Ladders: on one, he goes up it
+    const busy = !!this.climbing || this.phase !== 'play';
+    this.arsenal.preUpdate(dt, input, { canSwitch: this.playable && input.pointerLocked, busy });
+    const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching;
+    p.aiming = aiming;
+    if (this.phase === 'play' || this.dead || this.falling) {
+      if (this.climbing) this.climb(dt);
+      else this.catchLadder();
+      p.update(dt, L.colliders);
+      if (this.climbing) this.holdOnLadder();
+    }
+    this.wade(dt);
+    this.checkFall(dt);
+
+    // ---- The guns (they do nothing to the turrets but spark)
+    this.arsenal.updateViewmodels(dt, aiming);
+    const canFire = this.playable && input.pointerLocked && !busy;
+    this.arsenal.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
+    if (this.phase === 'play') {
+      const targetFov = 74 - this.arsenal.zoomFov;
+      if (Math.abs(p.camera.fov - targetFov) > 0.01) {
+        p.camera.fov = targetFov;
+        p.camera.updateProjectionMatrix();
+      }
+    }
+    this.hud.setAiming(this.arsenal.aimBlend > 0.5);
+
+    // ---- The route
+    this.updateSentries(dt);
+    this.updateLever(dt);
+    this.updateDoor(dt);
+    this.updateCheckpoints();
+    if (this.phase === 'plant') this.updatePlant(dt);
+
+    // ---- The world
+    this.updateAtmosphere(dt);
+    this.updateFlies(dt);
+    this.updateDrops(dt);
+    for (const c of L.carts) {
+      const len = c.to - c.from;
+      c.u = (((c.u + (c.speed * dt) / len) % 1) + 1) % 1;
+      const v = c.from + len * c.u;
+      if (c.axis === 'x') c.obj.position.x = v;
+      else c.obj.position.z = v;
+    }
+    this.hud.setHealth(p.health, p.regenProgress);
+    this.updateDebris(dt);
+    this.decals.update(dt);
+    this.particles.update(dt);
+    this.flashPool.update(dt);
+    this.world.step(1 / 60, dt, 3);
+    this.applyShake(dt);
+    input.endFrame();
+  }
+
+  // ------------------------------------------------------------ ladders
+
+  /** At the foot of a ladder, facing it and pushing on: onto it. */
+  private catchLadder(): void {
+    const p = this.player;
+    if (!this.playable || !this.ctx.input.isDown('KeyW')) return;
+    for (const l of this.level.ladders) {
+      const d = Math.hypot(p.position.x - l.base.x, p.position.z - l.base.z);
+      if (d > 0.75 || p.position.y < l.base.y - 0.3 || p.position.y > l.top - 0.5) continue;
+      // Facing it, near enough
+      let dy = p.yaw - l.face;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      if (Math.abs(dy) > 1.1) continue;
+      this.climbing = l;
+      this.rungT = 0;
+      return;
+    }
+  }
+
+  /** On the ladder: W up, S down, Space lets go. At the top he steps off onto the platform. */
+  private climb(dt: number): void {
+    const l = this.climbing!;
+    const p = this.player;
+    const input = this.ctx.input;
+    const dir = (input.isDown('KeyW') ? 1 : 0) - (input.isDown('KeyS') ? 1 : 0);
+    // Cancel gravity, set the climb (FPSPlayer subtracts gravity·dt before it moves him)
+    p.velocity.set(0, dir * CLIMB + 18 * dt, 0);
+    if (dir !== 0) {
+      this.rungT -= dt;
+      if (this.rungT <= 0) {
+        this.rungT = 0.32;
+        this.ctx.audio.ladderRung();
+      }
+    }
+    if (p.position.y >= l.top - 0.05) {
+      // Up and over onto the deck
+      p.position.copy(l.off);
+      p.velocity.set(0, 0, 0);
+      this.climbing = null;
+      return;
+    }
+    if (input.wasPressed('Space') || (dir < 0 && p.grounded && p.position.y <= l.base.y + 0.05)) this.climbing = null;
+  }
+
+  /** Kept on the ladder's line whatever W did to him sideways. */
+  private holdOnLadder(): void {
+    const l = this.climbing;
+    if (!l) return;
+    const p = this.player;
+    p.position.x = l.base.x;
+    p.position.z = l.base.z;
+    p.velocity.x = 0;
+    p.velocity.z = 0;
+  }
+
+  // ------------------------------------------------------------ the sewer
+
+  /** Wading: slow, sloshing, splashes round his legs. */
+  private wade(dt: number): void {
+    const p = this.player;
+    const inIt = this.level.sludge.some((b) => b.containsPoint(HALL_TMP.set(p.position.x, p.position.y + 0.05, p.position.z)));
+    if (inIt && this.phase === 'play') {
+      const sp = Math.hypot(p.velocity.x, p.velocity.z);
+      if (sp > WADE) {
+        p.velocity.x *= WADE / sp;
+        p.velocity.z *= WADE / sp;
+      }
+      this.wadeT -= dt;
+      if (sp > 0.8 && this.wadeT <= 0) {
+        this.wadeT = 0.5;
+        this.ctx.audio.splash(false);
+        this.splashAt(V(p.position.x, SLUDGE_Y, p.position.z), 8, 1.4);
+      }
+    }
+  }
+
+  private buildFlies(): void {
+    const mat = new THREE.PointsMaterial({ color: 0x050505, size: 0.035, sizeAttenuation: true });
+    for (const base of this.level.flies) {
+      const n = 60;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      const seed = new Float32Array(n * 4);
+      for (let i = 0; i < n * 4; i++) seed[i] = Math.random();
+      const pts = new THREE.Points(g, mat);
+      pts.frustumCulled = false;
+      this.scene.add(pts);
+      this.flies.push({ pts, base, seed });
+    }
+  }
+
+  private updateFlies(_dt: number): void {
+    const cam = this.player.camera.position;
+    let near = Infinity;
+    for (const f of this.flies) {
+      const d = f.base.distanceTo(cam);
+      near = Math.min(near, d);
+      f.pts.visible = d < 30;
+      if (!f.pts.visible) continue;
+      const a = f.pts.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const s = f.seed;
+      const t = this.t;
+      for (let i = 0; i < a.count; i++) {
+        const k = i * 4;
+        const r = 0.3 + s[k] * 1.3;
+        const w = 1.5 + s[k + 1] * 4;
+        a.setXYZ(
+          i,
+          f.base.x + Math.sin(t * w + s[k + 2] * 20) * r + Math.sin(t * 13 + i) * 0.05,
+          f.base.y + Math.sin(t * w * 1.3 + s[k + 3] * 9) * 0.5 * r,
+          f.base.z + Math.cos(t * w * 0.9 + s[k + 2] * 13) * r + Math.cos(t * 11 + i) * 0.05
+        );
+      }
+      a.needsUpdate = true;
+    }
+    this.fliesSound?.setDistance(near);
+  }
+
+  // ------------------------------------------------------------ droplets
+
+  private buildDrops(): void {
+    const n = 240;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3).fill(-999), 3));
+    this.drops = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x5f8a1c, size: 0.06, sizeAttenuation: true }));
+    this.drops.frustumCulled = false;
+    this.scene.add(this.drops);
+    for (let i = 0; i < n; i++) {
+      this.dropVel.push(new THREE.Vector3());
+      this.dropLife.push(0);
+    }
+  }
+
+  private splashAt(at: THREE.Vector3, n: number, power: number): void {
+    const a = this.drops.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < n; i++) {
+      const k = this.dropNext;
+      this.dropNext = (this.dropNext + 1) % a.count;
+      const ang = Math.random() * Math.PI * 2;
+      const sp = Math.random() * power;
+      a.setXYZ(k, at.x + Math.cos(ang) * 0.2, at.y + 0.05, at.z + Math.sin(ang) * 0.2);
+      this.dropVel[k].set(Math.cos(ang) * sp * 0.6, power * (0.6 + Math.random() * 0.8), Math.sin(ang) * sp * 0.6);
+      this.dropLife[k] = 1.5;
+    }
+    a.needsUpdate = true;
+  }
+
+  private updateDrops(dt: number): void {
+    const a = this.drops.geometry.getAttribute('position') as THREE.BufferAttribute;
+    let any = false;
+    for (let i = 0; i < a.count; i++) {
+      if (this.dropLife[i] <= 0) continue;
+      any = true;
+      this.dropLife[i] -= dt;
+      const v = this.dropVel[i];
+      v.y -= 14 * dt;
+      const y = a.getY(i) + v.y * dt;
+      if (y < SLUDGE_Y || this.dropLife[i] <= 0) {
+        this.dropLife[i] = 0;
+        a.setXYZ(i, 0, -999, 0);
+        continue;
+      }
+      a.setXYZ(i, a.getX(i) + v.x * dt, y, a.getZ(i) + v.z * dt);
+    }
+    if (any) a.needsUpdate = true;
+  }
+
+  // ------------------------------------------------------------ turrets
+
+  private updateSentries(dt: number): void {
+    const p = this.player;
+    const eye = p.eyePosition(Level13Scene.tmpA);
+    const { audio } = this.ctx;
+    for (const s of this.sentries) {
+      const from = s.eye(Level13Scene.tmpB);
+      const near = from.distanceTo(eye) < TURRET_RANGE + 5;
+      const sees = near && p.alive && this.phase === 'play' && !this.falling && (s.state === 'sweep' ? s.inBeam(eye) : true) && this.clearLine(from, eye);
+      const ev = s.update(dt, sees, eye);
+      if (ev === 'lock') {
+        audio.lockBeep();
+        this.hud.setAlert(true);
+        window.setTimeout(() => this.hud.setAlert(false), 900);
+      } else if (ev === 'shot') this.sentryShot(s, sees);
+    }
+  }
+
+  private sentryShot(s: Sentry, sees: boolean): void {
+    const p = this.player;
+    const { audio } = this.ctx;
+    const from = s.muzzle(Math.random() < 0.5 ? 0 : 1, Level13Scene.tmpC).clone();
+    audio.turretShot(from.distanceTo(p.camera.position));
+    this.flashPool.flash(from, 12);
+    const eye = p.eyePosition();
+    this.particles.muzzleFlash(from, eye.clone().sub(from).normalize());
+    if (sees && p.alive && Math.random() < 0.12) {
+      this.particles.tracer(from, eye, 0xffc890);
+      p.hit('A SENTRY TURRET', from);
+      return;
+    }
+    const miss = eye.clone().add(V((Math.random() - 0.5) * 2.2, (Math.random() - 0.6) * 1.6, (Math.random() - 0.5) * 2.2));
+    const dir = miss.sub(from).normalize();
+    const end = this.castBullet(from, dir, null);
+    this.particles.tracer(from, end, 0xffc890);
+    if (end.distanceTo(p.position) < 4) audio.bulletWhiz();
+  }
+
+  /** Nothing solid between two points (thin rails don't count: they're seen through). */
+  private clearLine(a: THREE.Vector3, b: THREE.Vector3): boolean {
+    const dist = a.distanceTo(b);
+    const dir = Level13Scene.tmpC.copy(b).sub(a).divideScalar(dist);
+    this.ray.set(a, dir);
+    const hit = HALL_TMP2;
+    for (const c of this.level.colliders) {
+      if (c.disabled) continue;
+      const bx = c.box;
+      // A rail: thin in plan, not head high
+      if (Math.min(bx.max.x - bx.min.x, bx.max.z - bx.min.z) < 0.25 && bx.max.y - bx.min.y < 1.3) continue;
+      if (bx.containsPoint(a) || bx.containsPoint(b)) continue;
+      if (this.ray.intersectBox(bx, hit) && hit.distanceTo(a) < dist - 0.25) return false;
+    }
+    return true;
+  }
+
+  // ------------------------------------------------------------ the lever and the platform
+
+  private updateLever(dt: number): void {
+    const L = this.level;
+    const p = this.player;
+    const near = this.playable && !this.leverPulled && p.position.distanceTo(L.lever.at) < 1.9;
+    if (this.leverT >= 0) {
+      this.leverT += dt;
+      L.lever.pivot.rotation.z = THREE.MathUtils.lerp(0.7, -0.7, smooth(this.leverT / 0.35));
+    }
+    if (near && this.ctx.input.wasPressed('KeyE')) {
+      this.leverPulled = true;
+      this.leverT = 0;
+      this.ctx.audio.leverThrow();
+      this.later(0.6, () => this.callMover(false));
+    }
+    if (this.phase === 'play') this.hud.setPrompt(near ? '[ E ] PULL THE LEVER' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
+  }
+
+  /** The lever's done: the platform starts over to him (`instant`: already crossed, a restart past it). */
+  private callMover(instant: boolean): void {
+    if (instant) {
+      this.leverPulled = true;
+      this.leverT = 1;
+      this.moverState = 'arrived';
+      return;
+    }
+    this.moverState = 'coming';
+    this.moverT = 0;
+    this.setObjective('THE PLATFORM’S COMING — RIDE IT ACROSS');
+  }
+
+  private updateMover(dt: number): void {
+    const m = this.level.mover;
+    const p = this.player;
+    this.moverPrev.copy(m.group.position);
+    const RUN = 6;
+    if (this.moverState === 'coming' || this.moverState === 'going') {
+      this.moverT += dt;
+      const k = smooth(this.moverT / RUN);
+      if (this.moverState === 'coming') m.group.position.lerpVectors(m.from, m.to, k);
+      else m.group.position.lerpVectors(m.to, m.from, k);
+      this.winch?.set(Math.sin(Math.PI * Math.min(1, this.moverT / RUN)) * 0.8 + 0.2);
+      if (this.moverT >= RUN) {
+        this.moverState = this.moverState === 'coming' ? 'docked' : 'arrived';
+        this.moverOnT = 0;
+        this.winch?.set(0);
+        this.ctx.audio.leverThrow();
+      }
+    }
+    if (this.moverState === 'docked') {
+      // Once he's on it, a moment, and away
+      if (this.onMover()) {
+        this.moverOnT += dt;
+        if (this.moverOnT > 0.9) {
+          this.moverState = 'going';
+          this.moverT = 0;
+        }
+      } else this.moverOnT = 0;
+    }
+    if (this.moverState === 'arrived' && m.group.position.distanceTo(m.from) > 0.01) m.group.position.copy(m.from);
+    this.winch?.setDistance(m.group.position.distanceTo(p.camera.position));
+    // The beacon blinks while it runs
+    const b = m.group.getObjectByName('beacon') as THREE.Mesh | undefined;
+    if (b) (b.material as THREE.MeshStandardMaterial).emissiveIntensity = this.moverState === 'coming' || this.moverState === 'going' ? (Math.sin(this.t * 10) > 0 ? 4 : 0.2) : 0.6;
+    // Him with it
+    const dx = m.group.position.x - this.moverPrev.x;
+    const dz = m.group.position.z - this.moverPrev.z;
+    if ((dx || dz) && this.onMover()) {
+      p.position.x += dx;
+      p.position.z += dz;
+    }
+    this.syncMover();
+  }
+
+  private onMover(): boolean {
+    const m = this.level.mover;
+    const p = this.player.position;
+    const c = m.group.position;
+    return Math.abs(p.x - c.x) < m.size.x / 2 + 0.2 && Math.abs(p.z - c.z) < m.size.z / 2 + 0.2 && Math.abs(p.y - c.y) < 0.2;
+  }
+
+  private syncMover(): void {
+    const m = this.level.mover;
+    const c = m.group.position;
+    const hx = m.size.x / 2;
+    const hz = m.size.z / 2;
+    m.collider.box.set(V(c.x - hx, c.y - 0.35, c.z - hz), V(c.x + hx, c.y, c.z + hz));
+    this.moverRails[0].box.set(V(c.x - hx, c.y, c.z - hz), V(c.x + hx, c.y + 1.12, c.z - hz + 0.1));
+    this.moverRails[1].box.set(V(c.x - hx, c.y, c.z + hz - 0.1), V(c.x + hx, c.y + 1.12, c.z + hz));
+  }
+
+  // ------------------------------------------------------------ the door
+
+  private doorPromptOn = false;
+
+  private updateDoor(_dt: number): void {
+    const L = this.level;
+    const p = this.player;
+    this.doorPromptOn = false;
+    if (!this.playable || this.planted) return;
+    const d = Math.hypot(p.position.x - L.door.front.x, p.position.z - L.door.front.z);
+    if (d > 2.2 || Math.abs(p.position.y - L.door.front.y) > 0.5) return;
+    // Facing it
+    const f = p.forwardDir(Level13Scene.tmpA);
+    if (f.x < 0.5) return;
+    this.doorPromptOn = true;
+    if (this.ctx.input.wasPressed('KeyE')) this.startPlant();
+  }
+
+  private startPlant(): void {
+    this.phase = 'plant';
+    this.phaseT = 0;
+    this.player.cinematic = true;
+    this.player.aiming = false;
+    this.hud.setPrompt(null);
+    this.hud.setGrenades(0);
+    this.cinema(true);
+    this.setObjective('');
+    this.ctx.audio.grenadePin();
+    this.hands.root.visible = true;
+  }
+
+  /** The plant: hands up to the door, pin, back off, beep beep beep, and it goes. */
+  private updatePlant(dt: number): void {
+    const t = this.phaseT;
+    const L = this.level;
+    const p = this.player;
+    const cam = p.camera;
+    const plant = L.door.plant;
+    const stand = V(L.door.front.x + 0.6, L.door.front.y, L.door.front.z);
+    const back = V(L.door.front.x - 6.5, L.door.front.y, L.door.front.z - 3.2);
+    // Where he is: up to it, then backing away, crouching behind the crate's side
+    const away = smooth((t - 1.6) / 1.1);
+    const at = stand.clone().lerp(back, away);
+    const eyeH = 1.6 - 0.45 * away;
+    cam.position.set(at.x, at.y + eyeH, at.z);
+    const look = plant.clone().lerp(V(L.door.front.x + 1.6, L.door.front.y + 1.7, L.door.front.z), away);
+    cam.lookAt(look);
+    cam.fov = THREE.MathUtils.lerp(cam.fov, 62, Math.min(1, dt * 3));
+    cam.updateProjectionMatrix();
+    this.hands.pose(t);
+    if (t >= 0.9 && t - dt < 0.9) this.ctx.audio.grenadePin();
+    // Let go: the grenade stays on the door
+    if (t >= 1.25 && !this.planted) {
+      const g = this.hands.nade;
+      g.updateWorldMatrix(true, false);
+      const wq = new THREE.Quaternion();
+      g.getWorldQuaternion(wq);
+      g.removeFromParent();
+      g.scale.setScalar(1.15);
+      g.position.copy(plant);
+      g.quaternion.copy(wq);
+      this.scene.add(g);
+      this.planted = g;
+      this.beepT = 0;
+    }
+    if (this.planted && t < 3.9) {
+      this.beepT -= dt;
+      if (this.beepT <= 0) {
+        const urgent = t > 3;
+        this.beepT = urgent ? 0.14 : 0.4;
+        this.ctx.audio.chargeBeep(urgent);
+      }
+    }
+    if (t >= 3.9 && !this.slab) this.blowDoor();
+    if (this.slab) {
+      const s = L.door.slab;
+      this.slab.vel.y -= 9.8 * dt;
+      s.position.addScaledVector(this.slab.vel, dt);
+      s.rotation.x += this.slab.spin.x * dt;
+      s.rotation.y += this.slab.spin.y * dt;
+      s.rotation.z += this.slab.spin.z * dt;
+      if (Math.random() < 0.5) this.particles.fire(plant.clone().add(V(0.4, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3)), 1.2, 1);
+    }
+    if (t > 5.4) this.fadeEl.style.transition = 'opacity 1s';
+    if (t > 5.4) this.fadeEl.style.opacity = '1';
+    if (t > 6.6) this.card.style.opacity = '1';
+    if (t > 11 && !this.handedOff) {
+      this.handedOff = true;
+      this.phase = 'done';
+      this.ctx.bus.emit(Events.Level13Complete);
+    }
+  }
+
+  private blowDoor(): void {
+    const L = this.level;
+    const at = L.door.plant.clone();
+    this.planted?.removeFromParent();
+    this.particles.explosion(at, 4.5);
+    this.particles.explosion(at.clone().add(V(1, 0.6, 0)), 3.5);
+    this.particles.sparks(at, V(-1, 0.4, 0), 60);
+    this.particles.dust(at.clone().setY(L.door.front.y + 0.1), 4, 1.5);
+    this.ctx.audio.explosion(6);
+    this.flashPool.flash(at, 40);
+    this.shake = 1.4;
+    L.door.collider.disabled = true;
+    // Blown off its hinges, in through the opening and away
+    this.slab = { vel: V(13, 4.5, (Math.random() - 0.5) * 2), spin: V((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, -4) };
+  }
+
+  // ------------------------------------------------------------ checkpoints, falls
+
+  private updateCheckpoints(): void {
+    const p = this.player.position;
+    if (!this.player.alive || this.phase !== 'play') return;
+    let c = this.checkpoint;
+    if (c < 1 && p.x > -61 && Math.abs(p.y - H1) < 0.3) c = 1;
+    if (c < 2 && p.x > -2 && p.x < 6 && p.z > 30 && p.z < 38 && Math.abs(p.y - H2) < 0.3) c = 2;
+    if (c < 3 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 3;
+    if (c !== this.checkpoint) {
+      this.checkpoint = c;
+      if (c === 1) this.setObjective('CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT');
+      if (c === 2 && !this.leverPulled) this.setObjective('PULL THE LEVER');
+      if (c === 3) this.setObjective('GET THROUGH THE DOOR AT THE END');
+    }
+  }
+
+  /** Off the edge, into the abyss: down he goes, and that's it. */
+  private checkFall(dt: number): void {
+    const p = this.player;
+    if (!p.alive || this.falling) {
+      if (this.falling) {
+        this.fallT += dt;
+        if (this.fallT > 1.0 && p.alive) p.kill('THE DROP');
+      }
+      return;
+    }
+    if (p.position.x > HALL.x0 && p.position.y < FALL_Y) {
+      this.falling = true;
+      this.fallT = 0;
+      this.climbing = null;
+    }
+  }
+
+  // ------------------------------------------------------------ atmosphere
+
+  private updateAtmosphere(dt: number): void {
+    const L = this.level;
+    const cam = this.player.camera.position;
+    const inSewer = cam.x < HALL.x0 - 0.5 && cam.y < H1 - 1;
+    const k = inSewer ? 0 : 1;
+    // Fog and sky: the sewer's green murk, the hall's grey haze
+    const fog = this.scene.fog as THREE.FogExp2;
+    const want = inSewer ? 0.034 : 0.0135;
+    fog.density += (want - fog.density) * Math.min(1, dt * 2);
+    const col = (this.scene.background as THREE.Color);
+    col.lerp(inSewer ? SEWER_COL : HALL_COL, Math.min(1, dt * 2));
+    fog.color.copy(col);
+    this.hemi.intensity += ((inSewer ? 0.35 : 0.55) - this.hemi.intensity) * Math.min(1, dt * 2);
+    this.sun.intensity += ((inSewer ? 0 : 0.7) - this.sun.intensity) * Math.min(1, dt * 2);
+    for (const l of L.lights.hall) l.intensity = inSewer ? 0 : (l.userData.k ??= l.intensity);
+    L.lights.sewer.forEach((l, i) => {
+      l.userData.k ??= l.intensity;
+      const f = Math.sin(this.t * 13 + this.flick[i]) * Math.sin(this.t * 4.1 + this.flick[i] * 2);
+      l.intensity = inSewer ? (f < -0.85 ? 0.6 : (l.userData.k as number) * (0.85 + 0.15 * f)) : 0;
+    });
+    for (const m of L.sludgeMats) {
+      m.uniforms.uTime.value = this.t;
+      m.uniforms.fogColor.value.copy(fog.color);
+      m.uniforms.fogDensity.value = fog.density;
+    }
+    L.vatGlow.forEach((m, i) => (m.emissiveIntensity = 1.2 + 0.4 * Math.sin(this.t * 1.3 + i)));
+    // The fog layers drift
+    L.fogLayers.forEach((f, i) => {
+      const map = (f.material as THREE.MeshBasicMaterial).map;
+      if (map) map.offset.set(this.t * 0.004 * (i % 2 ? 1 : -1), this.t * 0.003);
+    });
+    this.ambience?.mix(1 - k, k * 0.9);
+  }
+
+  private applyShake(dt: number): void {
+    this.shake = Math.max(0, this.shake - dt * 1.6);
+    if (this.shake <= 0) return;
+    const s = this.shake * this.shake * 0.025;
+    const cam = this.player.camera;
+    cam.rotation.x += (Math.random() - 0.5) * s;
+    cam.rotation.y += (Math.random() - 0.5) * s;
+  }
+
+  // ------------------------------------------------------------ timers
+
+  private timers: { at: number; fn: () => void }[] = [];
+  /** Something to do a little later, on the scene's clock (it stops with the pause). */
+  private later(sec: number, fn: () => void): void {
+    this.timers.push({ at: this.t + sec, fn });
+  }
+
+  // ------------------------------------------------------------ CombatScene
+
+  /** Nobody to kill in here. */
+  protected killEnemy(_enemy: Enemy, _point: THREE.Vector3, _dir: THREE.Vector3, _byPlayer: boolean, _headshot: boolean): void {}
+
+  // ------------------------------------------------------------ input
+
+  private onClick(): void {
+    if (this.dead) this.restart();
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    if (this.dead) {
+      if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
+      else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') this.restart();
+      return;
+    }
+    if (e.code === 'Enter' && this.phase === 'tube') this.startPlay();
+  }
+
+  private restart(): void {
+    this.ctx.bus.emit(Events.RestartLevel13, { checkpoint: this.checkpoint });
+  }
+
+  render(renderer: THREE.WebGLRenderer): void {
+    this.warmUp(renderer, this.player.camera);
+    renderer.render(this.scene, this.player.camera);
+  }
+}
+
+const HALL_TMP = new THREE.Vector3();
+const HALL_TMP2 = new THREE.Vector3();
+const SEWER_COL = new THREE.Color(0x0d1109);
+const HALL_COL = new THREE.Color(0x3a3f42);
+void H3;

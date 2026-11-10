@@ -18,6 +18,7 @@ import { StreetScene } from './scenes/StreetScene';
 import { AirportScene } from './scenes/AirportScene';
 import { RunwayScene } from './scenes/RunwayScene';
 import { HQScene } from './scenes/HQScene';
+import { Level13Scene } from './scenes/Level13Scene';
 import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
@@ -119,6 +120,12 @@ bus.on<{ checkpoint?: number }>(Events.RestartHQ, (p) => {
   engine.setScene(new HQScene(ctx, p?.checkpoint ?? 0), 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE');
 });
 bus.on(Events.HQComplete, () => {
+  engine.setScene(new Level13Scene(ctx), 'LEVEL 13 — THE UNDERWORKS');
+});
+bus.on<{ checkpoint?: number }>(Events.RestartLevel13, (p) => {
+  engine.setScene(new Level13Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 13 — THE UNDERWORKS');
+});
+bus.on(Events.Level13Complete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
 });
@@ -160,7 +167,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   airport: () => ({ scene: new AirportScene(ctx), title: 'LEVEL 11 — THE AIRPORT' }),
   // The alternate Level 11, from where Level 10 ends; reached only from here for now
   runway: () => ({ scene: new RunwayScene(ctx), title: 'LEVEL 11 (ALTERNATE) — LEFT ON THE RUNWAY' }),
-  hq: () => ({ scene: new HQScene(ctx), title: 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE' })
+  hq: () => ({ scene: new HQScene(ctx), title: 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE' }),
+  level13: () => ({ scene: new Level13Scene(ctx), title: 'LEVEL 13 — THE UNDERWORKS' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

@@ -4900,6 +4900,244 @@ export class AudioManager {
     return this.thrusterLoop(false);
   }
 
+  // ------------------------------------------------------------ level 13
+
+  /**
+   * A cloud of flies: a few buzzing wings (thin saws round 200 Hz, each
+   * wandering in pitch and loudness on its own) through a nasal band. Louder
+   * as he gets close; setDistance() each frame.
+   */
+  fliesLoop(): { setDistance(m: number): void; stop(): void } {
+    const idle = { setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 900;
+    band.Q.value = 0.8;
+    band.connect(out).connect(this.sfxBus);
+    const nodes: AudioScheduledSourceNode[] = [];
+    for (let i = 0; i < 4; i++) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = 170 + Math.random() * 90;
+      const wob = ctx.createOscillator();
+      wob.frequency.value = 0.6 + Math.random() * 2.2;
+      const wobG = ctx.createGain();
+      wobG.gain.value = 18 + Math.random() * 20;
+      wob.connect(wobG).connect(o.frequency);
+      const amp = ctx.createGain();
+      amp.gain.value = 0.25;
+      const swell = ctx.createOscillator();
+      swell.frequency.value = 0.2 + Math.random() * 0.7;
+      const swellG = ctx.createGain();
+      swellG.gain.value = 0.22;
+      swell.connect(swellG).connect(amp.gain);
+      o.connect(amp).connect(band);
+      for (const n of [o, wob, swell]) {
+        n.start();
+        nodes.push(n);
+      }
+    }
+    let stopped = false;
+    return {
+      setDistance: (m: number): void => {
+        if (stopped) return;
+        const d = Math.max(0.5, fin(m, 30));
+        out.gain.setTargetAtTime(Math.min(0.09, 0.5 / (d * d + 4)), ctx.currentTime, 0.15);
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+        for (const n of nodes) n.stop(ctx.currentTime + 1);
+      }
+    };
+  }
+
+  /**
+   * Where he is, as a bed under everything: the sewer (trickling water, a
+   * hum in the pipes, drips) or the hall (a deep machine drone, the rails far
+   * below rumbling, now and then a clank off in the dark). `mix(sewer, hall)`.
+   */
+  undergroundLoop(): { mix(sewer: number, hall: number): void; stop(): void } {
+    const idle = { mix: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const sewer = ctx.createGain();
+    const hall = ctx.createGain();
+    sewer.gain.value = 0;
+    hall.gain.value = 0;
+    sewer.connect(this.sfxBus);
+    hall.connect(this.sfxBus);
+    const srcs: AudioScheduledSourceNode[] = [];
+    const noise = (dest: AudioNode, type: BiquadFilterType, f: number, q: number, g: number, rate: number): void => {
+      const s = ctx.createBufferSource();
+      s.buffer = this.noiseBuffer;
+      s.loop = true;
+      s.playbackRate.value = rate;
+      const flt = ctx.createBiquadFilter();
+      flt.type = type;
+      flt.frequency.value = f;
+      flt.Q.value = q;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      s.connect(flt).connect(gn).connect(dest);
+      s.start(ctx.currentTime, Math.random());
+      srcs.push(s);
+    };
+    const tone = (dest: AudioNode, f: number, g: number, type: OscillatorType = 'sine'): void => {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      o.connect(gn).connect(dest);
+      o.start();
+      srcs.push(o);
+    };
+    // Sewer: running water, the pipes' hum
+    noise(sewer, 'bandpass', 700, 0.7, 0.05, 0.7);
+    noise(sewer, 'lowpass', 260, 0.6, 0.08, 0.5);
+    tone(sewer, 58, 0.03, 'triangle');
+    tone(sewer, 117, 0.012, 'sawtooth');
+    // Hall: the drone of the place, the rails' rumble
+    noise(hall, 'lowpass', 120, 0.9, 0.22, 0.4);
+    noise(hall, 'bandpass', 380, 1.2, 0.035, 0.6);
+    tone(hall, 41, 0.05);
+    tone(hall, 82.5, 0.018, 'triangle');
+    let alive = true;
+    let timer = 0;
+    let sK = 0;
+    let hK = 0;
+    const tick = (): void => {
+      if (!alive || !this.ctx) return;
+      // A drip in the sewer; a clank somewhere out in the hall
+      if (sK > 0.1 && Math.random() < 0.8) {
+        const f = 900 + Math.random() * 1400;
+        this.partial(sewer, { at: Math.random() * 0.3, D: 0.12, type: 'sine', f, f1: f * 1.8, gain: 0.05 + Math.random() * 0.05, attack: 0.002 });
+      }
+      if (hK > 0.1 && Math.random() < 0.18) this.clang(hall, Math.random() * 0.4, 90 + Math.random() * 160, 0.04 + Math.random() * 0.05, 1.2 + Math.random());
+      timer = window.setTimeout(tick, 420 + Math.random() * 500);
+    };
+    timer = window.setTimeout(tick, 400);
+    return {
+      mix: (s: number, h: number): void => {
+        sK = s;
+        hK = h;
+        sewer.gain.setTargetAtTime(Math.max(0, s), ctx.currentTime, 0.5);
+        hall.gain.setTargetAtTime(Math.max(0, h), ctx.currentTime, 0.5);
+      },
+      stop: (): void => {
+        if (!alive) return;
+        alive = false;
+        window.clearTimeout(timer);
+        sewer.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+        hall.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+        for (const s of srcs) s.stop(ctx.currentTime + 1.5);
+      }
+    };
+  }
+
+  /** Into the sludge: a heavy plop and the slop after it (`big` for a whole body coming down in it). */
+  splash(big: boolean): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, big ? 0.7 : 0.25, big ? 0.3 : 0);
+    this.burst(out, { D: big ? 0.6 : 0.22, type: 'lowpass', f: big ? 1800 : 1200, f1: 300, gain: 0.6, attack: 0.004 });
+    this.partial(out, { D: big ? 0.35 : 0.15, type: 'sine', f: big ? 180 : 260, f1: 70, gain: 0.5, attack: 0.002 });
+    if (big) for (let i = 0; i < 6; i++) this.burst(out, { at: 0.15 + Math.random() * 0.7, D: 0.08, type: 'bandpass', f: 600 + Math.random() * 900, q: 2, gain: 0.15, attack: 0.003 });
+  }
+
+  /** Down the tube: rushing air and the scrape of him on the steel, rising for `seconds`. */
+  slideWhoosh(seconds: number): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.5, 0.4);
+    this.burst(out, { D: seconds, type: 'bandpass', f: 300, f1: 1600, q: 0.8, gain: 0.5, attack: 0.6 });
+    this.burst(out, { D: seconds, type: 'lowpass', f: 140, f1: 400, q: 0.7, gain: 0.6, attack: 0.4 });
+    for (let t = 0.3; t < seconds; t += 0.25 + Math.random() * 0.3) this.burst(out, { at: t, D: 0.12, type: 'highpass', f: 2500, gain: 0.08 + Math.random() * 0.08, attack: 0.01 });
+  }
+
+  /** His boot on a ladder rung. */
+  ladderRung(): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.18, 0.2);
+    this.clang(out, 0, 520 + Math.random() * 80, 0.12, 0.25);
+  }
+
+  /** A big lever thrown: a ratchet and a heavy clunk home. */
+  leverThrow(): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.55, 0.3);
+    for (let i = 0; i < 5; i++) this.burst(out, { at: i * 0.06, D: 0.03, type: 'bandpass', f: 2600, q: 4, gain: 0.25, attack: 0.001 });
+    this.clang(out, 0.32, 160, 0.3, 0.9);
+    this.partial(out, { at: 0.32, D: 0.2, type: 'sine', f: 110, f1: 50, gain: 0.5, attack: 0.002 });
+  }
+
+  /** The platform's winch: a whine and a grind while it runs. set(0..1) runs it; setDistance. */
+  winchLoop(): { set(k: number): void; setDistance(m: number): void; stop(): void } {
+    const idle = { set: (): void => {}, setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    out.connect(this.sfxBus);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = 95;
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.value = 600;
+    const og = ctx.createGain();
+    og.gain.value = 0.12;
+    o.connect(flt).connect(og).connect(out);
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'bandpass';
+    nf.frequency.value = 1400;
+    nf.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.18;
+    n.connect(nf).connect(ng).connect(out);
+    o.start();
+    n.start();
+    let k = 0;
+    let dist = 1;
+    let stopped = false;
+    const apply = (): void => {
+      out.gain.setTargetAtTime(k * Math.min(1, 10 / (dist + 6)) * 0.6, ctx.currentTime, 0.15);
+    };
+    return {
+      set: (v: number): void => {
+        if (stopped) return;
+        k = Math.max(0, Math.min(1, fin(v, 0)));
+        apply();
+      },
+      setDistance: (m: number): void => {
+        if (stopped) return;
+        dist = Math.max(0, fin(m, 20));
+        apply();
+      },
+      stop: (): void => {
+        if (stopped) return;
+        stopped = true;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+        o.stop(ctx.currentTime + 1);
+        n.stop(ctx.currentTime + 1);
+      }
+    };
+  }
+
+  /** A grenade's pin out and a beep-beep counting down (the door charge), `n` beeps from now. */
+  chargeBeep(urgent: boolean): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.3, 0.2);
+    this.partial(out, { D: 0.09, type: 'square', f: urgent ? 2200 : 1700, gain: 0.3, attack: 0.002 });
+  }
+
   /** A jetpack: a ragged blowtorch roar and hiss, no turbine whine; sputters when setThrust jumps about. */
   jetpackLoop(): { setThrust(k: number): void; setDistance(m: number): void; stop(): void } {
     return this.thrusterLoop(true);

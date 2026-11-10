@@ -24,14 +24,17 @@ const TUBE_R = 0.22;
 
 /** Lying back in the hole: hips low, the back on the rear of the ring, the legs over the front, the head up looking out. */
 const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
-  hips: V3(0, 0.17, 0.0),
-  lean: [-52, -6, -4, -2, 22, 18],
+  hips: V3(0, 0.05, 0.04),
+  lean: [-58, -8, -6, -2, 26, 22],
   legs: {
     // Legs crossed at the ankle out over the front of the ring: the right over the left
-    l: { ankle: V3(-0.03, 0.06, 0.74), knee: V3(0.3, 1, 0.35), turn: -6 },
-    r: { ankle: V3(0.07, 0.16, 0.76), knee: V3(-0.3, 1, 0.35), turn: 10 }
+    l: { ankle: V3(-0.04, 0.1, 0.86), knee: V3(0.25, 1, 0.4), turn: -6 },
+    r: { ankle: V3(0.06, 0.19, 0.88), knee: V3(-0.25, 1, 0.4), turn: 10 }
   }
 };
+// Dev builds: the pose, to tune it live from the console
+if (import.meta.env.DEV) (window as unknown as { __menuPose: unknown }).__menuPose = RECLINE;
+
 /** His grip on the phone: fingers round the back of it, thumb on the side. */
 const PHONE_HAND: HandShape = { fingers: [[30, 45, 30], [38, 50, 32], [45, 55, 34], [52, 60, 36]], thumb: [0.35, 0.3, 0.2] };
 
@@ -43,12 +46,15 @@ const WAVES: [number, number, number, number, number][] = [
   [0.9, -0.5, 2.1, 0.014, 2.2]
 ];
 
+/** How fast the swell runs: slow, a lazy day. */
+const WAVE_PACE = 0.19;
+
 function waveAt(x: number, z: number, t: number): number {
   let h = 0;
   for (const [dx, dz, len, amp, sp] of WAVES) {
     const l = Math.hypot(dx, dz);
     const k = (Math.PI * 2) / len;
-    h += amp * Math.sin(k * ((dx / l) * x + (dz / l) * z) - t * sp * Math.sqrt(9.8 * k) * 0.35);
+    h += amp * Math.sin(k * ((dx / l) * x + (dz / l) * z) - t * sp * Math.sqrt(9.8 * k) * WAVE_PACE);
   }
   return h;
 }
@@ -67,6 +73,7 @@ export class MainMenuScene implements GameScene {
   private lid!: THREE.Object3D;
   private bowl!: THREE.Group;
   private steam: THREE.Sprite[] = [];
+  private gulls: THREE.Mesh[] = [];
   private waterMat!: THREE.ShaderMaterial;
   private sunDir = V3(-0.35, 0.42, 1).normalize();
   private mouse = { x: 0, y: 0 };
@@ -144,7 +151,7 @@ export class MainMenuScene implements GameScene {
         uniform float uT;
         varying vec3 vW;
         varying vec3 vN;
-        ${WAVES.map((w, i) => `const vec4 W${i} = vec4(${(w[0] / Math.hypot(w[0], w[1])).toFixed(4)}, ${(w[1] / Math.hypot(w[0], w[1])).toFixed(4)}, ${((Math.PI * 2) / w[2]).toFixed(4)}, ${w[3].toFixed(4)}); const float S${i} = ${(w[4] * Math.sqrt((9.8 * Math.PI * 2) / w[2]) * 0.35).toFixed(4)};`).join('\n')}
+        ${WAVES.map((w, i) => `const vec4 W${i} = vec4(${(w[0] / Math.hypot(w[0], w[1])).toFixed(4)}, ${(w[1] / Math.hypot(w[0], w[1])).toFixed(4)}, ${((Math.PI * 2) / w[2]).toFixed(4)}, ${w[3].toFixed(4)}); const float S${i} = ${(w[4] * Math.sqrt((9.8 * Math.PI * 2) / w[2]) * WAVE_PACE).toFixed(4)};`).join('\n')}
         void wave(vec4 w, float s, vec2 p, inout float h, inout vec2 d) {
           float ph = w.z * dot(w.xy, p) - uT * s;
           h += w.w * sin(ph);
@@ -171,28 +178,49 @@ export class MainMenuScene implements GameScene {
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+        float fbm(vec2 p){ float v = 0.0; float a = 0.5; for (int i = 0; i < 3; i++) { v += a * noise(p); p = p * 2.07 + 13.1; a *= 0.5; } return v; }
+        // A rippled normal from noise: the slope of fbm, sampled either side
+        vec2 slope(vec2 p){ float e = 0.12; return vec2(fbm(p + vec2(e, 0.0)) - fbm(p - vec2(e, 0.0)), fbm(p + vec2(0.0, e)) - fbm(p - vec2(0.0, e))) / (2.0 * e); }
         void main() {
+          float t = uT * 0.55;
           vec3 V = normalize(cameraPosition - vW);
-          // A little extra ripple in the normal for the sparkle
-          vec2 rp = vW.xz * 1.7 + vec2(uT * 0.4, uT * 0.25);
-          vec3 N = normalize(vN + vec3(noise(rp) - 0.5, 0.0, noise(rp + 7.3) - 0.5) * 0.18);
           float dist = length(vW.xz - cameraPosition.xz);
-          // Clear turquoise over the sand near, sapphire further out
-          vec3 shallow = vec3(0.22, 0.86, 0.83);
+          float near = 1.0 - smoothstep(8.0, 70.0, dist);
+          // Ripples on the swell, three sizes, each drifting its own way (fine ones only close by)
+          vec2 s1 = slope(vW.xz * 0.45 + vec2(t * 0.11, t * 0.05));
+          vec2 s2 = slope(vW.xz * 1.6 + vec2(-t * 0.16, t * 0.12));
+          vec2 s3 = slope(vW.xz * 5.0 + vec2(t * 0.3, -t * 0.22));
+          vec2 rip = s1 * 0.22 + s2 * 0.14 * (0.4 + 0.6 * near) + s3 * 0.07 * near;
+          vec3 N = normalize(vN + vec3(-rip.x, 0.0, -rip.y));
+          // Colour: turquoise over white sand close in, patches of deeper water and pale sandbars
+          // across the sea (large, slow noise), sapphire out toward the horizon
+          vec3 shallow = vec3(0.24, 0.87, 0.84);
+          vec3 bright = vec3(0.45, 0.93, 0.88);
           vec3 mid = vec3(0.07, 0.62, 0.78);
-          vec3 deep = vec3(0.03, 0.33, 0.62);
-          vec3 base = mix(shallow, mid, smoothstep(6.0, 45.0, dist));
-          base = mix(base, deep, smoothstep(45.0, 240.0, dist));
-          // Light through the waves onto the sand: soft caustic lace, near only
-          float caus = pow(noise(vW.xz * 1.3 + uT * 0.3) * noise(vW.xz * 1.9 - uT * 0.25), 2.0);
-          base += vec3(0.25, 0.35, 0.3) * caus * (1.0 - smoothstep(4.0, 30.0, dist));
+          vec3 deep = vec3(0.03, 0.32, 0.6);
+          float patchy = fbm(vW.xz * 0.018 + 4.0);
+          vec3 base = mix(shallow, mid, smoothstep(0.42, 0.7, patchy));
+          base = mix(base, bright, smoothstep(0.62, 0.8, fbm(vW.xz * 0.03 - 9.0)) * 0.6);
+          base = mix(base, mid, smoothstep(10.0, 60.0, dist) * 0.55);
+          base = mix(base, deep, smoothstep(70.0, 260.0, dist));
+          // Sunlight through the waves onto the sand: the caustic lace, near only
+          float c1 = noise(vW.xz * 1.4 + vec2(t * 0.35, t * 0.2));
+          float c2 = noise(vW.xz * 2.1 - vec2(t * 0.25, t * 0.3));
+          float caus = pow(1.0 - abs(c1 - c2) * 2.0, 6.0);
+          base += vec3(0.22, 0.32, 0.28) * caus * (1.0 - smoothstep(3.0, 25.0, dist));
+          // Light inside the swell: crests a touch greener, troughs a touch deeper
+          base += vec3(0.02, 0.07, 0.04) * clamp(vW.y * 7.0, -1.0, 1.0);
           float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
-          vec3 col = mix(base, uSky * 1.05, clamp(fres, 0.0, 0.85));
+          vec3 col = mix(base, uSky * 1.04, clamp(fres, 0.0, 0.8));
           vec3 R = reflect(-V, N);
           float sp = max(dot(R, uSun), 0.0);
-          col += vec3(1.0, 0.95, 0.85) * (pow(sp, 260.0) * 3.0 + pow(sp, 60.0) * 0.1);
-          // Foamy little crests on the near waves
-          col += vec3(0.3) * smoothstep(0.13, 0.19, vW.y) * (1.0 - smoothstep(10.0, 40.0, dist));
+          col += vec3(1.0, 0.95, 0.85) * (pow(sp, 300.0) * 2.6 + pow(sp, 70.0) * 0.08);
+          // Glitter: tiny bright points where the fine ripples catch the sun
+          float g = step(0.985, hash(floor(vW.xz * 9.0) + floor(t * 3.0))) * pow(sp, 6.0);
+          col += vec3(1.0, 0.97, 0.9) * g * 1.4 * smoothstep(9.0, 22.0, dist) * (1.0 - smoothstep(60.0, 160.0, dist));
+          // Thin lines of foam along the crests, broken up
+          float crest = smoothstep(0.1, 0.16, vW.y) * smoothstep(0.45, 0.75, fbm(vW.xz * 0.9 + t * 0.1));
+          col = mix(col, vec3(0.92, 0.97, 0.97), crest * 0.45 * near);
           // Into the haze at the horizon
           col = mix(col, uSky, smoothstep(220.0, 440.0, dist));
           gl_FragColor = vec4(col, 1.0);
@@ -221,65 +249,188 @@ export class MainMenuScene implements GameScene {
   private buildIsland(): void {
     const s = this.scene;
     // Haze for anything solid far off (the water and sky do their own)
-    s.fog = new THREE.Fog(0xb4dcf2, 120, 620);
+    s.fog = new THREE.Fog(0xb4dcf2, 140, 700);
     const isle = new THREE.Group();
     // Left of frame is +X (he, and the camera, look down +Z)
     isle.position.set(98, -0.6, 265);
     s.add(isle);
-    const sand = new THREE.Mesh(new THREE.CylinderGeometry(24, 28, 1.6, 40), new THREE.MeshStandardMaterial({ color: 0xf2e2b8, roughness: 1 }));
+    let seed = 7;
+    const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    // The lagoon: pale turquoise shallows spreading out round it, fading into the sea
+    {
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      const g = c.getContext('2d')!;
+      const grad = g.createRadialGradient(128, 128, 40, 128, 128, 128);
+      grad.addColorStop(0, 'rgba(150,240,225,0.95)');
+      grad.addColorStop(0.45, 'rgba(90,225,215,0.7)');
+      grad.addColorStop(1, 'rgba(60,200,210,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 256, 256);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const lagoon = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+      lagoon.rotation.x = -Math.PI / 2;
+      lagoon.scale.set(62, 50, 1);
+      lagoon.position.y = 0.66;
+      lagoon.renderOrder = 1;
+      isle.add(lagoon);
+    }
+    // Sand: a wet darker rim, the dry white beach on it
+    const wet = new THREE.Mesh(new THREE.CylinderGeometry(30, 31.5, 0.9, 48), new THREE.MeshStandardMaterial({ color: 0xcdb98c, roughness: 0.6 }));
+    wet.scale.set(1.25, 1, 0.82);
+    wet.position.y = 0.2;
+    isle.add(wet);
+    const sand = new THREE.Mesh(new THREE.CylinderGeometry(25, 29, 1.6, 48), new THREE.MeshStandardMaterial({ color: 0xf6e9c6, roughness: 1 }));
     sand.scale.set(1.25, 1, 0.8);
+    sand.position.y = 0.3;
     isle.add(sand);
-    // The green: a few overlapping squashed domes, bumpy, deep and bright greens
-    const greens = [0x2f7d32, 0x3f9a3a, 0x276b2b, 0x4caf50];
-    const lumps: [number, number, number, number, number][] = [
-      [0, 0, 0, 17, 9], [-9, 0, 3, 11, 7], [10, 0, -2, 12, 6.5], [3, 0, -6, 9, 10.5], [-4, 0, -4, 8, 8]
+    // Surf breaking white round the edge
+    const surf = new THREE.Mesh(new THREE.RingGeometry(0.97, 1.05, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.65, side: THREE.DoubleSide }));
+    surf.rotation.x = -Math.PI / 2;
+    surf.scale.set(31.5 * 1.25, 31.5 * 0.82, 1);
+    surf.position.y = 0.68;
+    isle.add(surf);
+    // The green: overlapping bumpy hills, deep and bright greens, a peak off-centre
+    const greens = [0x2f7d32, 0x3f9a3a, 0x276b2b, 0x4caf50, 0x1f5f25, 0x5cbf4a];
+    const lumps: [number, number, number, number][] = [
+      [0, 0, 17, 9], [-9, 3, 11, 7], [10, -2, 12, 6.5], [3, -6, 9, 13], [-4, -4, 8, 9.5], [14, 5, 7, 5], [-15, -3, 6, 4.5]
     ];
-    lumps.forEach(([x, , z, r, h], i) => {
-      const g = new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+    lumps.forEach(([x, z, r, h], i) => {
+      const g = new THREE.SphereGeometry(1, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
       const p = g.getAttribute('position');
       for (let k = 0; k < p.count; k++) {
         const vx = p.getX(k);
         const vy = p.getY(k);
         const vz = p.getZ(k);
-        const n = 1 + 0.08 * Math.sin(vx * 7 + i) * Math.sin(vz * 6 - i) + 0.05 * Math.sin(vx * 17 + vz * 13);
+        const n = 1 + 0.09 * Math.sin(vx * 7 + i) * Math.sin(vz * 6 - i) + 0.06 * Math.sin(vx * 17 + vz * 13) + 0.04 * Math.sin(vx * 31 - vz * 23 + i);
         p.setXYZ(k, vx * n, vy * n, vz * n);
       }
       g.computeVertexNormals();
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: greens[i % greens.length], roughness: 0.9, flatShading: true }));
       m.scale.set(r, h, r * 0.85);
-      m.position.set(x, 0.6, z);
+      m.position.set(x, 0.9, z);
       isle.add(m);
     });
-    // Palms round the beach, leaning out
+    // Undergrowth: clumps of bushes round the foot of the hills, down to the sand
+    const bush = new THREE.IcosahedronGeometry(1, 1);
+    for (let i = 0; i < 46; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = 12 + rnd() * 9;
+      const b = new THREE.Mesh(bush, new THREE.MeshStandardMaterial({ color: greens[Math.floor(rnd() * greens.length)], roughness: 0.9, flatShading: true }));
+      const sc = 1.2 + rnd() * 2.2;
+      b.scale.set(sc, sc * 0.7, sc);
+      b.position.set(Math.cos(a) * r * 1.2, 1 + sc * 0.3, Math.sin(a) * r * 0.8);
+      isle.add(b);
+    }
+    // Rocks at the water's edge on one side
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x8a8580, roughness: 0.95, flatShading: true });
+    for (let i = 0; i < 9; i++) {
+      const a = -0.6 + rnd() * 1.1;
+      const r = 28 + rnd() * 4;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8 + rnd() * 1.6, 0), rockMat);
+      rock.position.set(Math.cos(a) * r * 1.2, 0.6, Math.sin(a) * r * 0.8);
+      rock.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
+      isle.add(rock);
+    }
+    // Palms: curved trunks, drooping fronds, coconuts
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8a6a44, roughness: 0.9 });
     const frondMat = new THREE.MeshStandardMaterial({ color: 0x2e8b3a, roughness: 0.8, side: THREE.DoubleSide });
-    const frond = new THREE.PlaneGeometry(1.6, 6);
-    frond.translate(0, 3, 0);
-    for (let i = 0; i < 11; i++) {
-      const a = (i / 11) * Math.PI * 2 + Math.sin(i * 3.7) * 0.2;
-      const r = 17 + Math.sin(i * 5.1) * 3;
-      const palm = new THREE.Group();
-      palm.position.set(Math.cos(a) * r * 1.2, 0.8, Math.sin(a) * r * 0.8);
-      const h = 9 + (i % 3) * 2;
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, h, 7), trunkMat);
-      trunk.position.y = h / 2;
-      palm.add(trunk);
-      for (let k = 0; k < 7; k++) {
-        const f = new THREE.Mesh(frond, frondMat);
-        f.position.y = h;
-        f.rotation.set(0, (k / 7) * Math.PI * 2, 1.1 + Math.sin(k * 2.3) * 0.2, 'YXZ');
-        palm.add(f);
+    const frondMat2 = new THREE.MeshStandardMaterial({ color: 0x46a33f, roughness: 0.8, side: THREE.DoubleSide });
+    const nutMat = new THREE.MeshStandardMaterial({ color: 0x5a3f22, roughness: 0.8 });
+    // A frond: a long tapering leaf, bending down along its length
+    const frond = new THREE.PlaneGeometry(1.4, 6.5, 1, 10);
+    frond.translate(0, 3.25, 0);
+    {
+      const p = frond.getAttribute('position');
+      for (let k = 0; k < p.count; k++) {
+        const u = p.getY(k) / 6.5;
+        p.setX(k, p.getX(k) * (1 - u * 0.85));
+        p.setZ(k, u * u * 2.6);
       }
-      // Leaning away from the middle of the island
-      palm.rotation.set(Math.sin(a) * 0.25, 0, -Math.cos(a) * 0.25);
-      isle.add(palm);
+      frond.computeVertexNormals();
     }
-    // Surf breaking white round the edge
-    const surf = new THREE.Mesh(new THREE.RingGeometry(0.98, 1.06, 48), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
-    surf.rotation.x = -Math.PI / 2;
-    surf.scale.set(30 * 1.12, 28 * 0.85, 1);
-    surf.position.y = 0.62;
-    isle.add(surf);
+    const palm = (x: number, z: number, h: number, leanA: number, lean: number): void => {
+      const tree = new THREE.Group();
+      tree.position.set(x, 0.9, z);
+      // The trunk bends over toward its lean, in segments
+      const bend = (u: number): THREE.Vector3 => V3(Math.cos(leanA) * lean * u * u * h, u * h, Math.sin(leanA) * lean * u * u * h);
+      const segs = 5;
+      for (let k = 0; k < segs; k++) {
+        const a = bend(k / segs);
+        const b = bend((k + 1) / segs);
+        const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.42 - ((k + 1) / segs) * 0.15, 0.48 - (k / segs) * 0.15, a.distanceTo(b), 7), trunkMat);
+        seg.position.copy(a).lerp(b, 0.5);
+        seg.quaternion.setFromUnitVectors(V3(0, 1, 0), b.clone().sub(a).normalize());
+        tree.add(seg);
+      }
+      const crown = new THREE.Group();
+      crown.position.copy(bend(1));
+      tree.add(crown);
+      const n = 8 + Math.floor(rnd() * 3);
+      for (let k = 0; k < n; k++) {
+        const f = new THREE.Mesh(frond, k % 2 ? frondMat : frondMat2);
+        f.rotation.set(1.05 + rnd() * 0.45, (k / n) * Math.PI * 2 + rnd() * 0.3, 0, 'YXZ');
+        crown.add(f);
+      }
+      for (let k = 0; k < 4; k++) {
+        const c = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), nutMat);
+        c.position.set(Math.cos(k * 1.7) * 0.45, -0.35, Math.sin(k * 1.7) * 0.45);
+        crown.add(c);
+      }
+      isle.add(tree);
+    };
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2 + rnd() * 0.3;
+      const r = 15 + rnd() * 8;
+      // Leaning out over the water
+      palm(Math.cos(a) * r * 1.2, Math.sin(a) * r * 0.8, 8 + rnd() * 5, a + (rnd() - 0.5) * 0.6, 0.18 + rnd() * 0.22);
+    }
+    for (let i = 0; i < 6; i++) palm((rnd() - 0.5) * 16, (rnd() - 0.5) * 10, 9 + rnd() * 4, rnd() * 6.28, 0.08);
+    // A beach hut on stilts with a thatched roof, and a little jetty out from it
+    const wood = new THREE.MeshStandardMaterial({ color: 0x9a7650, roughness: 0.9 });
+    const thatch = new THREE.MeshStandardMaterial({ color: 0xc8a25c, roughness: 1 });
+    const hut = new THREE.Group();
+    hut.position.set(-6, 0.9, -22);
+    hut.rotation.y = 0.4;
+    for (const [hx, hz] of [[-2, -1.6], [2, -1.6], [-2, 1.6], [2, 1.6]]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 2, 6), wood);
+      post.position.set(hx, 1, hz);
+      hut.add(post);
+    }
+    const room = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.4, 3.6), wood);
+    room.position.y = 3.2;
+    hut.add(room);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(4.2, 2.6, 4), thatch);
+    roof.rotation.y = Math.PI / 4;
+    roof.position.y = 5.6;
+    roof.scale.set(1.25, 1, 1);
+    hut.add(roof);
+    const door = new THREE.Mesh(new THREE.PlaneGeometry(1, 1.7), new THREE.MeshStandardMaterial({ color: 0x3a2a1a }));
+    door.position.set(0, 2.95, -1.81);
+    door.rotation.y = Math.PI;
+    hut.add(door);
+    isle.add(hut);
+    const jetty = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.25, 12), wood);
+    jetty.position.set(-9, 1.0, -30);
+    jetty.rotation.y = 0.4;
+    isle.add(jetty);
+    for (let k = 0; k < 5; k++) {
+      const pile = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.6, 6), wood);
+      pile.position.set(-9 - Math.sin(0.4) * (k * 2.6 - 5), 0.3, -30 - Math.cos(0.4) * (k * 2.6 - 5));
+      isle.add(pile);
+    }
+    // Gulls wheeling over it
+    const gull = new THREE.BufferGeometry();
+    gull.setAttribute('position', new THREE.Float32BufferAttribute([-0.9, 0.25, 0, 0, 0, 0.12, 0.9, 0.25, 0, 0, 0.06, -0.15], 3));
+    gull.setIndex([0, 1, 3, 1, 2, 3]);
+    for (let k = 0; k < 4; k++) {
+      const b = new THREE.Mesh(gull, new THREE.MeshBasicMaterial({ color: 0xf5f5f5, side: THREE.DoubleSide }));
+      b.scale.setScalar(1.6);
+      b.userData = { r: 14 + k * 6, h: 18 + k * 3, w: 0.15 + k * 0.04, a: k * 1.6 };
+      isle.add(b);
+      this.gulls.push(b);
+    }
   }
 
   // ----------------------------------------------------------------- float
@@ -463,11 +614,13 @@ export class MainMenuScene implements GameScene {
     this.phone.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(upO, out.clone().negate()), upO, out.clone().negate()));
     this.phone.position.copy(ear).addScaledVector(out, 0.022).addScaledVector(upO, -0.04);
     // The hand round the back of the base: the wrist below and outside it
-    const wrist = this.phone.position.clone().addScaledVector(upO, -0.075).addScaledVector(out, 0.035).addScaledVector(fwd, 0.005);
+    // The hand cupped under and behind it, fingers up its back: the wrist just under the jaw line
+    const wrist = this.phone.position.clone().addScaledVector(upO, -0.1).addScaledVector(out, 0.03).addScaledVector(fwd, 0.015);
     rig.seat({
       ...trunk,
       arms: {
-        r: { wrist, along: upO.clone().addScaledVector(out, -0.25).normalize(), palm: out.clone().negate(), elbow: V3(-1, -0.6, 0.2), shape: PHONE_HAND },
+        // Elbow down and out in front of his chest, the forearm up to his ear — not cocked up behind his head
+        r: { wrist, along: upO.clone().addScaledVector(out, -0.15).normalize(), palm: out.clone().negate(), elbow: fwd.clone().multiplyScalar(0.7).add(V3(-0.5, -1, 0)).normalize(), shape: PHONE_HAND },
         l: { wrist: V3(0.36, 0.25, 0.06), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
       }
     });
@@ -516,8 +669,17 @@ export class MainMenuScene implements GameScene {
     const sz = (waveAt(f.position.x, f.position.z + e, time) - waveAt(f.position.x, f.position.z - e, time)) / (2 * e);
     // Riding high, as a float does with a man sat in it: the hole's above the water
     f.position.y = 0.05 + h;
-    f.rotation.set(sz * 0.8, Math.sin(time * 0.05) * 0.25, -sx * 0.8, 'YXZ');
+    f.rotation.set(sz * 0.55, Math.sin(time * 0.03) * 0.18, -sx * 0.55, 'YXZ');
     this.poseRavi(time);
+
+    // Gulls wheeling over the island, flapping now and then, gliding between
+    for (const b of this.gulls) {
+      const d = b.userData as { r: number; h: number; w: number; a: number };
+      const a = d.a + time * d.w;
+      b.position.set(Math.cos(a) * d.r, d.h + Math.sin(time * 0.4 + d.a) * 1.5, Math.sin(a) * d.r * 0.8);
+      const flap = Math.sin(time * 0.7 + d.a) > 0.3 ? 1 : 0.15;
+      b.rotation.set(Math.sin(time * 6 + d.a) * 0.35 * flap, -a, 0.15);
+    }
 
     // Steam off the curry
     for (const sp of this.steam) {

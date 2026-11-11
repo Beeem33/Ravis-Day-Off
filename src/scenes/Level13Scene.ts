@@ -495,7 +495,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       <div class="hq-card" style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;
         opacity:0;transition:opacity 1.2s;pointer-events:none;color:#e8e6df;letter-spacing:8px">
         <div style="font-size:13px;opacity:.6;letter-spacing:6px;margin-bottom:18px">LEVEL 13 — THE UNDERWORKS</div>
-        <div style="font-size:42px;font-weight:bold">TO BE CONTINUED</div>
+        <div style="font-size:42px;font-weight:bold">COMPLETE</div>
       </div>
     `;
     this.ctx.uiRoot.appendChild(el);
@@ -1474,7 +1474,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (t > 5.4) this.fadeEl.style.transition = 'opacity 1s';
     if (t > 5.4) this.fadeEl.style.opacity = '1';
     if (t > 6.6) this.card.style.opacity = '1';
-    if (t > 11 && !this.handedOff) {
+    if (t > 9 && !this.handedOff) {
       this.handedOff = true;
       this.phase = 'done';
       this.ctx.bus.emit(Events.Level13Complete);

@@ -1329,9 +1329,9 @@ export class Enemy {
    * model it is closed in the hand and rides it; on the block build it
    * hangs where the rig's hand is.
    */
-  holdProp(o: THREE.Object3D, out = 0.03): void {
+  holdProp(o: THREE.Object3D, out = 0.03, side: 'L' | 'R' = 'R'): void {
     if (this.hitman) {
-      this.hitman.holdInHand('R', o, out);
+      this.hitman.holdInHand(side, o, out);
       return;
     }
     o.position.set(0, -0.31, 0);

@@ -5156,6 +5156,165 @@ export class AudioManager {
     return this.thrusterLoop(true);
   }
 
+  // ------------------------------------------------------------ Level 14
+
+  /** The building coming down: a deep grinding roar with cracks and thumps in it. set(0..1). */
+  rumbleLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    out.connect(this.sfxBus);
+    const srcs: AudioScheduledSourceNode[] = [];
+    const layer = (type: BiquadFilterType, f: number, q: number, g: number, rate: number): void => {
+      const s = ctx.createBufferSource();
+      s.buffer = this.noiseBuffer;
+      s.loop = true;
+      s.playbackRate.value = rate;
+      const flt = ctx.createBiquadFilter();
+      flt.type = type;
+      flt.frequency.value = f;
+      flt.Q.value = q;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      s.connect(flt).connect(gn).connect(out);
+      s.start(ctx.currentTime, Math.random());
+      srcs.push(s);
+    };
+    layer('lowpass', 90, 0.8, 0.9, 0.35);
+    layer('bandpass', 260, 1.4, 0.18, 0.5);
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = 33;
+    const sg = ctx.createGain();
+    sg.gain.value = 0.25;
+    sub.connect(sg).connect(out);
+    sub.start();
+    srcs.push(sub);
+    let alive = true;
+    let k = 0;
+    let timer = 0;
+    const tick = (): void => {
+      if (!alive || !this.ctx) return;
+      if (k > 0.05) {
+        // Cracks and the thump of something heavy landing
+        if (Math.random() < 0.7) this.burst(out, { D: 0.08 + Math.random() * 0.1, type: 'bandpass', f: 900 + Math.random() * 1600, q: 2, gain: 0.25 * k, attack: 0.002 });
+        if (Math.random() < 0.4) this.partial(out, { D: 0.3, type: 'sine', f: 70 + Math.random() * 30, f1: 35, gain: 0.5 * k, attack: 0.004 });
+      }
+      timer = window.setTimeout(tick, 120 + Math.random() * 260);
+    };
+    timer = window.setTimeout(tick, 100);
+    return {
+      set: (v: number): void => {
+        k = Math.max(0, Math.min(1.2, v));
+        out.gain.setTargetAtTime(0.55 * k, ctx.currentTime, 0.3);
+      },
+      stop: (): void => {
+        if (!alive) return;
+        alive = false;
+        window.clearTimeout(timer);
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+        for (const s of srcs) s.stop(ctx.currentTime + 2);
+      }
+    };
+  }
+
+  /** The portal: a low, beating hum and a high shimmer over it, louder the nearer he is. */
+  portalHum(): { setDistance(m: number): void; stop(): void } {
+    const idle = { setDistance: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    out.connect(this.sfxBus);
+    const srcs: AudioScheduledSourceNode[] = [];
+    for (const [f, g, type] of [[55, 0.3, 'sine'], [55.7, 0.25, 'sine'], [110.4, 0.1, 'triangle'], [331, 0.025, 'sawtooth']] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      o.connect(gn).connect(out);
+      o.start();
+      srcs.push(o);
+    }
+    const s = ctx.createBufferSource();
+    s.buffer = this.noiseBuffer;
+    s.loop = true;
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = 3200;
+    flt.Q.value = 3;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.06;
+    s.connect(flt).connect(ng).connect(out);
+    s.start();
+    srcs.push(s);
+    let alive = true;
+    return {
+      setDistance: (m: number): void => {
+        if (!alive) return;
+        out.gain.setTargetAtTime(Math.min(0.6, 5 / (m + 4)) * 0.6, ctx.currentTime, 0.2);
+      },
+      stop: (): void => {
+        if (!alive) return;
+        alive = false;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+        for (const x of srcs) x.stop(ctx.currentTime + 1.5);
+      }
+    };
+  }
+
+  /** Swelling: a rubbery stretching squeal, rising, with creaks, over `seconds`. */
+  inflate(seconds: number): { stop(): void } {
+    const idle = { stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = this.place(ctx, 0, 0.45, 0.1);
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.exponentialRampToValueAtTime(520, t + seconds);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 23;
+    const lg = ctx.createGain();
+    lg.gain.value = 18;
+    lfo.connect(lg).connect(o.frequency);
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.setValueAtTime(400, t);
+    flt.frequency.exponentialRampToValueAtTime(1800, t + seconds);
+    flt.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.35, t + 0.3);
+    g.gain.setValueAtTime(0.35, t + seconds - 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + seconds + 0.1);
+    o.connect(flt).connect(g).connect(out);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + seconds + 0.2);
+    lfo.stop(t + seconds + 0.2);
+    for (let a = 0.2; a < seconds; a += 0.18 + Math.random() * 0.2) this.burst(out, { at: a, D: 0.07, type: 'bandpass', f: 500 + a * 400, q: 6, gain: 0.12, attack: 0.004 });
+    return {
+      stop: (): void => {
+        g.gain.cancelScheduledValues(ctx.currentTime);
+        g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.02);
+      }
+    };
+  }
+
+  /** A wet burst: a pop, a slap, and spatter coming down after it. */
+  squelchPop(): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.7, 0.3);
+    this.partial(out, { D: 0.12, type: 'sine', f: 240, f1: 60, gain: 0.8, attack: 0.002 });
+    this.burst(out, { D: 0.3, type: 'lowpass', f: 2400, f1: 400, gain: 0.7, attack: 0.002 });
+    for (let i = 0; i < 14; i++) this.burst(out, { at: 0.2 + Math.random() * 0.9, D: 0.05, type: 'bandpass', f: 800 + Math.random() * 1600, q: 3, gain: 0.12 + Math.random() * 0.1, attack: 0.002 });
+  }
+
   /** Whole game paused: everything in the audio graph holds where it is. */
   setPaused(on: boolean): void {
     if (!this.ctx) return;

@@ -2,17 +2,18 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { FPSPlayer } from './FPSPlayer';
 import { FirstPersonArms, grip } from './RaviVisual';
+import { quadShotgunModel } from './QuadShotgun';
 
 /**
  * Ravi's hands on the two box anchors (each in the box's own frame): the
  * right round the wrist of the stock, trigger finger in the guard; the left
  * wrapped round the pump, riding it through every stroke.
  */
-const GRIP_R = grip([0.0375, 0.061, 0.015], [-0.1, -0.6, -0.79], [-1, 0.1, 0], [0.2, -0.35, 0.9], {
+export const GRIP_R = grip([0.0375, 0.061, 0.015], [-0.1, -0.6, -0.79], [-1, 0.1, 0], [0.2, -0.35, 0.9], {
   fingers: [[-10, 15, 15], [80, 85, 35], [84, 85, 35], [88, 85, 35]],
   thumb: [0.3, 0.2, 0.1]
 });
-const GRIP_L = grip([-0.046, -0.017, 0.037], [0.8, 0.05, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
+export const GRIP_L = grip([-0.046, -0.017, 0.037], [0.8, 0.05, -0.6], [0, 1, 0], [-0.18, -0.22, 0.3], {
   fingers: [[60, 70, 30], [62, 70, 30], [64, 70, 32], [66, 70, 34]],
   thumb: [0.2, 0.15, 0.1]
 });
@@ -277,6 +278,36 @@ export class ShotgunViewmodel {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
+  }
+
+  private quad: THREE.Group | null = null;
+
+  /**
+   * Swap the 12-gauge for the Collective's quad-barrel from the lab crate.
+   * Same frame, same grip and sight line, so every pose and hand still fits;
+   * its loop and slide ride the pump group.
+   */
+  useQuad(): void {
+    if (this.quad) return;
+    const q = quadShotgunModel();
+    this.quad = q.group;
+    this.model.visible = false;
+    this.gun.add(q.group);
+    q.pump.removeFromParent();
+    q.pump.position.set(0, 0, 0);
+    this.pump.add(q.pump);
+    this.muzzle.position.copy(q.muzzle.position);
+    this.port.position.set(0.036, 0.03, 0.04);
+  }
+
+  get isQuad(): boolean {
+    return this.quad !== null;
+  }
+
+  /** Work the pump once, no shot: a fresh gun chambered. */
+  rack(): void {
+    this.pumpT = 0;
+    this.pumpFired.clear();
   }
 
   /** World-space muzzle position (for pellet tracers). */

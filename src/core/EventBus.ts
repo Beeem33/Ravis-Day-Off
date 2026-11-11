@@ -100,6 +100,10 @@ export const Events = {
   RestartLevel13: 'restart-level13',
   /** The door at the end of the walkways blown. */
   Level13Complete: 'level13-complete',
+  /** {checkpoint: number} — Level 14 again: 0 the way in, 1 the fight, 2 the run. */
+  RestartLevel14: 'restart-level14',
+  /** Through the portal at the end of the hallway. */
+  Level14Complete: 'level14-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -122,7 +126,8 @@ export const LEVELS = [
   { id: 'airport', n: '11', name: 'THE AIRPORT', blurb: 'Stop that jet' },
   { id: 'runway', n: '11 ALT', name: 'LEFT ON THE RUNWAY', blurb: 'Alternate Level 11 — the jet gets away, and the van turns up' },
   { id: 'hq', n: '12', name: 'THE EXTERMINATOR COLLECTIVE', blurb: 'Through the gates, the towers, and up to the headquarters' },
-  { id: 'level13', n: '13', name: 'THE UNDERWORKS', blurb: 'Down the tube, through the sewers, across the walkways over the abyss' }
+  { id: 'level13', n: '13', name: 'THE UNDERWORKS', blurb: 'Down the tube, through the sewers, across the walkways over the abyss' },
+  { id: 'level14', n: '14', name: 'THE LABORATORY', blurb: 'The report, the crate, the scientists, the hallway and the portal' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

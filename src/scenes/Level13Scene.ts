@@ -1556,8 +1556,12 @@ export class Level13Scene extends CombatScene<Level13Data> {
     for (const l of L.lights.hall) l.intensity = inSewer ? 0 : (l.userData.k ??= l.intensity);
     L.lights.sewer.forEach((l, i) => {
       l.userData.k ??= l.intensity;
-      const f = Math.sin(this.t * 13 + this.flick[i]) * Math.sin(this.t * 4.1 + this.flick[i] * 2);
-      l.intensity = inSewer ? (f < -0.85 ? 0.6 : (l.userData.k as number) * (0.85 + 0.15 * f)) : 0;
+      // Steady, the faintest hum; one lamp in four now and then stutters for a moment
+      const ph = this.flick[i];
+      const hum = 1 + 0.02 * Math.sin(this.t * 7 + ph);
+      const bad = i % 4 === 0 && Math.sin(this.t * 0.23 + ph) > 0.985;
+      const out = bad && Math.sin(this.t * 31 + ph * 3) < -0.2;
+      l.intensity = inSewer ? (l.userData.k as number) * (out ? 0.35 : hum) : 0;
     });
     for (const m of L.sludgeMats) {
       m.uniforms.uTime.value = this.t;

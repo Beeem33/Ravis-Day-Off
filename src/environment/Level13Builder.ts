@@ -4,9 +4,9 @@ import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas, tiling, noiseTile } from './Level8Builder';
 import { barrel } from './MechanicalProps';
-import { officeChair, officeDesk, trashCan, flowerPot, waterCooler } from './OfficeProps';
+import { officeChair, officeDesk, trashCan, flowerPot, waterCooler, printer, fileCabinet, paperStack, deskPhone, sodaCan, snack, fireAlarm } from './OfficeProps';
 import { cargoTexture, scissorGateTexture, monitor, screenPanel, poster, orderSheet, comic, type ScreenKind } from './Level13Props';
-import { shelfUnit, shelfTops, cleanerJug, sprayBottle, paintCan, cardboardBox, rollPack, mopBucket, mop, broom, wetFloorSign, toolbox, pegboard, hoseReel, hardHat, rubberBoots, workbench, janitorCart, doorSign, warnPlate, ecMug } from './Level13Props';
+import { shelfUnit, shelfTops, cleanerJug, sprayBottle, paintCan, cardboardBox, rollPack, mopBucket, mop, broom, wetFloorSign, toolbox, pegboard, hoseReel, hardHat, rubberBoots, workbench, janitorCart, doorSign, warnPlate, ecMug, wallClock, whiteboardStand, penCup, binderShelf, coatRack, fireExtinguisher, headset, stickyNotes } from './Level13Props';
 
 /**
  * Level13Builder — inside the Exterminator Collective.
@@ -618,7 +618,10 @@ function vatLiquidMaterial(colour: number): THREE.ShaderMaterial {
         float g1 = smoothstep(0.012, 0.0, abs(fract(vUv.x * 3.0 + 0.1 + 0.01 * sin(uTime * 0.3)) - 0.5));
         col += vec3(0.22) * g1 * (0.6 + 0.4 * vUv.y);
         float fogF = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
-        gl_FragColor = vec4(mix(col, fogColor, fogF), 1.0);
+        // This writes display colour straight out; the fog colour is linear (the lit materials get it
+        // encoded on the way out). Encode it here too, or far vats fade to a near-black instead of the haze.
+        vec3 fogDisplay = pow(fogColor, vec3(1.0 / 2.2));
+        gl_FragColor = vec4(mix(col, fogDisplay, fogF), 1.0);
       }
     `
   });
@@ -1413,12 +1416,33 @@ export class Level13Builder {
     this.add(M.hazard, box(Math.abs(fx) > 0.5 ? 0.02 : 0.62, 0.3, Math.abs(fx) > 0.5 ? 0.62 : 0.02, at.x - fx * (off + 0.02), at.y + 1.6, at.z - fz * (off + 0.02)));
     this.ladderTops.push(V(at.x - fx * 0.5, at.y + h + 0.4, at.z - fz * 0.5));
     if (cage) {
+      // Hoops wide and deep enough that he climbs inside them (his eye's 0.8 m off the wall),
+      // each fixed back to the rails, with straps up the back joining them
+      const C = 0.5;
+      const R = 0.62;
       for (let y = 2.4; y < h; y += 0.9) {
-        const ring = new THREE.TorusGeometry(0.42, 0.018, 4, 16, Math.PI);
+        // The half-hoop round behind him: its ends at the sides, bowed out on his side of the ladder
+        const ring = new THREE.TorusGeometry(R, 0.018, 4, 20, Math.PI);
         ring.rotateX(Math.PI / 2);
-        ring.rotateY(face + Math.PI / 2);
-        ring.translate(at.x - fx * 0.3, at.y + y, at.z - fz * 0.3);
+        ring.rotateY(face);
+        ring.translate(at.x - fx * C, at.y + y, at.z - fz * C);
         this.add(M.yellow, ring);
+        for (const s of [-1, 1]) {
+          const a = V(at.x + sx * 0.24 * s - fx * off, at.y + y, at.z + sz * 0.24 * s - fz * off);
+          const b = V(at.x + sx * R * s - fx * C, at.y + y, at.z + sz * R * s - fz * C);
+          const arm = new THREE.CylinderGeometry(0.016, 0.016, a.distanceTo(b), 4);
+          arm.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()));
+          arm.translate((a.x + b.x) / 2, a.y, (a.z + b.z) / 2);
+          this.add(M.yellow, arm);
+        }
+      }
+      for (const k of [-0.7, 0, 0.7]) {
+        const ang = Math.PI / 2 + k;
+        const px = Math.cos(ang) * R;
+        const pz = Math.sin(ang) * R;
+        const strap = new THREE.CylinderGeometry(0.016, 0.016, h - 2.4, 4);
+        strap.translate(at.x + sx * px - fx * (C + pz), at.y + 2.4 + (h - 2.4) / 2 - 0.45, at.z + sz * px - fz * (C + pz));
+        this.add(M.yellow, strap);
       }
     }
   }
@@ -1913,16 +1937,8 @@ export class Level13Builder {
     this.platform(44.0, 8.5, 47, 12.5, Y6, 'ns');
     this.add(M.hazard, span(44.0, Y6, 8.5, 44.3, Y6 + 0.012, 12.5), false, 0.5);
     this.walkway({ x0: 47, z0: 9.4, x1: 50, z1: 11.6, y: Y6, rails: 'both' });
-    // The end of walkway 5, where he drops onto it: a stripe and a sign
+    // The end of walkway 5, where he drops onto it: a hazard stripe
     this.add(M.hazard, span(40.2, H3, 42.9, 40.6, H3 + 0.012, 45.1), false, 0.5);
-    const sign = warnPlate('VAT LINE ↓ — RIDE AT OWN RISK', 1.6, 0.3);
-    sign.rotation.y = Math.PI;
-    sign.position.set(38.4, H3 + 1.4, 45.01);
-    this.group.add(sign);
-    const sign2 = warnPlate('ALIGHT HERE', 1.2, 0.3);
-    sign2.rotation.y = -Math.PI / 2;
-    sign2.position.set(44.03, Y6 + 1.4, 12.42);
-    this.group.add(sign2);
     return { x: X, y: Y, z0: z0 - 5, z1: z1 + 5, speed: -2.4, carts };
   }
 
@@ -1948,12 +1964,14 @@ export class Level13Builder {
    */
   private buildCargoLine(): Level13Data['cargo'] {
     const M = this.M;
-    const xa = 46.5;
+    const xa = 49.6;
     const xb = HALL.x1;
     const beamY = 65.2;
     // The dispatch tower they come out of, floor to roof
-    this.add(M.concrete, span(44.5, HALL.bottom, -3, xa, HALL.top, 7), true, 6);
-    for (const y of [H2 + 10, 80]) this.add(M.darkConcrete, span(44.2, y, -3.3, xa + 0.3, y + 1.2, 7.3), false, 6);
+    // A dispatch house, not a slab: five metres deep (the crates go right inside it), out to just short of
+    // the alighting platform, so from the cargo platform there's no seeing round the back of it
+    this.add(M.concrete, span(44.5, HALL.bottom, -3, xa, HALL.top, 8.3), true, 6);
+    for (const y of [H2 + 10, 80]) this.add(M.darkConcrete, span(44.2, y, -3.3, xa + 0.3, y + 1.2, 8.6), false, 6);
     const sign = warnPlate('CARGO DISPATCH 3', 2.6, 0.5);
     sign.rotation.y = Math.PI / 2;
     sign.position.set(xa + 0.02, 67.6, 2);
@@ -1994,7 +2012,8 @@ export class Level13Builder {
       ]);
       // Crates along the line, spaced so one comes by every few seconds
       const span_ = l.x1 - l.x0;
-      const n = 3;
+      // Two to a line, well spaced
+      const n = 2;
       for (let i = 0; i < n; i++) {
         const g = new THREE.Group();
         const k = (li * 2 + i) % 5;
@@ -2049,9 +2068,16 @@ export class Level13Builder {
     this.walkRail(54.1, -16, 56, -15.92, yb);
     // The frame: corner posts, bracing rings every 4 m, a winch house on top
     for (const x of [sx0, cx0, cx1, sx1]) for (const z of [z0, z1]) this.add(M.darkSteel, span(x - 0.1, base, z - 0.1, x + 0.1, top, z + 0.1));
+    // Bracing bars every 4 m, but never across the car's openings (one was landing right across the top one)
+    const openAt: Record<number, [number, number][]> = { [z0]: [[yb, yb + 2.6], [yt, yt + 2.6]], [z1]: [[yb, yb + 2.6]] };
     for (let y = base; y < top; y += 4) {
-      this.add(M.darkSteel, span(sx0, y, z0 - 0.08, sx1, y + 0.16, z0 + 0.08));
-      this.add(M.darkSteel, span(sx0, y, z1 - 0.08, sx1, y + 0.16, z1 + 0.08));
+      for (const z of [z0, z1]) {
+        const blocked = openAt[z].some(([a, b]) => y + 0.16 > a - 0.05 && y < b + 0.05);
+        if (blocked) {
+          this.add(M.darkSteel, span(sx0, y, z - 0.08, cx0 - 0.1, y + 0.16, z + 0.08));
+          this.add(M.darkSteel, span(cx1 + 0.1, y, z - 0.08, sx1, y + 0.16, z + 0.08));
+        } else this.add(M.darkSteel, span(sx0, y, z - 0.08, sx1, y + 0.16, z + 0.08));
+      }
     }
     this.add(M.darkSteel, span(sx0 - 0.2, top, z0 - 0.4, sx1 + 0.2, top + 0.3, z1 + 0.4));
     this.add(M.yellow, span(cx0 - 0.3, top + 0.3, z0 + 0.2, cx1 + 0.3, top + 1.4, z1 - 0.2));
@@ -2282,6 +2308,42 @@ export class Level13Builder {
     put(officeChair(), 52.1, y, -16.0, 0);
     put(trashCan(), 50.7, y, -14.6);
     put(flowerPot('dying'), 57.6, y, -23.3);
+    // ---- The rest of the office: a clock, the printer, filing, binders, the rota board, coats, the extinguisher
+    put(wallClock(), 51.6, y + 3.12, z0 + 0.22);
+    put(printer(), 46.95, y, -23.42, Math.PI);
+    this.solidBox(46.58, y, -23.8, 47.32, y + 1.2, -23.08);
+    put(fileCabinet(0.6, 1.3, 1.0, 3), 54.1, y, -23.48, Math.PI / 2);
+    this.solidBox(53.6, y, -23.8, 54.6, y + 1.3, -23.18);
+    put(paperStack(9, 0.05), 54.0, y + 1.3, -23.5, 0.2);
+    put(binderShelf(1.3, 1.2), 55.75, y, -23.62);
+    this.solidBox(55.1, y, -23.8, 56.4, y + 1.2, -23.44);
+    put(whiteboardStand(), 56.9, y, -16.4, -Math.PI / 2);
+    this.solidBox(56.6, y, -17.2, 57.2, y + 1.9, -15.6);
+    put(coatRack(), 47.6, y, -11.75);
+    this.solidBox(47.4, y, -11.95, 47.8, y + 1.8, -11.55);
+    put(fireExtinguisher(), 45.6, y, -23.45);
+    put(fireAlarm(), 57.9, y + 1.4, -11.21, Math.PI);
+    put(flowerPot('tall'), 45.65, y, -11.6);
+    this.solidBox(45.4, y, -11.85, 45.9, y + 1.4, -11.35);
+    // Desk clutter along the console: a phone, pens, paperwork, a headset, notes stuck on the screens
+    const top = y + 0.78;
+    put(deskPhone(), 46.0, top, -22.35, Math.PI / 2);
+    put(penCup(), 46.1, top, -20.95);
+    put(paperStack(6, 0.04), 46.05, top, -16.4, 0.4);
+    put(headset(), 46.05, top, -14.25, 0.3);
+    put(penCup(), 46.12, top, -12.6);
+    put(sodaCan(), 46.15, top, -18.15);
+    for (const [z, n] of [[-21.85, 3], [-17.6, 2], [-13.05, 2]] as const) put(stickyNotes(n), 45.69, top + 0.52, z, Math.PI / 2);
+    // And on the two desks
+    const dt = y + 0.745;
+    put(deskPhone(), 51.35, dt, -19.3, 0.2);
+    put(penCup(), 52.75, dt, -19.75);
+    put(snack('nutbar'), 52.6, dt, -19.25, 0.6);
+    put(deskPhone(), 52.7, dt, -15.05, Math.PI - 0.2);
+    put(paperStack(7, 0.05), 51.35, dt, -15.35, 0.3);
+    put(sodaCan(), 52.75, dt, -15.45);
+    put(penCup(), 51.3, dt, -14.95);
+
     // ---- The lever: a release box on the east wall, its handle down
     const at = V(east, y + 1.2, -21.0);
     this.add(M.yellow, span(east - 0.14, at.y - 0.35, at.z - 0.25, east, at.y + 0.35, at.z + 0.25));

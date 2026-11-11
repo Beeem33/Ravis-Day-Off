@@ -16,6 +16,7 @@ function tex(c: HTMLCanvasElement): THREE.CanvasTexture {
 }
 
 const mat = (color: number, roughness = 0.7, metalness = 0): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+const V2 = (x: number, y: number): THREE.Vector2 => new THREE.Vector2(x, y);
 
 function boxAt(g: THREE.Group, m: THREE.Material, w: number, h: number, d: number, x: number, y: number, z: number): THREE.Mesh {
   const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
@@ -62,22 +63,6 @@ function ecHex(g: CanvasRenderingContext2D, x: number, y: number, r: number, col
   g.restore();
 }
 
-/** A little grey: big head, black almond eyes, thin body. */
-function grey(g: CanvasRenderingContext2D, x: number, y: number, s: number): void {
-  g.save();
-  g.fillStyle = '#a9b0b4';
-  g.beginPath();
-  g.ellipse(x, y, s * 0.55, s * 0.68, 0, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#111';
-  for (const k of [-1, 1]) {
-    g.beginPath();
-    g.ellipse(x + k * s * 0.22, y + s * 0.05, s * 0.17, s * 0.09, k * -0.5, 0, Math.PI * 2);
-    g.fill();
-  }
-  g.restore();
-}
-
 // ================================================================ posters
 
 export type PosterKind = 'teamwork' | 'safety' | 'hang' | 'payload' | 'employee' | 'specimens';
@@ -89,19 +74,19 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
   g.textBaseline = 'alphabetic';
   if (kind === 'teamwork') {
     const gr = g.createLinearGradient(0, 0, 0, 512);
-    gr.addColorStop(0, '#0b1230');
-    gr.addColorStop(1, '#1d2a5a');
+    gr.addColorStop(0, '#5aa2d8');
+    gr.addColorStop(1, '#bfe0f4');
     g.fillStyle = gr;
     g.fillRect(0, 0, 384, 512);
-    for (let i = 0; i < 90; i++) {
-      g.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.7})`;
-      g.fillRect(Math.random() * 384, Math.random() * 300, 2, 2);
-    }
+    g.fillStyle = '#fff6c8';
+    g.beginPath();
+    g.arc(300, 90, 34, 0, Math.PI * 2);
+    g.fill();
     g.fillStyle = '#5d8a4a';
     g.beginPath();
     g.arc(192, 470, 230, Math.PI, 0);
     g.fill();
-    // Five in hazmat suits, hand in hand on the planet
+    // Five in overalls, hand in hand on the hill
     for (let i = 0; i < 5; i++) {
       const x = 72 + i * 60;
       g.fillStyle = '#e8c21a';
@@ -129,7 +114,7 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
     g.font = 'bold 50px Georgia, serif';
     g.fillText('TEAMWORK', 192, 410);
     g.font = 'italic 19px Georgia, serif';
-    wrap(g, 'Because the universe won’t exterminate itself.', 192, 446, 320, 24);
+    wrap(g, 'Together, everyone achieves more.', 192, 446, 320, 24);
   } else if (kind === 'safety') {
     g.fillStyle = '#f4f2ea';
     g.fillRect(0, 0, 384, 512);
@@ -162,10 +147,10 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
     g.restore();
     g.fillStyle = '#111';
     g.font = 'bold 26px Arial, sans-serif';
-    wrap(g, 'DAYS SINCE OUR LAST CONTAINMENT BREACH', 192, 340, 330, 30);
+    wrap(g, 'DAYS SINCE OUR LAST WORKPLACE ACCIDENT', 192, 340, 330, 30);
     g.font = '17px Arial, sans-serif';
     g.fillStyle = '#444';
-    wrap(g, 'Report all unaccounted-for tentacles to your supervisor immediately.', 192, 440, 320, 21);
+    wrap(g, 'Report all spills and hazards to your supervisor immediately.', 192, 440, 320, 21);
   } else if (kind === 'hang') {
     const gr = g.createLinearGradient(0, 0, 0, 512);
     gr.addColorStop(0, '#8fc6ee');
@@ -178,25 +163,53 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
     g.moveTo(0, 80);
     g.quadraticCurveTo(200, 100, 384, 60);
     g.stroke();
-    // A grey hanging on by its long thin arms
-    g.strokeStyle = '#a9b0b4';
-    g.lineWidth = 7;
+    // The kitten hanging on to the branch by its front paws
+    g.strokeStyle = '#e08a3a';
+    g.lineCap = 'round';
+    g.lineWidth = 14;
     g.beginPath();
     g.moveTo(170, 92);
-    g.lineTo(178, 200);
+    g.lineTo(176, 190);
     g.moveTo(214, 90);
-    g.lineTo(206, 200);
+    g.lineTo(208, 190);
     g.stroke();
-    grey(g, 192, 250, 90);
-    g.fillStyle = '#a9b0b4';
-    g.fillRect(176, 300, 32, 70);
-    g.lineWidth = 6;
+    g.fillStyle = '#e08a3a';
     g.beginPath();
-    g.moveTo(182, 368);
-    g.lineTo(172, 412);
-    g.moveTo(202, 368);
-    g.lineTo(212, 412);
+    g.ellipse(192, 290, 46, 74, 0, 0, Math.PI * 2);
+    g.fill();
+    g.beginPath();
+    g.arc(192, 200, 40, 0, Math.PI * 2);
+    g.fill();
+    for (const k of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(192 + k * 12, 168);
+      g.lineTo(192 + k * 38, 150);
+      g.lineTo(192 + k * 36, 186);
+      g.fill();
+    }
+    g.fillStyle = '#c96d22';
+    for (let k = 0; k < 4; k++) g.fillRect(160, 250 + k * 22, 64, 6);
+    g.strokeStyle = '#e08a3a';
+    g.lineWidth = 12;
+    g.beginPath();
+    g.moveTo(176, 350);
+    g.lineTo(170, 400);
+    g.moveTo(208, 350);
+    g.lineTo(214, 400);
+    g.moveTo(232, 330);
+    g.quadraticCurveTo(280, 340, 270, 400);
     g.stroke();
+    g.fillStyle = '#111';
+    for (const k of [-1, 1]) {
+      g.beginPath();
+      g.arc(192 + k * 14, 198, 6, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.fillStyle = '#f2a0a0';
+    g.beginPath();
+    g.arc(192, 212, 5, 0, Math.PI * 2);
+    g.fill();
+    g.lineCap = 'butt';
     g.fillStyle = '#1b2a44';
     g.font = 'bold 46px Arial, sans-serif';
     g.fillText('HANG IN THERE!', 192, 460);
@@ -234,8 +247,8 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
     g.fillRect(0, 396, 384, 116);
     g.fillStyle = '#f6e7c1';
     g.font = 'bold 36px Georgia, serif';
-    g.fillText('BELIEVE IN', 192, 440);
-    g.fillText('YOUR PAYLOAD', 192, 482);
+    g.fillText('AIM HIGH', 192, 440);
+    g.fillText('REACH FURTHER', 192, 482);
   } else if (kind === 'employee') {
     g.fillStyle = '#efe6cf';
     g.fillRect(0, 0, 384, 512);
@@ -263,17 +276,38 @@ export function posterTexture(kind: PosterKind): THREE.CanvasTexture {
     g.font = '17px Georgia, serif';
     g.fillText('Field Operations', 192, 402);
     g.font = 'italic 16px Georgia, serif';
-    wrap(g, 'For outstanding achievement in not getting eaten.', 192, 440, 300, 20);
+    wrap(g, 'For outstanding attendance and a great attitude.', 192, 440, 300, 20);
   } else {
+    // QUALITY: mountains at dawn, the motto under them
+    const sky = g.createLinearGradient(0, 0, 0, 300);
+    sky.addColorStop(0, '#2c3e6b');
+    sky.addColorStop(1, '#e9a46a');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, 384, 300);
+    g.fillStyle = '#2b2f3a';
+    g.beginPath();
+    g.moveTo(0, 300);
+    g.lineTo(110, 130);
+    g.lineTo(170, 210);
+    g.lineTo(250, 90);
+    g.lineTo(384, 300);
+    g.fill();
+    g.fillStyle = '#e8eef4';
+    g.beginPath();
+    g.moveTo(250, 90);
+    g.lineTo(226, 126);
+    g.lineTo(276, 128);
+    g.fill();
     g.fillStyle = '#0d0d0f';
-    g.fillRect(0, 0, 384, 512);
-    grey(g, 192, 150, 120);
+    g.fillRect(0, 300, 384, 212);
     g.strokeStyle = '#d4d4d4';
     g.lineWidth = 2;
     g.strokeRect(16, 16, 352, 480);
     g.fillStyle = '#f2f2f2';
-    g.font = 'bold 26px Arial, sans-serif';
-    wrap(g, 'YOU MISS 100% OF THE SPECIMENS YOU DON’T CONTAIN', 192, 300, 320, 32);
+    g.font = 'bold 40px Georgia, serif';
+    g.fillText('QUALITY', 192, 360);
+    g.font = '19px Georgia, serif';
+    wrap(g, 'Do it right the first time.', 192, 400, 320, 24);
     g.font = 'italic 17px Georgia, serif';
     g.fillStyle = '#aaa';
     g.fillText('— Director Halvorsen', 192, 460);
@@ -294,11 +328,11 @@ export function poster(kind: PosterKind, w = 0.66, h = 0.88): THREE.Group {
 // ================================================================ the canteen orders
 
 const ORDERS: { cls: string; lines: [string, string][]; note: string }[] = [
-  { cls: 'CLASS III — GREY', lines: [['40 kg', 'Raw potatoes, unwashed'], ['12 L', 'Milk, warm (not hot)'], ['1', 'Birthday cake for Zorp']], note: 'NO SALT. To them salt is a war crime. — Catering' },
-  { cls: 'CLASS V — REPTOID', lines: [['6 kg', 'Crickets, LIVE'], ['2', 'Heat lamps for table 4'], ['30', 'Raw eggs, shell on']], note: 'Seat them away from the Greys’ potatoes.' },
-  { cls: 'CLASS II — NORDIC', lines: [['9', 'Oat milk lattes, extra hot'], ['9', 'Quinoa bowls, no onion'], ['1', '“Something with kale”']], note: 'Must be served by somebody calm.' },
-  { cls: 'CLASS IX — AMORPHOUS', lines: [['1 drum', 'Lime gelatin (industrial)'], ['200', 'Paper plates'], ['1', 'Replacement serving hatch']], note: 'DO NOT serve in glass. It ate the last one.' },
-  { cls: 'CLASS VI — INSECTOID', lines: [['20 L', 'Sugar water'], ['200', 'Bananas, overripe'], ['1', 'Fly paper (DO NOT LEAVE OUT)']], note: 'NO bug spray within 50 m of the canteen!!' }
+  { cls: 'FIELD OPERATIONS', lines: [['40', 'Turkey sandwiches'], ['12 L', 'Coffee, black'], ['1', 'Birthday cake for Todd']], note: 'Todd is allergic to nuts. AGAIN: NO NUTS. — Catering' },
+  { cls: 'NIGHT SHIFT', lines: [['6', 'Large pizzas'], ['2', 'Crates of energy drinks'], ['30', 'Donuts, assorted']], note: 'Deliver to the loading dock, not the front gate.' },
+  { cls: 'CONTROL ROOM', lines: [['9', 'Oat milk lattes'], ['9', 'Salads, no onion'], ['1', '“Something with kale”']], note: 'Must arrive before the 9:00 briefing.' },
+  { cls: 'MAINTENANCE', lines: [['1 tub', 'Lime gelatin'], ['200', 'Paper plates'], ['1', 'New coffee maker']], note: 'The old coffee maker is NOT to be repaired again.' },
+  { cls: 'LAB 4B', lines: [['20', 'Bagels'], ['3', 'Tubs of cream cheese'], ['1', 'Fly paper (for the canteen)']], note: 'Lunches left in the lab fridge WILL be thrown out.' }
 ];
 
 export function orderSheetTexture(i: number): THREE.CanvasTexture {
@@ -316,7 +350,7 @@ export function orderSheetTexture(i: number): THREE.CanvasTexture {
   g.fillText('CATERING REQUISITION — FORM 7B', 80, 62);
   g.fillRect(20, 84, 344, 2);
   g.font = 'bold 14px Courier New, monospace';
-  g.fillText('CLASSIFICATION:', 24, 112);
+  g.fillText('DEPARTMENT:', 24, 112);
   g.fillStyle = '#1a3aa0';
   g.font = 'bold 22px "Comic Sans MS", cursive';
   g.fillText(o.cls, 24, 142);
@@ -370,7 +404,7 @@ export function comicTexture(i: number): THREE.CanvasTexture {
   g.fillStyle = '#111';
   g.font = 'bold 16px "Comic Sans MS", cursive';
   g.textAlign = 'left';
-  g.fillText(i % 2 ? 'LAB LIFE   by Gary, Sector 7' : 'CONTAINMENT CORNER   by Priya (Lab 4B)', 10, 20);
+  g.fillText(i % 2 ? 'OFFICE LIFE   by Gary, Sector 7' : 'BREAK ROOM   by Priya (Lab 4B)', 10, 20);
   const panel = (k: number): number => {
     const x = 10 + k * 196;
     g.strokeStyle = '#111';
@@ -427,51 +461,68 @@ export function comicTexture(i: number): THREE.CanvasTexture {
     g.textAlign = 'center';
     wrap(g, text, x, y - 4, w - 20, 14);
   };
-  const tank = (x: number): void => {
-    g.fillStyle = '#c9f0c0';
+  // The office coffee machine: a box with a pot under its spout
+  const tank = (x: number, sparks = false): void => {
+    g.fillStyle = '#555c66';
     g.fillRect(x + 100, 100, 70, 120);
     g.strokeRect(x + 100, 100, 70, 120);
-    g.fillStyle = '#4caf50';
+    g.fillStyle = '#222';
+    g.fillRect(x + 110, 150, 50, 50);
+    g.fillStyle = '#c9e6f0';
+    g.fillRect(x + 118, 168, 34, 30);
+    g.strokeRect(x + 118, 168, 34, 30);
+    g.fillStyle = '#6b3a1a';
+    g.fillRect(x + 119, 182, 32, 15);
+    g.fillStyle = '#e33';
     g.beginPath();
-    g.ellipse(x + 135, 180, 26, 30, 0, 0, Math.PI * 2);
+    g.arc(x + 157, 116, 5, 0, Math.PI * 2);
     g.fill();
-    g.fillStyle = '#111';
-    g.beginPath();
-    g.arc(x + 128, 172, 4, 0, Math.PI * 2);
-    g.arc(x + 143, 172, 4, 0, Math.PI * 2);
-    g.fill();
+    if (sparks) {
+      g.strokeStyle = '#f2b81c';
+      g.lineWidth = 3;
+      for (let k = 0; k < 4; k++) {
+        g.beginPath();
+        g.moveTo(x + 135, 100);
+        g.lineTo(x + 115 + k * 14, 78 - (k % 2) * 10);
+        g.stroke();
+      }
+      g.strokeStyle = '#111';
+    }
   };
   if (i % 2 === 0) {
     let x = panel(0);
     sci(x + 50, 130);
     tank(x);
-    bubble(x + 80, 64, 140, 'Is it hostile?', x + 56, 104);
+    bubble(x + 80, 64, 140, 'Is it fixed yet?', x + 56, 104);
     x = panel(1);
     sci(x + 50, 130);
-    tank(x);
-    bubble(x + 120, 64, 90, '...', x + 136, 140);
+    tank(x, true);
+    bubble(x + 120, 64, 90, '...', x + 136, 100);
     x = panel(2);
     sci(x + 50, 130, true);
     tank(x);
-    bubble(x + 82, 64, 150, 'Put “mildly” in the report.', x + 56, 104);
+    bubble(x + 82, 64, 150, 'Put “mostly” in the report.', x + 56, 104);
   } else {
     let x = panel(0);
     sci(x + 50, 130);
     sci(x + 130, 130);
-    bubble(x + 92, 62, 170, 'Who keeps leaving specimens in the staff fridge?', x + 120, 102);
+    bubble(x + 92, 62, 170, 'Who keeps leaving old lunches in the staff fridge?', x + 120, 102);
     x = panel(1);
     g.fillStyle = '#e6e6e6';
     g.fillRect(x + 40, 60, 106, 160);
     g.strokeRect(x + 40, 60, 106, 160);
-    g.fillStyle = '#9cff5a';
+    // A tub gone green at the back of the shelf
+    g.fillStyle = '#9cbf5a';
     g.fillRect(x + 72, 120, 40, 50);
-    g.fillStyle = '#111';
-    g.beginPath();
-    g.arc(x + 85, 140, 5, 0, Math.PI * 2);
-    g.arc(x + 99, 140, 5, 0, Math.PI * 2);
-    g.fill();
+    g.strokeRect(x + 72, 120, 40, 50);
+    g.fillStyle = '#6f8f3a';
+    for (let k = 0; k < 6; k++) {
+      g.beginPath();
+      g.arc(x + 78 + (k % 3) * 13, 130 + Math.floor(k / 3) * 18, 4, 0, Math.PI * 2);
+      g.fill();
+    }
     x = panel(2);
-    g.fillStyle = '#9cff5a';
+    g.fillStyle = '#9cbf5a';
     g.fillRect(x + 50, 80, 86, 110);
     g.strokeRect(x + 50, 80, 86, 110);
     g.fillStyle = '#fff';
@@ -493,7 +544,7 @@ export function comic(i: number, w = 0.5): THREE.Mesh {
 
 let mugParts: { side: THREE.Material; top: THREE.Material; plain: THREE.Material; body: THREE.BufferGeometry; handle: THREE.BufferGeometry } | null = null;
 
-/** PIONEERING EXTRATERRESTRIAL WEAPONRY SINCE 2003 — on both sides, the handle toward +Z. */
+/** EXTERMINATOR COLLECTIVE, EST. 2003 — on both sides, the handle toward +Z. */
 export function ecMug(full = true): THREE.Group {
   if (!mugParts) {
     const c = makeCanvas(1024, 256);
@@ -505,17 +556,18 @@ export function ecMug(full = true): THREE.Group {
       g.fillStyle = '#1d1d1f';
       g.textAlign = 'center';
       g.font = 'bold 30px Arial, sans-serif';
-      g.fillText('PIONEERING', cx, 160);
-      g.font = 'bold 22px Arial, sans-serif';
-      g.fillText('EXTRATERRESTRIAL WEAPONRY', cx, 192);
+      g.fillText('EXTERMINATOR', cx, 160);
+      g.font = 'bold 26px Arial, sans-serif';
+      g.fillText('COLLECTIVE', cx, 192);
       g.fillStyle = '#c4261c';
       g.font = 'bold 22px Arial, sans-serif';
-      g.fillText('SINCE 2003', cx, 224);
+      g.fillText('EST. 2003', cx, 224);
     }
     const body = new THREE.CylinderGeometry(0.043, 0.04, 0.1, 24);
-    const handle = new THREE.TorusGeometry(0.027, 0.0075, 6, 14, Math.PI * 1.25);
-    handle.rotateY(Math.PI / 2);
-    handle.rotateX(-Math.PI * 0.62);
+    // A C-shaped handle, joined to the side at the top and the bottom, bowed out toward +Z
+    const handle = new THREE.TorusGeometry(0.027, 0.0078, 8, 18, Math.PI);
+    handle.rotateZ(-Math.PI / 2);
+    handle.rotateY(-Math.PI / 2);
     mugParts = {
       side: new THREE.MeshStandardMaterial({ map: tex(c), roughness: 0.3 }),
       top: new THREE.MeshStandardMaterial({ color: 0x2a160a, roughness: 0.15 }),
@@ -529,7 +581,7 @@ export function ecMug(full = true): THREE.Group {
   const b = new THREE.Mesh(P.body, [P.side, full ? P.top : P.plain, P.plain]);
   b.position.y = 0.05;
   const h = new THREE.Mesh(P.handle, P.plain);
-  h.position.set(0, 0.05, 0.046);
+  h.position.set(0, 0.05, 0.037);
   g.add(b, h);
   return g;
 }
@@ -651,23 +703,28 @@ export function screenTexture(kind: ScreenKind, w = 512, h = 320): THREE.CanvasT
       g.fill();
     }
   } else if (kind === 'specimen') {
+    // A plant readout: a pressure dial and the figures beside it
     g.strokeStyle = '#3ad0ff';
-    g.lineWidth = 2;
-    for (let k = 0; k < 7; k++) {
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(150, 170, 80, Math.PI * 0.8, Math.PI * 2.2);
+    g.stroke();
+    for (let k = 0; k <= 10; k++) {
+      const a = Math.PI * 0.8 + (k / 10) * Math.PI * 1.4;
       g.beginPath();
-      g.ellipse(150, 160, 70 - k * 3, 92, 0, 0, Math.PI * 2);
-      g.globalAlpha = 0.25 + k * 0.1;
+      g.moveTo(150 + Math.cos(a) * 70, 170 + Math.sin(a) * 70);
+      g.lineTo(150 + Math.cos(a) * 80, 170 + Math.sin(a) * 80);
       g.stroke();
     }
-    g.globalAlpha = 1;
+    g.strokeStyle = '#ffb03a';
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(150, 170);
+    g.lineTo(150 + Math.cos(Math.PI * 1.75) * 66, 170 + Math.sin(Math.PI * 1.75) * 66);
+    g.stroke();
     g.fillStyle = '#3ad0ff';
-    for (const s of [-1, 1]) {
-      g.beginPath();
-      g.ellipse(150 + s * 28, 160, 20, 10, s * -0.5, 0, Math.PI * 2);
-      g.fill();
-    }
     g.font = 'bold 16px Courier New, monospace';
-    ['SPECIMEN 0451', 'CLASS III — GREY', 'MASS: 31.4 kg', 'MOOD: UNKNOWN', 'STATUS:', 'CONTAINED (MOSTLY)'].forEach((l, i) => g.fillText(l, 260, 70 + i * 34));
+    ['VAT 3 — PRESSURE', '4.2 BAR', 'TEMP: 41.2 C', 'FLOW: 220 L/MIN', 'STATUS:', 'NOMINAL'].forEach((l, i) => g.fillText(l, 260, 70 + i * 34));
   } else {
     g.fillStyle = '#d8e2ea';
     g.fillRect(0, 0, w, h);
@@ -676,7 +733,7 @@ export function screenTexture(kind: ScreenKind, w = 512, h = 320): THREE.CanvasT
     g.fillStyle = '#fff';
     g.fillText('E.C. MAIL — INBOX (14)', 12, 24);
     g.font = '15px Arial, sans-serif';
-    ['RE: RE: RE: Who took my potatoes', 'Mandatory fun: tentacle-safety seminar', 'Your parking permit for Hangar 2 has expired', 'FW: Canteen menu — Class IX week', 'Turret S3 shot the vending machine again', 'Lost: one (1) jar. Glowing. Answers to Kevin.'].forEach((l, i) => {
+    ['RE: RE: RE: Who took my sandwich', 'Mandatory fun: team-building seminar', 'Your parking permit for Hangar 2 has expired', 'FW: Canteen menu — pizza week', 'Turret S3 shot the vending machine again', 'Lost: one (1) red stapler. Answers to Kevin.'].forEach((l, i) => {
       g.fillStyle = i < 2 ? '#111' : '#555';
       g.font = (i < 2 ? 'bold ' : '') + '15px Arial, sans-serif';
       g.fillText(l, 14, 62 + i * 40);
@@ -718,8 +775,8 @@ export function monitor(kind: ScreenKind): THREE.Group {
 const CARGO = [
   ['LAB EQUIPMENT', 'FRAGILE — GLASS'],
   ['CENTRIFUGE', 'UNIT 4 — THIS WAY UP'],
-  ['SPECIMEN TANKS', 'EMPTY — HANDLE WITH CARE'],
-  ['PLASMA COILS', 'KEEP DRY'],
+  ['GLASS TANKS', 'EMPTY — HANDLE WITH CARE'],
+  ['SPARE COILS', 'KEEP DRY'],
   ['MICROSCOPES', 'ATTN: LAB 4B']
 ];
 
@@ -916,10 +973,15 @@ export function wetFloorSign(): THREE.Group {
   const g = new THREE.Group();
   for (const s of [-1, 1]) {
     const p = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.62), m);
-    p.position.set(0, 0.3, s * 0.1);
-    p.rotation.x = s * 0.17;
+    p.position.set(0, 0.305, s * 0.053);
+    p.rotation.x = -s * 0.17;
     g.add(p);
   }
+  // The hinge along the top where they meet, and the handle cut-out's bar
+  const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), mat(0xd9ad0f, 0.5));
+  hinge.rotation.z = Math.PI / 2;
+  hinge.position.set(0, 0.612, 0);
+  g.add(hinge);
   return g;
 }
 
@@ -1029,10 +1091,22 @@ export function janitorCart(): THREE.Group {
   boxAt(g, grey, 0.9, 0.04, 0.48, 0, 0.18, 0);
   boxAt(g, grey, 0.9, 0.04, 0.48, 0, 0.62, 0);
   for (const x of [-0.43, 0.43]) for (const z of [-0.22, 0.22]) boxAt(g, grey, 0.03, 0.8, 0.03, x, 0.42, z);
-  const bag = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), mat(0x161616, 0.35));
-  bag.scale.set(0.9, 1.25, 0.9);
-  bag.position.set(0.62, 0.48, 0);
+  const bagPts = [V2(0.0, 0), V2(0.17, 0.0), V2(0.2, 0.08), V2(0.205, 0.4), V2(0.2, 0.6)];
+  const bag = new THREE.Mesh(new THREE.LatheGeometry(bagPts, 18), mat(0xe8bf1c, 0.55));
+  bag.scale.set(1, 1, 0.8);
+  bag.position.set(0.66, 0.1, 0);
   g.add(bag);
+  const liner = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.02, 6, 18), mat(0x151515, 0.3));
+  liner.rotation.x = Math.PI / 2;
+  liner.scale.set(1, 0.8, 1);
+  liner.position.set(0.66, 0.7, 0);
+  g.add(liner);
+  const linerIn = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.04, 18, 1, true), mat(0x151515, 0.3));
+  linerIn.scale.set(1, 1, 0.8);
+  linerIn.position.set(0.66, 0.68, 0);
+  g.add(linerIn);
+  // The hoop frame it hangs from
+  boxAt(g, grey, 0.04, 0.04, 0.38, 0.45, 0.68, 0);
   for (const [i, c] of [0xd8302a, 0x2a8ad8, 0x2ab84a].entries()) {
     const b = sprayBottle(c);
     b.position.set(-0.3 + i * 0.12, 0.64, 0.05);
@@ -1116,4 +1190,253 @@ export function scissorGateTexture(): THREE.CanvasTexture {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// ================================================================ office odds and ends
+
+/** A wall clock, facing +Z, its hands at ten past ten. */
+export function wallClock(r = 0.18): THREE.Group {
+  const g = new THREE.Group();
+  const c = makeCanvas(256, 256);
+  const x = c.getContext('2d')!;
+  x.fillStyle = '#f6f4ee';
+  x.beginPath();
+  x.arc(128, 128, 124, 0, Math.PI * 2);
+  x.fill();
+  x.fillStyle = '#222';
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    x.save();
+    x.translate(128 + Math.sin(a) * 104, 128 - Math.cos(a) * 104);
+    x.rotate(a);
+    x.fillRect(-3, -10, 6, i % 3 ? 12 : 20);
+    x.restore();
+  }
+  const hand = (a: number, len: number, w: number): void => {
+    x.save();
+    x.translate(128, 128);
+    x.rotate(a);
+    x.fillRect(-w / 2, -len, w, len + 10);
+    x.restore();
+  };
+  hand((10 / 12) * Math.PI * 2 + 0.05, 62, 9);
+  hand((2 / 12) * Math.PI * 2, 92, 6);
+  x.fillStyle = '#c4261c';
+  hand(0.9, 96, 2);
+  const face = new THREE.Mesh(new THREE.CircleGeometry(r, 28), new THREE.MeshStandardMaterial({ map: tex(c), roughness: 0.5 }));
+  face.position.z = 0.03;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(r, 0.018, 8, 28), mat(0x1b1c1f, 0.4));
+  rim.position.z = 0.03;
+  const back = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.04, 28), mat(0x2a2b2e, 0.5));
+  back.rotation.x = Math.PI / 2;
+  back.position.z = 0.01;
+  g.add(back, face, rim);
+  return g;
+}
+
+/** A whiteboard on a wheeled stand, writing on the +Z face: the shift rota, a reminder, a doodle. */
+export function whiteboardStand(): THREE.Group {
+  const g = new THREE.Group();
+  const c = makeCanvas(512, 340);
+  const x = c.getContext('2d')!;
+  x.fillStyle = '#fbfcfd';
+  x.fillRect(0, 0, 512, 340);
+  x.strokeStyle = 'rgba(140,160,180,0.25)';
+  x.lineWidth = 18;
+  x.beginPath();
+  x.moveTo(40, 300);
+  x.lineTo(300, 60);
+  x.stroke();
+  x.fillStyle = '#1b4fa8';
+  x.font = 'bold 30px "Comic Sans MS", cursive';
+  x.fillText('SHIFT ROTA - WK 32', 24, 44);
+  x.font = '22px "Comic Sans MS", cursive';
+  const rows = [['MON', 'Priya / Gary'], ['TUE', 'Todd / Mendez'], ['WED', 'Gary / Priya'], ['THU', 'Kevin (!!)'], ['FRI', 'Todd / Priya']];
+  rows.forEach(([d, n], i) => {
+    x.fillStyle = '#1b4fa8';
+    x.fillText(d, 30, 90 + i * 40);
+    x.fillStyle = '#222';
+    x.fillText(n, 110, 90 + i * 40);
+  });
+  x.strokeStyle = '#c4261c';
+  x.lineWidth = 4;
+  x.beginPath();
+  x.ellipse(170, 204, 90, 22, 0, 0, Math.PI * 2);
+  x.stroke();
+  x.fillStyle = '#c4261c';
+  x.font = 'bold 22px "Comic Sans MS", cursive';
+  x.fillText('Turret S3 service', 300, 110);
+  x.fillText('due FRIDAY', 330, 140);
+  x.strokeStyle = '#2a8a3a';
+  x.beginPath();
+  x.arc(420, 250, 34, 0, Math.PI * 2);
+  x.stroke();
+  x.beginPath();
+  x.arc(406, 244, 3, 0, Math.PI * 2);
+  x.arc(434, 244, 3, 0, Math.PI * 2);
+  x.stroke();
+  x.beginPath();
+  x.moveTo(402, 260);
+  x.quadraticCurveTo(420, 276, 438, 260);
+  x.stroke();
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.0), new THREE.MeshStandardMaterial({ map: tex(c), roughness: 0.25 }));
+  board.position.set(0, 1.35, 0.026);
+  boxAt(g, mat(0xb8bcc0, 0.35, 0.6), 1.56, 1.06, 0.05, 0, 1.35, 0);
+  g.add(board);
+  boxAt(g, mat(0xb8bcc0, 0.35, 0.6), 1.3, 0.025, 0.07, 0, 0.8, 0.05);
+  [0x1b4fa8, 0xc4261c, 0x2a8a3a, 0x111111].forEach((col, i) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.12, 8), mat(col, 0.5));
+    m.rotation.z = Math.PI / 2;
+    m.position.set(-0.3 + i * 0.16, 0.825, 0.06);
+    g.add(m);
+  });
+  const steel = mat(0x8e9398, 0.4, 0.7);
+  for (const s of [-1, 1]) {
+    boxAt(g, steel, 0.04, 1.8, 0.04, s * 0.8, 0.95, 0);
+    boxAt(g, steel, 0.06, 0.04, 0.6, s * 0.8, 0.08, 0);
+    for (const z of [-0.26, 0.26]) {
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 10), mat(0x161616, 0.8));
+      w.rotation.z = Math.PI / 2;
+      w.position.set(s * 0.8, 0.035, z);
+      g.add(w);
+    }
+  }
+  return g;
+}
+
+/** A pot of pens and pencils. */
+export function penCup(): THREE.Group {
+  const g = new THREE.Group();
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.032, 0.1, 14, 1, true), mat(0x2b2f36, 0.5));
+  cup.position.y = 0.05;
+  const base = new THREE.Mesh(new THREE.CircleGeometry(0.032, 14), mat(0x2b2f36, 0.5));
+  base.rotation.x = -Math.PI / 2;
+  base.position.y = 0.002;
+  g.add(cup, base);
+  const cols = [0x1b4fa8, 0xc4261c, 0x111111, 0xe8c21a, 0x2a8a3a];
+  for (let i = 0; i < 5; i++) {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.15, 6), mat(cols[i], 0.5));
+    const a = (i / 5) * Math.PI * 2;
+    p.position.set(Math.cos(a) * 0.015, 0.1, Math.sin(a) * 0.015);
+    p.rotation.set(Math.sin(a) * 0.25, 0, -Math.cos(a) * 0.25);
+    g.add(p);
+  }
+  return g;
+}
+
+/** A shelf unit of ring binders; the open front faces +Z. */
+export function binderShelf(w = 1.3, h = 1.2): THREE.Group {
+  const g = new THREE.Group();
+  const wood = mat(0x5a4a3a, 0.7);
+  const d = 0.34;
+  for (const s of [-1, 1]) boxAt(g, wood, 0.03, h, d, (s * w) / 2, h / 2, 0);
+  boxAt(g, wood, w, h, 0.02, 0, h / 2, -d / 2 + 0.01);
+  const shelves = [0.02, h * 0.36, h * 0.69, h - 0.015];
+  for (const y of shelves) boxAt(g, wood, w, 0.03, d, 0, y, 0);
+  const cols = [0x1b4fa8, 0xc4261c, 0x2a8a3a, 0x222222, 0xe8c21a, 0x6a3a8a, 0x7a7d82];
+  const paper = mat(0xf2f0e8, 0.8);
+  let k = 0;
+  for (const y of shelves.slice(0, 3)) {
+    let x = -w / 2 + 0.05;
+    while (x < w / 2 - 0.14) {
+      const bw = 0.055 + (k % 3) * 0.01;
+      const bh = h * 0.28 - (k % 4) * 0.02;
+      const b = boxAt(g, mat(cols[k % cols.length], 0.6), bw, bh, 0.28, x + bw / 2, y + 0.015 + bh / 2, 0.01);
+      if (k % 9 === 8) {
+        // One leaning over on its neighbour
+        b.rotation.z = 0.25;
+        b.position.x += 0.035;
+        x += 0.06;
+      } else boxAt(g, paper, bw * 0.6, 0.05, 0.003, x + bw / 2, y + 0.015 + bh * 0.62, 0.151);
+      x += bw + 0.004;
+      k++;
+    }
+  }
+  return g;
+}
+
+/** A standing coat rack with a jacket and a hard hat hung on it. */
+export function coatRack(): THREE.Group {
+  const g = new THREE.Group();
+  const dark = mat(0x2a2b2e, 0.5, 0.4);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 1.75, 10), dark);
+  pole.position.y = 0.875;
+  g.add(pole);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.02, 0.03), dark);
+    foot.position.set(Math.cos(a) * 0.13, 0.015, Math.sin(a) * 0.13);
+    foot.rotation.y = -a;
+    g.add(foot);
+    const hook = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 6), dark);
+    hook.position.set(Math.cos(a) * 0.06, 1.66, Math.sin(a) * 0.06);
+    hook.rotation.set(Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9);
+    g.add(hook);
+  }
+  const jacket = new THREE.Group();
+  const cloth = mat(0x2d4a6a, 0.9);
+  boxAt(jacket, cloth, 0.42, 0.62, 0.08, 0, -0.32, 0);
+  for (const s of [-1, 1]) boxAt(jacket, cloth, 0.08, 0.55, 0.08, s * 0.2, -0.34, 0.02).rotation.z = s * 0.08;
+  jacket.position.set(0.08, 1.66, 0.05);
+  jacket.rotation.y = 0.3;
+  g.add(jacket);
+  const hat = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xf2c414, 0.4));
+  hat.position.set(-0.08, 1.7, -0.06);
+  hat.rotation.z = 0.5;
+  g.add(hat);
+  return g;
+}
+
+/** A red fire extinguisher, standing. */
+export function fireExtinguisher(): THREE.Group {
+  const g = new THREE.Group();
+  const red = mat(0xc41a1a, 0.35, 0.2);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.48, 16), red);
+  body.position.y = 0.24;
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), red);
+  dome.position.y = 0.48;
+  const black = mat(0x222222, 0.4, 0.6);
+  const valve = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.07, 8), black);
+  valve.position.y = 0.58;
+  boxAt(g, black, 0.14, 0.015, 0.03, 0.04, 0.62, 0).rotation.z = -0.25;
+  const hose = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.01, 6, 12, Math.PI), mat(0x111111, 0.6));
+  hose.position.set(0.075, 0.5, 0);
+  hose.rotation.z = -Math.PI / 2;
+  const label = new THREE.Mesh(new THREE.CylinderGeometry(0.0755, 0.0755, 0.14, 16, 1, true, -0.8, 1.6), mat(0xf2f0e8, 0.6));
+  label.position.y = 0.26;
+  g.add(body, dome, valve, hose, label);
+  return g;
+}
+
+/** A headset with a boom mic, lying on a desk. */
+export function headset(): THREE.Group {
+  const g = new THREE.Group();
+  const dark = mat(0x1b1c1f, 0.5);
+  const band = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.009, 6, 18, Math.PI), dark);
+  band.rotation.x = -Math.PI / 2;
+  band.position.y = 0.012;
+  g.add(band);
+  for (const s of [-1, 1]) {
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.025, 14), dark);
+    cup.position.set(s * 0.085, 0.013, 0);
+    g.add(cup);
+  }
+  const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.14, 6), dark);
+  boom.rotation.set(Math.PI / 2, 0, 0.5);
+  boom.position.set(0.11, 0.02, 0.06);
+  g.add(boom);
+  return g;
+}
+
+/** Sticky notes stuck in a cluster, facing +Z. */
+export function stickyNotes(n = 3): THREE.Group {
+  const g = new THREE.Group();
+  const cols = [0xf6e65a, 0xff9fc2, 0x9fe6ff, 0xb8f28a];
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.06), new THREE.MeshStandardMaterial({ color: cols[i % cols.length], roughness: 0.9, side: THREE.DoubleSide }));
+    m.position.set((i - (n - 1) / 2) * 0.065, (i % 2) * 0.02, 0.001 * i);
+    m.rotation.z = ((i % 3) - 1) * 0.12;
+    g.add(m);
+  }
+  return g;
 }

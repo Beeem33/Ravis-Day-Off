@@ -3192,6 +3192,27 @@ export class Enemy {
   }
 
   /**
+   * Gone for good — a level that keeps only so many bodies about takes the
+   * oldest away: every limb and the dropped gun out of the physics world,
+   * the model and the gun off the stage.
+   */
+  removeCorpse(): void {
+    for (const { body, container } of this.ragdoll) {
+      this.world?.removeBody(body);
+      container.removeFromParent();
+    }
+    this.ragdoll = [];
+    this.ragdollByName.clear();
+    if (this.gunBody) {
+      this.world?.removeBody(this.gunBody);
+      this.gunBody = null;
+    }
+    this.rifle.removeFromParent();
+    this.hitman?.model.removeFromParent();
+    this.root.removeFromParent();
+  }
+
+  /**
    * A bullet into an already-dead body: wake the nearest limb, shove it
    * along the bullet, and add another wound.
    */

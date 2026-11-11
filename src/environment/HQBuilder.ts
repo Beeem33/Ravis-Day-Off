@@ -429,6 +429,7 @@ export class HQBuilder {
     this.buildGlints();
     const waypoints = this.waypointGrid(parked, towers);
     this.buildEnv();
+    this.boxOccluders();
 
     const look = (x: number, z: number): THREE.Vector3 => V(x, 1.2, z);
     const post = (x: number, z: number, low: boolean, fx = x * 0.6, fz = z - 40): Post => ({ pos: V(x, 0, z), face: look(fx, fz), low });
@@ -493,13 +494,13 @@ export class HQBuilder {
         ],
         // At the foot of the stairs: the colonnade
         stairs: [
-          post(-17.1, -156.6, false, -30, -186),
-          post(17.1, -156.6, false, 30, -186),
-          post(-26.1, -156.6, false, -36, -186),
-          post(26.1, -156.6, false, 36, -186),
+          post(-17.1, -156.95, false, -30, -186),
+          post(17.1, -156.95, false, 30, -186),
+          post(-26.1, -156.95, false, -36, -186),
+          post(26.1, -156.95, false, 36, -186),
           post(2, -132.8, true, 20, -186),
-          post(-8.1, -156.6, false, -20, -186),
-          post(35.1, -156.6, false, 40, -186)
+          post(-8.1, -156.95, false, -20, -186),
+          post(35.1, -156.95, false, 40, -186)
         ]
       },
       spawns: {
@@ -1741,6 +1742,30 @@ export class HQBuilder {
       m.position.set(Math.cos(a) * 46, 1 + r() * 4, Math.sin(a) * 46);
       m.lookAt(0, m.position.y, 0);
       s.add(m);
+    }
+  }
+
+  /**
+   * What blocks the Collective's line of sight: a plain box for everything
+   * solid that stands taller than a crouching man and wider than a pole —
+   * never drawn, only raycast. Raycasting the drawn meshes meant testing
+   * every triangle of the wall, the stairs and the podium on every look.
+   */
+  private boxOccluders(): void {
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.MeshBasicMaterial();
+    const size = new THREE.Vector3();
+    this.occluders.length = 0;
+    for (const c of this.colliders) {
+      const b = c.box;
+      b.getSize(size);
+      // (the stairs' treads are slabs half a metre thick: they count)
+      if (b.max.y < 1.0 || size.y < 0.45 || (size.x < 0.45 && size.z < 0.45) || size.x > 400) continue;
+      const m = new THREE.Mesh(geo, mat);
+      b.getCenter(m.position);
+      m.scale.copy(size);
+      m.updateMatrixWorld(true);
+      this.occluders.push(m);
     }
   }
 

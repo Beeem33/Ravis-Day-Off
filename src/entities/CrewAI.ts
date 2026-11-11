@@ -77,6 +77,8 @@ export class CrewAI {
   /** Off to `post`, after `delay` seconds; `jog` for a walk-up rather than a sprint. */
   goTo(post: Post, delay = 0): void {
     this.post = post;
+    this.spot.copy(post.pos);
+    this.settleT = 0;
     this.wait = delay;
     this.path = this.plan(this.e.position, post.pos);
     this.state = 'run';
@@ -86,6 +88,7 @@ export class CrewAI {
   /** Straight there (a restart): already at it, down behind it. */
   placeAt(post: Post): void {
     this.post = post;
+    this.spot.copy(post.pos);
     this.e.position.copy(post.pos);
     this.state = 'cover';
     this.path = [];
@@ -167,11 +170,21 @@ export class CrewAI {
     // Stuck on something: find a way round from here
     this.stuckT += dt;
     if (this.stuckT > 0.8) {
-      if (e.position.distanceTo(this.last) < 0.5 && this.post) this.path = this.plan(e.position, this.post.pos, true);
+      if (e.position.distanceTo(this.last) < 0.5 && this.post) {
+        const off = Math.hypot(this.post.pos.x - e.position.x, this.post.pos.z - e.position.z);
+        if (off < 1.6) {
+          this.path = [];
+          this.spot.copy(e.position);
+        } else this.path = this.plan(e.position, this.post.pos, true);
+      }
       this.last.copy(e.position);
       this.stuckT = 0;
     }
   }
+
+  /** Where he actually settles at his post: the post, unless something solid holds him off it. */
+  private spot = new THREE.Vector3();
+  private settleT = 0;
 
   // -------------------------------------------------------------------- cover
 
@@ -181,17 +194,26 @@ export class CrewAI {
     e.slingWeapon(false);
     // Down behind it he holds it properly: two hands, muzzle low
     e.setRestCarry(true);
-    // Settle onto the post itself
+    // Settle onto the post itself — or, held off it a second, where he is (no shuffling on the spot)
     if (this.post) {
-      const p = this.post.pos;
+      const p = this.spot;
       const dx = p.x - e.position.x;
       const dz = p.z - e.position.z;
       const d = Math.hypot(dx, dz);
       if (d > 0.08) {
-        e.position.x += (dx / d) * Math.min(d, 1.5 * dt);
-        e.position.z += (dz / d) * Math.min(d, 1.5 * dt);
-        e.setWalk(0.3);
-      } else e.setWalk(0);
+        this.settleT += dt;
+        if (this.settleT > 1) {
+          p.copy(e.position);
+          e.setWalk(0);
+        } else {
+          e.position.x += (dx / d) * Math.min(d, 1.5 * dt);
+          e.position.z += (dz / d) * Math.min(d, 1.5 * dt);
+          e.setWalk(0.3);
+        }
+      } else {
+        this.settleT = 0;
+        e.setWalk(0);
+      }
     }
     this.lookAndShoot(dt, true);
   }
@@ -271,18 +293,14 @@ export class CrewAI {
   private plan(from: THREE.Vector3, to: THREE.Vector3, viaGrid = false): THREE.Vector3[] {
     const wps = this.deps.waypoints;
     if (!wps.length || (!viaGrid && this.deps.clear(_a.copy(from).setY(1), _b.copy(to).setY(1)))) return [to.clone()];
+    // The nearest waypoint with a clear line to the point (so the first and last legs, off the grid, don't go
+    // through a column); failing any, the nearest at all
     const nearest = (p: THREE.Vector3): number => {
-      let bi = 0;
-      let bd = Infinity;
-      for (let i = 0; i < wps.length; i++) {
-        if (!wps[i].links.length) continue;
-        const d = wps[i].pos.distanceToSquared(p);
-        if (d < bd) {
-          bd = d;
-          bi = i;
-        }
-      }
-      return bi;
+      const order: number[] = [];
+      for (let i = 0; i < wps.length; i++) if (wps[i].links.length) order.push(i);
+      order.sort((i, j) => wps[i].pos.distanceToSquared(p) - wps[j].pos.distanceToSquared(p));
+      for (const i of order.slice(0, 8)) if (this.deps.clear(_a.copy(wps[i].pos).setY(1), _b.copy(p).setY(1))) return i;
+      return order[0] ?? 0;
     };
     const a = nearest(from);
     const b = nearest(to);

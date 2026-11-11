@@ -24,6 +24,52 @@ const FALL = 15;
 export const CLOUD_LOW = 118;
 export const CLOUD_DECK = 165;
 
+/**
+ * A tiling fbm noise tile (the cloud shader used to work this out per pixel,
+ * five octaves twice over two layers, for most of the screen).
+ */
+function noiseTexture(size = 256): THREE.DataTexture {
+  const lattice = (cells: number, seed: number): Float32Array => {
+    const a = new Float32Array(cells * cells);
+    let s = seed >>> 0;
+    for (let i = 0; i < a.length; i++) {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      a[i] = s / 4294967296;
+    }
+    return a;
+  };
+  const data = new Uint8Array(size * size * 4);
+  const octaves = [4, 8, 16, 32, 64].map((cells, i) => ({ cells, l: lattice(cells, 17 + i * 31), amp: 0.5 / Math.pow(2, i) }));
+  const sm = (t: number): number => t * t * (3 - 2 * t);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let v = 0;
+      for (const o of octaves) {
+        const fx = (x / size) * o.cells;
+        const fy = (y / size) * o.cells;
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const tx = sm(fx - x0);
+        const ty = sm(fy - y0);
+        const at = (i: number, j: number): number => o.l[((j + o.cells) % o.cells) * o.cells + ((i + o.cells) % o.cells)];
+        const a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx;
+        const b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+        v += (a + (b - a) * ty) * o.amp;
+      }
+      const k = (y * size + x) * 4;
+      data[k] = data[k + 1] = data[k + 2] = Math.round(Math.min(1, v / 0.97) * 255);
+      data[k + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, size, size);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
 export interface StrikeEvent {
   /** Where the bolt came down (or into: the tower). */
   at: THREE.Vector3;
@@ -205,6 +251,7 @@ export class Storm {
       this.group.add(splashes);
     }
     // ---- The cloud: patchy scud low, the deck above it
+    const noise = noiseTexture();
     for (const [y, solid, scale, dark] of [[CLOUD_DECK, 1, 0.0016, 0.085], [CLOUD_LOW, 0, 0.0034, 0.11]] as const) {
       const mat = new THREE.ShaderMaterial({
         uniforms: {
@@ -212,7 +259,8 @@ export class Storm {
           uFlash: { value: 0 },
           uStrike: { value: new THREE.Vector2() },
           uWind: { value: new THREE.Vector2() },
-          uCam: { value: new THREE.Vector3() }
+          uCam: { value: new THREE.Vector3() },
+          uNoise: { value: noise }
         },
         vertexShader: /* glsl */ `
           varying vec3 vW;
@@ -228,24 +276,13 @@ export class Storm {
           uniform vec2 uStrike;
           uniform vec2 uWind;
           uniform vec3 uCam;
+          uniform sampler2D uNoise;
           varying vec3 vW;
-          float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-          float noise(vec2 p) {
-            vec2 i = floor(p);
-            vec2 f = fract(p);
-            f = f * f * (3.0 - 2.0 * f);
-            return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-          }
-          float fbm(vec2 p) {
-            float v = 0.0;
-            float a = 0.5;
-            for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; }
-            return v;
-          }
           void main() {
             vec2 p = vW.xz * ${scale} + uWind * uTime * ${(scale * 3).toFixed(5)};
-            float n = fbm(p);
-            float m = fbm(p * 2.7 - uTime * 0.01);
+            // The tile spans four of the old noise's cells
+            float n = texture2D(uNoise, p * 0.25).r;
+            float m = texture2D(uNoise, p * 0.675 + vec2(0.37, 0.61) - uTime * 0.0025).r;
             float body = ${solid ? 'smoothstep(0.2, 0.75, n) * 0.3 + 0.93' : 'smoothstep(0.42, 0.8, n * 0.8 + m * 0.35)'};
             float alpha = clamp(body, 0.0, ${solid ? '1.0' : '0.92'});
             // Underside: dark, a little lighter where it's thin; lit up by the strike round where it was

@@ -71,6 +71,8 @@ const ROCKET_KILL = 5.2;
 const ROCKET_HURT = 5.0;
 /** A rocket landing this close to a tower's frame brings it down. */
 const TOWER_REACH = 2.8;
+/** How many of the Collective's dead stay on the ground before the oldest is cleared away. */
+const MAX_CORPSES = 6;
 /** How often the dead drop a grenade. */
 const DROP_CHANCE = 0.34;
 /** How many of the Collective come at them in each phase, all of whom have to go down before they can move on. */
@@ -292,11 +294,14 @@ export class HQScene extends CombatScene<HQData> {
 
     // ---- The van
     this.van = crewVan();
-    this.van.light.intensity = 0;
+    this.van.light.removeFromParent();
     this.van.redLight.removeFromParent();
+    for (const b of this.van.beams) {
+      b.target.removeFromParent();
+      b.removeFromParent();
+    }
     this.van.headlights.emissiveIntensity = 2.4;
-    for (const b of this.van.beams) b.intensity = 60;
-    for (const m of this.van.meshes) m.castShadow = true;
+    this.van.body.add(this.headlampGlow());
     this.scene.add(this.van.group);
     this.paths = new FootPaths(() => 0);
 
@@ -421,10 +426,10 @@ export class HQScene extends CombatScene<HQData> {
     const sh = this.moon.shadow;
     sh.mapSize.set(2048, 2048);
     const c = sh.camera as THREE.OrthographicCamera;
-    c.left = -48;
-    c.right = 48;
-    c.top = 48;
-    c.bottom = -48;
+    c.left = -40;
+    c.right = 40;
+    c.top = 40;
+    c.bottom = -40;
     c.near = 10;
     c.far = 400;
     sh.bias = -0.0012;
@@ -444,6 +449,28 @@ export class HQScene extends CombatScene<HQData> {
     pmrem.dispose();
   }
 
+  /** What the van's headlamps throw on the wet road ahead of it: two long soft pools, added on. */
+  private headlampGlow(): THREE.Object3D {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(255,255,255,0.85)');
+    gr.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 128, 128);
+    const mat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), color: 0x8a8070, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+    const glow = new THREE.Group();
+    for (const sx of [-1, 1]) {
+      const q = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 16), mat);
+      q.rotation.x = -Math.PI / 2;
+      q.position.set(sx * 1.1, -0.38, -this.van.length / 2 - 8.5);
+      glow.add(q);
+    }
+    return glow;
+  }
+
   /** Sanjay, Dev and five more off the floor: kitted out, armed, in the back of the van to start. */
   private buildCrew(): void {
     const names: [string, number, { cap?: boolean; glasses?: boolean }][] = [
@@ -461,11 +488,8 @@ export class HQScene extends CombatScene<HQData> {
       e.restyleCrew(look);
       e.wearCrewKit();
       e.setSerious();
-      armWithAK(e, true);
+      armWithAK(e);
       this.scene.add(e.root);
-      e.root.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-      });
       this.crew.push(e);
       this.cs.set(e, { seat: new THREE.Vector3(), yaw: 0, out: false, talked: false });
       this.crewAI.push(
@@ -486,9 +510,6 @@ export class HQScene extends CombatScene<HQData> {
     d.restyleCrew({ cap: false });
     d.wearCrewKit();
     d.setSerious();
-    d.root.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
     this.driver = d;
     const stain = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.012), new THREE.MeshStandardMaterial({ color: 0xd88a86, roughness: 0.5 }));
     stain.position.set(-0.02, -0.06, -0.141);
@@ -1135,7 +1156,7 @@ export class HQScene extends CombatScene<HQData> {
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
     if (this.spawnT <= 0 && alive < 9 && this.phaseSpawned < TOWER_QUOTA) {
-      this.spawnT = 2.4 + Math.random() * 2.4;
+      this.spawnT = this.towersDown() >= 4 ? 0.7 : 2.4 + Math.random() * 2.4;
       const pool = this.towers[0].alive || this.towers[1].alive ? this.level.spawns.near : this.level.spawns.far;
       this.spawnAgent(this.pickSpawn(pool));
       this.phaseSpawned++;
@@ -1150,6 +1171,7 @@ export class HQScene extends CombatScene<HQData> {
     if (this.towersDown() >= 4 && this.phaseT > 0.5) {
       const left = this.enemiesLeft();
       this.showLeft(left, 'TOWERS DOWN — CLEAR OUT THE EC FORCES');
+      this.mopUp(dt, left, TOWER_QUOTA - this.phaseSpawned);
       if (left === 0) this.startAdvance(false);
     }
   }
@@ -1267,12 +1289,12 @@ export class HQScene extends CombatScene<HQData> {
     const alive = this.agents.filter((a) => a.e.alive).length;
     this.spawnT -= dt;
     if (this.spawnT <= 0 && alive < 9 && this.advanceSpawned < ADVANCE_QUOTA) {
-      this.spawnT = 2.8 + Math.random() * 2.5;
+      this.spawnT = p.z < -138 ? 0.7 : 2.8 + Math.random() * 2.5;
       this.advanceSpawned++;
       this.spawnAgent(this.pickSpawn(L.spawns.podium));
     }
     // Up to the stairs with him
-    if (!this.stairsMoved && p.z < -126) {
+    if (!this.stairsMoved && (p.z < -112 || this.phaseT > 30)) {
       this.stairsMoved = true;
       this.crewAI.forEach((c, i) => c.goTo(L.posts.stairs[i], i % 2 ? 2 : 0.2));
       this.say([{ who: 'MARCUS', text: 'Stairs ahead! Get to the columns!', dur: 2.4 }]);
@@ -1280,6 +1302,7 @@ export class HQScene extends CombatScene<HQData> {
     // In to the stairs only once the lot's clear
     const left = this.enemiesLeft();
     this.showLeft(left, p.z < -150 ? 'CLEAR THE AREA BEFORE YOU GO IN' : 'ADVANCE TO THE EC HEADQUARTERS — CLEAR THEM OUT');
+    this.mopUp(dt, left, ADVANCE_QUOTA - this.advanceSpawned);
     if (left === 0 && this.leftShown !== -2) {
       this.leftShown = -2;
       this.hud.setCounter(null);
@@ -1288,6 +1311,37 @@ export class HQScene extends CombatScene<HQData> {
     }
     if (left === 0 && p.z < -157.5 && this.player.alive) this.startTalk();
   }
+
+  /**
+   * The last few of them, once there are no more to come: they come for him
+   * (showLeft), but one stuck somewhere he can't get at, or a jetpack man
+   * hanging about out of reach, mustn't hold the level up. If the count
+   * hasn't moved for a while, the crew finish them.
+   */
+  private mopUp(dt: number, left: number, toCome: number): void {
+    if (left !== this.mopLeft) {
+      this.mopLeft = left;
+      this.mopT = 0;
+    }
+    if (left === 0 || left > 5 || toCome > 0 || !this.player.alive) return;
+    this.mopT += dt;
+    if (this.mopT < 22) return;
+    this.mopT = 0;
+    for (const a of this.agents) {
+      if (!a.e.alive) continue;
+      const jet = this.jetOf.get(a.e);
+      if (jet) {
+        // Shot down: he comes out of the sky on his own
+        if (jet.alive) this.downJet(jet, V(0, -1, 0), false);
+        continue;
+      }
+      if (a.e.alive) this.killEnemy(a.e, a.e.position.clone().setY(a.e.position.y + 1.3), V(0, 0.2, 1).normalize(), false, false, 'torso');
+    }
+    this.say([{ who: 'DEV', text: 'Got the last of them!', dur: 2 }]);
+  }
+
+  private mopLeft = -1;
+  private mopT = 0;
 
   // ---------------------------------------------------------------- 4 talk
 
@@ -1564,9 +1618,6 @@ export class HQScene extends CombatScene<HQData> {
     if (armour) e.wearArmour();
     e.setAiming(true);
     this.scene.add(e.root);
-    e.root.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
     for (const part of e.parts) L.shootables.push(part);
     const ai = new EnemyAI(e, {
       player: this.player,
@@ -1604,9 +1655,20 @@ export class HQScene extends CombatScene<HQData> {
           const k = this.level.shootables.indexOf(p);
           if (k >= 0) this.level.shootables.splice(k, 1);
         }
+        if (!this.jetOf.has(e)) this.corpses.push(a);
       }
     }
+    // The oldest go once there are more than a few: drawn and simulated, they were costing every frame
+    while (this.corpses.length > MAX_CORPSES) {
+      const old = this.corpses.shift()!;
+      old.e.removeCorpse();
+      this.agentOf.delete(old.e);
+      const k = this.agents.indexOf(old);
+      if (k >= 0) this.agents.splice(k, 1);
+    }
   }
+
+  private corpses: Agent[] = [];
 
   // ------------------------------------------------------------- jetpacks
 
@@ -1619,9 +1681,6 @@ export class HQScene extends CombatScene<HQData> {
     armWithAK(e);
     e.setAiming(true);
     this.scene.add(e.root);
-    e.root.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
     for (const part of e.parts) L.shootables.push(part);
     const a: Agent = { e, hp: JET_HP, armour: false, ai: null, pooled: false, push: 0 };
     this.agents.push(a);
@@ -1632,9 +1691,6 @@ export class HQScene extends CombatScene<HQData> {
       fire: (x) => this.enemyFire(x),
       crash: (t, at, vel) => this.jetCrash(t, at, vel),
       particles: this.particles
-    });
-    jet.pack.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
     });
     this.jets.push(jet);
     this.jetOf.set(e, jet);

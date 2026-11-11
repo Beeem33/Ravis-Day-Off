@@ -24,8 +24,9 @@ const TUBE_R = 0.22;
 
 /** Lying back in the hole: hips low, the back on the rear of the ring, the legs over the front, the head up looking out. */
 const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
-  hips: V3(0, 0.16, 0.14),
-  lean: [-58, -8, -6, -2, 26, 22],
+  // Seat sunk down through the hole (below the ring's middle), his back against the inside of the rear tube
+  hips: V3(0, -0.06, 0.14),
+  lean: [-50, -8, -6, -2, 26, 22],
   legs: {
     // Legs crossed at the ankle out over the front of the ring: the right over the left
     l: { ankle: V3(-0.05, 0.08, 0.85), knee: V3(0.15, 1, 0.3), turn: -6 },

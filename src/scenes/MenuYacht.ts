@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Enemy } from '../entities/Enemy';
 import { HitmanVisual } from '../entities/HitmanVisual';
+import { Lady, sunLounger } from './MenuLadies';
 
 /**
  * The menu's yacht: a white motor yacht at anchor off to Ravi's right, the
@@ -67,10 +68,12 @@ export class MenuYacht {
   private rings: { m: THREE.Mesh; life: number }[] = [];
   private dropTex: THREE.CanvasTexture;
   private floaties: THREE.Object3D[] = [];
+  private ladies: Lady[] = [];
 
   constructor() {
     this.dropTex = this.makeDropTex();
     this.buildBoat();
+    this.buildLadies();
     // The crew come aboard once their model has loaded (it loads behind the menu)
     HitmanVisual.load(`${import.meta.env.BASE_URL}models/hitman.glb`)
       .then(() => this.buildParty())
@@ -316,6 +319,31 @@ export class MenuYacht {
     g.add(chain);
   }
 
+  /**
+   * Up on the sundeck, along the rail on Ravi's side where they stand out against the sky:
+   * two chatting over drinks, one dancing, one waving out over the water, one on a lounger.
+   */
+  private buildLadies(): void {
+    const add = (l: Lady, x: number, z: number, yaw: number): void => {
+      l.root.position.set(x, SUN, z);
+      l.root.rotation.y = yaw;
+      this.group.add(l.root);
+      this.ladies.push(l);
+    };
+    add(new Lady({ skin: 0xe6bf9f, hair: 0xe8c66a, bikini: 0xff3b6b, long: true, shades: true }, 'wave'), -1.9, -2.3, Math.PI - 0.15);
+    add(new Lady({ skin: 0x8a5a3b, hair: 0x1a1210, bikini: 0xffd23f, long: true, shades: false }, 'chat', true), -4.05, -2.15, (Math.PI * 3) / 4);
+    add(new Lady({ skin: 0xd4a27c, hair: 0x5a2e16, bikini: 0x2ad0c8, long: false, shades: true }, 'drink', true), -3.35, -2.2, (-Math.PI * 3) / 4);
+    add(new Lady({ skin: 0xbf8a62, hair: 0x2a1a10, bikini: 0xb45cff, long: true, shades: false }, 'dance'), -0.6, -2.15, Math.PI + 0.2);
+    // The lounger along the rail, its head toward the bow, and her on it
+    const lounger = sunLounger(0xff8c42);
+    lounger.position.set(-5.7, SUN, -1.75);
+    lounger.rotation.y = -Math.PI / 2;
+    this.group.add(lounger);
+    const lounging = new Lady({ skin: 0xa8744e, hair: 0x3a2214, bikini: 0x3b8cff, long: true, shades: true }, 'lounge');
+    lounger.add(lounging.root);
+    this.ladies.push(lounging);
+  }
+
   // ------------------------------------------------------------- the party
 
   private person(at: THREE.Vector3, yaw: number, i: number, shirt: number, cap: boolean, glasses: boolean): Enemy {
@@ -394,6 +422,7 @@ export class MenuYacht {
     }
 
     this.updateTalkers(time);
+    for (const l of this.ladies) l.update(time);
     this.updateCouple(time);
     this.updateTop(time);
     for (const j of this.jumpers) this.updateJumper(j, dt);

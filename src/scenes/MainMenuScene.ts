@@ -261,7 +261,7 @@ export class MainMenuScene implements GameScene {
     s.add(this.float);
     this.buildIsland();
     // Broadside on, its party side to him, off to the right
-    this.yacht.group.position.set(-21, 0, 56);
+    this.yacht.group.position.set(-15.5, 0, 45);
     this.yacht.group.rotation.y = 0.16;
     s.add(this.yacht.group);
   }

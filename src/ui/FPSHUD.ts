@@ -245,6 +245,11 @@ export class FPSHUD {
     this.ammoEl.classList.toggle('reloading', reloading);
   }
 
+  /** The readout there or not (not, with a knife in his hand). */
+  setAmmoShown(on: boolean): void {
+    if (this.ammoEl) this.ammoEl.style.visibility = on ? '' : 'hidden';
+  }
+
   private shownLabel = '';
   private grenadeEl: HTMLElement | null = null;
   private shownGrenades = -1;

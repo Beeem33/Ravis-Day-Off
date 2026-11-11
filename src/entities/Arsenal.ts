@@ -8,6 +8,7 @@ import type { FPSPlayer } from './FPSPlayer';
 import { WeaponViewmodel } from './WeaponViewmodel';
 import { ShotgunViewmodel } from './ShotgunViewmodel';
 import { RifleViewmodel } from './RifleViewmodel';
+import { showInventory, type InventoryItem } from '../ui/InventoryUI';
 
 export type Gun = 'pistol' | 'shotgun' | 'rifle';
 
@@ -87,6 +88,15 @@ export class Arsenal {
   /** The gun the round being cast right now came out of. */
   firing: Gun = 'pistol';
   private cooldown = 0;
+  /**
+   * The knife, where a level gives him one: slot 4, after the guns. The
+   * arsenal only keeps the slot (wanted, out, how far put away); the scene
+   * owns the knife itself and reads `knifeActive` and `knifeStow`.
+   */
+  hasKnife = false;
+  knifeWanted = false;
+  knifeActive = false;
+  knifeStow = 1;
   /** Stow speeds: how fast the gun goes down, and comes back up. */
   stowRate = 5;
   drawRate = 5;
@@ -187,9 +197,43 @@ export class Arsenal {
     return this.held.reloading;
   }
 
-  /** Mid-swap, or still coming back up: no aiming and no shooting. */
+  /** Mid-swap, or still coming back up (or the knife's out instead): no aiming and no shooting. */
   get switching(): boolean {
-    return this.wanted !== this.active || this.held.stow > 0.1;
+    return this.knifeWanted || this.knifeActive || this.wanted !== this.active || this.held.stow > 0.1;
+  }
+
+  /** The knife in his hand from the start, the guns put away. */
+  startWithKnife(): void {
+    this.hasKnife = true;
+    this.knifeWanted = true;
+    this.knifeActive = true;
+    this.knifeStow = 0;
+    for (const v of this.all) v.stow = 1;
+  }
+
+  /** What he's carrying, slot by slot, and which is in hand (or being reached for). */
+  inventory(): { items: InventoryItem[]; active: number } {
+    const items: InventoryItem[] = [];
+    if (this.owned.has('pistol')) items.push({ key: 1, icon: 'pistol', name: 'PISTOL' });
+    if (this.owned.has('shotgun')) items.push(this.shotgun.isQuad ? { key: 2, icon: 'quad', name: 'QUAD-BARREL' } : { key: 2, icon: 'shotgun', name: 'SHOTGUN' });
+    if (this.owned.has('rifle')) items.push({ key: 3, icon: 'rifle', name: 'AK-47' });
+    if (this.hasKnife) items.push({ key: 4, icon: 'knife', name: 'KARAMBIT' });
+    const want = this.knifeWanted ? 4 : this.wanted === 'pistol' ? 1 : this.wanted === 'shotgun' ? 2 : 3;
+    return { items, active: items.findIndex((i) => i.key === want) };
+  }
+
+  /** The panel on the left: what's in which slot, and the grenades. */
+  showInventory(): void {
+    const { items, active } = this.inventory();
+    showInventory(items, active, this.grenades);
+  }
+
+  private select(key: number): void {
+    if (key === 4) this.knifeWanted = true;
+    else {
+      this.knifeWanted = false;
+      this.wanted = key === 1 ? 'pistol' : key === 2 ? 'shotgun' : 'rifle';
+    }
   }
 
   /** The strongest of the three sights' blends, for the HUD. */
@@ -217,11 +261,49 @@ export class Arsenal {
   preUpdate(dt: number, input: InputManager, o: { canSwitch: boolean; busy: boolean; hold?: boolean }): void {
     if (o.hold) return;
     const held = this.held;
+    const wheel = input.consumeWheel();
     if (o.canSwitch && !o.busy && !held.reloading) {
-      for (const [key, g] of SLOT_KEYS) if (this.owned.has(g) && input.wasPressed(key)) this.wanted = g;
+      let picked = false;
+      for (const [key, g] of SLOT_KEYS) {
+        if (this.owned.has(g) && input.wasPressed(key)) {
+          this.select(g === 'pistol' ? 1 : g === 'shotgun' ? 2 : 3);
+          picked = true;
+        }
+      }
+      if (this.hasKnife && input.wasPressed('Digit4')) {
+        this.select(4);
+        picked = true;
+      }
+      if (wheel) {
+        // A notch at a time through the slots he has, round and round
+        const { items, active } = this.inventory();
+        if (items.length > 1) {
+          const n = items.length;
+          this.select(items[(((active + Math.sign(wheel)) % n) + n) % n].key);
+          picked = true;
+        }
+      }
+      if (picked) this.showInventory();
     }
     if (o.busy) {
       for (const v of this.all) v.stow = Math.min(1, v.stow + dt * 6);
+      this.knifeStow = Math.min(1, this.knifeStow + dt * 6);
+    } else if (this.knifeWanted) {
+      // The gun down first, then the knife out
+      if (!this.knifeActive) {
+        held.stow = Math.min(1, held.stow + dt * this.stowRate);
+        if (held.stow >= 1) this.knifeActive = true;
+      } else {
+        for (const v of this.all) v.stow = 1;
+        this.knifeStow = Math.max(0, this.knifeStow - dt * 6);
+      }
+    } else if (this.knifeActive) {
+      // The knife away; whichever gun was asked for comes up after it
+      this.knifeStow = Math.min(1, this.knifeStow + dt * 7);
+      if (this.knifeStow >= 1) {
+        this.knifeActive = false;
+        this.active = this.wanted;
+      }
     } else if (this.wanted !== this.active) {
       held.stow = Math.min(1, held.stow + dt * this.stowRate);
       if (held.stow >= 1) this.active = this.wanted;
@@ -256,6 +338,8 @@ export class Arsenal {
       !this.held.reloading &&
       !this.switching &&
       (this.active !== 'shotgun' || !this.shotgun.pumping);
+    // The knife's out: the click is the scene's (its tricks), not a trigger's
+    if (this.knifeWanted || this.knifeActive) return null;
     const clicked = input.consumeClick();
     let fired: Gun | null = null;
     if (clicked && canFire && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {

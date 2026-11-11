@@ -8,6 +8,8 @@ export class InputManager {
   private mouseDX = 0;
   private mouseDY = 0;
   private clickQueued = false;
+  private rightQueued = false;
+  private wheel = 0;
   mouseHeld = false;
   /** Right mouse button held (aim down sights). */
   rightHeld = false;
@@ -51,6 +53,7 @@ export class InputManager {
     document.addEventListener('mousedown', (e) => {
       if (e.button === 2) {
         this.rightHeld = true;
+        if (this.pointerLocked) this.rightQueued = true;
         return;
       }
       if (e.button !== 0) return;
@@ -61,6 +64,10 @@ export class InputManager {
       if (e.button === 0) this.mouseHeld = false;
       if (e.button === 2) this.rightHeld = false;
     });
+    // The wheel: one notch a step through what he's carrying
+    document.addEventListener('wheel', (e) => {
+      if (this.pointerLocked && e.deltaY) this.wheel += Math.sign(e.deltaY);
+    }, { passive: true });
     // Right mouse = aim down sights; never show the browser context menu
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -148,6 +155,20 @@ export class InputManager {
     const c = this.clickQueued;
     this.clickQueued = false;
     return c;
+  }
+
+  /** True once per physical right click while locked. */
+  consumeRightClick(): boolean {
+    const c = this.rightQueued;
+    this.rightQueued = false;
+    return c;
+  }
+
+  /** Notches the wheel has turned since last asked: + down (next), − up (previous). */
+  consumeWheel(): number {
+    const w = this.wheel;
+    this.wheel = 0;
+    return w;
   }
 
   /** Call at the end of every frame. */

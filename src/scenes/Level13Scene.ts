@@ -12,6 +12,9 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { KnifeTwirlViewmodel } from '../entities/KnifeTwirlViewmodel';
+import { Arsenal, loadoutFor } from '../entities/Arsenal';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { hideInventory } from '../ui/InventoryUI';
 import type { Enemy } from '../entities/Enemy';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -307,8 +310,10 @@ class PlantHands {
 // ================================================================ scene
 
 export class Level13Scene extends CombatScene<Level13Data> {
-  /** All he has down here: a karambit, twirled round his finger for something to do. */
+  /** Everything he's carrying; and in his hand to start with, the karambit (slot 4). */
+  private arsenal!: Arsenal;
   private knife!: KnifeTwirlViewmodel;
+  private drink!: DrinkViewmodel;
   private hud!: FPSHUD;
   private phase: Phase = 'play';
   private phaseT = 0;
@@ -389,13 +394,37 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.player.camera.far = 600;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
-    this.ragdollOnDeath(() => null);
+    this.ragdollOnDeath(() => (!this.arsenal.knifeActive && this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
 
     this.particles = new ParticleManager(this.scene);
     this.flashPool = new MuzzleFlashPool(this.scene, 4);
     this.decals = new BloodDecalSystem(this.scene);
+    this.arsenal = new Arsenal(
+      {
+        player: this.player,
+        audio,
+        bus,
+        world: this.world,
+        particles: this.particles,
+        castBullet: (o, d) => this.castBullet(o, d, null),
+        addDebris: (m, b) => this.addDebris(m, b),
+        dropMagazine: (p) => this.dropMagazine(p)
+      },
+      loadoutFor('hq'),
+      'rifle'
+    );
+    this.arsenal.startWithKnife();
     this.knife = new KnifeTwirlViewmodel(this.player.camera);
     this.knife.onSlash = () => this.knifeSlash();
+    this.knife.onCatch = () => audio.pocket();
+    this.drink = new DrinkViewmodel(this.player.camera);
+    this.drink.onEvent = (e, i) => {
+      if (e === 'crack') audio.canCrack();
+      else if (e === 'gulp') audio.gulp(i);
+      else if (e === 'heal') this.player.healFull();
+      else if (e === 'crush') audio.canCrush();
+      else if (e === 'toss') this.dropCan(this.drink.tossPose());
+    };
     this.hands = new PlantHands(this.player.camera);
 
     // Light: a cold wash from the roof over the hall, very little in the sewer but its lamps
@@ -437,6 +466,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
     this.hud.setCounter(null);
     this.hud.setGrenades(1);
+    this.arsenal.grenades = 1;
     this.buildUI();
 
     this.unsubs.push(
@@ -466,6 +496,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.fliesSound?.stop();
     this.winch?.stop();
     this.hud.destroy();
+    hideInventory();
     this.flashPool.dispose();
     this.ui.remove();
   }
@@ -619,8 +650,14 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (this.phase !== 'tube') this.updateRides(dt);
 
     // ---- Ladders: on one, he goes up it
-    const busy = !!this.climbing || this.phase !== 'play';
-    p.aiming = false;
+    // ---- His hands: a can of Deadbull on G; nothing in them on a ladder or in a cutscene
+    const free = this.playable && input.pointerLocked && !this.climbing;
+    if (input.wasPressed('KeyG') && free && !this.arsenal.reloading && !this.knife.busy) this.drink.start();
+    if (!p.alive || this.falling) this.drink.abort();
+    const busy = !!this.climbing || this.phase !== 'play' || this.drink.engaged;
+    this.arsenal.preUpdate(dt, input, { canSwitch: free && !this.knife.busy, busy });
+    const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching;
+    p.aiming = aiming;
     if (this.phase === 'play' || this.dead || this.falling) {
       if (this.climbing) this.climb(dt);
       else this.catchLadder();
@@ -630,10 +667,24 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.wade(dt);
     this.checkFall(dt);
 
-    // ---- The knife: twirled round and round; put away on a ladder, in a cutscene, planting the charge
-    this.knife.stow += ((busy ? 1 : 0) - this.knife.stow) * Math.min(1, dt * 8);
-    if (this.playable && input.pointerLocked && !busy && input.consumeClick() && this.knife.slash()) this.ctx.audio.punchSwish();
+    // ---- The knife (a click is a trick), or the guns (they do nothing to the turrets but spark)
+    const a = this.arsenal;
+    this.knife.stow = a.knifeActive ? a.knifeStow : 1;
+    const canFire = this.playable && input.pointerLocked && !busy;
+    if (a.knifeActive && a.knifeWanted && canFire && a.knifeStow < 0.15 && input.consumeClick() && this.knife.trick()) this.ctx.audio.punchSwish();
     this.knife.update(dt, p);
+    a.updateViewmodels(dt, aiming);
+    a.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
+    this.hud.setAmmoShown(!a.knifeActive && !a.knifeWanted);
+    this.drink.update(dt, p);
+    if (this.phase === 'play') {
+      const targetFov = 74 - a.zoomFov;
+      if (Math.abs(p.camera.fov - targetFov) > 0.01) {
+        p.camera.fov = targetFov;
+        p.camera.updateProjectionMatrix();
+      }
+    }
+    this.hud.setAiming(a.aimBlend > 0.5);
 
     // ---- The route
     this.updateSentries(dt);

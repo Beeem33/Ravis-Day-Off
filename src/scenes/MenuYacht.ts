@@ -384,9 +384,9 @@ export class MenuYacht {
       e.root.userData.ph = 4 + i * 1.7;
       this.talkers.push(e);
     }
-    // The couple, at the rail on the near side, wrapped round each other
-    const a = this.person(V(-4.35, D, -2.35), -Math.PI / 2, 20, 0xef476f, false, false);
-    const b = this.person(V(-3.98, D, -2.35), Math.PI / 2, 21, 0x118ab2, false, true);
+    // The couple, on the main deck by the two chatting up front (yellow and purple shirts), wrapped round each other
+    const a = this.person(V(8.0, D, -2.2), -Math.PI / 2, 20, 0xef476f, false, false);
+    const b = this.person(V(8.37, D, -2.2), Math.PI / 2, 21, 0x118ab2, false, true);
     this.couple.push(a, b);
     // The DJ and two dancing up top
     this.dj = this.person(V(3.55, SUN, 0), Math.PI / 2, 30, 0x222222, true, true);

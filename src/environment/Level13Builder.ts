@@ -3,6 +3,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas, tiling, noiseTile } from './Level8Builder';
+import { barrel } from './MechanicalProps';
+import { officeChair, officeDesk, trashCan, flowerPot, waterCooler } from './OfficeProps';
+import { cargoTexture, scissorGateTexture, monitor, screenPanel, poster, orderSheet, comic, type ScreenKind } from './Level13Props';
+import { shelfUnit, shelfTops, cleanerJug, sprayBottle, paintCan, cardboardBox, rollPack, mopBucket, mop, broom, wetFloorSign, toolbox, pegboard, hoseReel, hardHat, rubberBoots, workbench, janitorCart, doorSign, warnPlate, ecMug } from './Level13Props';
 
 /**
  * Level13Builder — inside the Exterminator Collective.
@@ -31,8 +35,18 @@ export const SLUDGE_Y = 29.72;
 export const H1 = 46;
 export const H2 = 54;
 export const H3 = 62;
+/** The landings either side of the vat line, the cargo line and the lift's bottom; walkway 7 and the door; the office floor. */
+export const Y6 = 60.1;
+export const H4 = 66;
+export const OFFICE_Y = 78;
+/** The vat line: its track along z at this x, the carts' decks at this height. */
+export const VAT_X = 42.5;
+export const VAT_Y = 59.6;
 /** Below this, inside the hall, he's gone over. */
 export const FALL_Y = 38;
+/** The sewer tunnels: walls straight up to SPRING, then a vault rising RISE to its crown under the slab. */
+const SPRING = SEW_Y + 2.2;
+const RISE = 1.75;
 export const HALL = { x0: -60, x1: 60, z0: -70, z1: 70, top: 92, bottom: -70 };
 
 export interface Ladder {
@@ -41,6 +55,8 @@ export interface Ladder {
   face: number;
   top: number;
   off: THREE.Vector3;
+  /** Not there to climb (drawn up). */
+  disabled?: boolean;
 }
 
 export interface TurretSite {
@@ -87,6 +103,19 @@ export interface Level13Data extends CombatLevel {
   lights: { sewer: THREE.PointLight[]; hall: THREE.PointLight[] };
   vatGlow: THREE.MeshStandardMaterial[];
   fogLayers: THREE.Mesh[];
+  /** The maintenance room's door: slides into the wall (along z) when he comes up to it. */
+  vatLine: { x: number; y: number; z0: number; z1: number; speed: number; carts: { group: THREE.Group; z: number; deck: Collider; vats: Collider[] }[] };
+  cargo: { lines: { z: number; top: number; speed: number; x0: number; x1: number }[]; boxes: { group: THREE.Group; collider: Collider; line: number; x: number }[] };
+  lift: { car: THREE.Group; floor: Collider; x0: number; x1: number; z0: number; z1: number; yBottom: number; yTop: number; gates: { pivot: THREE.Group; collider: Collider; level: 'bottom' | 'top' }[] };
+  officeLever: { pivot: THREE.Group; at: THREE.Vector3 };
+  dropLadder: { group: THREE.Group; raise: number; ladder: Ladder };
+  /** The vats' liquid, one material per colour: the scene runs their clock and fog. */
+  vatMats: THREE.ShaderMaterial[];
+  /** Colliders that move (carts, crates, the lift): kept out of the physics world, added after it. */
+  dyn: Collider[];
+  sewerDoor: { slab: THREE.Group; collider: Collider; closedZ: number; openZ: number; at: THREE.Vector3 };
+  /** Where the outflows' slop lands in the pool, for splashes. */
+  pours: THREE.Vector3[];
 }
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
@@ -315,51 +344,283 @@ function fogCanvas(): HTMLCanvasElement {
 
 // ------------------------------------------------------------- the sludge
 
+const SLUDGE_NOISE = /* glsl */ `
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.1 + 7.3) * 0.3 + noise(p * 4.3 - 3.1) * 0.15; }
+`;
+
+const FOG_VERT = /* glsl */ `
+  varying vec3 vW;
+  varying float vFog;
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    vec4 mv = viewMatrix * w;
+    vFog = -mv.z;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+/**
+ * The sludge: a thick green soup that drifts, with brown muck rafting on it,
+ * a scum that gathers, and bubbles — round, domed, catching the light — that
+ * swell up, pop and leave a ring spreading where they were.
+ */
 function sludgeMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: { uTime: { value: 0 }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 } },
-    vertexShader: /* glsl */ `
-      varying vec3 vW;
-      varying float vFog;
-      void main() {
-        vec4 w = modelMatrix * vec4(position, 1.0);
-        vW = w.xyz;
-        vec4 mv = viewMatrix * w;
-        vFog = -mv.z;
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
+    vertexShader: FOG_VERT,
     fragmentShader: /* glsl */ `
       uniform float uTime;
       uniform vec3 fogColor;
       uniform float fogDensity;
       varying vec3 vW;
       varying float vFog;
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p) {
-        vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+      ${SLUDGE_NOISE}
+      // One layer of bubbles: cells of 1/scale m, one bubble in some of them
+      vec3 bubbles(vec2 p, float scale, float t, float seed) {
+        vec2 g = p * scale;
+        vec2 id = floor(g);
+        vec2 f = fract(g) - 0.5;
+        float h = hash(id + seed);
+        if (h < 0.62) return vec3(0.0);
+        vec2 o = (vec2(hash(id + seed + 3.1), hash(id + seed + 7.7)) - 0.5) * 0.5;
+        float life = fract(t * (0.18 + h * 0.25) + h * 13.0);
+        float d = length(f - o);
+        // Swelling (a dome, lit from above), then popped (a ring going out)
+        float r = 0.08 + 0.26 * smoothstep(0.0, 0.75, life);
+        float alive = step(life, 0.78);
+        float dome = alive * smoothstep(r, r - 0.05, d);
+        float hi = alive * smoothstep(r * 0.45, 0.0, length(f - o - vec2(-0.3, 0.3) * r));
+        float rr = (life - 0.78) / 0.22;
+        float ring = (1.0 - alive) * smoothstep(0.04, 0.0, abs(d - (r + rr * 0.3))) * (1.0 - rr);
+        return vec3(dome, hi, ring);
       }
       void main() {
-        vec2 p = vW.xz * 0.8;
-        float n = noise(p + vec2(uTime * 0.12, uTime * 0.05)) * 0.6 + noise(p * 2.7 - uTime * 0.09) * 0.4;
-        float scum = smoothstep(0.55, 0.8, noise(vW.xz * 0.35 + uTime * 0.02));
-        float bub = step(0.985, hash(floor(vW.xz * 6.0) + floor(uTime * 1.5)));
-        vec3 col = mix(vec3(0.06, 0.11, 0.025), vec3(0.17, 0.27, 0.05), n);
-        col = mix(col, vec3(0.26, 0.27, 0.1), scum * 0.75);
-        // Brown spots of muck drifting in it, and a darker crust round them
-        float muck = noise(vW.xz * 1.1 + vec2(uTime * 0.03, -uTime * 0.02) + 31.0) * 0.65 + noise(vW.xz * 3.3 - uTime * 0.02) * 0.35;
-        float spot = smoothstep(0.6, 0.7, muck);
-        col = mix(col, vec3(0.05, 0.06, 0.02), smoothstep(0.54, 0.6, muck) * (1.0 - spot) * 0.6);
-        col = mix(col, vec3(0.24, 0.15, 0.06) * (0.8 + 0.4 * noise(vW.xz * 9.0)), spot);
-        col += vec3(0.25, 0.4, 0.08) * bub;
-        // A sick sheen
-        col += vec3(0.05, 0.09, 0.02) * pow(n, 4.0) * 3.0;
-        float f = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
-        gl_FragColor = vec4(mix(col, fogColor, f), 0.985);
+        float t = uTime;
+        vec2 p = vW.xz;
+        vec2 flow = vec2(t * 0.11, t * 0.04);
+        float n = fbm(p * 0.8 + flow);
+        float swirl = fbm(p * 1.6 + vec2(n * 1.8, -n) - flow * 0.7);
+        vec3 col = mix(vec3(0.05, 0.10, 0.02), vec3(0.18, 0.28, 0.05), swirl);
+        // Scum gathering in drifts, a crust of muck, brown rafts
+        float scum = smoothstep(0.55, 0.78, fbm(p * 0.35 + t * 0.015));
+        col = mix(col, vec3(0.27, 0.28, 0.11), scum * 0.7);
+        float muck = fbm(p * 1.1 + vec2(t * 0.03, -t * 0.02) + 31.0);
+        float spot = smoothstep(0.6, 0.68, muck);
+        col = mix(col, vec3(0.04, 0.05, 0.015), smoothstep(0.53, 0.6, muck) * (1.0 - spot) * 0.6);
+        col = mix(col, vec3(0.24, 0.15, 0.06) * (0.75 + 0.45 * noise(p * 9.0)), spot);
+        // Bubbles, two sizes
+        vec3 b1 = bubbles(p + flow * 0.5, 2.2, t, 1.0);
+        vec3 b2 = bubbles(p + flow * 0.5 + 0.37, 4.5, t * 1.3, 9.0);
+        vec3 b = max(b1, b2 * 0.8);
+        col = mix(col, vec3(0.22, 0.36, 0.07), b.x * 0.6);
+        col += vec3(0.42, 0.55, 0.22) * b.y * 0.8;
+        col += vec3(0.18, 0.26, 0.06) * b.z;
+        // A sick oily sheen in the swirl
+        float sheen = pow(max(0.0, swirl - 0.45) * 1.8, 3.0);
+        col += vec3(0.08, 0.12, 0.03) * sheen + vec3(0.05, 0.02, 0.07) * sheen * noise(p * 3.0 + t * 0.2);
+        float fogF = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
+        gl_FragColor = vec4(mix(col, fogColor, fogF), 0.985);
       }
     `,
     transparent: true
+  });
+}
+
+/** Slop pouring out of an outflow: streaks falling down a narrow strip, frayed at the edges. */
+function streamMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 } },
+    vertexShader: FOG_VERT,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 fogColor;
+      uniform float fogDensity;
+      varying vec3 vW;
+      varying float vFog;
+      varying vec2 vUv;
+      ${SLUDGE_NOISE}
+      void main() {
+        float x = vUv.x;
+        float n = fbm(vec2(x * 6.0, vUv.y * 3.0 + uTime * 2.6));
+        float edge = smoothstep(0.0, 0.25 + n * 0.2, x) * smoothstep(1.0, 0.75 - n * 0.2, x);
+        float streak = 0.6 + 0.4 * noise(vec2(x * 14.0, vUv.y * 1.5 + uTime * 3.4));
+        float a = edge * smoothstep(0.25, 0.5, n + 0.2) * 0.92;
+        if (a < 0.05) discard;
+        vec3 col = mix(vec3(0.07, 0.13, 0.02), vec3(0.24, 0.36, 0.07), streak * n);
+        float fogF = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
+        gl_FragColor = vec4(mix(col, fogColor, fogF), a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+}
+
+// ------------------------------------------------------------- the vats
+
+/**
+ * A vat's pieces, foot at the origin: legs and a skirt, a lower and an upper
+ * shell, the glass band between them held by straps and rims, a dome with a
+ * hatch, a gauge, and a gooseneck pipe off the top down to the deck beside
+ * it. `steel` and `dark` are for merging; `band` gets the liquid.
+ */
+function vatGeometry(r: number, h: number): { steel: THREE.BufferGeometry[]; dark: THREE.BufferGeometry[]; band: THREE.BufferGeometry } {
+  const steel: THREE.BufferGeometry[] = [];
+  const dark: THREE.BufferGeometry[] = [];
+  const at = (g: THREE.BufferGeometry, x: number, y: number, z: number): THREE.BufferGeometry => g.translate(x, y, z);
+  const b0 = 0.4 + h * 0.3;
+  const b1 = b0 + h * 0.45;
+  for (let k = 0; k < 4; k++) {
+    const a = (k * Math.PI) / 2 + Math.PI / 4;
+    dark.push(span(Math.cos(a) * r * 0.78 - 0.07, 0, Math.sin(a) * r * 0.78 - 0.07, Math.cos(a) * r * 0.78 + 0.07, 0.45, Math.sin(a) * r * 0.78 + 0.07));
+  }
+  dark.push(at(new THREE.CylinderGeometry(r * 1.03, r * 1.03, 0.12, 24), 0, 0.42, 0));
+  steel.push(at(new THREE.CylinderGeometry(r, r, b0 - 0.4, 24), 0, (0.4 + b0) / 2, 0));
+  steel.push(at(new THREE.CylinderGeometry(r * 0.9, r, h * 0.25, 24), 0, b1 + h * 0.125, 0));
+  for (const y of [b0, b1]) {
+    const t = new THREE.TorusGeometry(r * 1.01, 0.04, 6, 28);
+    t.rotateX(Math.PI / 2);
+    steel.push(at(t, 0, y, 0));
+  }
+  // Straps over the glass
+  for (let k = 0; k < 6; k++) {
+    const a = (k * Math.PI) / 3;
+    const g = new THREE.BoxGeometry(0.05, b1 - b0, 0.035);
+    g.rotateY(-a);
+    steel.push(at(g, Math.cos(a) * (r + 0.012), (b0 + b1) / 2, Math.sin(a) * (r + 0.012)));
+  }
+  // Bolts round the lower rim
+  for (let k = 0; k < 16; k++) {
+    const a = (k * Math.PI) / 8;
+    dark.push(at(new THREE.BoxGeometry(0.035, 0.035, 0.035), Math.cos(a) * (r + 0.02), b0 - 0.06, Math.sin(a) * (r + 0.02)));
+  }
+  const dome = new THREE.SphereGeometry(r * 0.9, 24, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+  dome.scale(1, 0.42, 1);
+  dark.push(at(dome, 0, b1 + h * 0.25, 0));
+  const top = b1 + h * 0.25 + r * 0.38;
+  steel.push(at(new THREE.CylinderGeometry(r * 0.28, r * 0.3, 0.12, 14), 0, top, 0));
+  // A gauge on the upper shell
+  const gauge = new THREE.CylinderGeometry(0.09, 0.09, 0.05, 14);
+  gauge.rotateX(Math.PI / 2);
+  dark.push(at(gauge, 0, b1 + h * 0.12, r * 0.97));
+  // The gooseneck: up off the dome, over, and down the outside to a flange at the floor
+  const pr = 0.06;
+  const ox = r * 0.45;
+  const reach = r + 0.22;
+  steel.push(at(new THREE.CylinderGeometry(pr, pr, 0.55, 10), ox, top + 0.2, 0));
+  const across = new THREE.CylinderGeometry(pr, pr, reach - ox, 10);
+  across.rotateZ(Math.PI / 2);
+  steel.push(at(across, (ox + reach) / 2, top + 0.47, 0));
+  steel.push(at(new THREE.CylinderGeometry(pr, pr, top + 0.47, 10), reach, (top + 0.47) / 2, 0));
+  for (const [x, y] of [[ox, top + 0.47], [reach, top + 0.47]]) steel.push(at(new THREE.SphereGeometry(pr * 1.15, 10, 8), x, y, 0));
+  steel.push(at(new THREE.CylinderGeometry(pr * 1.8, pr * 1.8, 0.05, 12), reach, 0.025, 0));
+  const band = new THREE.CylinderGeometry(r * 1.002, r * 1.002, b1 - b0, 36, 1, true);
+  band.translate(0, (b0 + b1) / 2, 0);
+  return { steel, dark, band };
+}
+
+/**
+ * What's in a vat, through its glass: the stuff glowing, swirling slowly,
+ * its surface sloshing round the tank, a bright scum at the top of it and a
+ * meniscus line; bubbles rising through it in wobbling columns; above the
+ * level the empty glass dark with vapour. Glints on the glass over the lot.
+ */
+function vatLiquidMaterial(colour: number): THREE.ShaderMaterial {
+  const c = new THREE.Color(colour);
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uCol: { value: new THREE.Vector3(((colour >> 16) & 255) / 255, ((colour >> 8) & 255) / 255, (colour & 255) / 255) },
+      uSeed: { value: c.r * 3.1 + c.b * 7.7 },
+      fogColor: { value: new THREE.Color() },
+      fogDensity: { value: 0 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vN;
+      varying vec3 vV;
+      varying vec3 vW;
+      varying float vFog;
+      void main() {
+        vUv = uv;
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vW = w.xyz;
+        vec4 mv = viewMatrix * w;
+        vFog = -mv.z;
+        vN = normalize(normalMatrix * normal);
+        vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 uCol;
+      uniform float uSeed;
+      uniform vec3 fogColor;
+      uniform float fogDensity;
+      varying vec2 vUv;
+      varying vec3 vN;
+      varying vec3 vV;
+      varying vec3 vW;
+      varying float vFog;
+      ${SLUDGE_NOISE}
+      void main() {
+        float t = uTime + uSeed * 10.0 + (vW.x + vW.z) * 0.37;
+        float u = vUv.x * 6.2831853;
+        float level = 0.76 + 0.03 * sin(u * 2.0 + t * 1.1) + 0.014 * sin(u * 5.0 - t * 1.9) + 0.007 * sin(u * 11.0 + t * 3.3);
+        vec2 p = vec2(vUv.x * 9.0, vUv.y * 2.6);
+        vec3 col;
+        if (vUv.y > level) {
+          float vap = fbm(vec2(vUv.x * 12.0, vUv.y * 5.0 - t * 0.2));
+          float near = smoothstep(level + 0.22, level, vUv.y);
+          col = uCol * 0.05 + vec3(0.02, 0.025, 0.03) + uCol * 0.35 * vap * near;
+          // Droplets of condensation on the inside of the glass
+          vec2 dg = vec2(vUv.x * 60.0, vUv.y * 22.0);
+          float dd = length(fract(dg) - 0.5);
+          col += uCol * 0.25 * smoothstep(0.22, 0.1, dd) * step(0.7, hash(floor(dg)));
+        } else {
+          float depth = (level - vUv.y) / level;
+          vec2 q = p + vec2(t * 0.05, -t * 0.18);
+          float sw = fbm(q + fbm(p * 0.8 - t * 0.07) * 1.6);
+          col = uCol * (0.38 + 0.85 * sw) * (1.0 - depth * 0.5);
+          // Brighter veins winding through it
+          float vein = smoothstep(0.035, 0.0, abs(fbm(p * 1.4 + vec2(-t * 0.06, t * 0.12)) - 0.5));
+          col += uCol * 0.7 * vein;
+          // Bubbles rising in wobbling columns
+          vec2 bg = vec2(vUv.x * 30.0, vUv.y * 10.0 - t * 1.6);
+          vec2 id = floor(bg);
+          vec2 f = fract(bg) - 0.5;
+          float col_ = hash(vec2(id.x, 7.0));
+          if (col_ > 0.5 && hash(id + 2.3) > 0.35) {
+            float wob = sin(t * 3.0 + id.y * 1.7 + col_ * 20.0) * 0.2;
+            float d = length(vec2(f.x - wob, f.y * 1.1));
+            float r = 0.1 + 0.14 * hash(id);
+            float ring = smoothstep(r, r - 0.05, d) - smoothstep(r - 0.06, r - 0.12, d);
+            col += (uCol * 0.6 + 0.35) * ring + vec3(0.5) * smoothstep(r * 0.4, 0.0, length(f - vec2(wob - r * 0.35, r * 0.35)));
+          }
+          // The scum at the top
+          float foam = smoothstep(0.045, 0.0, level - vUv.y) * (0.6 + 0.4 * noise(vec2(vUv.x * 40.0, t)));
+          col = mix(col, uCol * 1.5 + 0.25, foam * 0.85);
+        }
+        col += uCol * 0.9 * smoothstep(0.009, 0.0, abs(vUv.y - level));
+        // The glass: a cool rim at grazing angles, two glints that drift a little
+        float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
+        col += vec3(0.16, 0.2, 0.22) * fres;
+        float g1 = smoothstep(0.012, 0.0, abs(fract(vUv.x * 3.0 + 0.1 + 0.01 * sin(uTime * 0.3)) - 0.5));
+        col += vec3(0.22) * g1 * (0.6 + 0.4 * vUv.y);
+        float fogF = 1.0 - exp(-fogDensity * fogDensity * vFog * vFog);
+        gl_FragColor = vec4(mix(col, fogColor, fogF), 1.0);
+      }
+    `
   });
 }
 
@@ -373,6 +634,8 @@ interface WalkwaySpec {
   y: number;
   /** Rails along each long side: 'both', 'none', '-' (the low-coordinate side), '+'. */
   rails: 'both' | 'none' | '-' | '+';
+  /** Where its hangers go up to (default the roof trusses). */
+  hangTo?: number;
 }
 
 export class Level13Builder {
@@ -409,13 +672,24 @@ export class Level13Builder {
   private ratRuns: [THREE.Vector3, THREE.Vector3][] = [];
   private floaters: THREE.Object3D[] = [];
   private ladderTops: THREE.Vector3[] = [];
+  private pours: THREE.Vector3[] = [];
+  private dyn: Collider[] = [];
+  private vatMats: THREE.ShaderMaterial[] = [];
+  private vaultMat!: THREE.MeshStandardMaterial;
 
   build(): Level13Data {
     this.makeMaterials();
     this.buildSewer();
+    const sewerDoor = this.buildMaintenance();
     this.buildShaft();
     this.buildHall();
     const route = this.buildRoute();
+    const vatLine = this.buildVatLine();
+    const cargo = this.buildCargoLine();
+    const lift = this.buildLift();
+    const officeLever = this.buildOffice();
+    const finale = this.buildFinale();
+    route.ladders.push(finale.dropLadder.ladder);
     this.buildAbyss();
     this.buildHallDressing();
     this.flush();
@@ -430,25 +704,37 @@ export class Level13Builder {
         { pos: V(-128.5, CH_Y, 0), yaw: -Math.PI / 2 },
         { pos: V(-57, H1, -31), yaw: -Math.PI / 2 },
         { pos: V(1, H2, 35.5), yaw: -Math.PI / 2 },
-        { pos: V(30, H3, 45.5), yaw: -Math.PI / 2 }
+        { pos: V(30, H3, 45.5), yaw: -Math.PI / 2 },
+        { pos: V(53, Y6, 10.5), yaw: 0 },
+        { pos: V(53, OFFICE_Y, -13), yaw: Math.PI },
+        { pos: V(53.5, H4, -18.5), yaw: 0 }
       ],
       ladders: route.ladders,
       turrets: route.turrets,
       sludge: this.sludge,
       sludgeMats: this.sludgeMats,
-      flies: [V(-112, 31.2, 0.5), V(-99, 31, -2), V(-98, 31.4, -32), V(-94, 31.1, -35), V(-104, 31.6, -29), V(-78, 31.2, -31), V(-64, 31.4, -30)],
+      flies: [V(-112, 31.2, 0.5), V(-99, 31, -2), V(-98, 31.4, -32), V(-94, 31.1, -35), V(-104, 31.6, -29), V(-78, 31.2, -31), V(-84, 31.3, -33)],
       ratRuns: this.ratRuns,
       floaters: this.floaters,
       ladderTops: this.ladderTops,
       lever: route.lever,
       mover: route.mover,
-      door: route.door,
+      door: finale.door,
+      vatLine,
+      cargo,
+      lift,
+      officeLever,
+      dropLadder: finale.dropLadder,
+      vatMats: this.vatMats,
+      dyn: this.dyn,
       carts: this.carts,
       tube,
       outlet: V(-133.4, 32.3, 0),
       lights: { sewer: this.sewerLights, hall: this.hallLights },
       vatGlow: this.vatGlow,
-      fogLayers: this.fogLayers
+      fogLayers: this.fogLayers,
+      sewerDoor,
+      pours: this.pours
     };
   }
 
@@ -475,6 +761,7 @@ export class Level13Builder {
       greenLamp: new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x9cff5a, emissiveIntensity: 2.2 }),
       black: new THREE.MeshBasicMaterial({ color: 0x020202 })
     };
+    this.vaultMat = new THREE.MeshStandardMaterial({ map: brick, color: 0x9a9a88, roughness: 0.85, side: THREE.DoubleSide });
   }
 
   /** Geometry to be drawn in `mat` (merged later); optionally solid, and shot at. */
@@ -514,7 +801,11 @@ export class Level13Builder {
 
   /**
    * The tunnels on a 1 m grid: which cells are walkable, which of those are
-   * the channel. Floors and walls come off the grid, merged into runs.
+   * the channel. Floors and walls come off the grid, merged into runs. The
+   * tunnels get brick barrel vaults springing from both walls; the rooms
+   * (the junction, the pool room, the maintenance room) have flat ceilings,
+   * and where a tunnel opens into one a headwall closes the space above its
+   * arch, so nothing curved ever crosses where he walks.
    */
   private buildSewer(): void {
     const M = this.M;
@@ -534,8 +825,9 @@ export class Level13Builder {
     mark(-105, -5, -93, 5, open); // junction
     mark(-102, -27, -96, -5, open); // B
     mark(-107, -38, -89, -26, open); // pool room
-    mark(-89, -34, -66, -28, open); // C
-    mark(-66, -35, -61, -27, open); // the ladder chamber
+    mark(-89, -34, -67, -28, open); // C
+    mark(-67, -32, -66, -30, open); // the maintenance room's doorway
+    mark(-66, -37, -61, -25, open); // the maintenance room, the ladder up out of it
     // The channel down the middle of them
     mark(-133, -1, -100, 1, chan);
     mark(-101, -2, -97, 1, chan);
@@ -560,7 +852,7 @@ export class Level13Builder {
         this.solidBox(x, top - 0.6, z, x + 1, top, z2);
         if (c) {
           // The ledge's lip down into the channel, where a ledge is beside it
-          for (const zz of [z - 1, z2]) if (isOpen(x, zz) && !isChan(x, zz)) this.add(M.brick, span(x, CH_Y, Math.min(zz, zz) + (zz < z ? 0.9 : 0), x + 1, SEW_Y, (zz < z ? zz + 1 : zz + 0.1)), false, 2);
+          for (const zz of [z - 1, z2]) if (isOpen(x, zz) && !isChan(x, zz)) this.add(M.brick, span(x, CH_Y, zz < z ? zz + 0.9 : zz, x + 1, SEW_Y, zz < z ? zz + 1 : zz + 0.1), false, 2);
         }
         z = z2;
       }
@@ -597,6 +889,17 @@ export class Level13Builder {
       this.add(M.darkConcrete, span(x0, SEW_Y + 4, z0, x1, SEW_Y + 4.6, z1), false, 3);
       this.solidBox(x0, SEW_Y + 4, z0, x1, SEW_Y + 4.6, z1);
     }
+    // ---- Vaults over the tunnels; headwalls where they open into the rooms
+    this.vault(-133, -3, -105, 3);
+    this.headwall('x', -105, 0, 3);
+    this.vault(-102, -26, -96, -5);
+    this.headwall('z', -5, -99, 3);
+    this.headwall('z', -26, -99, 3);
+    this.vault(-89, -34, -67, -28);
+    this.headwall('x', -89, -31, 3);
+    // The rooms' flat ceilings get concrete beams across them
+    for (let x = -103; x < -93; x += 3) this.add(M.concrete, span(x - 0.2, SEW_Y + 3.65, -5, x + 0.2, SEW_Y + 4, 5), false, 2);
+    for (let x = -105; x < -89; x += 3) this.add(M.concrete, span(x - 0.2, SEW_Y + 3.65, -38, x + 0.2, SEW_Y + 4, -26), false, 2);
     // The sludge, over the channel
     const sludgeRects: [number, number, number, number][] = [[-133, -1, -100, 1], [-101, -27, -97, 1], [-104, -36, -92, -28], [-92, -32, -70, -30]];
     for (const [x0, z0, x1, z1] of sludgeRects) {
@@ -609,40 +912,7 @@ export class Level13Builder {
       this.group.add(plane);
       this.sludge.push(new THREE.Box3(V(x0, CH_Y - 0.2, z0), V(x1, SLUDGE_Y + 0.05, z1)));
     }
-    // Pipes along the walls, runs of conduit, grates in the floor, the outlet
-    const r = lcg(13);
-    const pipeRun = (a: THREE.Vector3, b: THREE.Vector3, rad: number, mat: THREE.Material): void => {
-      const len = a.distanceTo(b);
-      const g = new THREE.CylinderGeometry(rad, rad, len, 10);
-      g.applyMatrix4(new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()), V(1, 1, 1)));
-      this.add(mat, g);
-      // Collars along it
-      for (let k = 2; k < len; k += 3 + r() * 2) {
-        const c = new THREE.CylinderGeometry(rad * 1.25, rad * 1.25, 0.12, 10);
-        const p = a.clone().lerp(b, k / len);
-        c.applyMatrix4(new THREE.Matrix4().compose(p, new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()), V(1, 1, 1)));
-        this.add(M.rust, c);
-      }
-    };
-    pipeRun(V(-132, 33.3, 2.6), V(-101, 33.3, 2.6), 0.22, M.pipe);
-    pipeRun(V(-132, 32.6, 2.75), V(-101, 32.6, 2.75), 0.12, M.rust);
-    pipeRun(V(-132, 33.5, -2.65), V(-104, 33.5, -2.65), 0.16, M.darkSteel);
-    pipeRun(V(-101.6, 33.3, -5), V(-101.6, 33.3, -26), 0.25, M.pipe);
-    pipeRun(V(-96.4, 32.8, -6), V(-96.4, 32.8, -26), 0.14, M.rust);
-    pipeRun(V(-88, 33.4, -28.5), V(-67, 33.4, -28.5), 0.24, M.pipe);
-    pipeRun(V(-88, 32.7, -33.6), V(-67, 32.7, -33.6), 0.14, M.darkSteel);
-    pipeRun(V(-106.5, 30, -37), V(-106.5, 34, -37), 0.3, M.rust);
-    pipeRun(V(-89.6, 30, -37.4), V(-89.6, 34, -37.4), 0.22, M.pipe);
-    // Big outflow pipes spilling into the pool room from the walls
-    for (const [x, z, ry] of [[-106.6, -31, 0], [-89.4, -33, Math.PI]] as const) {
-      const g = new THREE.CylinderGeometry(0.55, 0.55, 1.2, 14, 1, true);
-      g.rotateZ(Math.PI / 2);
-      g.rotateY(ry);
-      g.translate(x, 31.6, z);
-      this.add(M.rust, g);
-    }
-    // Floor grates on the ledges, a few rungs set in the walls
-    for (let i = 0; i < 9; i++) this.add(M.darkSteel, span(-128 + i * 3.5, SEW_Y, 1.4, -127.2 + i * 3.5, SEW_Y + 0.02, 2.4));
+    this.buildSewerPipes();
     // The outlet: a pipe mouth in the end wall, high up, black inside
     {
       const g = new THREE.CylinderGeometry(0.95, 0.95, 1.4, 20, 1, true);
@@ -658,69 +928,35 @@ export class Level13Builder {
       back.translate(-133.95, 32.3, 0);
       this.add(M.black, back);
     }
-    // Lights: caged bulkheads, sick green; real lights only a few
-    const lamps: [number, number, number][] = [[-122, 33.8, -2.7], [-108, 33.8, 2.7], [-99, 33.8, -14], [-98, 33.8, -32], [-80, 33.8, -28.3], [-64, 33.8, -34.5]];
-    for (const [x, y, z] of lamps) {
-      this.add(M.greenLamp, box(0.5, 0.16, 0.22, x, y - 0.16, z));
-      this.add(M.darkSteel, box(0.6, 0.06, 0.3, x, y - 0.02, z));
-    }
-    for (const [i, [x, y, z]] of lamps.entries()) {
-      void i;
-      const l = new THREE.PointLight(0x9cdc6a, 26, 22, 1.5);
-      l.position.set(x, y - 0.4, z);
-      this.group.add(l);
-      this.sewerLights.push(l);
-    }
-    // ---- Rounder: brick vaults over the tunnels and rooms, springing from a metre up the walls
-    const vault = (x0: number, z0: number, x1: number, z1: number): void => {
-      const alongX = x1 - x0 >= z1 - z0;
-      const len = alongX ? x1 - x0 : z1 - z0;
-      const half = (alongX ? z1 - z0 : x1 - x0) / 2;
-      const g = new THREE.CylinderGeometry(half, half, len, 20, 1, true, -Math.PI / 2, Math.PI);
-      // Lying along the run, the open side down; squashed to fit under the 4 m ceiling
-      g.rotateZ(Math.PI / 2);
-      if (!alongX) g.rotateY(Math.PI / 2);
-      g.scale(alongX ? 1 : 1, 2.95 / half, alongX ? 1 : 1);
-      g.translate((x0 + x1) / 2, SEW_Y + 1.0, (z0 + z1) / 2);
-      worldUVs(g, 2);
-      const m = new THREE.Mesh(g, this.M.brick.clone());
-      (m.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
-      this.group.add(m);
-      // Ribs every few metres, the way old sewers are built
-      for (let k = 2; k < len; k += 4) {
-        const rib = new THREE.TorusGeometry(half - 0.05, 0.09, 4, 18, Math.PI);
-        if (alongX) rib.rotateY(Math.PI / 2);
-        rib.scale(1, 2.95 / half, 1);
-        rib.translate(alongX ? x0 + k : (x0 + x1) / 2, SEW_Y + 1.0, alongX ? (z0 + z1) / 2 : z0 + k);
-        this.add(M.darkConcrete, rib);
-      }
-    };
-    vault(-133, -3, -105, 3);
-    vault(-105, -5, -93, 5);
-    vault(-102, -26, -96, -5);
-    vault(-107, -38, -89, -26);
-    vault(-89, -34, -66, -28);
-    // ---- More pipes: down the walls, across the vaults, valves on them, one dribbling
-    pipeRun(V(-118, 30, 2.75), V(-118, 34, 2.75), 0.18, M.rust);
-    pipeRun(V(-110, 30, -2.75), V(-110, 33.6, -2.75), 0.12, M.pipe);
-    pipeRun(V(-126, 33.2, -2.6), V(-126, 33.2, 2.6), 0.1, M.darkSteel);
-    pipeRun(V(-104.5, 32.2, -4.6), V(-93.5, 32.2, -4.6), 0.2, M.pipe);
-    pipeRun(V(-104.6, 30, 4.6), V(-104.6, 34, 4.6), 0.28, M.rust);
-    pipeRun(V(-101.7, 31.6, -8), V(-101.7, 31.6, -24), 0.12, M.darkSteel);
-    pipeRun(V(-106.5, 33.2, -27), V(-89.5, 33.2, -27), 0.3, M.pipe);
-    pipeRun(V(-95, 30, -37.6), V(-95, 34, -37.6), 0.16, M.darkSteel);
-    pipeRun(V(-80, 30, -33.6), V(-80, 34, -33.6), 0.22, M.rust);
-    pipeRun(V(-74, 32.1, -28.4), V(-68, 32.1, -28.4), 0.1, M.darkSteel);
-    const valveMat = new THREE.MeshStandardMaterial({ color: 0x9a2a1c, roughness: 0.5, metalness: 0.5 });
-    for (const [x, y, z, ry] of [[-118, 31.4, 2.45, 0], [-104.3, 31.2, 4.3, 0], [-80, 31.3, -33.3, 0], [-95, 31.5, -37.3, 0], [-110, 31.6, -2.5, 0]] as const) {
-      const w = new THREE.TorusGeometry(0.16, 0.025, 6, 14);
-      w.rotateY(ry);
-      w.translate(x, y, z);
-      this.group.add(new THREE.Mesh(w, valveMat));
-      this.add(M.darkSteel, box(0.04, 0.04, 0.18, x, y - 0.02, z));
+    // Lights. In the tunnels a caged fitting hung from the crown of the vault,
+    // in the rooms one fixed flat to the ceiling; nothing hangs in the air.
+    const crown = SPRING + RISE;
+    const lamps: { x: number; z: number; alongX: boolean; room: boolean }[] = [
+      { x: -124, z: 0, alongX: true, room: false },
+      { x: -112, z: 0, alongX: true, room: false },
+      { x: -99, z: 0, alongX: true, room: true },
+      { x: -99, z: -15, alongX: false, room: false },
+      { x: -98, z: -32, alongX: true, room: true },
+      { x: -78, z: -31, alongX: true, room: false }
+    ];
+    for (const l of lamps) {
+      const lx = l.alongX ? 0.55 : 0.24;
+      const lz = l.alongX ? 0.24 : 0.55;
+      const top = l.room ? SEW_Y + 4 : crown;
+      if (!l.room) this.add(M.darkSteel, box(0.04, 0.22, 0.04, l.x, top - 0.2, l.z));
+      const y = l.room ? top - 0.1 : top - 0.32;
+      this.add(M.darkSteel, box(lx + 0.08, 0.1, lz + 0.08, l.x, y, l.z));
+      this.add(M.greenLamp, box(lx, 0.06, lz, l.x, y - 0.06, l.z));
+      // The cage over the lens
+      for (const s of [-1, 1]) this.add(M.darkSteel, l.alongX ? box(lx + 0.04, 0.02, 0.02, l.x, y - 0.08, l.z + s * lz * 0.5) : box(0.02, 0.02, lz + 0.04, l.x + s * lx * 0.5, y - 0.08, l.z));
+      const p = new THREE.PointLight(0x9cdc6a, 26, 22, 1.5);
+      p.position.set(l.x, y - 0.4, l.z);
+      this.group.add(p);
+      this.sewerLights.push(p);
     }
     // ---- Trash: crushed bottles, cans, wrappers, takeaway boxes, an apple core, newspaper —
     // on the ledges, and some of it floating in the sludge
+    const r = lcg(13);
     const bottleMat = new THREE.MeshStandardMaterial({ color: 0x9cc8e0, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.7 });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x2a6ad0, roughness: 0.5 });
     const canMats = [0xc8241c, 0x1c6ac8, 0xd8c020, 0x2a8a3a].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.35, metalness: 0.7 }));
@@ -791,7 +1027,7 @@ export class Level13Builder {
       const z = -38 + r() * 42;
       const cx = Math.floor(x);
       const cz = Math.floor(z);
-      if (!isOpen(cx, cz)) continue;
+      if (!isOpen(cx, cz) || x > -68) continue;
       const wet = isChan(cx, cz);
       if (wet && r() < 0.4) continue;
       trashAt(x, z, wet);
@@ -800,23 +1036,302 @@ export class Level13Builder {
     this.ratRuns.push(
       [V(-131, SEW_Y, 2.2), V(-102, SEW_Y, 2.2)],
       [V(-130, SEW_Y, -2.3), V(-104, SEW_Y, -2.3)],
-      [V(-103, SEW_Y, -6), V(-103, SEW_Y, -25)],
-      [V(-96.6, SEW_Y, -6), V(-96.6, SEW_Y, -25)],
+      [V(-101.6, SEW_Y, -6), V(-101.6, SEW_Y, -25)],
+      [V(-96.5, SEW_Y, -6), V(-96.5, SEW_Y, -25)],
       [V(-106, SEW_Y, -37), V(-90, SEW_Y, -37)],
-      [V(-88, SEW_Y, -33.3), V(-67, SEW_Y, -33.3)],
-      [V(-88, SEW_Y, -28.6), V(-68, SEW_Y, -28.6)]
+      [V(-88, SEW_Y, -33.3), V(-69, SEW_Y, -33.3)],
+      [V(-88, SEW_Y, -28.6), V(-69, SEW_Y, -28.6)]
     );
-
-    // Muck heaped in corners, a dead rat's worth of debris
+    // Muck heaped in corners
     for (let i = 0; i < 40; i++) {
       const x = -132 + r() * 70;
       const z = -38 + r() * 42;
-      if (!isOpen(Math.floor(x), Math.floor(z)) || isChan(Math.floor(x), Math.floor(z))) continue;
+      if (x > -68 || !isOpen(Math.floor(x), Math.floor(z)) || isChan(Math.floor(x), Math.floor(z))) continue;
       const g = new THREE.DodecahedronGeometry(0.12 + r() * 0.2, 0);
       g.scale(1, 0.4, 1);
       g.translate(x, SEW_Y + 0.03, z);
       this.add(M.sewerFloor, g);
     }
+  }
+
+  /** Half an ellipse in the XY plane, a by b, as a tube of radius `r`: a rib, or a ring round a mouth. */
+  private archTube(a: number, b: number, r: number): THREE.BufferGeometry {
+    const pts = new THREE.EllipseCurve(0, 0, a, b, 0, Math.PI, false, 0).getPoints(28).map((p) => V(p.x, p.y, 0));
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, r, 5, false);
+  }
+
+  /**
+   * A brick barrel vault along a tunnel: half an ellipse across it, springing
+   * from both side walls at SPRING and rising RISE to a crown just under the
+   * ceiling slab. Ribs every 4 m.
+   */
+  private vault(x0: number, z0: number, x1: number, z1: number): void {
+    const alongX = x1 - x0 >= z1 - z0;
+    const len = alongX ? x1 - x0 : z1 - z0;
+    const half = (alongX ? z1 - z0 : x1 - x0) / 2;
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    // Theta 0..π puts the half with x ≥ 0 on the cylinder; turned about Z that half is the top
+    const g = new THREE.CylinderGeometry(1, 1, len, 32, Math.max(1, Math.round(len / 4)), true, 0, Math.PI);
+    const uv = g.getAttribute('uv');
+    const arc = Math.PI * Math.sqrt((half * half + RISE * RISE) / 2);
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getY(i) * len) / 2, (uv.getX(i) * arc) / 2);
+    g.rotateZ(Math.PI / 2);
+    g.scale(1, RISE, half);
+    if (!alongX) g.rotateY(Math.PI / 2);
+    g.translate(cx, SPRING, cz);
+    this.add(this.vaultMat, g);
+    for (let k = 2; k < len - 1; k += 4) {
+      const rib = this.archTube(half - 0.05, RISE - 0.05, 0.08);
+      if (alongX) rib.rotateY(Math.PI / 2);
+      rib.translate(alongX ? x0 + k : cx, SPRING, alongX ? cz : z0 + k);
+      this.add(this.M.darkConcrete, rib);
+    }
+  }
+
+  /**
+   * Where a vaulted tunnel opens into a flat-ceilinged room: the wall above
+   * the arch, from the spring line up into the slab, with the arch cut out
+   * of it and a brick ring round the opening. `axis` is the tunnel's
+   * direction; `at` the plane of the mouth on it; `c` the tunnel's middle.
+   */
+  private headwall(axis: 'x' | 'z', at: number, c: number, half: number): void {
+    const top = SEW_Y + 4.4 - SPRING;
+    const s = new THREE.Shape();
+    s.moveTo(-half, 0);
+    s.lineTo(-half, top);
+    s.lineTo(half, top);
+    s.lineTo(half, 0);
+    for (let i = 1; i < 28; i++) {
+      const a = (i / 28) * Math.PI;
+      s.lineTo(half * Math.cos(a), RISE * Math.sin(a));
+    }
+    s.lineTo(-half, 0);
+    const g = new THREE.ShapeGeometry(s);
+    const ring = this.archTube(half, RISE, 0.1);
+    for (const x of [g, ring]) {
+      if (axis === 'x') x.rotateY(Math.PI / 2);
+      x.translate(axis === 'x' ? at : c, SPRING, axis === 'x' ? c : at);
+    }
+    worldUVs(g, 2);
+    this.add(this.vaultMat, g);
+    this.add(this.M.darkConcrete, ring);
+  }
+
+  /**
+   * One pipe along the walls: straight runs between `pts`, an elbow at each
+   * bend, collars along it, a flange where each end goes into a wall. The
+   * runs are solid (he bumps his head on them jumping, not walking).
+   */
+  private pipeRoute(pts: THREE.Vector3[], r: number, mat: THREE.Material, solid = true): void {
+    const M = this.M;
+    const up = V(0, 1, 0);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const len = a.distanceTo(b);
+      const q = new THREE.Quaternion().setFromUnitVectors(up, b.clone().sub(a).normalize());
+      const g = new THREE.CylinderGeometry(r, r, len, 12);
+      g.applyMatrix4(new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), q, V(1, 1, 1)));
+      this.add(mat, g);
+      for (let k = 1.5; k < len - 0.5; k += 3) {
+        const c = new THREE.CylinderGeometry(r * 1.22, r * 1.22, 0.1, 12);
+        c.applyMatrix4(new THREE.Matrix4().compose(a.clone().lerp(b, k / len), q, V(1, 1, 1)));
+        this.add(M.rust, c);
+      }
+      if (solid) this.solidBox(Math.min(a.x, b.x) - r, Math.min(a.y, b.y) - r, Math.min(a.z, b.z) - r, Math.max(a.x, b.x) + r, Math.max(a.y, b.y) + r, Math.max(a.z, b.z) + r);
+    }
+    for (let i = 1; i < pts.length - 1; i++) {
+      const s = new THREE.SphereGeometry(r * 1.12, 12, 8);
+      s.translate(pts[i].x, pts[i].y, pts[i].z);
+      this.add(mat, s);
+    }
+    for (const [p, n] of [[pts[0], pts[1]], [pts[pts.length - 1], pts[pts.length - 2]]] as const) {
+      const d = n.clone().sub(p).normalize();
+      const f = new THREE.CylinderGeometry(r * 1.6, r * 1.6, 0.06, 14);
+      f.applyMatrix4(new THREE.Matrix4().compose(p.clone().addScaledVector(d, 0.03), new THREE.Quaternion().setFromUnitVectors(up, d), V(1, 1, 1)));
+      this.add(M.rust, f);
+    }
+  }
+
+  /**
+   * The pipework: two mains that run the whole way along the walls, one each
+   * side, from the end wall at the outlet to the maintenance room's wall,
+   * turning every corner on the way; downpipes off them to the floor with
+   * valves; and two outflows spilling into the pool.
+   */
+  private buildSewerPipes(): void {
+    const M = this.M;
+    const y = SPRING - 0.22;
+    const P = (pts: [number, number][]): THREE.Vector3[] => pts.map(([x, z]) => V(x, y, z));
+    // Main one: along A's south wall, round the junction, down B's east side, across the pool room and along C
+    this.pipeRoute(P([[-133, 2.76], [-104.76, 2.76], [-104.76, 4.76], [-93.24, 4.76], [-93.24, -4.76], [-96.24, -4.76], [-96.24, -26.24], [-89.24, -26.24], [-89.24, -28.24], [-67, -28.24]]), 0.18, M.pipe);
+    // Main two: the other side all the way
+    this.pipeRoute(P([[-133, -2.78], [-104.78, -2.78], [-104.78, -4.78], [-101.78, -4.78], [-101.78, -26.22], [-106.78, -26.22], [-106.78, -37.78], [-89.22, -37.78], [-89.22, -33.78], [-67, -33.78]]), 0.12, M.darkSteel);
+    // A conduit under main one along A, into the end wall and into the junction's wall
+    this.pipeRoute([V(-133, SPRING - 0.6, 2.88), V(-105, SPRING - 0.6, 2.88)], 0.06, M.rust);
+    // Downpipes from the mains to the floor: a tee at the top, a flange at the floor, a valve wheel
+    const valveMat = new THREE.MeshStandardMaterial({ color: 0x9a2a1c, roughness: 0.5, metalness: 0.5 });
+    const downs: [number, number, number, number][] = [
+      [-118, 2.76, 0.1, -1],
+      [-110, -2.78, 0.08, 1],
+      [-93.24, 0, 0.1, 0],
+      [-106.78, -33, 0.08, 0],
+      [-80, -28.24, 0.1, -1],
+      [-74, -33.78, 0.08, 1]
+    ];
+    for (const [x, z, rr, face] of downs) {
+      this.pipeRoute([V(x, SEW_Y, z), V(x, y, z)], rr, M.rust);
+      const w = new THREE.TorusGeometry(0.15, 0.024, 6, 14);
+      // The wheel faces into the tunnel: across z (face ±1) or across x (0)
+      if (face === 0) w.rotateY(Math.PI / 2);
+      const off = rr + 0.07;
+      w.translate(x + (face === 0 ? (x > -100 ? -off : off) : 0), SEW_Y + 1.05, z + face * off);
+      this.group.add(new THREE.Mesh(w, valveMat));
+      this.add(M.darkSteel, box(face === 0 ? 0.16 : 0.04, 0.04, face === 0 ? 0.04 : 0.16, x + (face === 0 ? (x > -100 ? -off / 2 : off / 2) : 0), SEW_Y + 1.03, z + (face * off) / 2));
+    }
+    // The outflows: big pipes out of the pool room's walls over the ledge, slop falling out of them
+    const outflows: { from: THREE.Vector3; to: THREE.Vector3; r: number }[] = [
+      { from: V(-98, SEW_Y + 0.95, -38), to: V(-98, SEW_Y + 0.95, -35.7), r: 0.36 },
+      { from: V(-107, SEW_Y + 0.95, -31), to: V(-103.7, SEW_Y + 0.95, -31), r: 0.32 }
+    ];
+    for (const o of outflows) {
+      const len = o.from.distanceTo(o.to);
+      const d = o.to.clone().sub(o.from).normalize();
+      const g = new THREE.CylinderGeometry(o.r, o.r, len, 16, 1, true);
+      g.applyMatrix4(new THREE.Matrix4().compose(o.from.clone().add(o.to).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d), V(1, 1, 1)));
+      this.add(M.rust, g);
+      const lip = new THREE.TorusGeometry(o.r, 0.05, 6, 18);
+      lip.applyMatrix4(new THREE.Matrix4().compose(o.to, new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), d), V(1, 1, 1)));
+      this.add(M.rust, lip);
+      const back = new THREE.CircleGeometry(o.r * 0.98, 16);
+      back.applyMatrix4(new THREE.Matrix4().compose(o.from.clone().addScaledVector(d, 0.3), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), d), V(1, 1, 1)));
+      this.add(M.black, back);
+      this.solidBox(Math.min(o.from.x, o.to.x) - o.r, o.from.y - o.r, Math.min(o.from.z, o.to.z) - o.r, Math.max(o.from.x, o.to.x) + o.r, o.from.y + o.r, Math.max(o.from.z, o.to.z) + o.r);
+      // The slop pouring out of it, two crossed strips
+      const mat = streamMaterial();
+      this.sludgeMats.push(mat);
+      const h = o.to.y - o.r * 0.4 - SLUDGE_Y;
+      for (const ry of [0, Math.PI / 2]) {
+        const s = new THREE.Mesh(new THREE.PlaneGeometry(o.r * 1.1, h), mat);
+        s.position.set(o.to.x + d.x * 0.12, SLUDGE_Y + h / 2, o.to.z + d.z * 0.12);
+        s.rotation.y = ry;
+        s.renderOrder = 2;
+        this.group.add(s);
+      }
+      this.pours.push(V(o.to.x + d.x * 0.12, SLUDGE_Y, o.to.z + d.z * 0.12));
+    }
+  }
+
+  /**
+   * The maintenance room at the end of the sewer, under the shaft: shelves
+   * of cleaning kit, a bench and its tools, the mop bucket; and its door, a
+   * steel slab that slides into the wall when he walks up to it.
+   */
+  private buildMaintenance(): Level13Data['sewerDoor'] {
+    const M = this.M;
+    const y = SEW_Y;
+    // A step up out of the end of the channel, under the slop, so he can walk out of it to the door
+    this.add(M.brick, span(-70.55, CH_Y - 0.6, -32, -70, CH_Y + 0.38, -30), true, 2);
+    // The doorway in the wall between C and the room: jambs, lintel, hazard trim on the tunnel side
+    this.add(M.darkSteel, span(-67, y, -32, -66, y + 2.45, -31.75), true);
+    this.add(M.darkSteel, span(-67, y, -30.25, -66, y + 2.45, -30), true);
+    this.add(M.brick, span(-67, y + 2.4, -32, -66, SEW_Y + 4.4, -30), true, 2);
+    this.add(M.hazard, span(-67.04, y + 2.3, -32.1, -67, y + 2.5, -29.9), false, 0.5);
+    for (const z of [-32.1, -30.1]) this.add(M.hazard, span(-67.04, y, z, -67, y + 2.5, z + 0.2), false, 0.5);
+    // The door
+    const slab = new THREE.Group();
+    const steel = new THREE.MeshStandardMaterial({ color: 0x5c646c, roughness: 0.5, metalness: 0.6 });
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.3, 1.5), steel);
+    slab.add(leaf);
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.4, 0.3), new THREE.MeshStandardMaterial({ color: 0x0a1210, roughness: 0.1, metalness: 0.4 }));
+    win.position.set(0, 0.5, 0);
+    slab.add(win);
+    const plate = doorSign('MAINTENANCE', 'AUTHORISED STAFF ONLY', 0.9, 0.3);
+    plate.rotation.y = -Math.PI / 2;
+    plate.position.set(-0.05, 0.05, 0);
+    slab.add(plate);
+    const kick = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.25, 1.5), this.M.hazard);
+    kick.position.set(0, -1.02, 0);
+    slab.add(kick);
+    slab.position.set(-66.5, y + 1.15, -31);
+    leaf.userData.surface = 'metal';
+    this.shootables.push(leaf);
+    this.group.add(slab);
+    const collider = this.solidBox(-66.56, y, -31.75, -66.44, y + 2.3, -30.25);
+    // Inside: a lamp on the ceiling and its light
+    for (const z of [-34.5, -27.5]) {
+      this.add(M.darkSteel, box(0.7, 0.08, 0.3, -64, SEW_Y + 3.92, z));
+      this.add(M.lamp, box(0.6, 0.04, 0.22, -64, SEW_Y + 3.88, z));
+    }
+    const l = new THREE.PointLight(0xffe6b0, 16, 12, 1.5);
+    l.position.set(-64, SEW_Y + 3.3, -31);
+    this.group.add(l);
+    this.sewerLights.push(l);
+    const put = (o: THREE.Object3D, x: number, yy: number, z: number, ry = 0): THREE.Object3D => {
+      o.position.set(x, yy, z);
+      o.rotation.y = ry;
+      this.group.add(o);
+      return o;
+    };
+    // North end: two runs of shelving against the wall, stocked
+    const r = lcg(71);
+    for (const sx of [-64.6, -62.4]) {
+      put(shelfUnit(1.9, 0.5, 2.1, 4), sx, y, -36.68);
+      this.solidBox(sx - 0.95, y, -36.95, sx + 0.95, y + 2.1, -36.43);
+      const tops = shelfTops(2.1, 4);
+      for (const [k, ty] of tops.entries()) {
+        let x = sx - 0.8;
+        while (x < sx + 0.75) {
+          const pick = Math.floor(r() * 7);
+          let o: THREE.Object3D;
+          let w: number;
+          if (pick === 0) [o, w] = [cleanerJug([0x2a8ad8, 0xf2d22a, 0xd8302a, 0x2ab84a][Math.floor(r() * 4)]), 0.16];
+          else if (pick === 1) [o, w] = [sprayBottle([0x2a8ad8, 0xd8302a, 0x9a2ad8][Math.floor(r() * 3)]), 0.1];
+          else if (pick === 2 && k < 2) [o, w] = [paintCan([0xd8d8d8, 0x2a6ad8, 0xc8261c, 0x2a8a3a][Math.floor(r() * 4)]), 0.19];
+          else if (pick === 3) [o, w] = [rollPack(), 0.34];
+          else if (pick === 4) [o, w] = [cardboardBox(0.32, 0.22 + r() * 0.12, 0.34), 0.34];
+          else if (pick === 5 && k === 3) [o, w] = [hardHat(r() < 0.5 ? 0xf2c414 : 0xffffff), 0.3];
+          else [o, w] = [cleanerJug(0xf2f2f2, '#2a6ad8'), 0.16];
+          if (x + w > sx + 0.92) break;
+          put(o, x + w / 2, y + ty, -36.68 + (r() - 0.5) * 0.08, (r() - 0.5) * 0.4);
+          x += w + 0.03 + r() * 0.05;
+        }
+      }
+    }
+    // The mop bucket out in front of them, brooms and a mop against the west wall
+    put(mopBucket(), -64.6, y, -34.9, 0.3);
+    this.solidBox(-64.85, y, -35.1, -64.35, y + 0.6, -34.7);
+    put(broom(), -65.82, y, -35.6).rotation.set(0, Math.PI / 2, 0.18);
+    put(broom(), -65.82, y, -35.15).rotation.set(0, Math.PI / 2, 0.14);
+    put(mop(0, 0, 0), -65.84, y, -34.6).rotation.set(0, 0, -0.16);
+    put(barrel('blue'), -61.6, y, -34.4);
+    this.solidBox(-61.9, y, -34.7, -61.3, y + 0.9, -34.1);
+    // By the door, the wet floor sign
+    put(wetFloorSign(), -65.3, y, -32.9, 0.6);
+    // South end: the bench and its pegboard, the toolbox, a janitor's cart, boxes, boots, hats on hooks
+    put(workbench(2.4), -64.6, y, -25.4, Math.PI);
+    this.solidBox(-65.8, y, -25.75, -63.4, y + 0.92, -25.05);
+    put(pegboard(2.2, 0.9), -64.6, y + 1.65, -25.02, Math.PI);
+    put(toolbox(), -64.0, y + 0.91, -25.4, Math.PI + 0.2);
+    put(cleanerJug(0xd8302a), -65.4, y + 0.91, -25.35);
+    put(ecMug(false), -64.9, y + 0.91, -25.5);
+    put(janitorCart(), -62.4, y, -26.0, Math.PI / 2);
+    this.solidBox(-62.7, y, -26.9, -62.1, y + 0.9, -25.1);
+    put(cardboardBox(0.5, 0.4, 0.5), -65.6, y, -27.3, 0.2);
+    put(cardboardBox(0.42, 0.34, 0.42), -65.6, y + 0.4, -27.3, -0.1);
+    this.solidBox(-65.9, y, -27.6, -65.3, y + 0.74, -27.0);
+    put(rubberBoots(), -65.7, y, -28.3, Math.PI / 2);
+    for (const [i, c] of [0xf2c414, 0xffffff, 0xf2c414].entries()) {
+      this.add(M.darkSteel, box(0.04, 0.04, 0.12, -65.94, y + 1.62, -29.4 + i * 0.4));
+      put(hardHat(c), -65.85, y + 1.66, -29.4 + i * 0.4).rotation.z = -0.25;
+    }
+    put(hoseReel(), -61.02, y + 1.4, -27.6, -Math.PI / 2);
+    const ws = warnPlate('SHAFT ↑ HALL 7', 0.9, 0.22);
+    ws.rotation.y = -Math.PI / 2;
+    ws.position.set(-61.01, y + 2.5, -31);
+    this.group.add(ws);
+    return { slab, collider, closedZ: -31, openZ: -32.6, at: V(-66.5, y, -31) };
   }
 
   /** The chamber's ceiling hole and the shaft up from it to the recess in the hall's west wall. */
@@ -837,16 +1352,23 @@ export class Level13Builder {
     this.add(M.darkConcrete, span(-67, top + 3.5, -35, -60, top + 4.1, -27), true, 3);
     // A hatch, flung open against the recess wall
     this.add(M.darkSteel, span(-62.9, top, -33.9, -61.1, top + 2.0, -33.8));
-    this.add(M.lamp, box(0.4, 0.12, 0.2, -63.5, top + 3.3, -28.2));
-    // The ladder up the shaft: on its east face
-    this.ladderMesh(V(-61.05, SEW_Y, -31), -Math.PI / 2, top - SEW_Y + 1.1);
+    // The recess lamp, fixed flat to its roof
+    this.add(M.darkSteel, box(0.52, 0.06, 0.28, -63.5, top + 3.44, -28.6));
+    this.add(M.lamp, box(0.42, 0.06, 0.2, -63.5, top + 3.38, -28.6));
+    // A bulkhead lamp on the shaft's wall halfway up
+    this.add(M.darkSteel, span(-63, SEW_Y + 8.2, -31.2, -62.9, SEW_Y + 8.6, -30.8));
+    this.add(M.lamp, span(-62.9, SEW_Y + 8.25, -31.12, -62.86, SEW_Y + 8.55, -30.88));
+    // The ladder up the shaft: on its east face, from the sewer floor to the recess floor, hoops above
+    this.ladderMesh(V(-61.05, SEW_Y, -31), -Math.PI / 2, top - SEW_Y, 'hoops');
   }
 
   /**
    * A ladder's rails and rungs: `at` its foot, against whatever it's fixed to
    * on the side `face` points away from (the climber faces `face`), `h` tall.
+   * Its top: 'lamp', a crossbar across the rail heads with a lamp on it, or
+   * 'hoops', grab handles standing up off the floor it comes out on.
    */
-  private ladderMesh(at: THREE.Vector3, face: number, h: number, cage = false): void {
+  private ladderMesh(at: THREE.Vector3, face: number, h: number, topKind: 'lamp' | 'hoops' = 'lamp', cage = false): void {
     const M = this.M;
     const fx = -Math.sin(face);
     const fz = -Math.cos(face);
@@ -855,18 +1377,39 @@ export class Level13Builder {
     const off = 0.08; // proud of the wall, toward the climber (he faces `face`, so back along it)
     for (const s of [-0.24, 0.24]) {
       const g = new THREE.BoxGeometry(0.065, h, 0.08);
+      g.rotateY(face);
       g.translate(at.x + sx * s - fx * off, at.y + h / 2, at.z + sz * s - fz * off);
       this.add(M.yellow, g);
     }
-    for (let y = 0.3; y < h; y += 0.3) {
+    for (let y = 0.3; y < h - 0.05; y += 0.3) {
       const g = new THREE.CylinderGeometry(0.024, 0.024, 0.48, 6);
       g.rotateZ(Math.PI / 2);
       g.rotateY(face);
       g.translate(at.x - fx * off, at.y + y, at.z - fz * off);
       this.add(M.yellow, g);
     }
-    // A lamp at the top and a glow at the foot, so he can find it
-    this.add(M.lamp, box(0.36, 0.14, 0.14, at.x - fx * off, at.y + h + 0.05, at.z - fz * off));
+    if (topKind === 'lamp') {
+      // A crossbar over the rail heads, the lamp sat on it
+      const bar = new THREE.BoxGeometry(0.6, 0.06, 0.08);
+      bar.rotateY(face);
+      bar.translate(at.x - fx * off, at.y + h - 0.03, at.z - fz * off);
+      this.add(M.yellow, bar);
+      const lamp = new THREE.BoxGeometry(0.36, 0.12, 0.12);
+      lamp.rotateY(face);
+      lamp.translate(at.x - fx * off, at.y + h + 0.06, at.z - fz * off);
+      this.add(M.lamp, lamp);
+    } else {
+      // Grab hoops: a post each side on the floor past the top, bent back over the edge
+      for (const s of [-0.3, 0.3]) {
+        const bx = at.x + sx * s + fx * 0.28;
+        const bz = at.z + sz * s + fz * 0.28;
+        this.add(M.yellow, box(0.05, 0.95, 0.05, bx, at.y + h, bz));
+        const tx = at.x + sx * s - fx * off;
+        const tz = at.z + sz * s - fz * off;
+        this.add(M.yellow, span(Math.min(bx, tx) - 0.025, at.y + h + 0.9, Math.min(bz, tz) - 0.025, Math.max(bx, tx) + 0.025, at.y + h + 0.95, Math.max(bz, tz) + 0.025));
+        this.add(M.yellow, box(0.05, 0.95, 0.05, tx, at.y + h, tz));
+      }
+    }
     this.add(M.hazard, box(Math.abs(fx) > 0.5 ? 0.02 : 0.62, 0.3, Math.abs(fx) > 0.5 ? 0.62 : 0.02, at.x - fx * (off + 0.02), at.y + 1.6, at.z - fz * (off + 0.02)));
     this.ladderTops.push(V(at.x - fx * 0.5, at.y + h + 0.4, at.z - fz * 0.5));
     if (cage) {
@@ -890,16 +1433,20 @@ export class Level13Builder {
     this.add(M.concrete, span(x0 - 1, H1 + 3.5, z0, x0, top, z1), true, 8);
     this.add(M.concrete, span(x0 - 1, H1 - 0.4, z0, x0, H1 + 3.5, -34), true, 8);
     this.add(M.concrete, span(x0 - 1, H1 - 0.4, -28, x0, H1 + 3.5, z1), true, 8);
-    this.add(M.concrete, span(x1, bottom, z0, x1 + 1, H3, z1), true, 8);
-    this.add(M.concrete, span(x1, H3 + 4, z0, x1 + 1, top, z1), true, 8);
-    this.add(M.concrete, span(x1, H3, z0, x1 + 1, H3 + 4, 42), true, 8);
-    this.add(M.concrete, span(x1, H3, 46, x1 + 1, H3 + 4, z1), true, 8);
+    this.add(M.concrete, span(x1, bottom, z0, x1 + 1, H4, z1), true, 8);
+    this.add(M.concrete, span(x1, H4 + 4, z0, x1 + 1, top, z1), true, 8);
+    this.add(M.concrete, span(x1, H4, z0, x1 + 1, H4 + 4, -32), true, 8);
+    this.add(M.concrete, span(x1, H4, -28, x1 + 1, H4 + 4, z1), true, 8);
     this.add(M.concrete, span(x0, bottom, z0 - 1, x1, top, z0), true, 8);
     this.add(M.concrete, span(x0, bottom, z1, x1, top, z1 + 1), true, 8);
     this.add(M.darkConcrete, span(x0, top, z0, x1, top + 1, z1), true, 8);
     // Pilasters and string courses on the walls: scale for the eye
     for (let z = z0 + 10; z < z1; z += 20) {
-      for (const x of [x0, x1 - 1.2]) this.add(M.darkConcrete, span(x, bottom, z - 1, x + 1.2, top, z + 1), false, 4);
+      for (const x of [x0, x1 - 1.2]) {
+        // None where the cargo line runs into the east wall, nor behind the office
+        if (x > 0 && z > -26 && z < 8) continue;
+        this.add(M.darkConcrete, span(x, bottom, z - 1, x + 1.2, top, z + 1), false, 4);
+      }
     }
     for (let x = x0 + 10; x < x1; x += 20) {
       for (const z of [z0, z1 - 1.2]) this.add(M.darkConcrete, span(x - 1, bottom, z, x + 1, top, z + 1.2), false, 4);
@@ -911,7 +1458,7 @@ export class Level13Builder {
       this.add(M.darkConcrete, span(x0, y, z1 - 0.6, x1, y + 0.8, z1), false, 4);
     }
     // Columns up out of the abyss to the roof
-    for (const [x, z] of [[-45, -56], [-10, -56], [25, -56], [48, -22], [-48, 26], [-14, 54], [16, 60], [46, 62], [-42, 58], [16, -14], [-6, -30]] as const) {
+    for (const [x, z] of [[-45, -56], [-10, -56], [25, -56], [-48, 26], [-14, 54], [16, 60], [46, 62], [-42, 58], [16, -14], [-6, -30]] as const) {
       this.add(M.concrete, span(x - 2, bottom, z - 2, x + 2, top, z + 2), false, 6);
       for (const y of [H1 - 6, H2 + 10, 80]) this.add(M.darkConcrete, span(x - 2.4, y, z - 2.4, x + 2.4, y + 1.2, z + 2.4), false, 6);
     }
@@ -923,7 +1470,7 @@ export class Level13Builder {
     for (let x = x0 + 15; x < x1; x += 30) this.add(M.darkSteel, span(x - 0.3, top - 3.2, z0, x + 0.3, top - 2.6, z1));
     // Skylight panels in the roof: cold light through them
     for (let x = -45; x <= 45; x += 30) {
-      for (let z = -50; z <= 50; z += 33) this.add(M.lamp, span(x - 4, top - 0.25, z - 6, x + 4, top - 0.2, z + 6));
+      for (let z = -50; z <= 50; z += 33) this.add(M.lamp, span(x - 4, top - 0.05, z - 6, x + 4, top, z + 6));
     }
     // Fog layers over the abyss, deeper and deeper
     const fogTex = new THREE.CanvasTexture(fogCanvas());
@@ -939,7 +1486,7 @@ export class Level13Builder {
       this.fogLayers.push(m);
     }
     // Hall lights: a few, on the route
-    for (const [x, y, z, k] of [[-44, H1 + 6, -31, 40], [-30, H1 + 6, 0, 30], [2, H2 + 7, 22, 36], [30, H3 + 6, 38, 34], [52, H3 + 6, 44, 34], [-14, H2 + 7, 10, 28]] as const) {
+    for (const [x, y, z, k] of [[-44, H1 + 6, -31, 40], [-30, H1 + 6, 0, 30], [2, H2 + 7, 22, 36], [30, H3 + 6, 38, 34], [-14, H2 + 7, 10, 28], [46, H3 + 5, 14, 34], [54, Y6 + 6.5, -2, 30], [55, H4 + 5, -30, 30]] as const) {
       const l = new THREE.PointLight(0xdfe6ee, k, 34, 1.4);
       l.position.set(x, y, z);
       this.group.add(l);
@@ -994,7 +1541,7 @@ export class Level13Builder {
       const hz = alongX ? z0 : z0 + (z1 - z0) * k;
       const hx2 = alongX ? hx : x1;
       const hz2 = alongX ? z1 : hz;
-      for (const [px, pz] of i % 2 ? [[hx, hz]] : [[hx2, hz2]]) this.add(M.darkSteel, span(px - 0.03, y + 1.1, pz - 0.03, px + 0.03, HALL.top - 2.4, pz + 0.03));
+      for (const [px, pz] of i % 2 ? [[hx, hz]] : [[hx2, hz2]]) this.add(M.darkSteel, span(px - 0.03, y + 1.1, pz - 0.03, px + 0.03, w.hangTo ?? HALL.top - 2.4, pz + 0.03));
     }
   }
 
@@ -1060,37 +1607,12 @@ export class Level13Builder {
 
   /** A vat: a steel drum on legs with a glass band showing what's inside it glowing. */
   private vat(x: number, y: number, z: number, r: number, h: number, colour: number, solid = true): void {
-    const M = this.M;
-    this.add(M.steel, (() => {
-      const g = new THREE.CylinderGeometry(r, r, h * 0.3, 20);
-      g.translate(x, y + 0.4 + h * 0.15, z);
-      return g;
-    })());
-    this.add(M.steel, (() => {
-      const g = new THREE.CylinderGeometry(r, r * 0.9, h * 0.25, 20);
-      g.translate(x, y + 0.4 + h * 0.75 + h * 0.125, z);
-      return g;
-    })());
-    const dome = new THREE.SphereGeometry(r, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-    dome.scale(1, 0.4, 1);
-    dome.translate(x, y + 0.4 + h, z);
-    this.add(M.darkSteel, dome);
-    for (let k = 0; k < 4; k++) {
-      const a = (k * Math.PI) / 2 + 0.4;
-      this.add(M.darkSteel, span(x + Math.cos(a) * r * 0.8 - 0.06, y, z + Math.sin(a) * r * 0.8 - 0.06, x + Math.cos(a) * r * 0.8 + 0.06, y + 0.45, z + Math.sin(a) * r * 0.8 + 0.06));
-    }
-    // The glass band, and the stuff in it: lit from within
-    const glow = new THREE.MeshStandardMaterial({ color: colour, emissive: colour, emissiveIntensity: 1.4, roughness: 0.1, transparent: true, opacity: 0.85 });
-    this.vatGlow.push(glow);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.002, r * 1.002, h * 0.45, 20, 1, true), glow);
-    band.position.set(x, y + 0.4 + h * 0.3 + h * 0.225, z);
+    const p = vatGeometry(r, h);
+    for (const g of p.steel) this.add(this.M.steel, g.translate(x, y, z));
+    for (const g of p.dark) this.add(this.M.darkSteel, g.translate(x, y, z));
+    const band = new THREE.Mesh(p.band, this.liquid(colour));
+    band.position.set(x, y, z);
     this.group.add(band);
-    // Pipes off the top
-    this.add(M.pipe, (() => {
-      const g = new THREE.CylinderGeometry(0.08, 0.08, 3, 8);
-      g.translate(x + r * 0.4, y + 0.4 + h + 1.5, z);
-      return g;
-    })());
     if (solid) this.solidBox(x - r, y, z - r, x + r, y + 0.4 + h, z + r);
   }
 
@@ -1098,7 +1620,7 @@ export class Level13Builder {
    * The route, start to finish; and the things on it the scene drives:
    * ladders, the turrets' mounts, the lever and the platform it calls, the door.
    */
-  private buildRoute(): { ladders: Ladder[]; turrets: TurretSite[]; lever: Level13Data['lever']; mover: Level13Data['mover']; door: Level13Data['door'] } {
+  private buildRoute(): { ladders: Ladder[]; turrets: TurretSite[]; lever: Level13Data['lever']; mover: Level13Data['mover'] } {
     const M = this.M;
     const ladders: Ladder[] = [];
     // Up the shaft from the sewer, against the hall's wall
@@ -1124,7 +1646,7 @@ export class Level13Builder {
     this.platform(-36, -3, -28, 5.4, H1, 'we');
     this.crate(-34.8, H1, -1.8, 1.1, 1.1);
     ladders.push({ base: V(-32, H1, 5.0), face: Math.PI, top: H2, off: V(-32, H2, 7.2) });
-    this.ladderMesh(V(-32, H1, 5.8), Math.PI, H2 - H1 + 1.1, true);
+    this.ladderMesh(V(-32, H1, 5.8), Math.PI, H2 - H1 + 1.1, 'lamp', true);
     // ---- 3: above, and the span east that's been broken
     this.platform(-36, 5.8, -28, 13, H2, 'nws');
     this.walkway({ x0: -28, z0: 9, x1: -19.5, z1: 11, y: H2, rails: '+' });
@@ -1184,18 +1706,13 @@ export class Level13Builder {
     this.walkRail(30.8, 39.12, 34, 39.2, H2);
     this.crate(32.9, H2, 31.2, 1.1, 1.1);
     ladders.push({ base: V(30, H2, 39.0), face: Math.PI, top: H3, off: V(30, H3, 41.4) });
-    this.ladderMesh(V(30, H2, 39.8), Math.PI, H3 - H2 + 1.1, true);
+    this.ladderMesh(V(30, H2, 39.8), Math.PI, H3 - H2 + 1.1, 'lamp', true);
     // ---- 7, and the last long walkway east under the turret
     this.platform(26, 40, 34, 48, H3, 'nws');
     this.vat(27.4, H3, 46.5, 0.8, 2.0, 0x7dff5a);
-    this.walkway({ x0: 34, z0: 42.9, x1: 52, z1: 45.1, y: H3, rails: '+' });
-    for (const x of [38, 43.5, 48.5]) this.coverStack(x, H3, 43.45, 0.9);
-    // ---- 8: the last platform, against the east wall, the door in it
-    this.platform(52, 38, 60, 50, H3, 'ns');
-    this.crate(53.2, H3, 39.2, 1.1, 1.1);
-    this.crate(53.2, H3, 39.2, 0.9, 2.1);
-    this.vat(54, H3, 48.4, 0.7, 1.8, 0xb35cff);
-    const door = this.buildDoor();
+    // S5: east to where it stops, over the vat line (buildVatLine marks its end)
+    this.walkway({ x0: 34, z0: 42.9, x1: 40.6, z1: 45.1, y: H3, rails: 'both' });
+    this.coverStack(37.4, H3, 43.45, 0.9);
     // ---- The turrets' mounts are the scene's (it builds the guns); here, the sites
     const turrets: TurretSite[] = [
       // Each sweeps one walkway and nothing else: the platforms between them are never in two beams
@@ -1206,7 +1723,7 @@ export class Level13Builder {
       // S4, short of the platforms at either end
       { pos: V(17, H2 + 7, 22), yaw: 1.57, half: 0.42, rate: 0.45, pitch: -0.35, mount: 'post' },
       // S5
-      { pos: V(43, H3 + 8, 25), yaw: Math.PI, half: 0.4, rate: 0.45, pitch: -0.34, mount: 'post' }
+      { pos: V(34, H3 + 8, 25), yaw: Math.PI, half: 0.22, rate: 0.45, pitch: -0.34, mount: 'post' }
     ];
     // Their posts: steel columns up from the abyss, a bracket out to the gun
     for (const t of turrets) {
@@ -1214,7 +1731,7 @@ export class Level13Builder {
       this.add(M.hazard, span(t.pos.x - 0.37, t.pos.y - 2.2, t.pos.z - 0.37, t.pos.x + 0.37, t.pos.y - 1.6, t.pos.z + 0.37), false, 0.6);
       this.add(M.darkSteel, span(t.pos.x - 0.8, t.pos.y - 0.75, t.pos.z - 0.8, t.pos.x + 0.8, t.pos.y - 0.6, t.pos.z + 0.8));
     }
-    return { ladders, turrets, lever, mover, door };
+    return { ladders, turrets, lever, mover };
   }
 
   private leverPost(at: THREE.Vector3): Level13Data['lever'] {
@@ -1273,8 +1790,8 @@ export class Level13Builder {
   private buildDoor(): Level13Data['door'] {
     const M = this.M;
     const x = HALL.x1;
-    const z = 44;
-    const y = H3;
+    const z = -30;
+    const y = H4;
     // Frame: heavy steel jambs and a lintel with hazard stripes, a red lamp over it
     this.add(M.darkSteel, span(x - 0.35, y, z - 2.3, x + 0.2, y + 4.3, z - 1.9));
     this.add(M.darkSteel, span(x - 0.35, y, z + 1.9, x + 0.2, y + 4.3, z + 2.3));
@@ -1300,9 +1817,533 @@ export class Level13Builder {
     this.group.add(slab);
     const collider = this.solidBox(x - 0.15, y, z - 2, x + 0.3, y + 3.9, z + 2);
     const warn = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff2010, emissiveIntensity: 3 }));
-    warn.position.set(x - 0.3, y + 4.6, z);
+    // On a bracket off the wall over the lintel, not hanging in the air
+    warn.position.set(x - 0.2, y + 4.6, z);
     this.group.add(warn);
-    return { slab, collider, front: V(x - 1.6, y, z), plant: V(x - 0.2, y + 1.15, z + 0.75) };
+    this.add(this.M.darkSteel, span(x - 0.2, y + 4.42, z - 0.08, x, y + 4.48, z + 0.08));
+    this.add(this.M.darkSteel, span(x - 0.06, y + 4.3, z - 0.15, x, y + 4.7, z + 0.15));
+    return { slab, collider, front: V(x - 1.6, y, z), plant: V(x - 0.13, y + 1.45, z + 0.4) };
+  }
+
+  // -------------------------------------------------------------- the vat line
+
+  /**
+   * A track along z at VAT_X, carts on it carrying two vats each north
+   * through the hall and out through the wall at each end. He drops onto one
+   * from the end of walkway 5 and rides it to the landing beside the track.
+   */
+  private buildVatLine(): Level13Data['vatLine'] {
+    const M = this.M;
+    const X = VAT_X;
+    const Y = VAT_Y;
+    const z0 = HALL.z0;
+    const z1 = HALL.z1;
+    // The girder under the carts, the rails on it, trestles down into the fog every 12 m
+    this.add(M.darkSteel, span(X - 1.0, Y - 1.05, z0, X + 1.0, Y - 0.62, z1));
+    for (const s of [-0.7, 0.7]) this.add(M.steel, span(X + s - 0.06, Y - 0.62, z0, X + s + 0.06, Y - 0.5, z1));
+    this.add(M.hazard, span(X - 1.02, Y - 0.85, z0, X - 1.0, Y - 0.7, z1), false, 0.5);
+    this.add(M.hazard, span(X + 1.0, Y - 0.85, z0, X + 1.02, Y - 0.7, z1), false, 0.5);
+    for (let z = z0 + 6; z < z1; z += 12) {
+      for (const s of [-0.85, 0.85]) this.add(M.darkSteel, span(X + s - 0.12, -10, z - 0.12, X + s + 0.12, Y - 1.05, z + 0.12));
+      for (let yy = Y - 7; yy > 0; yy -= 9) this.add(M.darkSteel, span(X - 0.85, yy, z - 0.08, X + 0.85, yy + 0.18, z + 0.08));
+    }
+    // The portals it goes through, at both ends
+    for (const z of [z0, z1]) {
+      const s = z === z0 ? 1 : -1;
+      this.add(M.black, span(X - 1.6, Y - 1.1, Math.min(z, z + s * 0.04), X + 1.6, Y + 3.4, Math.max(z, z + s * 0.04)));
+      this.add(M.hazard, span(X - 1.9, Y - 1.1, Math.min(z, z + s * 0.12), X - 1.6, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
+      this.add(M.hazard, span(X + 1.6, Y - 1.1, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
+      this.add(M.hazard, span(X - 1.9, Y + 3.4, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
+    }
+    // A cart: a deck on two bogies, a vat at each end, the middle clear to stand in
+    const deck = merge([
+      span(-1.2, -0.28, -3.5, 1.2, 0, 3.5),
+      span(-0.9, -0.62, -2.9, 0.9, -0.28, -1.9),
+      span(-0.9, -0.62, 1.9, 0.9, -0.28, 2.9),
+      span(-0.25, -0.2, -3.9, 0.25, -0.05, -3.5),
+      span(-0.25, -0.2, 3.5, 0.25, -0.05, 3.9)
+    ]);
+    const edge = merge([span(-1.22, -0.26, -3.52, -1.18, -0.02, 3.52), span(1.18, -0.26, -3.52, 1.22, -0.02, 3.52), span(-1.2, -0.26, -3.52, 1.2, -0.02, -3.48), span(-1.2, -0.26, 3.48, 1.2, -0.02, 3.52)]);
+    const wheels = merge(
+      [-2.4, 2.4].flatMap((bz) =>
+        [-0.45, 0.45].flatMap((dz) =>
+          [-0.7, 0.7].map((wx) => {
+            const g = new THREE.CylinderGeometry(0.2, 0.2, 0.1, 12);
+            g.rotateZ(Math.PI / 2);
+            g.translate(wx, -0.55, bz + dz);
+            return g;
+          })
+        )
+      )
+    );
+    const stripes = merge([span(-1.2, 0, -1.6, 1.2, 0.012, -1.45), span(-1.2, 0, 1.45, 1.2, 0.012, 1.6)]);
+    worldUVs(stripes, 0.5);
+    const colours = [0x7dff5a, 0xb35cff, 0x5ae0ff];
+    const vparts = vatGeometry(0.85, 2.0);
+    const vSteel = merge(vparts.steel.flatMap((g) => [-2.35, 2.35].map((vz) => g.clone().translate(0, 0, vz))));
+    const vDark = merge(vparts.dark.flatMap((g) => [-2.35, 2.35].map((vz) => g.clone().translate(0, 0, vz))));
+    for (const g of [...vparts.steel, ...vparts.dark]) g.dispose();
+    const carts: Level13Data['vatLine']['carts'] = [];
+    const n = 7;
+    const len = z1 - z0 + 10;
+    for (let i = 0; i < n; i++) {
+      const g = new THREE.Group();
+      const parts: THREE.Mesh[] = [new THREE.Mesh(deck, M.darkSteel), new THREE.Mesh(edge, M.yellow), new THREE.Mesh(wheels, M.darkSteel), new THREE.Mesh(stripes, M.hazard), new THREE.Mesh(vSteel, M.steel), new THREE.Mesh(vDark, M.darkSteel)];
+      const liq = this.liquid(colours[i % colours.length]);
+      for (const vz of [-2.35, 2.35]) {
+        const b = new THREE.Mesh(vparts.band, liq);
+        b.position.z = vz;
+        parts.push(b);
+      }
+      for (const m of parts) {
+        g.add(m);
+        m.userData.surface = 'metal';
+        m.userData.noDecal = true;
+        this.shootables.push(m);
+      }
+      const z = z0 - 5 + (i / n) * len;
+      g.position.set(X, Y, z);
+      this.group.add(g);
+      const deckC: Collider = { box: new THREE.Box3() };
+      const vatsC: Collider[] = [{ box: new THREE.Box3() }, { box: new THREE.Box3() }];
+      this.dyn.push(deckC, ...vatsC);
+      carts.push({ group: g, z, deck: deckC, vats: vatsC });
+    }
+    // Where he gets off: a landing pad beside the track, a walkway east to the cargo platform
+    this.platform(44.0, 8.5, 47, 12.5, Y6, 'ns');
+    this.add(M.hazard, span(44.0, Y6, 8.5, 44.3, Y6 + 0.012, 12.5), false, 0.5);
+    this.walkway({ x0: 47, z0: 9.4, x1: 50, z1: 11.6, y: Y6, rails: 'both' });
+    // The end of walkway 5, where he drops onto it: a stripe and a sign
+    this.add(M.hazard, span(40.2, H3, 42.9, 40.6, H3 + 0.012, 45.1), false, 0.5);
+    const sign = warnPlate('VAT LINE ↓ — RIDE AT OWN RISK', 1.6, 0.3);
+    sign.rotation.y = Math.PI;
+    sign.position.set(38.4, H3 + 1.4, 45.01);
+    this.group.add(sign);
+    const sign2 = warnPlate('ALIGHT HERE', 1.2, 0.3);
+    sign2.rotation.y = -Math.PI / 2;
+    sign2.position.set(44.03, Y6 + 1.4, 12.42);
+    this.group.add(sign2);
+    return { x: X, y: Y, z0: z0 - 5, z1: z1 + 5, speed: -2.4, carts };
+  }
+
+  /** The liquid in a vat: one material per colour, shared, the scene running its clock. */
+  private liquidCache = new Map<number, THREE.ShaderMaterial>();
+  private liquid(colour: number): THREE.ShaderMaterial {
+    let m = this.liquidCache.get(colour);
+    if (!m) {
+      m = vatLiquidMaterial(colour);
+      this.liquidCache.set(colour, m);
+      this.vatMats.push(m);
+    }
+    return m;
+  }
+
+  // -------------------------------------------------------------- the cargo line
+
+  /**
+   * Three monorails out of the dispatch tower to the east wall, crates of
+   * lab equipment hung under them on cables, each line running its own way.
+   * He hops from crate to crate, line to line, from the cargo platform to the
+   * lift's landing.
+   */
+  private buildCargoLine(): Level13Data['cargo'] {
+    const M = this.M;
+    const xa = 46.5;
+    const xb = HALL.x1;
+    const beamY = 65.2;
+    // The dispatch tower they come out of, floor to roof
+    this.add(M.concrete, span(44.5, HALL.bottom, -3, xa, HALL.top, 7), true, 6);
+    for (const y of [H2 + 10, 80]) this.add(M.darkConcrete, span(44.2, y, -3.3, xa + 0.3, y + 1.2, 7.3), false, 6);
+    const sign = warnPlate('CARGO DISPATCH 3', 2.6, 0.5);
+    sign.rotation.y = Math.PI / 2;
+    sign.position.set(xa + 0.02, 67.6, 2);
+    this.group.add(sign);
+    const lines: Level13Data['cargo']['lines'] = [
+      { z: 4.4, top: 59.95, speed: 1.5 },
+      { z: 1.8, top: 60.2, speed: -1.4 },
+      { z: -0.8, top: 60.0, speed: 1.35 }
+    ].map((l) => ({ ...l, x0: xa - 1.5, x1: xb + 1.5 }));
+    const crateMats = [0, 1, 2, 3, 4].map((i) => new THREE.MeshStandardMaterial({ map: cargoTexture(i), roughness: 0.6, metalness: 0.3 }));
+    const topMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.55, metalness: 0.4 });
+    const crateGeo = new THREE.BoxGeometry(2.0, 1.3, 2.0);
+    const boxes: Level13Data['cargo']['boxes'] = [];
+    for (const [li, l] of lines.entries()) {
+      // The rail: an I-beam from the tower to the wall, a portal at each end
+      this.add(M.darkSteel, span(xa, beamY, l.z - 0.18, xb, beamY + 0.06, l.z + 0.18));
+      this.add(M.darkSteel, span(xa, beamY + 0.06, l.z - 0.04, xb, beamY + 0.5, l.z + 0.04));
+      this.add(M.darkSteel, span(xa, beamY + 0.5, l.z - 0.18, xb, beamY + 0.56, l.z + 0.18));
+      for (const [x, s] of [[xa, 1], [xb, -1]] as const) {
+        this.add(M.black, span(Math.min(x, x + s * 0.04), l.top - 1.45, l.z - 1.15, Math.max(x, x + s * 0.04), beamY + 0.7, l.z + 1.15));
+        this.add(M.hazard, span(Math.min(x, x + s * 0.1), beamY + 0.7, l.z - 1.25, Math.max(x, x + s * 0.1), beamY + 0.95, l.z + 1.25), false, 0.6);
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshStandardMaterial({ color: 0x221100, emissive: l.speed > 0 === (s > 0) ? 0x30ff40 : 0xff2a1a, emissiveIntensity: 3 }));
+        lamp.position.set(x + s * 0.12, beamY + 1.15, l.z);
+        this.group.add(lamp);
+      }
+      // Its rigging, the same on every crate of the line: trolley, rope, hook, spreader, four cables
+      const spreadY = l.top + 2.8;
+      const rig = merge([
+        span(-0.35, beamY - 0.3, -0.14, 0.35, beamY, 0.14),
+        span(-0.02, spreadY + 0.15, -0.02, 0.02, beamY - 0.3, 0.02),
+        span(-0.08, spreadY + 0.05, -0.08, 0.08, spreadY + 0.2, 0.08),
+        span(-1.0, spreadY - 0.06, -1.0, 1.0, spreadY + 0.04, -0.92),
+        span(-1.0, spreadY - 0.06, 0.92, 1.0, spreadY + 0.04, 1.0),
+        span(-1.0, spreadY - 0.06, -1.0, -0.92, spreadY + 0.04, 1.0),
+        span(0.92, spreadY - 0.06, -1.0, 1.0, spreadY + 0.04, 1.0),
+        span(-1.0, spreadY - 0.06, -0.02, 1.0, spreadY + 0.04, 0.02),
+        ...[-0.95, 0.95].flatMap((cx) => [-0.95, 0.95].map((cz) => span(cx - 0.012, l.top, cz - 0.012, cx + 0.012, spreadY - 0.06, cz + 0.012)))
+      ]);
+      // Crates along the line, spaced so one comes by every few seconds
+      const span_ = l.x1 - l.x0;
+      const n = 3;
+      for (let i = 0; i < n; i++) {
+        const g = new THREE.Group();
+        const k = (li * 2 + i) % 5;
+        const crate = new THREE.Mesh(crateGeo, [crateMats[k], crateMats[(k + 2) % 5], topMat, topMat, crateMats[(k + 1) % 5], crateMats[(k + 3) % 5]]);
+        crate.position.y = l.top - 0.65;
+        g.add(crate, new THREE.Mesh(rig, M.darkSteel));
+        crate.userData.surface = 'metal';
+        crate.userData.noDecal = true;
+        this.shootables.push(crate);
+        const x = l.x0 + ((i + li * 0.37) / n) * span_;
+        g.position.set(x, 0, l.z);
+        this.group.add(g);
+        const c: Collider = { box: new THREE.Box3() };
+        this.dyn.push(c);
+        boxes.push({ group: g, collider: c, line: li, x });
+      }
+    }
+    // The cargo platform he starts from, and its sign
+    this.platform(50, 6, 56, 14, Y6, 'es');
+    this.walkRail(50, 6, 50.08, 9.4, Y6);
+    this.walkRail(50, 11.6, 50.08, 14, Y6);
+    this.add(M.hazard, span(50, Y6, 6, 56, Y6 + 0.012, 6.3), false, 0.5);
+    this.crate(55, Y6, 13, 1.1, 1.1);
+    return { lines, boxes };
+  }
+
+  // -------------------------------------------------------------- the lift
+
+  /**
+   * A caged lift between the cargo line's landings and the control office
+   * above. The shaft is a steel frame with perforated cage panels; the car
+   * a floor, perforated sides and roof. Collapsible gates at the three
+   * openings: south and north at the bottom, north at the top.
+   */
+  private buildLift(): Level13Data['lift'] {
+    const M = this.M;
+    const sx0 = 48.6;
+    const sx1 = 57.4;
+    const cx0 = 51.5;
+    const cx1 = 54.5;
+    const z0 = -11;
+    const z1 = -8;
+    const yb = Y6;
+    const yt = OFFICE_Y;
+    const base = yb - 0.8;
+    const top = yt + 4.6;
+    // The landings either side at the bottom
+    this.platform(50, -8, 56, -2.4, yb, 'we');
+    this.add(M.hazard, span(50, yb, -2.7, 56, yb + 0.012, -2.4), false, 0.5);
+    this.platform(50, -16, 56, -11, yb, 'we');
+    this.walkRail(50, -16, 52.9, -15.92, yb);
+    this.walkRail(54.1, -16, 56, -15.92, yb);
+    // The frame: corner posts, bracing rings every 4 m, a winch house on top
+    for (const x of [sx0, cx0, cx1, sx1]) for (const z of [z0, z1]) this.add(M.darkSteel, span(x - 0.1, base, z - 0.1, x + 0.1, top, z + 0.1));
+    for (let y = base; y < top; y += 4) {
+      this.add(M.darkSteel, span(sx0, y, z0 - 0.08, sx1, y + 0.16, z0 + 0.08));
+      this.add(M.darkSteel, span(sx0, y, z1 - 0.08, sx1, y + 0.16, z1 + 0.08));
+    }
+    this.add(M.darkSteel, span(sx0 - 0.2, top, z0 - 0.4, sx1 + 0.2, top + 0.3, z1 + 0.4));
+    this.add(M.yellow, span(cx0 - 0.3, top + 0.3, z0 + 0.2, cx1 + 0.3, top + 1.4, z1 - 0.2));
+    // The side bays either side of the car: solid, caged on every face
+    const cage = (x0: number, y0: number, z0_: number, x1: number, y1: number, z1_: number): void => {
+      this.add(M.grating, span(x0, y0, z0_, x1, y1, z1_), false, 1.2);
+    };
+    for (const [a, b] of [[sx0, cx0], [cx1, sx1]] as const) {
+      this.solidBox(a, base, z0, b, top, z1);
+      cage(a, base, z0 - 0.02, b, top, z0 + 0.02);
+      cage(a, base, z1 - 0.02, b, top, z1 + 0.02);
+      cage(a === sx0 ? a - 0.02 : b - 0.02, base, z0, a === sx0 ? a + 0.02 : b + 0.02, top, z1);
+    }
+    // The car's well: cage panels on its two faces, leaving the openings
+    const opening = 2.6;
+    const face = (z: number, gaps: [number, number][]): void => {
+      let y = base;
+      for (const [g0, g1] of [...gaps, [top, top]] as [number, number][]) {
+        if (g0 > y) {
+          cage(cx0, y, z - 0.02, cx1, g0, z + 0.02);
+          this.solidBox(cx0, y, z - 0.06, cx1, g0, z + 0.06);
+        }
+        y = g1;
+      }
+    };
+    face(z1, [[yb, yb + opening]]);
+    face(z0, [[yb, yb + opening], [yt, yt + opening]]);
+    // Gates: a collapsible lattice that folds toward the east side of each opening
+    const gateTex = scissorGateTexture();
+    gateTex.repeat.set(3, 1.3);
+    const gateMat = new THREE.MeshStandardMaterial({ map: gateTex, color: 0xb8bcc0, metalness: 0.7, roughness: 0.4, alphaTest: 0.5, side: THREE.DoubleSide });
+    const gates: Level13Data['lift']['gates'] = [];
+    for (const [z, y, level, out] of [[z1, yb, 'bottom', 1], [z0, yb, 'bottom', -1], [z0, yt, 'top', -1]] as const) {
+      const pivot = new THREE.Group();
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(cx1 - cx0, opening), gateMat);
+      m.position.set(-(cx1 - cx0) / 2, opening / 2, 0);
+      pivot.add(m);
+      pivot.position.set(cx1 - 0.02, y, z + out * 0.12);
+      this.group.add(pivot);
+      const collider: Collider = { box: new THREE.Box3(V(cx0, y, z + out * 0.12 - 0.06), V(cx1, y + opening, z + out * 0.12 + 0.06)) };
+      this.dyn.push(collider);
+      gates.push({ pivot, collider, level });
+      // A lamp over each opening, a sign beside the bottom ones
+      this.add(M.darkSteel, span(cx0 + 1.2, y + opening + 0.05, z + out * 0.04, cx1 - 1.2, y + opening + 0.2, z + out * 0.2));
+      this.add(M.lamp, span(cx0 + 1.25, y + opening + 0.02, z + out * 0.06, cx1 - 1.25, y + opening + 0.05, z + out * 0.18));
+    }
+    const ls = warnPlate('LIFT — CONTROL ROOM ↑', 1.5, 0.3);
+    ls.position.set((sx0 + cx0) / 2, yb + 1.6, z1 + 0.05);
+    this.group.add(ls);
+    const ls2 = warnPlate('WALKWAY 7 LADDER: RAISED', 1.6, 0.3);
+    ls2.rotation.y = Math.PI;
+    ls2.position.set((cx1 + sx1) / 2, yb + 1.6, z0 - 0.05);
+    this.group.add(ls2);
+    // The car: floor at the group's origin
+    const car = new THREE.Group();
+    const w = cx1 - cx0 - 0.06;
+    const d = z1 - z0 - 0.06;
+    const H = 2.7;
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.18, d), M.steel);
+    floor.position.y = -0.09;
+    const rim = new THREE.Mesh(merge([span(-w / 2, 0, -d / 2, w / 2, 0.012, -d / 2 + 0.15), span(-w / 2, 0, d / 2 - 0.15, w / 2, 0.012, d / 2)]), M.hazard);
+    const frame = new THREE.Mesh(
+      merge([
+        ...[-1, 1].flatMap((sx) => [-1, 1].map((sz) => span(sx * (w / 2) - 0.05, 0, sz * (d / 2) - 0.05, sx * (w / 2) + 0.05, H, sz * (d / 2) + 0.05))),
+        span(-w / 2, H - 0.08, -d / 2, w / 2, H, d / 2).translate(0, 0, 0),
+        span(-w / 2, -0.4, -0.1, w / 2, -0.18, 0.1)
+      ]),
+      M.darkSteel
+    );
+    const walls = new THREE.Mesh(merge([span(-w / 2, 0.02, -d / 2, -w / 2 + 0.03, H - 0.08, d / 2), span(w / 2 - 0.03, 0.02, -d / 2, w / 2, H - 0.08, d / 2), span(-w / 2, H - 0.12, -d / 2, w / 2, H - 0.09, d / 2)]), M.grating);
+    worldUVs(walls.geometry, 1.2);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.25), M.yellow);
+    panel.position.set(w / 2 - 0.06, 1.3, -d / 2 + 0.4);
+    const btn = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff3020, emissiveIntensity: 2.5 }));
+    btn.position.set(w / 2 - 0.1, 1.35, -d / 2 + 0.4);
+    const light = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.2), M.lamp);
+    light.position.y = H - 0.15;
+    car.add(floor, rim, frame, walls, panel, btn, light);
+    for (const m of [floor, frame]) {
+      m.userData.surface = 'metal';
+      m.userData.noDecal = true;
+      this.shootables.push(m);
+    }
+    car.position.set((cx0 + cx1) / 2, yb, (z0 + z1) / 2);
+    this.group.add(car);
+    const floorC: Collider = { box: new THREE.Box3() };
+    this.dyn.push(floorC);
+    return { car, floor: floorC, x0: cx0, x1: cx1, z0, z1, yBottom: yb, yTop: yt, gates };
+  }
+
+  // -------------------------------------------------------------- the control office
+
+  /**
+   * The control room at the top of the lift, hung off the east wall over the
+   * whole hall: windows all down the west side and part of the south, the
+   * operators' console under them, screens, a map of the hall on the wall,
+   * posters, the canteen's orders and the comics pinned up, coffee. And the
+   * lever that lets down walkway 7's ladder.
+   */
+  private buildOffice(): Level13Data['officeLever'] {
+    const M = this.M;
+    const x0 = 45;
+    const x1 = 58.6;
+    const z0 = -24;
+    const z1 = -11;
+    const y = OFFICE_Y;
+    const ceil = y + 3.4;
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xc9c6bc, roughness: 0.85 });
+    const carpet = new THREE.MeshStandardMaterial({ color: 0x3a4250, roughness: 0.95 });
+    const glass = new THREE.MeshStandardMaterial({ color: 0x9fc4d8, roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.16, depthWrite: false });
+    const put = (o: THREE.Object3D, x: number, yy: number, z: number, ry = 0): THREE.Object3D => {
+      o.position.set(x, yy, z);
+      o.rotation.y = ry;
+      this.group.add(o);
+      return o;
+    };
+    // Shell: the floor slab and its carpet, the ceiling slab, the walls
+    this.add(M.darkSteel, span(x0, y - 0.6, z0, x1, y - 0.02, z1), true);
+    this.add(carpet, span(x0 + 0.2, y - 0.02, z0 + 0.2, x1 - 0.2, y, z1 - 0.2));
+    this.add(M.darkSteel, span(x0, ceil, z0, x1, ceil + 0.6, z1), true);
+    this.add(wallMat, span(x0 + 0.2, ceil - 0.02, z0 + 0.2, x1 - 0.2, ceil, z1 - 0.2));
+    // Under it: trusses, and legs down into the fog
+    for (let x = x0 + 1; x < x1; x += 3) this.add(M.darkSteel, span(x - 0.12, y - 1.4, z0, x + 0.12, y - 0.6, z1));
+    for (const z of [z0 + 0.5, z1 - 0.5]) this.add(M.darkSteel, span(x0 + 0.3, -10, z - 0.25, x0 + 0.8, y - 0.6, z + 0.25));
+    for (const z of [z0 + 0.5, z1 - 0.5]) this.add(M.darkSteel, span(x0 + 0.3, y - 1.4, z - 0.1, x1, y - 1.2, z + 0.1));
+    // North wall and east wall: solid
+    this.add(wallMat, span(x0, y, z0, x1, ceil, z0 + 0.2), true);
+    this.add(wallMat, span(x1 - 0.2, y, z0, x1, ceil, z1), true);
+    // West wall: a low wall, the long window, a header; mullions every 1.6 m
+    const sill = y + 0.95;
+    const head = ceil - 0.25;
+    this.add(wallMat, span(x0, y, z0, x0 + 0.2, sill, z1), true);
+    this.add(wallMat, span(x0, head, z0, x0 + 0.2, ceil, z1), true);
+    this.add(glass, span(x0 + 0.08, sill, z0, x0 + 0.12, head, z1));
+    this.solidBox(x0, sill, z0, x0 + 0.2, head, z1);
+    for (let z = z0 + 0.2; z <= z1; z += 1.6) this.add(M.darkSteel, span(x0 - 0.02, sill, z - 0.05, x0 + 0.22, head, z + 0.05));
+    // South wall: window west of the lift, the lift's own cage face, solid east of it
+    this.add(wallMat, span(x0, y, z1 - 0.2, 48.6, sill, z1), true);
+    this.add(wallMat, span(x0, head, z1 - 0.2, 48.6, ceil, z1), true);
+    this.add(glass, span(x0, sill, z1 - 0.12, 48.6, head, z1 - 0.08));
+    this.solidBox(x0, sill, z1 - 0.2, 48.6, head, z1);
+    for (const x of [x0 + 1.2, x0 + 2.4]) this.add(M.darkSteel, span(x - 0.05, sill, z1 - 0.22, x + 0.05, head, z1 + 0.02));
+    this.add(wallMat, span(57.4, y, z1 - 0.2, x1, ceil, z1), true);
+    // Outside: a band of light along the top of the window, the name on the wall
+    for (const z of [z0 + 0.5, z1 - 0.5]) this.add(M.lamp, span(x0 + 0.3, ceil - 0.06, z - 0.15, x1 - 0.3, ceil, z + 0.15));
+    for (let x = x0 + 2; x < x1 - 1; x += 3.2) this.add(M.lamp, span(x - 0.6, ceil - 0.05, -18.1, x + 0.6, ceil, -16.9));
+    const l = new THREE.PointLight(0xfff0d8, 20, 18, 1.5);
+    l.position.set(52, ceil - 0.5, -17.5);
+    this.group.add(l);
+    this.hallLights.push(l);
+    const nameplate = warnPlate('SECTOR 7 CONTROL', 3.2, 0.6);
+    nameplate.rotation.y = -Math.PI / 2;
+    nameplate.position.set(x0 - 0.02, ceil + 0.3, (z0 + z1) / 2);
+    this.group.add(nameplate);
+    // ---- The console under the west window: a long desk, five screens, keyboards, chairs facing out
+    this.add(M.darkSteel, span(x0 + 0.2, y, z0 + 1.2, x0 + 1.4, y + 0.74, z1 - 1.2), true);
+    this.add(new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.4 }), span(x0 + 0.2, y + 0.74, z0 + 1.1, x0 + 1.5, y + 0.78, z1 - 1.1));
+    const kinds: ScreenKind[] = ['sentries', 'vats', 'cams', 'specimen', 'sentries'];
+    kinds.forEach((k, i) => {
+      const z = z0 + 2.4 + i * 2.1;
+      put(monitor(k), x0 + 0.65, y + 0.78, z, Math.PI / 2);
+      const chair = officeChair();
+      put(chair, x0 + 2.2, y, z + (i % 2 ? 0.2 : -0.1), Math.PI / 2 + (i - 2) * 0.12);
+      this.solidBox(x0 + 1.95, y, z - 0.3, x0 + 2.45, y + 0.5, z + 0.3);
+    });
+    put(ecMug(), x0 + 1.2, y + 0.78, z0 + 3.4, 0.6);
+    put(ecMug(false), x0 + 1.25, y + 0.78, z0 + 8.1, 2.1);
+    put(ecMug(), x0 + 1.15, y + 0.78, z0 + 10.6, -0.8);
+    for (const [i, z] of [z0 + 5.2, z0 + 7.0].entries()) {
+      const s = orderSheet(i);
+      s.rotation.set(-Math.PI / 2, 0, 0.4 + i);
+      s.position.set(x0 + 1.15, y + 0.785, z);
+      this.group.add(s);
+    }
+    // ---- The big map of the hall on the north wall, posters either side
+    put(screenPanel('map', 3.4, 2.0), 51.6, y + 1.9, z0 + 0.22);
+    put(poster('teamwork'), 48.1, y + 1.75, z0 + 0.22);
+    put(poster('safety'), 55.2, y + 1.75, z0 + 0.22);
+    put(poster('employee', 0.55, 0.74), 56.9, y + 1.75, z0 + 0.22);
+    // ---- East wall: posters, the corkboard with the canteen's orders and the comics, the lever
+    const east = x1 - 0.22;
+    put(poster('hang'), east, y + 1.7, -14.6, -Math.PI / 2);
+    put(poster('payload'), east, y + 1.7, -22.4, -Math.PI / 2);
+    put(poster('specimens', 0.55, 0.74), east, y + 1.7, -12.4, -Math.PI / 2);
+    const cork = new THREE.Mesh(new THREE.BoxGeometry(0.03, 1.1, 2.6), new THREE.MeshStandardMaterial({ color: 0xa47a4a, roughness: 1 }));
+    put(cork, east - 0.015, y + 1.65, -18.6);
+    for (let i = 0; i < 5; i++) {
+      const s = orderSheet(i, 0.24, 0.32);
+      s.rotation.set(0, -Math.PI / 2, (i % 2 ? 0.05 : -0.06) * (i - 2));
+      s.position.set(east - 0.035, y + 1.85 - (i % 2) * 0.42, -19.7 + Math.floor(i / 2) * 0.62 + (i % 2) * 0.3);
+      this.group.add(s);
+    }
+    for (let i = 0; i < 2; i++) {
+      const cm = comic(i, 0.6);
+      cm.rotation.y = -Math.PI / 2;
+      cm.position.set(east - 0.035, y + 1.35 + i * 0.62, -17.6 + i * 0.05);
+      this.group.add(cm);
+    }
+    // Coffee: a counter in the south-east corner, the machine, the mugs, the cooler beside it
+    this.add(new THREE.MeshStandardMaterial({ color: 0x6a5a48, roughness: 0.7 }), span(east - 0.6, y, -13.9, east, y + 0.92, -11.2), true);
+    this.add(new THREE.MeshStandardMaterial({ color: 0xd8d4cc, roughness: 0.4 }), span(east - 0.62, y + 0.92, -13.92, east, y + 0.96, -11.2));
+    const machine = new THREE.Group();
+    const mBody = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.36), new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.4, metalness: 0.4 }));
+    mBody.position.y = 0.25;
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 0.16, 14), new THREE.MeshStandardMaterial({ color: 0x2a160a, roughness: 0.1, transparent: true, opacity: 0.85 }));
+    pot.position.set(-0.08, 0.1, 0);
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 4), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2a1a, emissiveIntensity: 3 }));
+    led.position.set(-0.21, 0.4, 0.1);
+    machine.add(mBody, pot, led);
+    put(machine, east - 0.28, y + 0.96, -12.0, -Math.PI / 2);
+    for (let i = 0; i < 4; i++) put(ecMug(i % 2 === 0), east - 0.35 + (i % 2) * 0.12, y + 0.96, -12.9 - i * 0.18, i * 1.3);
+    put(waterCooler(), east - 0.3, y, -14.5, -Math.PI / 2);
+    this.solidBox(east - 0.55, y, -14.8, east, y + 1.4, -14.2);
+    // ---- Two desks in the room, a bin, a dying plant
+    put(officeDesk(1.6), 52.0, y, -19.5);
+    this.solidBox(51.2, y, -19.9, 52.8, y + 0.76, -19.1);
+    put(monitor('email'), 51.7, y + 0.745, -19.75);
+    put(ecMug(), 52.5, y + 0.745, -19.6, 1.0);
+    const sheet = orderSheet(3);
+    sheet.rotation.set(-Math.PI / 2, 0, -0.3);
+    sheet.position.set(52.35, y + 0.75, -19.3);
+    this.group.add(sheet);
+    put(officeChair(), 51.9, y, -18.7, Math.PI);
+    put(officeDesk(1.6), 52.0, y, -15.2, Math.PI);
+    this.solidBox(51.2, y, -15.6, 52.8, y + 0.76, -14.8);
+    put(monitor('cams'), 52.3, y + 0.745, -14.95, Math.PI);
+    put(comic(0, 0.36), 51.6, y + 0.752, -15.25).rotation.set(-Math.PI / 2, 0, 0.2);
+    put(officeChair(), 52.1, y, -16.0, 0);
+    put(trashCan(), 50.7, y, -14.6);
+    put(flowerPot('dying'), 57.6, y, -23.3);
+    // ---- The lever: a release box on the east wall, its handle down
+    const at = V(east, y + 1.2, -21.0);
+    this.add(M.yellow, span(east - 0.14, at.y - 0.35, at.z - 0.25, east, at.y + 0.35, at.z + 0.25));
+    this.add(M.hazard, span(east - 0.15, at.y - 0.32, at.z - 0.22, east - 0.14, at.y - 0.18, at.z + 0.22), false, 0.4);
+    const label = warnPlate('WALKWAY 7 LADDER — RELEASE', 0.9, 0.18);
+    label.rotation.y = -Math.PI / 2;
+    label.position.set(east - 0.01, at.y + 0.5, at.z);
+    this.group.add(label);
+    const pivot = new THREE.Group();
+    pivot.position.set(east - 0.16, at.y, at.z);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8), M.steel);
+    arm.position.y = 0.22;
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), new THREE.MeshStandardMaterial({ color: 0xb8261c, roughness: 0.4 }));
+    knob.position.y = 0.46;
+    pivot.add(arm, knob);
+    pivot.rotation.z = Math.PI - 0.5;
+    this.group.add(pivot);
+    return { pivot, at: V(east - 0.6, y, at.z) };
+  }
+
+  // -------------------------------------------------------------- walkway 7 and the door
+
+  /**
+   * North of the lift: the drop ladder from its north landing up to walkway
+   * 7 (pulled up until the lever's thrown), the walkway, the last platform
+   * and the blast door in the east wall.
+   */
+  private buildFinale(): { dropLadder: Level13Data['dropLadder']; door: Level13Data['door'] } {
+    const M = this.M;
+    const lx = 53.5;
+    const lz = -16.2;
+    this.walkway({ x0: 52.4, z0: -24, x1: 54.6, z1: -16.4, y: H4, rails: 'both', hangTo: OFFICE_Y - 1.4 });
+    this.platform(52, -36, 60, -24, H4, 'nw');
+    this.walkRail(52, -24.08, 52.4, -24, H4);
+    this.walkRail(54.6, -24.08, 60, -24, H4);
+    this.coverStack(53.4, H4, -34.6, 1.0);
+    this.crate(58.8, H4, -25.2, 1.1, 1.1);
+    this.vat(58.4, H4, -34.6, 0.7, 1.8, 0xb35cff);
+    // Guides at the walkway's end that the ladder slides in
+    for (const s of [-0.3, 0.3]) this.add(M.darkSteel, span(lx + s - 0.05, H4 - 0.4, lz - 0.2, lx + s + 0.05, H4 + 1.1, lz - 0.1));
+    // The ladder: its own group, drawn up 4.6 m until released
+    const h = H4 - Y6;
+    const g = new THREE.Group();
+    const parts: THREE.BufferGeometry[] = [];
+    for (const s of [-0.24, 0.24]) parts.push(span(s - 0.033, 0, -0.04, s + 0.033, h + 1.0, 0.04));
+    for (let y = 0.3; y < h; y += 0.3) {
+      const r = new THREE.CylinderGeometry(0.024, 0.024, 0.48, 6);
+      r.rotateZ(Math.PI / 2);
+      r.translate(0, y, 0);
+      parts.push(r);
+    }
+    g.add(new THREE.Mesh(merge(parts), M.yellow));
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.3, 0.02), M.hazard);
+    plate.position.set(0, 1.6, -0.05);
+    g.add(plate);
+    const raise = 4.6;
+    g.position.set(lx, Y6 + raise, lz);
+    this.group.add(g);
+    this.ladderTops.push(V(lx, H4 + 0.4, lz - 0.5));
+    const ladder: Ladder = { base: V(lx, Y6, -15.7), face: 0, top: H4, off: V(lx, H4, -17.3), disabled: true };
+    const door = this.buildDoor();
+    return { dropLadder: { group: g, raise, ladder }, door };
   }
 
   // -------------------------------------------------------------- the abyss
@@ -1389,7 +2430,8 @@ export class Level13Builder {
       const z = onX ? THREE.MathUtils.clamp(k, -65, 65) : side < 0 ? HALL.z0 + rad + 0.7 : HALL.z1 - rad - 0.7;
       // Keep clear of the recess and the door
       if (Math.abs(x - HALL.x0) < 4 && Math.abs(z + 31) < 6) continue;
-      if (Math.abs(x - HALL.x1) < 4 && Math.abs(z - 44) < 6) continue;
+      if (Math.abs(x - HALL.x1) < 4 && z > -38 && z < 10) continue;
+      if (Math.abs(x - VAT_X) < 4) continue;
       g.translate(x, (HALL.top + HALL.bottom) / 2, z);
       this.add(r() < 0.5 ? M.pipe : M.rust, g);
     }
@@ -1398,6 +2440,7 @@ export class Level13Builder {
       const x = -55 + r() * 110;
       const z = -65 + r() * 130;
       const len = 20 + r() * 40;
+      if (x > 36) continue;
       this.add(M.darkSteel, span(x - 0.03, HALL.top - len, z - 0.03, x + 0.03, HALL.top - 2.4, z + 0.03));
       this.add(M.rust, (() => {
         const g = new THREE.TorusGeometry(0.25, 0.05, 6, 12);
@@ -1410,7 +2453,8 @@ export class Level13Builder {
     this.walkway({ x0: HALL.x0 + 1, z0: HALL.z0 + 1, x1: HALL.x1 - 1, z1: HALL.z0 + 3, y, rails: '+' });
     this.walkway({ x0: HALL.x0 + 1, z0: HALL.z1 - 3, x1: HALL.x1 - 1, z1: HALL.z1 - 1, y, rails: '-' });
     this.walkway({ x0: HALL.x0 + 1, z0: HALL.z0 + 3, x1: HALL.x0 + 3, z1: HALL.z1 - 3, y, rails: '+' });
-    this.walkway({ x0: HALL.x1 - 3, z0: HALL.z0 + 3, x1: HALL.x1 - 1, z1: HALL.z1 - 3, y, rails: '-' });
+    this.walkway({ x0: HALL.x1 - 3, z0: HALL.z0 + 3, x1: HALL.x1 - 1, z1: -38, y, rails: '-' });
+    this.walkway({ x0: HALL.x1 - 3, z0: 10, x1: HALL.x1 - 1, z1: HALL.z1 - 3, y, rails: '-' });
     this.walkway({ x0: HALL.x0 + 3, z0: -1, x1: HALL.x1 - 3, z1: 1, y: 82, rails: 'both' });
     this.walkway({ x0: -1, z0: HALL.z0 + 3, x1: 1, z1: HALL.z1 - 3, y: 70, rails: 'both' });
     // A gantry crane across the hall, its hook down in the dark
@@ -1438,12 +2482,12 @@ export class Level13Builder {
       m.rotation.y = ry;
       this.group.add(m);
     };
-    sign('SECTOR 7 — CONTAINMENT', HALL.x0 + 0.3, 58, -10, Math.PI / 2);
-    sign('DANGER — NO RETURN BELOW', HALL.x1 - 0.3, 52, 10, -Math.PI / 2);
-    sign('BIOHAZARD TRANSIT', 0, 64, HALL.z1 - 0.3, Math.PI);
-    sign('LEVEL 5 ACCESS →', HALL.x1 - 0.3, H3 + 6.4, 44, -Math.PI / 2);
+    sign('SECTOR 7 — CONTAINMENT', HALL.x0 + 0.05, 58, -10, Math.PI / 2);
+    sign('DANGER — NO RETURN BELOW', HALL.x1 - 0.05, 52, 12, -Math.PI / 2);
+    sign('BIOHAZARD TRANSIT', 0, 64, HALL.z1 - 0.05, Math.PI);
+    sign('LEVEL 5 ACCESS →', HALL.x1 - 0.05, H4 + 5.6, -30, -Math.PI / 2);
     // Vats on wall shelves, here and there, out over the drop
-    for (const [x, z] of [[-57, 12], [-57, 40], [57, -10], [20, -67], [-20, 67]] as const) {
+    for (const [x, z] of [[-57, 12], [-57, 40], [57, 30], [20, -67], [-20, 67]] as const) {
       const sy = 40 + r() * 20;
       this.add(M.darkSteel, span(x - 2.5, sy - 0.5, z - 2.5, x + 2.5, sy, z + 2.5));
       this.vat(x, sy, z, 1.2, 3.2, r() < 0.5 ? 0x7dff5a : 0xb35cff, false);

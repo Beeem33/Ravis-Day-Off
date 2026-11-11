@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SLUDGE_Y, H1, H2, H3, FALL_Y, HALL } from '../environment/Level13Builder';
+import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SEW_Y, SLUDGE_Y, H1, H2, H3, H4, Y6, OFFICE_Y, FALL_Y, HALL } from '../environment/Level13Builder';
+import type { Collider as Col } from '../environment/OfficeLevelBuilder';
+import { FirstPersonArms, mixGrip } from '../entities/RaviVisual';
+import { GRENADE_HOLD, GRENADE_OPEN, GRENADE_PIN } from '../entities/Grenades';
 import { grenade as grenadeModel } from '../environment/VanProps';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -238,59 +241,66 @@ class Sentry {
 // ================================================================ the plant
 
 /**
- * Ravi's hands for the door: the right brings the grenade up and presses it
- * to the door, the left pulls the pin, and the grenade's left there (the
- * scene takes it off the hand into the world).
+ * Ravi's hands for the door, his own arms (the same rig as the grenade
+ * throw): the right brings the grenade up and presses it flat to the door,
+ * the left comes in and pulls the pin, the right lets go and both drop away.
+ * The scene takes the grenade off the hand into the world when it's left.
  */
 class PlantHands {
   readonly root = new THREE.Group();
-  private armR = new THREE.Group();
-  private armL = new THREE.Group();
+  private handR = new THREE.Object3D();
+  private handL = new THREE.Object3D();
   readonly nade: THREE.Group;
   private ring: THREE.Object3D;
+  private arms: FirstPersonArms;
+  private static LOW = new THREE.Vector3(0.24, -0.55, -0.3);
+  private static HELD = new THREE.Vector3(0.1, -0.18, -0.36);
+  private static AWAY = new THREE.Vector3(0.3, -0.65, -0.2);
+  private static REST_L = new THREE.Vector3(-0.3, -0.62, -0.22);
+  private static RING_OFF = new THREE.Vector3();
+  private static Q_HELD = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.1, 0.1, 0.25));
+  private static Q_PRESS = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 - 0.15, Math.PI - 0.25, 0.15, 'YXZ'));
+  private static Q_AWAY = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.5, 0.3, 0.4));
+  private tmp = new THREE.Vector3();
 
   constructor(camera: THREE.Camera) {
     camera.add(this.root);
-    this.root.visible = false;
-    const skin = new THREE.MeshStandardMaterial({ color: 0x8a5c3b, roughness: 0.85 });
-    const sleeve = new THREE.MeshStandardMaterial({ color: 0x4d6f9c, roughness: 0.9 });
-    const mk = (g: THREE.Group): void => {
-      const fore = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.66), skin);
-      fore.position.set(0, -0.02, 0.36);
-      const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.078, 0.09), sleeve);
-      cuff.position.set(0, -0.02, 0.2);
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.09), skin);
-      g.add(fore, cuff, hand);
-    };
-    mk(this.armR);
-    mk(this.armL);
+    this.root.add(this.handR, this.handL);
     this.nade = grenadeModel();
-    this.nade.scale.setScalar(1.15);
-    this.nade.position.set(0, 0.03, -0.06);
-    this.armR.add(this.nade);
+    this.handR.add(this.nade);
     this.ring = this.nade.children[2];
-    this.root.add(this.armR, this.armL);
+    this.arms = new FirstPersonArms(this.root, camera).set('r', this.handR, GRENADE_HOLD).set('l', this.handL, GRENADE_PIN);
+    this.root.visible = false;
   }
 
-  /** `t` seconds into the plant: up, pressed on, pin pulled (0.9 s), let go (1.25 s), hands back. */
-  pose(t: number): void {
-    this.root.visible = t < 2.2;
-    const up = smooth(t / 0.5);
-    const press = smooth((t - 0.45) / 0.3);
-    const back = smooth((t - 1.35) / 0.5);
-    this.armR.position.set(0.32 - 0.24 * up - 0.02 * press, -0.5 + 0.38 * up - 0.4 * back, -0.25 - 0.15 * up - 0.18 * press + 0.2 * back);
-    this.armR.rotation.set(-0.3 + 0.35 * up, 0.25 * (1 - up), 0);
-    // The left comes in to take the ring
-    const lIn = smooth((t - 0.55) / 0.3) * (1 - smooth((t - 1.05) / 0.35));
-    const yank = smooth((t - 0.85) / 0.12);
-    this.armL.position.set(-0.36 + 0.29 * lIn - 0.12 * yank, -0.55 + 0.46 * lIn - 0.06 * yank, -0.3 - 0.27 * lIn + 0.16 * yank);
-    this.armL.rotation.set(-0.2 + 0.3 * lIn, -0.4 * lIn, 0);
-    // The ring off with the left hand
-    if (yank > 0.5 && this.ring.parent === this.nade) {
-      this.ring.removeFromParent();
-      this.armL.add(this.ring);
-      this.ring.position.set(0, -0.02, -0.05);
-    }
+  /**
+   * `t` seconds into the plant; `target` where the grenade goes on the door,
+   * in camera space. Up (0–0.45 s), onto the door (to 0.8), the pin (0.85),
+   * let go (1.25), away (from 1.35).
+   */
+  pose(t: number, target: THREE.Vector3): void {
+    this.root.visible = t < 2.1;
+    if (!this.root.visible) return;
+    const up = smooth(t / 0.45);
+    const press = smooth((t - 0.4) / 0.4);
+    const back = smooth((t - 1.35) / 0.55);
+    const h = this.handR;
+    h.position.lerpVectors(PlantHands.LOW, PlantHands.HELD, up).lerp(target, press).lerp(PlantHands.AWAY, back);
+    // Palm up holding it; then turned so the palm faces the door, fingers up, the grenade between
+    h.quaternion.copy(PlantHands.Q_HELD).slerp(PlantHands.Q_PRESS, press).slerp(PlantHands.Q_AWAY, back);
+    // The left in for the ring, a tug, gone again
+    const lIn = smooth((t - 0.5) / 0.3) * (1 - smooth((t - 1.0) / 0.35));
+    const tug = smooth((t - 0.82) / 0.1);
+    // To the ring wherever it is now, pinching it, then pulled back and out
+    this.root.updateMatrixWorld(true);
+    this.root.worldToLocal(this.ring.getWorldPosition(this.tmp));
+    this.tmp.add(PlantHands.RING_OFF.set(-0.03 - 0.12 * tug, 0.0 - 0.02 * tug, 0.05 + 0.08 * tug));
+    this.handL.position.lerpVectors(PlantHands.REST_L, this.tmp, lIn);
+    this.handL.rotation.set(0, 0, 0);
+    this.handL.visible = lIn > 0.03;
+    if (tug > 0.5 && this.ring.visible) this.ring.visible = false;
+    this.arms.set('r', h, mixGrip(GRENADE_HOLD, GRENADE_OPEN, smooth((t - 1.2) / 0.12)));
+    this.arms.update();
   }
 }
 
@@ -370,6 +380,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const L = this.level;
     this.scene.add(L.group);
     this.world = this.createPhysicsWorld(L.colliders);
+    // What moves (the carts, the crates, the lift and its gates) stays out of the physics world
+    L.colliders.push(...L.dyn);
     this.checkpoint = Math.min(this.from, L.checkpoints.length - 1);
     const start = L.checkpoints[this.checkpoint];
     this.player = new FPSPlayer(start.pos.clone(), start.yaw, input, audio, bus);
@@ -418,6 +430,10 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.moverRails.push(c);
     }
     if (this.checkpoint >= 3) this.callMover(true);
+    if (this.checkpoint >= 5) this.releaseLadder(true);
+    this.liftY = this.checkpoint === 5 ? L.lift.yTop : L.lift.yBottom;
+    this.liftAt = this.checkpoint === 5 ? 'top' : 'bottom';
+    this.updateRides(0);
     this.syncMover();
     this.buildFlies();
     this.buildRats();
@@ -576,7 +592,17 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.player.pitch = 0;
     this.player.camera.fov = 74;
     this.player.camera.updateProjectionMatrix();
-    this.setObjective(this.checkpoint === 0 ? 'FIND A WAY UP OUT OF THE SEWERS' : 'CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT');
+    this.setObjective(
+      [
+        'FIND A WAY UP OUT OF THE SEWERS',
+        'CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT',
+        'PULL THE LEVER',
+        'DROP ONTO A PASSING VAT CART — RIDE IT NORTH',
+        'HOP THE CARGO CRATES ACROSS TO THE LIFT',
+        'TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW',
+        'GET THROUGH THE DOOR AT THE END'
+      ][this.checkpoint] ?? ''
+    );
     this.ctx.input.requestPointerLock();
   }
 
@@ -600,8 +626,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
     if (this.phase === 'tube') this.updateTube(dt);
 
-    // ---- The platform carries whoever's stood on it
+    // ---- The platform carries whoever's stood on it; so do the carts, the crates and the lift
     this.updateMover(dt);
+    if (this.phase !== 'tube') this.updateRides(dt);
 
     // ---- Ladders: on one, he goes up it
     const busy = !!this.climbing || this.phase !== 'play';
@@ -632,8 +659,10 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
     // ---- The route
     this.updateSentries(dt);
+    this.updateOfficeLever(dt);
     this.updateLever(dt);
     this.updateDoor(dt);
+    this.updateSewerDoor(dt);
     this.updateCheckpoints();
     if (this.phase === 'plant') this.updatePlant(dt);
 
@@ -646,6 +675,11 @@ export class Level13Scene extends CombatScene<Level13Data> {
       f.rotation.y += Math.sin(this.t * 0.2 + i) * dt * 0.05;
     }
     this.updateDrops(dt);
+    this.pourT -= dt;
+    if (this.pourT <= 0) {
+      this.pourT = 0.12;
+      for (const at of L.pours) if (at.distanceTo(p.position) < 18) this.splashAt(at, 2, 1.1);
+    }
     for (const c of L.carts) {
       const len = c.to - c.from;
       c.u = (((c.u + (c.speed * dt) / len) % 1) + 1) % 1;
@@ -670,6 +704,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const p = this.player;
     if (!this.playable || !this.ctx.input.isDown('KeyW')) return;
     for (const l of this.level.ladders) {
+      if (l.disabled) continue;
       const d = Math.hypot(p.position.x - l.base.x, p.position.z - l.base.z);
       if (d > 0.75 || p.position.y < l.base.y - 0.3 || p.position.y > l.top - 0.5) continue;
       // Facing it, near enough
@@ -740,9 +775,31 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
   }
 
+  // ------------------------------------------------------------ the maintenance room door
+
+  private sewerDoorK = 0;
+  private sewerDoorWant = false;
+
+  /** Slides open as he comes up to it (from either side), shut again once he has gone. */
+  private updateSewerDoor(dt: number): void {
+    const d = this.level.sewerDoor;
+    const p = this.player.position;
+    const near = Math.hypot(p.x - d.at.x, p.z - d.at.z) < 2.8 && Math.abs(p.y - d.at.y) < 2.5;
+    if (near !== this.sewerDoorWant) {
+      this.sewerDoorWant = near;
+      this.ctx.audio.elevatorDoors(0.75);
+    }
+    this.sewerDoorK = THREE.MathUtils.clamp(this.sewerDoorK + (near ? dt : -dt) / 0.75, 0, 1);
+    d.slab.position.z = THREE.MathUtils.lerp(d.closedZ, d.openZ, smooth(this.sewerDoorK));
+    d.collider.disabled = this.sewerDoorK > 0.55;
+  }
+
   // ------------------------------------------------------------ rats
 
-  private rats: { g: THREE.Group; tail: THREE.Object3D; run: number; u: number; dir: number; speed: number; pause: number; ph: number }[] = [];
+  private rats: { g: THREE.Group; tail: THREE.Object3D; run: number; u: number; dir: number; speed: number; pause: number; ph: number; alive: boolean; deadT: number; knock: THREE.Vector3 }[] = [];
+  /** Invisible boxes a little bigger than each rat, for bullets to find. */
+  private ratHits: THREE.Mesh[] = [];
+  private squeakT = 0;
 
   /** A rat: grey-brown body, pointed head, pink ears and a long tail. */
   private buildRats(): void {
@@ -750,6 +807,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const pink = new THREE.MeshStandardMaterial({ color: 0xc88a84, roughness: 0.7 });
     const eye = new THREE.MeshBasicMaterial({ color: 0x080808 });
     const runs = this.level.ratRuns;
+    const hitGeo = new THREE.BoxGeometry(0.2, 0.17, 0.42);
+    const hitMat = new THREE.MeshBasicMaterial({ visible: false });
     for (let i = 0; i < 11; i++) {
       const g = new THREE.Group();
       const body = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), fur);
@@ -773,7 +832,13 @@ export class Level13Scene extends CombatScene<Level13Data> {
       g.add(body, head, tail);
       g.scale.setScalar(1.3);
       this.scene.add(g);
-      this.rats.push({ g, tail, run: i % runs.length, u: Math.random(), dir: Math.random() < 0.5 ? 1 : -1, speed: 1.4 + Math.random() * 1.4, pause: Math.random() * 2, ph: Math.random() * 10 });
+      const rat = { g, tail, run: i % runs.length, u: Math.random(), dir: Math.random() < 0.5 ? 1 : -1, speed: 1.4 + Math.random() * 1.4, pause: Math.random() * 2, ph: Math.random() * 10, alive: true, deadT: 0, knock: new THREE.Vector3() };
+      const hit = new THREE.Mesh(hitGeo, hitMat);
+      hit.position.y = 0.07;
+      hit.userData.rat = rat;
+      g.add(hit);
+      this.ratHits.push(hit);
+      this.rats.push(rat);
     }
   }
 
@@ -781,11 +846,27 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private updateRats(dt: number): void {
     const runs = this.level.ratRuns;
     const p = this.player.position;
+    this.squeakT -= dt;
     for (const r of this.rats) {
+      if (!r.alive) {
+        // Knocked over by the round, sliding to a stop on its back
+        r.deadT += dt;
+        if (r.deadT < 0.6) {
+          r.g.position.addScaledVector(r.knock, dt);
+          r.knock.multiplyScalar(Math.max(0, 1 - dt * 6));
+          r.g.rotation.z = Math.min(Math.PI, r.g.rotation.z + dt * 12);
+        }
+        r.tail.rotation.y = Math.sin(r.deadT * 30) * 0.3 * Math.max(0, 1 - r.deadT);
+        continue;
+      }
       const [a, b] = runs[r.run];
       const len = a.distanceTo(b);
       const at = Level13Scene.tmpA.lerpVectors(a, b, r.u);
       const near = Math.hypot(at.x - p.x, at.z - p.z) < 3 && Math.abs(at.y - p.y) < 1.5;
+      if (near && this.squeakT <= 0 && Math.random() < dt * 2) {
+        this.squeakT = 0.6;
+        this.ctx.audio.ratSqueak(false, Math.hypot(at.x - p.x, at.z - p.z));
+      }
       if (near) {
         // Away from him, fast
         const ahead = Level13Scene.tmpB.lerpVectors(a, b, THREE.MathUtils.clamp(r.u + 0.02 * r.dir, 0, 1));
@@ -812,8 +893,51 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
   }
 
+  /** A round has hit a rat: down it goes, squealing; a dead one just jolts. */
+  private shootRat(r: Level13Scene['rats'][number], point: THREE.Vector3, dir: THREE.Vector3): void {
+    this.particles.bloodSpray(point, dir, false, SEW_Y);
+    this.decals.place('blood', V(point.x + dir.x * 0.2, SEW_Y + 0.01, point.z + dir.z * 0.2), V(0, 1, 0), 0.3 + Math.random() * 0.15);
+    this.ctx.bus.emit(Events.HitMarker, { lethal: r.alive });
+    if (!r.alive) {
+      r.knock.set(dir.x, 0, dir.z).multiplyScalar(0.6);
+      r.deadT = 0.3;
+      return;
+    }
+    r.alive = false;
+    r.deadT = 0;
+    r.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(2.2);
+    this.ctx.audio.ratSqueak(true, point.distanceTo(this.player.position));
+  }
+
+  /** The player's rounds find the rats first if one is nearer than whatever else is in the way. */
+  protected castBullet(origin: THREE.Vector3, dir: THREE.Vector3, shooter: Enemy | null): THREE.Vector3 {
+    if (shooter === null && origin.y < H1 - 2 && this.ratHits.length) {
+      this.raycaster.set(origin, dir);
+      this.raycaster.far = 60;
+      const rh = this.raycaster.intersectObjects(this.ratHits, false)[0];
+      if (rh) {
+        const wh = this.raycaster.intersectObjects(this.level.shootables, false).find((h) => h.distance > 0.02);
+        if (!wh || rh.distance < wh.distance) {
+          this.shootRat(rh.object.userData.rat, rh.point, dir);
+          return rh.point.clone();
+        }
+      }
+    }
+    return super.castBullet(origin, dir, shooter);
+  }
+
   private buildFlies(): void {
-    const mat = new THREE.PointsMaterial({ color: 0x050505, size: 0.035, sizeAttenuation: true });
+    // Round, and small: square points read as black squares hanging in the air once he is close
+    const c = document.createElement('canvas');
+    c.width = c.height = 32;
+    const g2 = c.getContext('2d')!;
+    const grad = g2.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.55, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g2.fillStyle = grad;
+    g2.fillRect(0, 0, 32, 32);
+    const mat = new THREE.PointsMaterial({ color: 0x060606, size: 0.018, sizeAttenuation: true, map: new THREE.CanvasTexture(c), alphaTest: 0.5 });
     for (const base of this.level.flies) {
       const n = 60;
       const g = new THREE.BufferGeometry();
@@ -975,7 +1099,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.ctx.audio.leverThrow();
       this.later(0.6, () => this.callMover(false));
     }
-    if (this.phase === 'play') this.hud.setPrompt(near ? '[ E ] PULL THE LEVER' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
+    if (this.phase === 'play') this.hud.setPrompt(near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
   }
 
   /** The lever's done: the platform starts over to him (`instant`: already crossed, a restart past it). */
@@ -1051,6 +1175,217 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.moverRails[1].box.set(V(c.x - hx, c.y, c.z + hz - 0.1), V(c.x + hx, c.y + 1.12, c.z + hz));
   }
 
+  // ------------------------------------------------------------ the carts, the crates, the lift
+
+  private pourT = 0;
+  private liftY = 0;
+  private liftAt: 'bottom' | 'top' = 'bottom';
+  private liftState: 'idle' | 'closing' | 'moving' | 'opening' = 'idle';
+  private liftT = 0;
+  private liftGate = 1;
+  private liftArmed = true;
+  private liftInT = 0;
+  private liftCallT = 0;
+  private liftArrived = false;
+  /** The velocity of whatever he was last carried on, given to him when he leaves it. */
+  private carry = new THREE.Vector3();
+  private carrying = false;
+  private static RIDE = 6;
+
+  /**
+   * Everything that moves and can be stood on: the vat carts down their
+   * track, the crates along their monorails, the lift up and down its
+   * shaft. Each is moved, its colliders with it; if he's stood on one he
+   * goes with it (and keeps its speed when he jumps off); if one runs into
+   * him it shoves him.
+   */
+  private updateRides(dt: number): void {
+    const L = this.level;
+    const p = this.player;
+    const moves: { c: Col; d: THREE.Vector3 }[] = [];
+    // The vat carts, north, round through the walls
+    const vl = L.vatLine;
+    const vlen = vl.z1 - vl.z0;
+    for (const c of vl.carts) {
+      const prev = c.z;
+      c.z += vl.speed * dt;
+      if (c.z < vl.z0) c.z += vlen;
+      if (c.z > vl.z1) c.z -= vlen;
+      c.group.position.z = c.z;
+      c.deck.box.set(V(vl.x - 1.2, vl.y - 0.3, c.z - 3.5), V(vl.x + 1.2, vl.y, c.z + 3.5));
+      c.vats.forEach((v, i) => v.box.set(V(vl.x - 0.85, vl.y, c.z + (i ? 2.35 : -2.35) - 0.85), V(vl.x + 0.85, vl.y + 2.45, c.z + (i ? 2.35 : -2.35) + 0.85)));
+      if (Math.abs(c.z - prev) < 5) {
+        const d = V(0, 0, c.z - prev);
+        moves.push({ c: c.deck, d }, ...c.vats.map((v) => ({ c: v, d })));
+      }
+    }
+    // The crates, each line its own way
+    for (const b of L.cargo.boxes) {
+      const l = L.cargo.lines[b.line];
+      const len = l.x1 - l.x0;
+      const prev = b.x;
+      b.x += l.speed * dt;
+      if (b.x < l.x0) b.x += len;
+      if (b.x > l.x1) b.x -= len;
+      b.group.position.x = b.x;
+      b.collider.box.set(V(b.x - 1.0, l.top - 1.3, l.z - 1.0), V(b.x + 1.0, l.top, l.z + 1.0));
+      if (Math.abs(b.x - prev) < 5) moves.push({ c: b.collider, d: V(b.x - prev, 0, 0) });
+    }
+    // The lift
+    const lift = L.lift;
+    const prevY = this.liftY;
+    this.updateLift(dt);
+    lift.car.position.y = this.liftY;
+    lift.floor.box.set(V(lift.x0 + 0.03, this.liftY - 0.2, lift.z0 + 0.03), V(lift.x1 - 0.03, this.liftY, lift.z1 - 0.03));
+    moves.push({ c: lift.floor, d: V(0, this.liftY - prevY, 0) });
+    if (dt <= 0 || !p.alive || this.climbing) {
+      this.carrying = false;
+      return;
+    }
+    // Stood on one of them?
+    const pos = p.position;
+    const on = moves.find((m) => {
+      const b = m.c.box;
+      // His footprint on it at all (he stands on an edge as long as any of him is over it)
+      return pos.x > b.min.x - 0.31 && pos.x < b.max.x + 0.31 && pos.z > b.min.z - 0.31 && pos.z < b.max.z + 0.31 && Math.abs(pos.y - b.max.y) < 0.18 + Math.abs(m.d.y);
+    });
+    if (on) {
+      if (on.d.y) pos.y = on.c.box.max.y + 0.001;
+      if (on.d.x || on.d.z) p.shove(on.d.x, on.d.z, L.colliders);
+      this.carry.set(on.d.x / dt, 0, on.d.z / dt);
+      this.carrying = true;
+    } else if (this.carrying) {
+      // Off it: he keeps going the way it was taking him
+      this.carrying = false;
+      p.velocity.x += this.carry.x;
+      p.velocity.z += this.carry.z;
+    }
+    // Run into by one: shoved along with it
+    const me = new THREE.Box3(V(pos.x - 0.33, pos.y + 0.05, pos.z - 0.33), V(pos.x + 0.33, pos.y + 1.7, pos.z + 0.33));
+    for (const m of moves) {
+      if (m === on || (!m.d.x && !m.d.z) || !me.intersectsBox(m.c.box)) continue;
+      pos.x += m.d.x;
+      pos.z += m.d.z;
+    }
+  }
+
+  /** Is he in the car (well inside it, on its floor)? */
+  private inLift(): boolean {
+    const l = this.level.lift;
+    const p = this.player.position;
+    return p.x > l.x0 + 0.3 && p.x < l.x1 - 0.3 && p.z > l.z0 + 0.3 && p.z < l.z1 - 0.3 && Math.abs(p.y - this.liftY) < 0.35;
+  }
+
+  /**
+   * The lift: stand in the car a moment and the gates fold shut, it goes to
+   * the other floor and they open again. Get out and back in to go back.
+   * Waiting at the gate of the floor it isn't at calls it.
+   */
+  private updateLift(dt: number): void {
+    const l = this.level.lift;
+    const p = this.player.position;
+    const audio = this.ctx.audio;
+    const inside = this.inLift() && this.player.alive;
+    if (this.liftState === 'idle') {
+      if (!inside) this.liftArmed = true;
+      this.liftInT = inside && this.liftArmed ? this.liftInT + dt : 0;
+      // Called from the other floor: he's waiting by the gate there
+      const otherY = this.liftAt === 'bottom' ? l.yTop : l.yBottom;
+      const waiting = Math.abs(p.y - otherY) < 0.4 && p.x > l.x0 - 1 && p.x < l.x1 + 1 && Math.abs(p.z - (l.z0 + l.z1) / 2) < 4.5;
+      this.liftCallT = waiting ? this.liftCallT + dt : 0;
+      if (this.liftInT > 0.8 || this.liftCallT > 0.8) {
+        this.liftState = 'closing';
+        this.liftT = 0;
+        audio.elevatorDoors(0.6);
+      }
+    } else if (this.liftState === 'closing') {
+      this.liftGate = Math.max(0, this.liftGate - dt / 0.6);
+      if (this.liftGate <= 0) {
+        this.liftState = 'moving';
+        this.liftT = 0;
+        audio.elevatorRide(Level13Scene.RIDE);
+      }
+    } else if (this.liftState === 'moving') {
+      this.liftT += dt;
+      const k = smooth(this.liftT / Level13Scene.RIDE);
+      this.liftY = this.liftAt === 'bottom' ? THREE.MathUtils.lerp(l.yBottom, l.yTop, k) : THREE.MathUtils.lerp(l.yTop, l.yBottom, k);
+      if (this.liftT >= Level13Scene.RIDE) {
+        this.liftAt = this.liftAt === 'bottom' ? 'top' : 'bottom';
+        this.liftY = this.liftAt === 'top' ? l.yTop : l.yBottom;
+        this.liftState = 'opening';
+        audio.elevatorDing();
+        audio.elevatorDoors(0.6);
+        if (this.liftAt === 'top' && !this.liftArrived && !this.ladderReleased) this.setObjective('FIND THE RELEASE FOR WALKWAY 7’S LADDER');
+        if (this.liftAt === 'top') this.liftArrived = true;
+        if (this.liftAt === 'bottom' && this.ladderReleased) this.setObjective('CLIMB THE LADDER TO WALKWAY 7');
+      }
+    } else {
+      this.liftGate = Math.min(1, this.liftGate + dt / 0.6);
+      if (this.liftGate >= 1) {
+        this.liftState = 'idle';
+        this.liftArmed = !inside;
+        this.liftInT = 0;
+        this.liftCallT = 0;
+      }
+    }
+    for (const g of l.gates) {
+      const open = g.level === this.liftAt && this.liftState !== 'moving' ? smooth(this.liftGate) : 0;
+      g.pivot.scale.x = 1 - 0.9 * open;
+      g.collider.disabled = open > 0.5;
+    }
+  }
+
+  // ------------------------------------------------------------ the office lever, the drop ladder
+
+  private officePromptOn = false;
+  private ladderReleased = false;
+  private officeLeverT = -1;
+  private ladderDrop = -1;
+
+  private updateOfficeLever(dt: number): void {
+    const L = this.level;
+    const p = this.player;
+    const lv = L.officeLever;
+    this.officePromptOn = this.playable && !this.ladderReleased && Math.hypot(p.position.x - lv.at.x, p.position.z - lv.at.z) < 1.5 && Math.abs(p.position.y - lv.at.y) < 0.5;
+    if (this.officePromptOn && this.ctx.input.wasPressed('KeyE')) {
+      this.releaseLadder(false);
+      this.ctx.audio.leverThrow();
+    }
+    if (this.officeLeverT >= 0 && this.officeLeverT < 1) {
+      this.officeLeverT = Math.min(1, this.officeLeverT + dt / 0.35);
+      lv.pivot.rotation.z = THREE.MathUtils.lerp(Math.PI - 0.5, 0.45, smooth(this.officeLeverT));
+    }
+    // The ladder letting down, far below
+    const dl = L.dropLadder;
+    if (this.ladderDrop >= 0 && this.ladderDrop < 1) {
+      this.ladderDrop = Math.min(1, this.ladderDrop + dt / 2.4);
+      const k = this.ladderDrop * this.ladderDrop;
+      dl.group.position.y = Y6 + dl.raise * (1 - k);
+      if (this.ladderDrop >= 1) {
+        dl.ladder.disabled = false;
+        this.ctx.audio.ladderRung();
+      }
+    }
+  }
+
+  /** The release is pushed up: walkway 7's ladder comes down (`instant` on a restart past it). */
+  private releaseLadder(instant: boolean): void {
+    const L = this.level;
+    this.ladderReleased = true;
+    if (instant) {
+      this.officeLeverT = 1;
+      L.officeLever.pivot.rotation.z = 0.45;
+      this.ladderDrop = 1;
+      L.dropLadder.group.position.y = Y6;
+      L.dropLadder.ladder.disabled = false;
+      return;
+    }
+    this.officeLeverT = 0;
+    this.ladderDrop = 0;
+    if (this.checkpoint < 5) this.checkpoint = 5;
+    this.setObjective('TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW');
+  }
+
   // ------------------------------------------------------------ the door
 
   private doorPromptOn = false;
@@ -1089,8 +1424,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const p = this.player;
     const cam = p.camera;
     const plant = L.door.plant;
-    const stand = V(L.door.front.x + 0.6, L.door.front.y, L.door.front.z);
-    const back = V(L.door.front.x - 6.5, L.door.front.y, L.door.front.z - 3.2);
+    const stand = V(plant.x - 0.45, L.door.front.y, plant.z - 0.12);
+    const back = V(L.door.front.x - 4.5, L.door.front.y, L.door.front.z - 3.2);
     // Where he is: up to it, then backing away, crouching behind the crate's side
     const away = smooth((t - 1.6) / 1.1);
     const at = stand.clone().lerp(back, away);
@@ -1100,7 +1435,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     cam.lookAt(look);
     cam.fov = THREE.MathUtils.lerp(cam.fov, 62, Math.min(1, dt * 3));
     cam.updateProjectionMatrix();
-    this.hands.pose(t);
+    cam.updateMatrixWorld(true);
+    this.hands.pose(t, cam.worldToLocal(plant.clone().add(V(-0.05, 0, 0))));
     if (t >= 0.9 && t - dt < 0.9) this.ctx.audio.grenadePin();
     // Let go: the grenade stays on the door
     if (t >= 1.25 && !this.planted) {
@@ -1108,9 +1444,10 @@ export class Level13Scene extends CombatScene<Level13Data> {
       g.updateWorldMatrix(true, false);
       const wq = new THREE.Quaternion();
       g.getWorldQuaternion(wq);
+      const wp = g.getWorldPosition(new THREE.Vector3());
       g.removeFromParent();
       g.scale.setScalar(1.15);
-      g.position.copy(plant);
+      g.position.set(L.door.plant.x - 0.03, wp.y, wp.z);
       g.quaternion.copy(wq);
       this.scene.add(g);
       this.planted = g;
@@ -1169,11 +1506,15 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (c < 1 && p.x > -61 && Math.abs(p.y - H1) < 0.3) c = 1;
     if (c < 2 && p.x > -2 && p.x < 6 && p.z > 30 && p.z < 38 && Math.abs(p.y - H2) < 0.3) c = 2;
     if (c < 3 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 3;
+    if (c < 4 && Math.abs(p.y - Y6) < 0.3 && p.x > 50 && p.x < 56 && p.z > 6 && p.z < 14) c = 4;
+    if (c < 6 && Math.abs(p.y - H4) < 0.3 && p.x > 50 && p.z < -16) c = 6;
     if (c !== this.checkpoint) {
       this.checkpoint = c;
       if (c === 1) this.setObjective('CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT');
       if (c === 2 && !this.leverPulled) this.setObjective('PULL THE LEVER');
-      if (c === 3) this.setObjective('GET THROUGH THE DOOR AT THE END');
+      if (c === 3) this.setObjective('DROP ONTO A PASSING VAT CART — RIDE IT NORTH');
+      if (c === 4) this.setObjective('HOP THE CARGO CRATES ACROSS TO THE LIFT');
+      if (c === 6) this.setObjective('GET THROUGH THE DOOR AT THE END');
     }
   }
 
@@ -1204,7 +1545,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     // Fog and sky: the sewer's green murk, the hall's grey haze
     const fog = this.scene.fog as THREE.FogExp2;
     // Thick in the sewer; in the hall enough that the next turret along is a shape in the murk
-    const want = inSewer ? 0.06 : 0.036;
+    const inOffice = cam.y > OFFICE_Y - 0.5 && cam.y < OFFICE_Y + 4 && cam.x > 45 && cam.z < -11 && cam.z > -24;
+    const want = inSewer ? 0.06 : inOffice ? 0.016 : 0.036;
     fog.density += (want - fog.density) * Math.min(1, dt * 2);
     const col = (this.scene.background as THREE.Color);
     col.lerp(inSewer ? SEWER_COL : HALL_COL, Math.min(1, dt * 2));
@@ -1222,7 +1564,11 @@ export class Level13Scene extends CombatScene<Level13Data> {
       m.uniforms.fogColor.value.copy(fog.color);
       m.uniforms.fogDensity.value = fog.density;
     }
-    L.vatGlow.forEach((m, i) => (m.emissiveIntensity = 1.2 + 0.4 * Math.sin(this.t * 1.3 + i)));
+    for (const m of L.vatMats) {
+      m.uniforms.uTime.value = this.t;
+      m.uniforms.fogColor.value.copy(fog.color);
+      m.uniforms.fogDensity.value = fog.density;
+    }
     // The fog layers drift
     L.fogLayers.forEach((f, i) => {
       const map = (f.material as THREE.MeshBasicMaterial).map;

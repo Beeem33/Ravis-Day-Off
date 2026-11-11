@@ -5059,6 +5059,19 @@ export class AudioManager {
     for (let t = 0.3; t < seconds; t += 0.25 + Math.random() * 0.3) this.burst(out, { at: t, D: 0.12, type: 'highpass', f: 2500, gain: 0.08 + Math.random() * 0.08, attack: 0.01 });
   }
 
+  /** A rat: a chirp or two (`dying`: a long falling squeal). */
+  ratSqueak(dying = false, dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, dying ? 0.45 : 0.18, 0.25);
+    const n = dying ? 2 : 1 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      const at = i * (0.08 + Math.random() * 0.05);
+      const f = 2700 + Math.random() * 1300;
+      this.partial(out, { at, D: dying ? 0.32 : 0.07, type: 'sine', f, f1: dying ? f * 0.5 : f * 1.2, gain: 0.5, attack: 0.004 });
+      this.partial(out, { at, D: dying ? 0.28 : 0.06, type: 'triangle', f: f * 1.52, f1: dying ? f * 0.8 : f * 1.7, gain: 0.14, attack: 0.004 });
+    }
+  }
+
   /** His boot on a ladder rung. */
   ladderRung(): void {
     if (!this.ctx) return;

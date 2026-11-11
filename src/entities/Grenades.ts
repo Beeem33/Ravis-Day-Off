@@ -29,18 +29,18 @@ const RELEASE_AT = 0.66;
 const PICK_RANGE = 1.35;
 
 // The grenade in his palm, the fingers round it, held up in front (as the montage had it)
-const HOLD = grip([0.012, -0.064, 0.06], [-0.22, 0.22, -0.95], [0, 1, 0.15], [0.32, -0.45, 0.83], {
+export const GRENADE_HOLD = grip([0.012, -0.064, 0.06], [-0.22, 0.22, -0.95], [0, 1, 0.15], [0.32, -0.45, 0.83], {
   fingers: [[46, 50, 30], [48, 54, 32], [50, 56, 32], [54, 58, 34]],
   thumb: [0.38, 0.42, 0.3]
 });
 // Let go: the fingers open as it leaves
-const OPEN = grip([0.012, -0.066, 0.066], [-0.22, 0.12, -0.97], [0, 1, 0.08], [0.32, -0.45, 0.83], {
+export const GRENADE_OPEN = grip([0.012, -0.066, 0.066], [-0.22, 0.12, -0.97], [0, 1, 0.08], [0.32, -0.45, 0.83], {
   fingers: [[10, 12, 6], [8, 10, 5], [10, 12, 6], [14, 16, 8]],
   thumb: [0.12, 0.18, 0.12],
   spread: 6
 });
 // The left hand pinching the ring
-const PIN = grip([0.0, -0.03, 0.07], [0.3, 0.1, -0.95], [-0.6, 0, -0.2], [-0.3, -0.4, 0.6], {
+export const GRENADE_PIN = grip([0.0, -0.03, 0.07], [0.3, 0.1, -0.95], [-0.6, 0, -0.2], [-0.3, -0.4, 0.6], {
   fingers: [[60, 60, 30], [70, 70, 35], [80, 75, 35], [85, 80, 35]],
   thumb: [0.6, 0.4, 0.3]
 });
@@ -90,7 +90,7 @@ export class GrenadeThrow {
     this.nade = grenade();
     this.hand.add(this.nade);
     this.ring = this.nade.children[2];
-    this.arms = new FirstPersonArms(this.root, camera).set('r', this.hand, HOLD).set('l', this.pinHand, PIN);
+    this.arms = new FirstPersonArms(this.root, camera).set('r', this.hand, GRENADE_HOLD).set('l', this.pinHand, GRENADE_PIN);
     this.root.visible = false;
   }
 
@@ -146,7 +146,7 @@ export class GrenadeThrow {
       this.onPin?.();
     }
     const open = smooth((t - RELEASE_AT + 0.02) / 0.06);
-    this.arms.set('r', h, mixGrip(HOLD, OPEN, open));
+    this.arms.set('r', h, mixGrip(GRENADE_HOLD, GRENADE_OPEN, open));
     if (!this.released && t >= RELEASE_AT) {
       this.released = true;
       const at = this.handWorld();

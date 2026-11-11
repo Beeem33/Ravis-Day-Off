@@ -37,6 +37,21 @@ const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
 // Dev builds: the pose, to tune it live from the console
 if (import.meta.env.DEV) (window as unknown as { __menuPose: unknown }).__menuPose = RECLINE;
 
+/** The phone at his ear and the hand on it: head-frame placement of the phone, the wrist off it, the elbow's pole (model frame). */
+const PHONE = {
+  ear: V3(-0.1, 0.075, 0.0),
+  up: V3(0.0, 1, -0.55),
+  out: V3(-1, 0, -0.35),
+  push: 0.0,
+  drop: 0.04,
+  // The fist round the base, the lid and the antenna up out of it at his ear
+  wrist: V3(0.058, -0.105, 0.0),
+  alongOut: -0.15,
+  // Out to his right, resting on the ring: the ear's down level with his shoulder, so the elbow has to go somewhere
+  elbow: V3(-1, 0.1, 0.2)
+};
+if (import.meta.env.DEV) (window as unknown as { __phone: unknown }).__phone = PHONE;
+
 /** His grip on the phone: fingers round the back of it, thumb on the side. */
 const PHONE_HAND: HandShape = { fingers: [[30, 45, 30], [38, 50, 32], [45, 55, 34], [52, 60, 36]], thumb: [0.35, 0.3, 0.2] };
 
@@ -687,22 +702,22 @@ export class MainMenuScene implements GameScene {
     const inHead = (v: THREE.Vector3): THREE.Vector3 => v.clone().applyQuaternion(R).add(headP);
     const dirHead = (v: THREE.Vector3): THREE.Vector3 => v.clone().applyQuaternion(R).normalize();
     // The phone: lid's screen against his right ear, base angled down to the corner of his mouth
-    const ear = inHead(V3(-0.1, 0.075, 0.0));
-    const up = dirHead(V3(0.0, 1, -0.55));
-    const out = dirHead(V3(-1, 0, 0.1));
+    const ear = inHead(PHONE.ear);
+    const up = dirHead(PHONE.up);
+    const out = dirHead(PHONE.out);
     const fwd = new THREE.Vector3().crossVectors(out, up).normalize();
     const upO = new THREE.Vector3().crossVectors(fwd, out).normalize();
     // Phone frame: its +Y up the phone (lid end), +Z out of its face; the face is to his head (−out)
     this.phone.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(upO, out.clone().negate()), upO, out.clone().negate()));
-    this.phone.position.copy(ear).addScaledVector(out, 0.03).addScaledVector(upO, -0.04);
+    this.phone.position.copy(ear).addScaledVector(out, PHONE.push).addScaledVector(upO, -PHONE.drop);
     // The hand round the back of the base: the wrist below and outside it
     // The hand cupped under and behind it, fingers up its back: the wrist just under the jaw line
-    const wrist = this.phone.position.clone().addScaledVector(upO, -0.1).addScaledVector(out, 0.03).addScaledVector(fwd, 0.015);
+    const wrist = this.phone.position.clone().addScaledVector(out, PHONE.wrist.x).addScaledVector(upO, PHONE.wrist.y).addScaledVector(fwd, PHONE.wrist.z);
     rig.seat({
       ...trunk,
       arms: {
         // Elbow down and out in front of his chest, the forearm up to his ear — not cocked up behind his head
-        r: { wrist, along: upO.clone().addScaledVector(out, -0.15).normalize(), palm: out.clone().negate(), elbow: fwd.clone().multiplyScalar(0.35).add(V3(-1, -0.7, 0)).normalize(), shape: PHONE_HAND },
+        r: { wrist, along: upO.clone().addScaledVector(out, PHONE.alongOut).normalize(), palm: out.clone().negate(), elbow: PHONE.elbow.clone().normalize(), shape: PHONE_HAND },
         // Elbow up and out onto the top of the tube, not sunk into it
         l: { wrist: V3(0.38, 0.34, 0.03), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.85, 0.45, -0.4).normalize(), shape: HAND.relaxed }
       }

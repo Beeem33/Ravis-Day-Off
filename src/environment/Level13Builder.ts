@@ -1657,7 +1657,10 @@ export class Level13Builder {
     this.coverStack(-48.5, H1, -31.5, 1.0);
     this.coverStack(-42, H1, -31.5, 1.0);
     // ---- 1: the first junction, crates and a vat on it
-    this.platform(-36, -36, -28, -27, H1, 'nw');
+    this.platform(-36, -36, -28, -27, H1, 'n');
+    // West rail either side of where S1 comes in, not across it
+    this.walkRail(-36, -36, -35.92, -32.1, H1);
+    this.walkRail(-36, -29.9, -35.92, -27, H1);
     this.crate(-35, H1, -35, 1.1, 1.1);
     this.crate(-35, H1, -35, 0.9, 2.1);
     this.crate(-29.3, H1, -34.8, 1.1, 1.1);
@@ -1672,7 +1675,9 @@ export class Level13Builder {
     ladders.push({ base: V(-32, H1, 5.0), face: Math.PI, top: H2, off: V(-32, H2, 7.2) });
     this.ladderMesh(V(-32, H1, 5.8), Math.PI, H2 - H1 + 1.1, 'lamp', true);
     // ---- 3: above, and the span east that's been broken
-    this.platform(-36, 5.8, -28, 13, H2, 'nws');
+    this.platform(-36, 5.8, -28, 13, H2, 'ws');
+    this.walkRail(-36, 5.8, -32.8, 5.88, H2);
+    this.walkRail(-31.2, 5.8, -28, 5.88, H2);
     this.walkway({ x0: -28, z0: 9, x1: -19.5, z1: 11, y: H2, rails: '+' });
     // The gap: the walkway's gone between x −19.5 and −9.5, and its ends torn and hanging
     this.add(M.darkSteel, (() => {
@@ -1710,7 +1715,10 @@ export class Level13Builder {
     this.coverStack(2.45, H2, 18.5, 0.9);
     this.coverStack(2.45, H2, 25, 0.9);
     // ---- 5: the lever platform, and the gap east of it
-    this.platform(-2, 30, 6, 38, H2, 'nws');
+    this.platform(-2, 30, 6, 38, H2, 'ws');
+    // North rail either side of where S4 comes in, not across it
+    this.walkRail(-2, 30, 1, 30.08, H2);
+    this.walkRail(3, 30, 6, 30.08, H2);
     const leverAt = V(-1.2, H2, 34);
     const lever = this.leverPost(leverAt);
     // The platform it calls: parked against 6 to start with
@@ -1732,7 +1740,9 @@ export class Level13Builder {
     ladders.push({ base: V(30, H2, 39.0), face: Math.PI, top: H3, off: V(30, H3, 41.4) });
     this.ladderMesh(V(30, H2, 39.8), Math.PI, H3 - H2 + 1.1, 'lamp', true);
     // ---- 7, and the last long walkway east under the turret
-    this.platform(26, 40, 34, 48, H3, 'nws');
+    this.platform(26, 40, 34, 48, H3, 'ws');
+    this.walkRail(26, 40, 29.2, 40.08, H3);
+    this.walkRail(30.8, 40, 34, 40.08, H3);
     this.vat(27.4, H3, 46.5, 0.8, 2.0, 0x7dff5a);
     // S5: east to where it stops, over the vat line (buildVatLine marks its end)
     this.walkway({ x0: 34, z0: 42.9, x1: 40.6, z1: 45.1, y: H3, rails: 'both' });
@@ -1970,16 +1980,17 @@ export class Level13Builder {
     // The dispatch tower they come out of, floor to roof
     // A dispatch house, not a slab: five metres deep (the crates go right inside it), out to just short of
     // the alighting platform, so from the cargo platform there's no seeing round the back of it
-    this.add(M.concrete, span(44.5, HALL.bottom, -3, xa, HALL.top, 8.3), true, 6);
-    for (const y of [H2 + 10, 80]) this.add(M.darkConcrete, span(44.2, y, -3.3, xa + 0.3, y + 1.2, 8.6), false, 6);
+    this.add(M.concrete, span(44.5, HALL.bottom, -5, xa, HALL.top, 8.3), true, 6);
+    for (const y of [H2 + 10, 80]) this.add(M.darkConcrete, span(44.2, y, -5.3, xa + 0.3, y + 1.2, 8.6), false, 6);
     const sign = warnPlate('CARGO DISPATCH 3', 2.6, 0.5);
     sign.rotation.y = Math.PI / 2;
     sign.position.set(xa + 0.02, 67.6, 2);
     this.group.add(sign);
     const lines: Level13Data['cargo']['lines'] = [
-      { z: 4.4, top: 59.95, speed: 1.5 },
-      { z: 1.8, top: 60.2, speed: -1.4 },
-      { z: -0.8, top: 60.0, speed: 1.35 }
+      // 1.5 m gaps: platform edge 6 | crates 4.5..2.5 | 1.0..-1.0 | -2.5..-4.5 | landing -6
+      { z: 3.5, top: 59.95, speed: 1.5 },
+      { z: 0, top: 60.2, speed: -1.4 },
+      { z: -3.5, top: 60.0, speed: 1.35 }
     ].map((l) => ({ ...l, x0: xa - 1.5, x1: xb + 1.5 }));
     const crateMats = [0, 1, 2, 3, 4].map((i) => new THREE.MeshStandardMaterial({ map: cargoTexture(i), roughness: 0.6, metalness: 0.3 }));
     const topMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.55, metalness: 0.4 });
@@ -2061,8 +2072,8 @@ export class Level13Builder {
     const base = yb - 0.8;
     const top = yt + 4.6;
     // The landings either side at the bottom
-    this.platform(50, -8, 56, -2.4, yb, 'we');
-    this.add(M.hazard, span(50, yb, -2.7, 56, yb + 0.012, -2.4), false, 0.5);
+    this.platform(50, -8, 56, -6, yb, 'we');
+    this.add(M.hazard, span(50, yb, -6.3, 56, yb + 0.012, -6), false, 0.5);
     this.platform(50, -16, 56, -11, yb, 'we');
     this.walkRail(50, -16, 52.9, -15.92, yb);
     this.walkRail(54.1, -16, 56, -15.92, yb);

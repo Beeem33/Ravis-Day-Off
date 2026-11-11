@@ -11,7 +11,7 @@ import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
-import { Arsenal, loadoutFor } from '../entities/Arsenal';
+import { KnifeTwirlViewmodel } from '../entities/KnifeTwirlViewmodel';
 import type { Enemy } from '../entities/Enemy';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -307,7 +307,8 @@ class PlantHands {
 // ================================================================ scene
 
 export class Level13Scene extends CombatScene<Level13Data> {
-  private arsenal!: Arsenal;
+  /** All he has down here: a karambit, twirled round his finger for something to do. */
+  private knife!: KnifeTwirlViewmodel;
   private hud!: FPSHUD;
   private phase: Phase = 'play';
   private phaseT = 0;
@@ -388,25 +389,13 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.player.camera.far = 600;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
-    this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
+    this.ragdollOnDeath(() => null);
 
     this.particles = new ParticleManager(this.scene);
     this.flashPool = new MuzzleFlashPool(this.scene, 4);
     this.decals = new BloodDecalSystem(this.scene);
-    this.arsenal = new Arsenal(
-      {
-        player: this.player,
-        audio,
-        bus,
-        world: this.world,
-        particles: this.particles,
-        castBullet: (o, d) => this.castBullet(o, d, null),
-        addDebris: (m, b) => this.addDebris(m, b),
-        dropMagazine: (p) => this.dropMagazine(p)
-      },
-      loadoutFor('hq'),
-      'rifle'
-    );
+    this.knife = new KnifeTwirlViewmodel(this.player.camera);
+    this.knife.onSlash = () => this.knifeSlash();
     this.hands = new PlantHands(this.player.camera);
 
     // Light: a cold wash from the roof over the hall, very little in the sewer but its lamps
@@ -448,7 +437,6 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
     this.hud.setCounter(null);
     this.hud.setGrenades(1);
-    this.hud.setAmmo(...this.arsenal.ammoReadout());
     this.buildUI();
 
     this.unsubs.push(
@@ -632,9 +620,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
     // ---- Ladders: on one, he goes up it
     const busy = !!this.climbing || this.phase !== 'play';
-    this.arsenal.preUpdate(dt, input, { canSwitch: this.playable && input.pointerLocked, busy });
-    const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching;
-    p.aiming = aiming;
+    p.aiming = false;
     if (this.phase === 'play' || this.dead || this.falling) {
       if (this.climbing) this.climb(dt);
       else this.catchLadder();
@@ -644,18 +630,10 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.wade(dt);
     this.checkFall(dt);
 
-    // ---- The guns (they do nothing to the turrets but spark)
-    this.arsenal.updateViewmodels(dt, aiming);
-    const canFire = this.playable && input.pointerLocked && !busy;
-    this.arsenal.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
-    if (this.phase === 'play') {
-      const targetFov = 74 - this.arsenal.zoomFov;
-      if (Math.abs(p.camera.fov - targetFov) > 0.01) {
-        p.camera.fov = targetFov;
-        p.camera.updateProjectionMatrix();
-      }
-    }
-    this.hud.setAiming(this.arsenal.aimBlend > 0.5);
+    // ---- The knife: twirled round and round; put away on a ladder, in a cutscene, planting the charge
+    this.knife.stow += ((busy ? 1 : 0) - this.knife.stow) * Math.min(1, dt * 8);
+    if (this.playable && input.pointerLocked && !busy && input.consumeClick() && this.knife.slash()) this.ctx.audio.punchSwish();
+    this.knife.update(dt, p);
 
     // ---- The route
     this.updateSentries(dt);
@@ -907,6 +885,24 @@ export class Level13Scene extends CombatScene<Level13Data> {
     r.deadT = 0;
     r.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(2.2);
     this.ctx.audio.ratSqueak(true, point.distanceTo(this.player.position));
+  }
+
+  /** The slash landing: a rat in reach in front of him, low down, gets it. */
+  private knifeSlash(): void {
+    const p = this.player.position;
+    const f = this.player.forwardDir();
+    for (const r of this.rats) {
+      if (!r.alive) continue;
+      const at = r.g.position;
+      const dx = at.x - p.x;
+      const dz = at.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1.7 || Math.abs(at.y - p.y) > 1.2) continue;
+      if ((dx * f.x + dz * f.z) / Math.max(d, 1e-4) < 0.45) continue;
+      this.shootRat(r, at.clone().setY(at.y + 0.08), V(dx, 0, dz).normalize());
+      this.ctx.audio.knifeStab();
+      return;
+    }
   }
 
   /** The player's rounds find the rats first if one is nearer than whatever else is in the way. */

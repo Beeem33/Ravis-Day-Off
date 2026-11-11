@@ -29,8 +29,9 @@ const RECLINE: Pick<SeatPose, 'hips' | 'lean' | 'legs'> = {
   lean: [-50, -8, -6, -2, 26, 22],
   legs: {
     // Legs crossed at the ankle out over the front of the ring: the right over the left
-    l: { ankle: V3(-0.05, 0.08, 0.85), knee: V3(0.15, 1, 0.3), turn: -6 },
-    r: { ankle: V3(0.06, 0.17, 0.87), knee: V3(-0.15, 1, 0.3), turn: 10 }
+    // (ankles drawn in and up so the knees bend up over the tube: thighs and calves rest on it, not through it)
+    l: { ankle: V3(-0.05, 0.31, 0.69), knee: V3(0.1, 1, 0.05), turn: -6 },
+    r: { ankle: V3(0.06, 0.39, 0.71), knee: V3(-0.1, 1, 0.05), turn: 10 }
   }
 };
 // Dev builds: the pose, to tune it live from the console
@@ -702,7 +703,8 @@ export class MainMenuScene implements GameScene {
       arms: {
         // Elbow down and out in front of his chest, the forearm up to his ear — not cocked up behind his head
         r: { wrist, along: upO.clone().addScaledVector(out, -0.15).normalize(), palm: out.clone().negate(), elbow: fwd.clone().multiplyScalar(0.35).add(V3(-1, -0.7, 0)).normalize(), shape: PHONE_HAND },
-        l: { wrist: V3(0.38, 0.32, 0.03), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.8, -0.5, -0.6), shape: HAND.relaxed }
+        // Elbow up and out onto the top of the tube, not sunk into it
+        l: { wrist: V3(0.38, 0.34, 0.03), along: V3(0.25, -0.15, 1).normalize(), palm: V3(0.15, -1, 0).normalize(), elbow: V3(0.85, 0.45, -0.4).normalize(), shape: HAND.relaxed }
       }
     });
   }

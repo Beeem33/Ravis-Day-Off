@@ -46,9 +46,13 @@ export class BloodDecalSystem {
 
   constructor(
     private scene: THREE.Scene,
-    opts: { lit?: boolean } = {}
+    opts: { lit?: boolean; max?: number } = {}
   ) {
     this.lit = opts.lit ?? false;
+    if (opts.max) {
+      this.max = opts.max;
+      this.maxDrips = Math.min(this.maxDrips, Math.round(opts.max / 3));
+    }
     for (let i = 0; i < 4; i++) this.bloodMats.push(this.makeMaterial(this.drawSplatter(i * 7 + 1, false), 0.65));
     for (let i = 0; i < 2; i++) this.poolMats.push(this.makeMaterial(this.drawSplatter(i * 13 + 3, true), 0.58));
     this.holeMat = this.makeMaterial(this.drawBulletHole(), 0.9);

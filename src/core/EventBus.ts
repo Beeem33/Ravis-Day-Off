@@ -92,7 +92,7 @@ export const Events = {
   AirportComplete: 'airport-complete',
   /** Level 11's alternate played out: left on the runway, into the van, the crew suited up. */
   RunwayComplete: 'runway-complete',
-  /** {checkpoint: number} — the HQ assault again: 0 the gate crash, 1 the towers, 2 the advance. */
+  /** {checkpoint: number} — the HQ assault again: 0 the gate crash, 1 the towers, 2 the advance, 3 past the breach. */
   RestartHQ: 'restart-hq',
   /** In under the stairs of the Exterminator Collective's headquarters. */
   HQComplete: 'hq-complete',

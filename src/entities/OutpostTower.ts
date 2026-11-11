@@ -583,9 +583,9 @@ export class OutpostTower {
     } else if (P) {
       // Burning where it lies
       this.fireT -= dt;
-      const near = this.camDist < 110;
+      const near = this.camDist < 70;
       if (near) for (const p of this.fires) P.fire(p, 1.9, 1);
-      if (this.camDist < 220) P.smokeColumn(_a.copy(this.fires[0]).setY(2), 1.5, 1);
+      if (this.camDist < 160) P.smokeColumn(_a.copy(this.fires[0]).setY(2), 1.5, 0.6);
       if (this.fireT <= 0) {
         this.fireT = 2 + Math.random() * 3;
         if (near && Math.random() < 0.5) P.sparks(this.fires[0], V(0, 1, 0), 10);

@@ -16,6 +16,38 @@ import type { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { RaviRagdoll, type GunKind } from '../entities/RaviRagdoll';
 
+/**
+ * cannon's sweep-and-prune with its early exit put back. Its own loop asks
+ * whether a pair could collide at all (not both static, not both asleep)
+ * before it asks whether they overlap along the sorted axis — so a pair that
+ * can't never ends the inner loop, and every body is tried against every
+ * other, every step: in a car park full of parked cars and walls that was
+ * most of a frame with everything asleep. Here the overlap along the axis
+ * comes first, against the same AABB bounds the list is sorted by, and the
+ * sweep stops where it should.
+ */
+class SweepAndPrune extends CANNON.SAPBroadphase {
+  collisionPairs(_world: CANNON.World, p1: CANNON.Body[], p2: CANNON.Body[]): void {
+    const bodies = this.axisList;
+    const n = bodies.length;
+    const k = this.axisIndex === 0 ? 'x' : this.axisIndex === 1 ? 'y' : 'z';
+    if (this.dirty) {
+      this.sortList();
+      this.dirty = false;
+    }
+    for (let i = 0; i !== n; i++) {
+      const bi = bodies[i];
+      const top = bi.aabb.upperBound[k];
+      for (let j = i + 1; j < n; j++) {
+        const bj = bodies[j];
+        if (bj.aabb.lowerBound[k] > top) break;
+        if (!this.needBroadphaseCollision(bi, bj)) continue;
+        this.intersectionTest(bi, bj, p1, p2);
+      }
+    }
+  }
+}
+
 /** The parts of a level's data that the shared combat code touches. */
 export interface CombatLevel {
   group: THREE.Group;
@@ -221,7 +253,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
    */
   protected createPhysicsWorld(colliders: Collider[]): CANNON.World {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -19, 0) });
-    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.broadphase = new SweepAndPrune(world);
     world.allowSleep = true;
     // Bodies grip surfaces a bit and barely bounce — ragdolls drape, mags clatter
     world.defaultContactMaterial.friction = 0.45;

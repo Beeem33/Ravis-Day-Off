@@ -23,6 +23,10 @@ export interface DebrisPiece {
   still?: boolean;
   /** Called the first time it hits something, with how hard. Return true if that stops it dead (it bounces no further). */
   onLand?: (p: DebrisPiece, speed: number) => boolean | void;
+  /** Never cleared away, however long it lies there (the big pieces worth looking at). */
+  keep?: boolean;
+  /** Seconds it has lain still. */
+  rest?: number;
 }
 
 const G = 9.8;
@@ -37,7 +41,13 @@ export class Debris {
   constructor(
     private particles: ParticleManager,
     /** The height of whatever is under a point. */
-    private floorAt: (x: number, z: number) => number
+    private floorAt: (x: number, z: number) => number,
+    /**
+     * Seconds a small piece lies still before it sinks away and is gone
+     * (Infinity: never). A long fight otherwise fills the ground with
+     * hundreds of chunks, every one of them drawn every frame.
+     */
+    private expire = Infinity
   ) {}
 
   add(p: DebrisPiece): DebrisPiece {
@@ -106,6 +116,19 @@ export class Debris {
       if (p.smoke && p.smoke > 0) {
         p.smoke -= dt;
         if (puff) this.particles.exhaust(o.position, _up);
+      }
+    }
+    if (this.expire === Infinity) return;
+    for (let i = this.pieces.length - 1; i >= 0; i--) {
+      const p = this.pieces[i];
+      if (!p.still || p.keep || p.size > 1.2) continue;
+      p.rest = (p.rest ?? 0) + dt;
+      if (p.rest < this.expire) continue;
+      // Into the ground, then gone
+      p.obj.position.y -= dt * 0.3;
+      if (p.rest > this.expire + 2.5) {
+        p.obj.removeFromParent();
+        this.pieces.splice(i, 1);
       }
     }
   }

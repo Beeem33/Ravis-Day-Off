@@ -714,7 +714,7 @@ export class CarSystem implements ICarSystem {
       }
       const o = f.car.origin;
       const d = this.playerDist(o);
-      if (d > 130) continue;
+      if (d > 90) continue;
       // Up through where the cabin was, whichever way up it's lying
       const at = _v2.set(o.x, o.y + 0.9, o.z);
       const k = Math.min(1, f.t / 6);

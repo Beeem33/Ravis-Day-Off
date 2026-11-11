@@ -63,7 +63,16 @@ export interface HQData extends CombatLevel {
   };
   trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; list: Sway[]; flutter: { value: number }; gust: { value: number } };
   stair: { x0: number; x1: number; zFoot: number; zTop: number; topY: number };
-  hole: { centre: THREE.Vector3; trigger: THREE.Box3; light: THREE.PointLight; spark: THREE.Vector3 };
+  hole: {
+    centre: THREE.Vector3;
+    trigger: THREE.Box3;
+    light: THREE.PointLight;
+    spark: THREE.Vector3;
+    /** The wall where the hole will be, whole until it's blown: drawn, solid, and its box in the occluders. */
+    wall: { mesh: THREE.Mesh; collider: Collider; occluder: THREE.Object3D | null };
+    /** What's left once it's blown — the broken edge, the rubble, the rebar, the scorch, the lamp: hidden till then. */
+    dressing: THREE.Object3D[];
+  };
   /** Under the stairs: no rain. */
   shelter: THREE.Box3;
   /** The skyscraper's footprint (the lightning likes it). */
@@ -81,7 +90,7 @@ export interface HQData extends CombatLevel {
   /** Where Ravi stands to fight from at each checkpoint: 1 the towers, 2 the advance. */
   starts: { pos: THREE.Vector3; yaw: number }[];
   /** The crew's places: round the van to start, then further up as the towers fall, then on to the stairs. */
-  posts: { van: Post[]; mid: Post[]; far: Post[]; stairs: Post[] };
+  posts: { van: Post[]; mid: Post[]; far: Post[]; stairs: Post[]; charge: Post[] };
   /** Where the Collective's men come from: by the towers, and out of the podium. */
   spawns: { near: HQSpawn[]; far: HQSpawn[]; podium: HQSpawn[] };
   /** Oil drums left burning about the lot: where the flames go. */
@@ -430,6 +439,7 @@ export class HQBuilder {
     const waypoints = this.waypointGrid(parked, towers);
     this.buildEnv();
     this.boxOccluders();
+    hq.hole.wall.occluder = this.occluderOf.get(hq.hole.wall.collider) ?? null;
 
     const look = (x: number, z: number): THREE.Vector3 => V(x, 1.2, z);
     const post = (x: number, z: number, low: boolean, fx = x * 0.6, fz = z - 40): Post => ({ pos: V(x, 0, z), face: look(fx, fz), low });
@@ -459,7 +469,9 @@ export class HQBuilder {
       starts: [
         { pos: V(2.4, 0, -20.4), yaw: -1.28 },
         { pos: V(2.4, 0, -20.4), yaw: -1.28 },
-        { pos: V(4, 0, -90), yaw: 0 }
+        { pos: V(4, 0, -90), yaw: 0 },
+        // Past the breach: in the lot short of the stairs, the hole ahead
+        { pos: V(-6, 0, -140), yaw: 0.1 }
       ],
       posts: {
         // Round the van and behind the first row of cars, the towers ahead
@@ -501,6 +513,16 @@ export class HQBuilder {
           post(2, -132.8, true, 20, -186),
           post(-8.1, -156.95, false, -20, -186),
           post(35.1, -156.95, false, 40, -186)
+        ],
+        // The charge once the wall's blown: in round both sides of the stairs, up to the podium
+        charge: [
+          post(-16.5, -172, false, -30, -186),
+          post(16.5, -172, false, 30, -186),
+          post(-22, -179, false, -34, -186),
+          post(22, -179, false, 34, -186),
+          post(-10.5, -165.5, false, -20, -186),
+          post(10.5, -165.5, false, 20, -186),
+          post(-28, -170, false, -40, -186)
         ]
       },
       spawns: {
@@ -1355,6 +1377,13 @@ export class HQBuilder {
     for (const sx of [-1, 1]) back.push(box(0.3, HOLE.h + 1, 4.6, HOLE.x + sx * (HOLE.w / 2 + 1.5), 0, PODIUM_Z - 3.5));
     const voidMesh = new THREE.Mesh(merge(back), M.void);
     this.group.add(voidMesh);
+    // Until it's blown, the wall's whole across where the hole will be
+    const patch = new THREE.Mesh(box(HOLE.w, HOLE.h, 1.2, HOLE.x, 0, PODIUM_Z - 0.6), M.stone);
+    worldUVs(patch.geometry, 6);
+    const patchCollider: Collider = { box: this.collide(hx0, 0, PODIUM_Z - 1.2, hx1, HOLE.h, PODIUM_Z) };
+    this.colliders.push(patchCollider);
+    this.solid(patch, { occlude: true });
+    const dressing: THREE.Object3D[] = [];
     // The broken edge round the hole: lumps of concrete standing proud, bent rebar
     const r = lcg(66);
     const lumps: THREE.BufferGeometry[] = [];
@@ -1384,6 +1413,7 @@ export class HQBuilder {
     rubble.castShadow = true;
     rubble.receiveShadow = true;
     this.group.add(rubble);
+    dressing.push(rubble);
     const rebar: THREE.BufferGeometry[] = [];
     for (let k = 0; k < 9; k++) {
       const x = hx0 + 0.2 + r() * (HOLE.w - 0.4);
@@ -1391,7 +1421,9 @@ export class HQBuilder {
       const pts = [V(x, y + 0.3, PODIUM_Z - 0.6), V(x + (r() - 0.5) * 0.3, y - 0.2, PODIUM_Z - 0.2), V(x + (r() - 0.5) * 0.6, y - 0.6 - r() * 0.5, PODIUM_Z + 0.2 + r() * 0.3)];
       rebar.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 6, 0.014, 4, false));
     }
-    this.group.add(new THREE.Mesh(merge(rebar), new THREE.MeshStandardMaterial({ color: 0x4a2e22, roughness: 0.7, metalness: 0.5 })));
+    const rebarMesh = new THREE.Mesh(merge(rebar), new THREE.MeshStandardMaterial({ color: 0x4a2e22, roughness: 0.7, metalness: 0.5 }));
+    this.group.add(rebarMesh);
+    dressing.push(rebarMesh);
     // Scorching on the wall round it
     const scorch = new THREE.Mesh(
       new THREE.PlaneGeometry(7, 5.5),
@@ -1399,6 +1431,7 @@ export class HQBuilder {
     );
     scorch.position.set(HOLE.x, HOLE.h * 0.6, PODIUM_Z + 0.01);
     this.group.add(scorch);
+    dressing.push(scorch);
     const holeLight = new THREE.PointLight(0xffa860, 14, 16, 1.6);
     holeLight.position.set(HOLE.x + 2.6, HOLE.h + 0.9, PODIUM_Z + 1.4);
     this.group.add(holeLight);
@@ -1413,6 +1446,9 @@ export class HQBuilder {
     lamp.add(cage, bulb, flex);
     lamp.rotation.z = 0.35;
     this.group.add(lamp);
+    dressing.push(lamp);
+    for (const d of dressing) d.visible = false;
+    holeLight.intensity = 0;
 
     // ---- The stairs: steps on a slab, the slab on piers
     const steps: THREE.BufferGeometry[] = [];
@@ -1606,7 +1642,9 @@ export class HQBuilder {
         centre,
         trigger: new THREE.Box3(V(hx0 + 0.2, -1, PODIUM_Z - 1.6), V(hx1 - 0.2, 3, PODIUM_Z + 0.8)),
         light: holeLight,
-        spark: V(hx1 - 0.3, HOLE.h - 0.2, PODIUM_Z + 0.1)
+        spark: V(hx1 - 0.3, HOLE.h - 0.2, PODIUM_Z + 0.1),
+        wall: { mesh: patch, collider: patchCollider, occluder: null },
+        dressing
       },
       shelter,
       entrance,
@@ -1751,6 +1789,9 @@ export class HQBuilder {
    * never drawn, only raycast. Raycasting the drawn meshes meant testing
    * every triangle of the wall, the stairs and the podium on every look.
    */
+  /** The occluder box made for each collider (the scene takes the wall's away when it's blown). */
+  private occluderOf = new Map<Collider, THREE.Object3D>();
+
   private boxOccluders(): void {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshBasicMaterial();
@@ -1766,6 +1807,7 @@ export class HQBuilder {
       m.scale.copy(size);
       m.updateMatrixWorld(true);
       this.occluders.push(m);
+      this.occluderOf.set(c, m);
     }
   }
 

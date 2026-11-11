@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { HQBuilder, type HQData, type Post, type HQSpawn } from '../environment/HQBuilder';
@@ -52,7 +53,7 @@ import { track, smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
  * (the towers, without the gate again; or the advance, the towers still down).
  */
 
-type Phase = 'arrive' | 'towers' | 'advance' | 'talk' | 'hole' | 'ending';
+type Phase = 'arrive' | 'towers' | 'advance' | 'breach' | 'hole' | 'ending';
 
 /** What it takes to put one of the Collective's men down. */
 const AGENT_HP = 80;
@@ -72,7 +73,11 @@ const ROCKET_HURT = 5.0;
 /** A rocket landing this close to a tower's frame brings it down. */
 const TOWER_REACH = 2.8;
 /** How many of the Collective's dead stay on the ground before the oldest is cleared away. */
-const MAX_CORPSES = 6;
+const MAX_CORPSES = 4;
+/** How many of the advance's men have to go down before the crew blow the wall (of ADVANCE_QUOTA). */
+const BREACH_KILLS = 15;
+/** Where Sanjay fires the rocket at the wall from: off the side of the stairs, a clear line in under them. */
+const SANJAY_FIRE = new THREE.Vector3(-24, 0, -176);
 /** How often the dead drop a grenade. */
 const DROP_CHANCE = 0.34;
 /** How many of the Collective come at them in each phase, all of whom have to go down before they can move on. */
@@ -188,7 +193,6 @@ export class HQScene extends CombatScene<HQData> {
   // ---- Third-person Ravi for the cutscenes
   private ravi: RaviRig | null = null;
   private raviGun: THREE.Group | null = null;
-  private stage = new THREE.Vector3();
 
   // ---- UI
   private ui!: HTMLElement;
@@ -199,6 +203,8 @@ export class HQScene extends CombatScene<HQData> {
   private letterbox!: HTMLElement;
   private card!: HTMLElement;
   private skipEl!: HTMLElement;
+  private marker!: HTMLElement;
+  private markerText!: HTMLElement;
   private lines: (Line & { at: number })[] = [];
   private lineT = 0;
   private barkT = 8;
@@ -239,17 +245,17 @@ export class HQScene extends CombatScene<HQData> {
     this.scene.add(L.group);
     this.world = this.createPhysicsWorld(L.colliders);
 
-    const start = L.starts[Math.min(this.from, 2)];
+    const start = L.starts[Math.min(this.from, 3)];
     this.player = new FPSPlayer(start.pos.clone(), start.yaw, input, audio, bus);
     this.player.camera.far = 3200;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
 
-    this.particles = new ParticleManager(this.scene, { smoke: 1500 });
+    this.particles = new ParticleManager(this.scene, { smoke: 1000 });
     this.flashPool = new MuzzleFlashPool(this.scene, 3);
     Enemy.flashPool = this.flashPool;
-    this.decals = new BloodDecalSystem(this.scene);
-    this.debrisFx = new Debris(this.particles, () => 0);
+    this.decals = new BloodDecalSystem(this.scene, { max: 180 });
+    this.debrisFx = new Debris(this.particles, () => 0, 15);
 
     this.buildLights();
     this.buildEnvironmentMap();
@@ -326,7 +332,10 @@ export class HQScene extends CombatScene<HQData> {
       if (e === 'reloadStart') audio.launcherReload(0.2);
     };
     this.rockets = new Rockets(this.scene, this.particles, (a, b) => this.rocketHit(a, b));
-    this.rockets.onBurst = (pos, dir) => this.explode(pos, dir, 'rocket');
+    this.rockets.onBurst = (pos, dir) => {
+      if (this.phase === 'breach' && !this.breached && pos.distanceTo(this.level.hole.centre) < 4.5) this.breachWall(false);
+      this.explode(pos, dir, 'rocket');
+    };
     this.nadeVm = new GrenadeThrow(this.player.camera);
     this.nadeVm.onPin = () => audio.grenadePin();
     this.nadeVm.onRelease = (from) => {
@@ -391,7 +400,8 @@ export class HQScene extends CombatScene<HQData> {
 
     if (this.from === 0) this.startArrival();
     else if (this.from === 1) this.startTowers(true);
-    else this.startAdvance(true);
+    else if (this.from === 2) this.startAdvance(true);
+    else this.startPastBreach();
   }
 
   exit(): void {
@@ -564,6 +574,9 @@ export class HQScene extends CombatScene<HQData> {
       <div class="hq-subs" style="position:absolute;left:50%;bottom:15vh;transform:translateX(-50%);max-width:70vw;text-align:center;
         color:#f2f2ee;font-size:17px;letter-spacing:.5px;text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.9);opacity:0;transition:opacity .25s"></div>
       <div class="intro-skip">[ ENTER ] SKIP</div>
+      <div class="hq-marker" style="position:absolute;left:0;top:0;display:none;color:#ffd85e;font-size:12px;letter-spacing:2px;
+        text-align:center;text-shadow:0 1px 3px #000,0 0 8px rgba(0,0,0,.8);pointer-events:none;white-space:nowrap">
+        <span></span><div style="font-size:20px;line-height:1">▼</div></div>
       <div class="intro-fade" style="opacity:1"></div>
       <div class="hq-whiteout" style="position:absolute;inset:0;pointer-events:none;opacity:0;
         background:radial-gradient(ellipse at center, rgba(255,246,220,1) 0%, rgba(255,170,80,0.85) 60%, rgba(255,120,40,0.6) 100%)"></div>
@@ -582,6 +595,8 @@ export class HQScene extends CombatScene<HQData> {
     this.letterbox = el.querySelector('.intro-letterbox')!;
     this.card = el.querySelector('.hq-card')!;
     this.skipEl = el.querySelector('.intro-skip')!;
+    this.marker = el.querySelector('.hq-marker')!;
+    this.markerText = this.marker.querySelector('span')!;
     this.whiteout = el.querySelector('.hq-whiteout')!;
   }
 
@@ -632,7 +647,7 @@ export class HQScene extends CombatScene<HQData> {
   }
 
   private get cutscene(): boolean {
-    return this.phase === 'arrive' || this.phase === 'talk' || this.phase === 'ending';
+    return this.phase === 'arrive' || this.phase === 'breach' || this.phase === 'ending';
   }
 
   private get playable(): boolean {
@@ -1299,18 +1314,14 @@ export class HQScene extends CombatScene<HQData> {
       this.crewAI.forEach((c, i) => c.goTo(L.posts.stairs[i], i % 2 ? 2 : 0.2));
       this.say([{ who: 'MARCUS', text: 'Stairs ahead! Get to the columns!', dur: 2.4 }]);
     }
-    // In to the stairs only once the lot's clear
-    const left = this.enemiesLeft();
-    this.showLeft(left, p.z < -150 ? 'CLEAR THE AREA BEFORE YOU GO IN' : 'ADVANCE TO THE EC HEADQUARTERS — CLEAR THEM OUT');
-    this.mopUp(dt, left, ADVANCE_QUOTA - this.advanceSpawned);
-    if (left === 0 && this.leftShown !== -2) {
-      this.leftShown = -2;
-      this.hud.setCounter(null);
-      this.setObjective('OBJECTIVE: GET TO THE FOOT OF THE STAIRS');
-      this.say([{ who: 'SANJAY', text: "That's the last of them! Ravi — the stairs!", dur: 2.6 }]);
-    }
-    if (left === 0 && p.z < -157.5 && this.player.alive) this.startTalk();
+    // Fight through most of them and the crew blow a way in; how many more, on the HUD
+    const need = Math.max(0, BREACH_KILLS - this.advKills);
+    this.showLeft(need, 'FIGHT YOUR WAY TO THE EC HEADQUARTERS');
+    this.mopUp(dt, this.agents.filter((a) => a.e.alive).length, ADVANCE_QUOTA - this.advanceSpawned);
+    if (need === 0 && this.player.alive) this.startBreach();
   }
+
+  private advKills = 0;
 
   /**
    * The last few of them, once there are no more to come: they come for him
@@ -1343,134 +1354,224 @@ export class HQScene extends CombatScene<HQData> {
   private mopLeft = -1;
   private mopT = 0;
 
-  // ---------------------------------------------------------------- 4 talk
+  // -------------------------------------------------------------- 4 the breach
 
-  /** Where the talk happens: beside the foot of the stairs, the hole in sight under them. */
-  private startTalk(): void {
-    const L = this.level;
-    this.setPhase('talk');
+  private breachLauncher: THREE.Group | null = null;
+  private breached = false;
+
+  /**
+   * The wall goes: Sanjay, off the side of the stairs with the spare tube on
+   * his shoulder, puts a rocket into it; the wall under the stairs blows out;
+   * he yells at Ravi to go for it, and the crew charge the building.
+   */
+  private startBreach(): void {
+    this.setPhase('breach');
     this.cinema(true);
     this.player.cinematic = true;
     this.player.aiming = false;
     this.launcherUp = false;
-    this.stage.set(-16.2, 0, -166.5);
-    // Sanjay comes running from his post
+    this.camInit = false;
+    this.hud.setCounter(null);
+    this.setObjective('');
+    // That's the last of them coming: from here the crew take it to the rest
+    this.advanceSpawned = ADVANCE_QUOTA;
     const s = this.sanjay;
-    const ai = this.crewAI[0];
-    ai.state = 'idle';
-    const mark = V(this.stage.x + 0.5, 0, this.stage.z - 1.35);
-    s.position.set(this.stage.x + 6.5, 0, this.stage.z + 5.5);
+    const hole = this.level.hole.centre;
+    this.crewAI[0].state = 'idle';
+    this.paths.stop(s);
+    s.position.copy(SANJAY_FIRE);
+    s.yaw = Math.atan2(-(hole.x - SANJAY_FIRE.x), -(hole.z - SANJAY_FIRE.z));
+    s.root.rotation.y = s.yaw;
+    s.slingWeapon(true);
     s.setAiming(false);
-    s.slingWeapon(false);
-    s.setRestCarry(true);
-    this.paths.walk(s, [s.position.clone(), mark], 4.6, this.stage.clone().setY(1.5));
-    s.setRun(true);
-    // Ravi, seen
-    if (this.ravi) {
-      this.ravi.root.visible = true;
-      this.ravi.root.position.copy(this.stage);
-      this.ravi.root.rotation.y = Math.atan2(mark.x - this.stage.x, mark.z - this.stage.z);
-    }
+    s.setRestCarry(false);
+    s.setRun(false);
+    s.setWalk(0);
+    // On his right shoulder, the tube down his line of sight
+    const lm = launcherModel();
+    lm.group.position.set(0.17, 1.5, -0.12);
+    s.root.add(lm.group);
+    this.breachLauncher = lm.group;
+    s.pose = { handR: V(0.17, 1.33, -0.24), handL: V(0.1, 1.39, -0.55), curl: 0.9 };
+    s.setHeadLook(hole.clone().setY(1.5));
     this.say([
-      { who: 'SANJAY', text: 'Ravi! Over here — look, under the stairs.', dur: 2.6 },
-      { who: 'SANJAY', text: "Wall's blown clean through. That's your way in.", dur: 2.6 },
-      { who: 'SANJAY', text: "Sneak in. We'll keep them busy out here and work our way in after you.", dur: 3.4 },
-      { who: 'RAVI', text: 'Got it. Don’t die out here.', dur: 2.2 }
-    ], 0.5);
+      { who: 'SANJAY', text: 'The wall under the stairs — heads down!', dur: 2.6 },
+      { who: 'SANJAY', text: "That's our way in! Ravi — GO! We'll hold them off out here!", dur: 3.4 },
+      { who: 'RAVI', text: 'Going!', dur: 1.6 }
+    ], 0.1);
   }
 
-  private updateTalk(dt: number): void {
+  private updateBreach(dt: number): void {
     const t = this.phaseT;
     const L = this.level;
-    const s = this.sanjay;
-    this.paths.update(dt);
-    if (!this.paths.has(s)) s.setRun(false);
     const hole = L.hole.centre;
-    const st = this.stage;
-    const r = this.ravi;
-    const sanjayHead = s.position.clone().setY(1.6);
-    // Sanjay: points at the hole while he talks about it, then at Ravi
-    const pointing = t > 3.0 && t < 7.4;
-    if (pointing) {
-      const d = hole.clone().sub(s.position).setY(0).normalize();
-      // In his body frame: his right +X, forward −Z
-      const c = Math.cos(s.yaw);
-      const sn = Math.sin(s.yaw);
-      const bx = d.x * c - d.z * sn;
-      const bz = d.x * sn + d.z * c;
-      const reach = smooth((t - 3.0) / 0.4) * (1 - smooth((t - 7.0) / 0.4));
-      // With his left: the rifle's in his right
-      s.pose = { handL: V(-0.18 + bx * 0.62 * reach, 1.36 + 0.06 * reach - 0.45 * (1 - reach), bz * 0.62 * reach - 0.1), curl: 0.55 };
-      s.setHeadLook(t < 5.2 ? hole.clone().setY(1.5) : r ? r.root.position.clone().setY(1.6) : null);
-    } else {
-      s.pose = null;
-      s.setHeadLook(r ? r.root.position.clone().setY(1.6) : null);
+    const s = this.sanjay;
+    const at = SANJAY_FIRE;
+    // The rocket, at the wall
+    if (t >= 0.75 && t - dt < 0.75 && this.breachLauncher) {
+      this.breachLauncher.updateWorldMatrix(true, false);
+      const from = this.breachLauncher.localToWorld(V(0, 0, -0.7));
+      const dir = hole.clone().setY(1.5).sub(from).normalize();
+      this.rockets.fire(from.clone().addScaledVector(dir, 0.2), dir, 34);
+      this.ctx.audio.rocketLaunch(from.distanceTo(this.player.camera.position));
+      this.particles.muzzleFlash(from, dir);
+      this.flashPool.flash(from, 25);
+      const rear = this.breachLauncher.localToWorld(V(0, 0, 0.5));
+      this.particles.tyreSmoke(rear, dir.clone().negate().setY(0.4), 0.35);
     }
-    if (!this.paths.has(s)) s.faceToward(st, dt, 5);
-    // Ravi: looking at Sanjay, then at the hole when he's shown it, then a nod and a thumb up
-    const nod = t > 10.4 && t < 11.6 ? Math.sin(((t - 10.4) / 1.2) * Math.PI * 2) * 11 : 0;
-    const thumb = smooth((t - 10.6) / 0.35) * (1 - smooth((t - 12.0) / 0.4));
-    const lookHole = t > 4.0 && t < 7.6;
-    this.poseRavi({ nod, thumb, look: lookHole ? hole : sanjayHead });
+    // However it went, the wall's down by now
+    if (t >= 2.2 && !this.breached) this.breachWall(false);
+    // He drops the tube and brings his rifle up; the crew go for it
+    if (t >= 2.9 && t - dt < 2.9) this.crewCharge();
+    if (t >= 4.2 && t - dt < 4.2) {
+      const lm = this.breachLauncher;
+      if (lm) {
+        const wp = lm.getWorldPosition(new THREE.Vector3());
+        const wq = lm.getWorldQuaternion(new THREE.Quaternion());
+        lm.removeFromParent();
+        this.scene.add(lm);
+        lm.position.copy(wp);
+        lm.quaternion.copy(wq);
+        this.debrisFx.add({ obj: lm, vel: V(0.5, 0.8, 0.4), spin: V(1.5, 0.5, 2), size: 0.25 });
+        this.breachLauncher = null;
+      }
+      s.pose = null;
+      s.setHeadLook(null);
+      s.slingWeapon(false);
+      this.crewAI[0].goTo(L.posts.charge[0], 0);
+    }
     // ---- Shots
     const A = HQScene.tmpA;
     const B = HQScene.tmpB;
-    const rp = st;
-    if (t < 2.6) {
-      // Over his shoulder: Sanjay running in
-      A.set(rp.x - 0.9, 1.75, rp.z + 1.7);
-      B.copy(s.position).setY(1.3);
-      this.setCam(A, B, 52, t < 0.05 ? 1 : 0.12);
-    } else if (t < 4.6) {
-      // The two of them, from the side
-      A.set(rp.x - 3.6, 1.55, rp.z - 0.4);
-      B.set(rp.x + 0.25, 1.45, rp.z - 0.7);
-      this.setCam(A, B, 46);
-    } else if (t < 7.6) {
-      // What he's pointing at: the hole, under the stairs — the camera in under the slab, pushing in on it
-      const k = smooth((t - 4.6) / 3);
-      A.set(hole.x + 6.2, 1.25, hole.z + 10.5).lerp(V(hole.x + 3.4, 1.35, hole.z + 6.2), k);
-      B.copy(hole).setY(1.45);
-      this.setCam(A, B, THREE.MathUtils.lerp(46, 40, k));
-    } else if (t < 10.2) {
-      // Sanjay, close, finishing it
-      A.set(rp.x + 0.2, 1.62, rp.z - 0.3);
-      B.copy(sanjayHead).setY(1.58);
-      this.setCam(A, B, 38);
-    } else if (t < 12.4) {
-      // Ravi, close: the nod, the thumb
-      A.set(rp.x + 1.1, 1.58, rp.z - 1.4);
-      B.set(rp.x, 1.45, rp.z);
-      this.setCam(A, B, 36);
+    if (t < 1.05) {
+      // Over Sanjay's shoulder: the wall in under the stairs, the tube on his shoulder
+      const f = HQScene.tmpC.copy(hole).sub(at).setY(0).normalize();
+      A.copy(at).addScaledVector(f, -1.8).add(V(-f.z * 0.8, 1.9, f.x * 0.8));
+      B.copy(hole).setY(1.4);
+      this.setCam(A, B, 50);
+    } else if (t < 3.6) {
+      // The wall itself, from in under the stairs: the rocket comes in, it blows, the hole's there
+      const k = smooth((t - 1.05) / 2.5);
+      A.set(hole.x + 6.6, 1.5, hole.z + 10.5).lerp(V(hole.x + 5.6, 1.4, hole.z + 8.8), k);
+      B.copy(hole).setY(1.6);
+      this.setCam(A, B, 48);
+    } else if (t < 7.4) {
+      // The crew going for it: low on the plaza beside the stairs, looking back at the columns as they
+      // break cover, come through the gaps and run past, the camera turning after them
+      const k = smooth((t - 3.9) / 3.2);
+      A.set(-21 + 0.6 * k, 1.3, -168 - 0.8 * k);
+      B.set(THREE.MathUtils.lerp(-15, -19, k), THREE.MathUtils.lerp(1.6, 1.3, k), THREE.MathUtils.lerp(-158, -175, k));
+      this.setCam(A, B, 56);
     } else {
-      // Back behind his eyes, looking at the hole
-      this.endTalk();
+      this.endBreach();
     }
   }
 
-  private endTalk(): void {
+  /** Everyone up and at the building, in two waves. */
+  private crewCharge(): void {
+    this.crewAI.forEach((c, i) => {
+      if (c.e === this.sanjay) return;
+      c.goTo(this.level.posts.charge[i], i % 2 ? 0.5 : 0);
+    });
+  }
+
+  /** The wall under the stairs, blown: gone from where it stood, the broken hole there instead. */
+  private breachWall(instant: boolean): void {
+    if (this.breached) return;
+    this.breached = true;
+    const H = this.level.hole;
+    H.wall.mesh.visible = false;
+    H.wall.collider.disabled = true;
     const L = this.level;
+    const oi = H.wall.occluder ? L.occluders.indexOf(H.wall.occluder) : -1;
+    if (oi >= 0) L.occluders.splice(oi, 1);
+    const si = L.shootables.indexOf(H.wall.mesh);
+    if (si >= 0) L.shootables.splice(si, 1);
+    for (const d of H.dressing) d.visible = true;
+    if (instant) return;
+    // Out of the wall: chunks of it thrown out across the plaza, dust, a lot of noise
+    const c = H.centre.clone().setY(1.6);
+    this.particles.explosion(c, 5);
+    this.particles.dust(H.centre.clone().setY(0.2), 4.5, 2);
+    this.particles.sparks(c, V(0, 0.4, 1), 40);
+    const chunk = new THREE.DodecahedronGeometry(0.3, 0);
+    const mat = (H.wall.mesh.material as THREE.Material);
+    for (let k = 0; k < 16; k++) {
+      const m = new THREE.Mesh(chunk, mat);
+      const sz = 0.5 + Math.random() * 1.2;
+      m.scale.setScalar(sz);
+      m.position.set(c.x + (Math.random() - 0.5) * 2.6, 0.4 + Math.random() * 2.4, c.z + 0.3);
+      this.scene.add(m);
+      this.debrisFx.add({ obj: m, vel: V((Math.random() - 0.5) * 9, 2 + Math.random() * 5, 5 + Math.random() * 9), spin: V((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10), size: 0.5 * sz, smoke: k < 4 ? 3 : 0 });
+    }
+    this.ctx.audio.wallCollapse();
+    this.ctx.audio.explosion(c.distanceTo(this.player.camera.position));
+    this.shake = Math.max(this.shake, 0.8);
+  }
+
+  private endBreach(): void {
     this.setPhase('hole');
-    if (this.ravi) this.ravi.root.visible = false;
     const p = this.player;
-    p.position.copy(this.stage);
-    const look = yawPitchTo(p.eyePosition(), L.hole.centre.clone().setY(1.4));
-    p.yaw = look.yaw;
-    p.pitch = look.pitch;
     p.cinematic = false;
     this.camInit = false;
     p.camera.fov = 74;
     p.camera.updateProjectionMatrix();
     this.cinema(false);
-    this.arsenal.equip('rifle', 1);
-    // Sanjay back to the fight
-    const s = this.sanjay;
-    s.pose = null;
-    s.setHeadLook(null);
-    s.setRestCarry(false);
-    this.crewAI[0].goTo(L.posts.stairs[0], 0.2);
-    this.setObjective('GET INSIDE: THE HOLE UNDER THE STAIRS');
+    this.setObjective('GET INSIDE: THE BREACH UNDER THE STAIRS');
     this.ctx.input.requestPointerLock();
+  }
+
+  /** A restart past the breach: the wall's down, the crew are up by the building, a few of them still about. */
+  private startPastBreach(): void {
+    this.startAdvance(true);
+    this.advanceSpawned = ADVANCE_QUOTA;
+    let keep = 2;
+    for (const a of this.agents) {
+      if (!a.e.alive) continue;
+      if (keep-- > 0) continue;
+      a.ai?.dispose();
+      a.ai = null;
+      a.e.root.removeFromParent();
+      a.e.alive = false;
+      for (const p of a.e.parts) {
+        const k = this.level.shootables.indexOf(p);
+        if (k >= 0) this.level.shootables.splice(k, 1);
+      }
+    }
+    this.agents = this.agents.filter((a) => a.e.alive);
+    this.crew.forEach((e, i) => this.crewAI[i].placeAt(this.level.posts.charge[i]));
+    this.breachWall(true);
+    const s = this.level.starts[3];
+    this.player.position.copy(s.pos);
+    this.player.yaw = s.yaw;
+    this.setPhase('hole');
+    this.hud.setCounter(null);
+    this.setObjective('GET INSIDE: THE BREACH UNDER THE STAIRS');
+  }
+
+  /** Over the breach once it's open, wherever he's looking: a marker and how far. */
+  private updateMarker(): void {
+    const on = this.phase === 'hole' && this.player.alive;
+    this.marker.style.display = on ? '' : 'none';
+    if (!on) return;
+    const cam = this.player.camera;
+    const at = HQScene.tmpA.copy(this.level.hole.centre).setY(2.0);
+    const d = Math.round(Math.hypot(at.x - this.player.position.x, at.z - this.player.position.z));
+    const v = HQScene.tmpB.copy(at).project(cam);
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    let x = (v.x * 0.5 + 0.5) * W;
+    let y = (-v.y * 0.5 + 0.5) * H;
+    // Behind him: pinned to the bottom edge, on the side to turn to
+    if (v.z > 1) {
+      x = v.x > 0 ? 40 : W - 40;
+      y = H * 0.75;
+    }
+    x = THREE.MathUtils.clamp(x, 40, W - 40);
+    y = THREE.MathUtils.clamp(y, 70, H - 70);
+    this.marker.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px) translate(-50%, -100%)`;
+    const text = `BREACH ${d}m`;
+    if (this.markerText.textContent !== text) this.markerText.textContent = text;
   }
 
   // ---------------------------------------------------------------- 5 in
@@ -1655,11 +1756,13 @@ export class HQScene extends CombatScene<HQData> {
           const k = this.level.shootables.indexOf(p);
           if (k >= 0) this.level.shootables.splice(k, 1);
         }
-        if (!this.jetOf.has(e)) this.corpses.push(a);
+        this.corpses.push(a);
       }
     }
     // The oldest go once there are more than a few: drawn and simulated, they were costing every frame
     while (this.corpses.length > MAX_CORPSES) {
+      // (a jetpack man still coming down, his pack burning, isn't done with yet)
+      if (this.jets.some((j) => j.e === this.corpses[0].e)) break;
       const old = this.corpses.shift()!;
       old.e.removeCorpse();
       this.agentOf.delete(old.e);
@@ -2255,8 +2358,8 @@ export class HQScene extends CombatScene<HQData> {
       case 'advance':
         this.updateAdvance(dt);
         break;
-      case 'talk':
-        this.updateTalk(dt);
+      case 'breach':
+        this.updateBreach(dt);
         break;
       case 'hole':
         this.updateHole();
@@ -2372,13 +2475,13 @@ export class HQScene extends CombatScene<HQData> {
     this.updateJets(dt);
     this.updateBooms(dt);
     if (this.phase !== 'arrive') {
-      if (this.phase !== 'talk' && this.phase !== 'ending') {
+      if (this.phase !== 'ending') {
         this.paths.update(dt);
         this.crewOut();
       }
       for (let i = 0; i < this.crew.length; i++) {
         const c = this.crewAI[i];
-        if (this.phase === 'talk' && c.e === this.sanjay) continue;
+        if (this.phase === 'breach' && c.e === this.sanjay && this.phaseT < 4.2) continue;
         if (!this.cs.get(c.e)!.out) continue;
         c.update(dt);
       }
@@ -2389,6 +2492,7 @@ export class HQScene extends CombatScene<HQData> {
     this.debrisFx.update(dt);
     this.updateBarks(dt);
     this.updateSubs();
+    this.updateMarker();
 
     // ---- The world
     this.updateWeather(dt);
@@ -2397,11 +2501,17 @@ export class HQScene extends CombatScene<HQData> {
     this.decals.update(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
-    this.world.step(1 / 60, dt, 3);
+    // Nothing awake (a lot full of parked cars and settled bodies, most of the time): nothing to step
+    if (this.physicsAwake()) this.world.step(1 / 60, dt, 3);
     this.cars.suspendCrush = cut;
     this.cars.update(dt, this.player, this.player.camera);
     this.applyShake(dt);
     input.endFrame();
+  }
+
+  private physicsAwake(): boolean {
+    for (const b of this.world.bodies) if (b.type === CANNON.Body.DYNAMIC && b.sleepState !== CANNON.Body.SLEEPING) return true;
+    return false;
   }
 
   /** Away it goes: from the tube that's next, at whatever's under the crosshair. */
@@ -2488,14 +2598,7 @@ export class HQScene extends CombatScene<HQData> {
     this.scene.environmentIntensity = 0.6 + 1.6 * f;
     // Blast light dying away; borrowed in the talk as a soft fill on their faces
     this.blastK = Math.max(0, this.blastK - dt * 3.2);
-    if (this.phase === 'talk' && this.blastK < 0.05) {
-      this.blast.color.setHex(0xc8d6ff);
-      this.blast.position.copy(this.stage).add(HQScene.tmpC.set(1.6, 2.3, -2.2));
-      this.blast.intensity = 9;
-    } else {
-      this.blast.color.setHex(0xffa04a);
-      this.blast.intensity = 700 * this.blastK * this.blastK;
-    }
+    this.blast.intensity = 700 * this.blastK * this.blastK;
     // The trees in the wind
     const tr = L.trees;
     tr.flutter.value = this.t;
@@ -2529,14 +2632,15 @@ export class HQScene extends CombatScene<HQData> {
     L.beams.forEach((b, i) => {
       b.rotation.set(0.35 * Math.sin(this.t * 0.21 + i * 2), 0, 0.3 * Math.cos(this.t * 0.17 + i * 1.3) + (i ? -0.2 : 0.2));
     });
-    // Sparks off the cable by the hole
-    if (Math.random() < dt * 1.6 && L.hole.spark.distanceTo(p) < 60) {
-      this.particles.electricSparks(L.hole.spark, 4 + Math.floor(Math.random() * 6));
-      if (L.hole.spark.distanceTo(p) < 20) this.ctx.audio.electricCrackle(L.hole.spark.distanceTo(p));
-    }
-    // The work lamp by the hole, on a bad connection
-    const flick = Math.sin(this.t * 17) * Math.sin(this.t * 5.3);
-    L.hole.light.intensity = flick < -0.8 ? 2 : 13 + 4 * flick;
+    // Once the wall's blown: sparks off the cable torn out with it, and the work lamp on a bad connection
+    if (this.breached) {
+      if (Math.random() < dt * 1.6 && L.hole.spark.distanceTo(p) < 60) {
+        this.particles.electricSparks(L.hole.spark, 4 + Math.floor(Math.random() * 6));
+        if (L.hole.spark.distanceTo(p) < 20) this.ctx.audio.electricCrackle(L.hole.spark.distanceTo(p));
+      }
+      const flick = Math.sin(this.t * 17) * Math.sin(this.t * 5.3);
+      L.hole.light.intensity = flick < -0.8 ? 2 : 13 + 4 * flick;
+    } else L.hole.light.intensity = 0;
     // The drums burning about the lot
     for (const b of L.burning) {
       const d = b.distanceTo(p);
@@ -2612,6 +2716,7 @@ export class HQScene extends CombatScene<HQData> {
   ): void {
     if (!enemy.alive || this.crew.includes(enemy)) return;
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
+    if (this.phase === 'advance') this.advKills++;
     const a = this.agentOf.get(enemy);
     if (a) {
       a.ai?.dispose();
@@ -2652,7 +2757,8 @@ export class HQScene extends CombatScene<HQData> {
   }
 
   private restart(): void {
-    const cp = this.phase === 'advance' || this.phase === 'talk' || this.phase === 'hole' || this.phase === 'ending' ? 2 : 1;
+    // Past the breach he comes back past it; dying in the advance, back to the start of the advance
+    const cp = this.phase === 'hole' || this.phase === 'ending' ? 3 : this.phase === 'advance' || this.phase === 'breach' ? 2 : 1;
     this.ctx.bus.emit(Events.RestartHQ, { checkpoint: cp });
   }
 

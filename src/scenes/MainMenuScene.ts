@@ -4,6 +4,7 @@ import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { MenuUI } from '../ui/MenuUI';
 import { RaviVisual, HAND, type HandShape, type RaviRig, type SeatPose } from '../entities/RaviVisual';
+import { MenuYacht } from './MenuYacht';
 
 const V3 = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -91,6 +92,8 @@ export class MainMenuScene implements GameScene {
   private bowl!: THREE.Group;
   private steam: THREE.Sprite[] = [];
   private gulls: THREE.Mesh[] = [];
+  /** The crew's party boat, off to his right, nearer than the island. */
+  private yacht = new MenuYacht();
   private waterMat!: THREE.ShaderMaterial;
   private sunDir = V3(-0.35, 0.42, 1).normalize();
   private mouse = { x: 0, y: 0 };
@@ -257,6 +260,10 @@ export class MainMenuScene implements GameScene {
     s.add(back);
     s.add(this.float);
     this.buildIsland();
+    // Broadside on, its party side to him, off to the right
+    this.yacht.group.position.set(-21, 0, 56);
+    this.yacht.group.rotation.y = 0.16;
+    s.add(this.yacht.group);
   }
 
   /**
@@ -769,6 +776,7 @@ export class MainMenuScene implements GameScene {
     f.position.y = 0.05 + h;
     f.rotation.set(sz * 0.55, Math.sin(time * 0.03) * 0.18, -sx * 0.55, 'YXZ');
     this.poseRavi(time);
+    this.yacht.update(Math.min(dt, 0.1), time, waveAt);
 
     // Gulls wheeling over the island, flapping now and then, gliding between
     for (const b of this.gulls) {

@@ -18,7 +18,7 @@ export interface LadyLook {
   shades: boolean;
 }
 
-export type LadyMood = 'chat' | 'dance' | 'wave' | 'lounge' | 'drink';
+export type LadyMood = 'chat' | 'dance' | 'wave' | 'lounge' | 'drink' | 'kiss';
 
 /** A limb hung from a pivot: the upper part, a joint, the lower part. */
 interface Limb {
@@ -122,11 +122,11 @@ export class Lady {
     return { root, joint, end };
   }
 
-  /** Set an arm: `fwd` raises it forward, `out` out to the side, `bend` the elbow. */
-  private arm(i: number, fwd: number, out: number, bend: number): void {
+  /** Set an arm: `fwd` raises it forward, `out` out to the side, `bend` the elbow, `twist` turns it so the elbow folds inward. */
+  private arm(i: number, fwd: number, out: number, bend: number, twist = 0): void {
     const a = this.arms[i];
     const s = i === 0 ? -1 : 1;
-    a.root.rotation.set(-fwd, 0, s * out, 'XZY');
+    a.root.rotation.set(-fwd, s * twist, s * out, 'XZY');
     a.joint.rotation.set(-bend, 0, 0);
   }
 
@@ -170,6 +170,18 @@ export class Lady {
     b.rotation.set(0, 0.06 * sway, 0.04 + 0.02 * sway);
     this.leg(0, 0.02, 0.05);
     this.leg(1, -0.12, 0.25, 0.05);
+    if (this.mood === 'kiss') {
+      // Up on her toes, leaning in to him, arms up round his neck, her head tipped up and to the side
+      const k = Math.sin(t * 1.7);
+      b.position.y = 0.06;
+      b.rotation.set(0.1, 0.04 * sway, 0);
+      this.leg(0, 0.0, 0.05);
+      this.leg(1, -0.25, 0.7);
+      this.arm(0, 1.95, 0.45, 1.4, 1.3);
+      this.arm(1, 1.95, 0.45, 1.4, 1.3);
+      this.head.rotation.set(-0.32 + 0.04 * k, 0.05 * sway, 0.28 + 0.05 * k);
+      return;
+    }
     if (this.mood === 'wave') {
       // Waving out over the water
       this.arm(1, 2.75, 0.55, 0.35 + 0.35 * Math.sin(t * 7));

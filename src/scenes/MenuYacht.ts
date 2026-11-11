@@ -385,9 +385,14 @@ export class MenuYacht {
       this.talkers.push(e);
     }
     // The couple, on the main deck by the two chatting up front (yellow and purple shirts), wrapped round each other
-    const a = this.person(V(8.0, D, -2.2), -Math.PI / 2, 20, 0xef476f, false, false);
+    // Her, up on her toes with her arms round his neck; him, his hands on her waist
+    const her = new Lady({ skin: 0xd4a27c, hair: 0x2a1408, bikini: 0xef476f, long: true, shades: false }, 'kiss');
+    her.root.position.set(8.0, D, -2.2);
+    her.root.rotation.y = Math.PI / 2;
+    this.group.add(her.root);
+    this.ladies.push(her);
     const b = this.person(V(8.37, D, -2.2), Math.PI / 2, 21, 0x118ab2, false, true);
-    this.couple.push(a, b);
+    this.couple.push(b);
     // The DJ and two dancing up top
     this.dj = this.person(V(3.55, SUN, 0), Math.PI / 2, 30, 0x222222, true, true);
     for (let i = 0; i < 2; i++) this.dancers.push(this.person(V(0.9 - i * 1.4, SUN, i ? 1.0 : -1.2), -Math.PI / 2 + (i ? -0.5 : 0.4), 31 + i, [0x7bf05a, 0xff8c42][i], false, false));
@@ -452,23 +457,16 @@ export class MenuYacht {
   }
 
   private updateCouple(time: number): void {
-    const [a, b] = this.couple;
-    if (!a) return;
+    const [b] = this.couple;
+    if (!b) return;
     const sway = Math.sin(time * 0.9);
-    // Her arms round his neck; his hands on her waist. Heads tipped opposite ways, in close
-    a.pose = {
-      handR: V(0.13, 1.47, -0.43),
-      handL: V(-0.13, 1.49, -0.43),
-      curl: 0.4,
-      lean: 0.16,
-      head: new THREE.Euler(0.15, 0.1 * sway, 0.32 + 0.06 * Math.sin(time * 1.7))
-    };
+    // Kissing her: leant in and down to her, head tipped the other way, hands on her waist
     b.pose = {
-      handR: V(0.19, 1.0, -0.33),
-      handL: V(-0.19, 1.02, -0.33),
+      handR: V(0.17, 1.0, -0.22),
+      handL: V(-0.17, 1.02, -0.22),
       curl: 0.5,
-      lean: 0.18,
-      head: new THREE.Euler(0.22, -0.1 * sway, -0.3 + 0.06 * Math.sin(time * 1.7 + 1))
+      lean: -0.22,
+      head: new THREE.Euler(0.12 - 0.03 * Math.sin(time * 1.7), -0.08 * sway, -0.3 + 0.05 * Math.sin(time * 1.7 + 1))
     };
   }
 

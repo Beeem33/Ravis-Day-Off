@@ -24,7 +24,7 @@ import { quadShotgunModel } from '../entities/QuadShotgun';
  */
 
 export const ROOM = { x0: -12, x1: 12, z0: -9, z1: 9, h: 4.6 };
-export const HALL = { x0: 4, x1: 8, z0: 9, z1: 62, h: 3.8, pit: 54.5 };
+export const HALL = { x0: 4, x1: 8, z0: 9, z1: 46, h: 3.8, pit: 46 };
 /** Where he stands to take the gun out of the crate (facing −Z), and the crate. */
 export const STAND = new THREE.Vector3(0.5, 0, -1.02);
 export const CRATE = new THREE.Vector3(0.5, 0, -1.75);
@@ -49,7 +49,8 @@ export interface Level14Data extends CombatLevel {
   rocketDoor: { leaf: THREE.Group; collider: Collider; at: THREE.Vector3 };
   plug: { obj: THREE.Group; collider: Collider; at: THREE.Vector3; edges: THREE.Group };
   hallPieces: HallPiece[];
-  portal: { center: THREE.Vector3; mat: THREE.ShaderMaterial; ring: THREE.Mesh; light: THREE.PointLight; mist: THREE.Sprite[] };
+  /** The fire door at the hallway's end: its leaf (hinged on its left), what blocks it, its middle. */
+  exit: { leaf: THREE.Group; collider: Collider; at: THREE.Vector3 };
   lights: { lamps: THREE.PointLight[]; hall: THREE.PointLight[]; red: THREE.PointLight[] };
   /** The ceiling fittings, which come down with the room. */
   fixtures: THREE.Object3D[];
@@ -625,7 +626,7 @@ export class Level14Builder {
       rocketDoor,
       plug,
       hallPieces: hall.pieces,
-      portal: hall.portal,
+      exit: hall.exit,
       lights: { lamps: this.lamps, hall: hall.lights, red: this.red },
       fixtures: this.fixtures,
       tankGlow: this.tankGlow,
@@ -761,7 +762,7 @@ export class Level14Builder {
     mesh.position.set(x - 0.05, 0.907, z + 0.12);
     this.group.add(mesh);
     // A small warm pool of light on it
-    const l = new THREE.PointLight(0xffd8a0, 3.5, 2.6, 1.6);
+    const l = new THREE.PointLight(0xffd8a0, 3.5, 3, 1.6);
     l.position.set(x + 0.4, 1.35, z);
     this.group.add(l);
     return { mesh, front: V(x - 0.05, 0, z + 1.1) };
@@ -922,10 +923,6 @@ export class Level14Builder {
         this.mesh(new THREE.BoxGeometry(0.04, 0.3, 0.04), M.steel, -s * 0.18, 0.2, -s * 0.12, head).rotation.z = s * 0.8;
         this.fixtures.push(head);
       }
-      const spot = new THREE.SpotLight(0xf2f8ff, 10, 5, 0.7, 0.6, 1.4);
-      spot.position.set(x, ROOM.h - 1.6, z);
-      spot.target.position.set(x, 0.9, z);
-      this.group.add(spot, spot.target);
       this.collide(x - 0.45, 0, z - 1.1, x + 0.45, 0.98, z + 1.1);
     });
   }
@@ -975,9 +972,6 @@ export class Level14Builder {
         body.add(tube);
       }
       this.floaters.push(body);
-      const l = new THREE.PointLight(0x58ff7a, 2.2, 3.4, 1.8);
-      l.position.set(x, 1.4, z);
-      this.group.add(l);
       this.collide(x - 0.62, 0, z - 0.62, x + 0.62, 2.8, z + 0.62);
     });
   }
@@ -1085,45 +1079,182 @@ export class Level14Builder {
 
   // ------------------------------------------------------------- the crate
 
+  /**
+   * The middle of the lab, where the crate used to be: a long steel island
+   * (sink, centrifuge, racks of samples, two screens on arms), a fume hood
+   * hung over it with its duct up into a main run across the ceiling, a
+   * specimen pod at each end with a figure in the fluid, gas bottles behind,
+   * a trolley, cables in a cover across the floor. The gun data is kept (an
+   * empty group, never shown): the scene's restart paths still ask for it.
+   */
   private buildCrate(): Level14Data['crate'] {
     const M = this.M;
-    const { x, z } = CRATE;
-    // A long weapons crate on two skids, lid hinged open toward the far side
-    this.box(1.3, 0.08, 0.7, x, 0.04, z, M.wood, { collide: false });
-    this.box(1.3, 0.5, 0.7, x, 0.33, z, M.crate);
-    this.box(1.16, 0.02, 0.56, x, 0.56, z, M.foam, { shoot: false });
-    for (const s of [-1, 1]) {
-      this.box(1.32, 0.06, 0.04, x, 0.42, z + s * 0.36, M.darkSteel, { shoot: false });
-      this.box(0.04, 0.5, 0.72, x + s * 0.55, 0.33, z, M.darkSteel, { shoot: false });
+    // East of where he stands: the line from there to the south door stays open (the rocket comes through it)
+    const x = 2.0;
+    const z = -2.95;
+    // ---- The island
+    this.box(3.6, 0.86, 1.2, x, 0.43, z, M.cabinet);
+    this.box(3.7, 0.05, 1.32, x, 0.885, z, M.epoxy);
+    this.box(3.5, 0.08, 1.1, x, 0.04, z, M.darkSteel, { shoot: false });
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 6; i++) {
+        const dx = x - 1.5 + i * 0.6;
+        const fz = z + side * 0.605;
+        this.box(0.54, 0.008, 0.01, dx, 0.62, fz, M.darkSteel, { shoot: false });
+        this.box(0.54, 0.008, 0.01, dx, 0.32, fz, M.darkSteel, { shoot: false });
+        this.box(0.14, 0.02, 0.02, dx, 0.72, fz + side * 0.01, M.steel, { shoot: false });
+      }
     }
-    this.collide(x - 0.66, 0, z - 0.36, x + 0.66, 0.58, z + 0.36);
-    const lid = this.box(1.3, 0.05, 0.7, x, 0.95, z - 0.36, M.crate);
-    lid.rotation.x = -1.35;
-    lid.position.set(x, 0.58 + 0.34 * Math.sin(1.35), z - 0.35 - 0.34 * Math.cos(1.35));
-    // Stencils
-    const c = makeCanvas(512, 128);
-    const g = c.getContext('2d')!;
-    g.fillStyle = '#343b2a';
-    g.fillRect(0, 0, 512, 128);
-    g.fillStyle = '#d8d2b4';
-    g.font = 'bold 54px Arial';
-    g.fillText('EC ARMORY', 20, 62);
-    g.font = 'bold 30px Arial';
-    g.fillText('CLASSIFIED — QB-4 PROTOTYPE', 20, 108);
-    const tx = new THREE.CanvasTexture(c);
-    tx.colorSpace = THREE.SRGBColorSpace;
-    const label = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.25), new THREE.MeshStandardMaterial({ map: tx, roughness: 0.8 }));
-    label.position.set(x, 0.33, z + 0.352);
-    this.group.add(label);
-    // The gun in its foam, muzzle to the east, on its side a little
+    this.collide(x - 1.85, 0, z - 0.66, x + 1.85, 0.92, z + 0.66);
+    // The sink and its gooseneck
+    this.box(0.62, 0.02, 0.46, x - 1.15, 0.9, z, M.steel, { shoot: false });
+    this.box(0.54, 0.01, 0.38, x - 1.15, 0.905, z, M.rubber, { shoot: false });
+    this.cyl(0.018, 0.018, 0.42, x - 1.15, 1.12, z - 0.26, M.steel, 8);
+    const neck = this.mesh(new THREE.TorusGeometry(0.1, 0.016, 6, 14, Math.PI), M.steel, x - 1.15, 1.33, z - 0.16);
+    neck.rotation.y = Math.PI / 2;
+    for (const s2 of [-1, 1]) this.box(0.05, 0.03, 0.03, x - 1.15 + s2 * 0.08, 0.95, z - 0.26, M.red, { shoot: false });
+    // The centrifuge: a squat drum, its lid, a panel of lights
+    this.cyl(0.24, 0.26, 0.26, x + 1.15, 1.04, z + 0.05, M.sheet, 22);
+    this.cyl(0.22, 0.22, 0.03, x + 1.15, 1.185, z + 0.05, M.darkSteel, 22);
+    this.box(0.18, 0.08, 0.02, x + 1.15, 1.02, z + 0.3, M.epoxy, { shoot: false });
+    for (let i = 0; i < 3; i++) this.box(0.025, 0.02, 0.01, x + 1.09 + i * 0.05, 1.03, z + 0.312, i === 1 ? M.red : M.lampLens, { shoot: false });
+    // Racks of sample tubes, lit from inside
+    const vialCols = [0x5dff7a, 0x41c8ff, 0xc060ff, 0xffb040];
+    for (const [rx, rz] of [[x + 0.15, z + 0.25], [x + 0.5, z - 0.3]]) {
+      this.box(0.5, 0.06, 0.16, rx, 0.94, rz, M.darkSteel, { shoot: false });
+      for (let i = 0; i < 8; i++) {
+        const c = vialCols[(i + Math.round(rx * 10)) % 4];
+        const m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9, roughness: 0.3 });
+        this.cyl(0.012, 0.012, 0.11, rx - 0.21 + i * 0.06, 1.01, rz, m, 8);
+      }
+    }
+    // Clipboards, a pipette stand, a half-drunk mug
+    for (let i = 0; i < 2; i++) {
+      const cb = this.box(0.23, 0.012, 0.32, x - 0.5 + i * 0.3, 0.915, z + 0.32, M.wood, { shoot: false });
+      cb.rotation.y = 0.2 - i * 0.5;
+      this.box(0.2, 0.004, 0.27, x - 0.5 + i * 0.3, 0.923, z + 0.33, M.sheet, { shoot: false }).rotation.y = 0.2 - i * 0.5;
+    }
+    this.cyl(0.08, 0.08, 0.02, x - 0.15, 0.92, z - 0.35, M.darkSteel, 12);
+    for (let i = 0; i < 4; i++) {
+      const p = this.cyl(0.008, 0.012, 0.24, x - 0.2 + i * 0.03, 1.04, z - 0.35, M.sheet, 6);
+      p.rotation.z = (i - 1.5) * 0.12;
+    }
+    this.cyl(0.045, 0.04, 0.1, x + 1.55, 0.96, z - 0.35, M.sheet, 12);
+    // Two screens on arms off the back edge, facing the room's north half
+    for (const sx of [x - 0.55, x + 0.75]) {
+      this.cyl(0.02, 0.02, 0.55, sx, 1.18, z - 0.5, M.steel, 8);
+      const sc = screen(this.screens.length);
+      this.screens.push(sc);
+      const scr = this.box(0.62, 0.4, 0.04, sx, 1.62, z - 0.48, M.epoxy, { shoot: false });
+      scr.rotation.x = -0.12;
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.34), new THREE.MeshBasicMaterial({ map: sc.tex }));
+      face.position.set(0, 0, 0.022);
+      scr.add(face);
+    }
+    // ---- The fume hood over it, its duct up to the main run across the ceiling
+    const hy = 2.85;
+    this.box(3.1, 0.06, 1.25, x, hy, z, M.steel, { shoot: false });
+    for (const s2 of [-1, 1]) {
+      const skirt = this.box(3.1, 0.35, 0.03, x, hy - 0.17, z + s2 * 0.61, M.steel, { shoot: false });
+      skirt.rotation.x = s2 * 0.25;
+    }
+    const hood = this.mesh(new THREE.CylinderGeometry(0.28, 0.9, 0.45, 4, 1, true), M.steel, x, hy + 0.25, z);
+    hood.rotation.y = Math.PI / 4;
+    hood.scale.set(1.6, 1, 0.75);
+    this.cyl(0.26, 0.26, ROOM.h - hy - 0.5, x, hy + 0.47 + (ROOM.h - hy - 0.5) / 2, z, M.steel, 16);
+    // The lamp strip under the hood, and the chains it hangs on
+    this.box(2.6, 0.03, 0.12, x, hy - 0.04, z, M.lampLens, { shoot: false });
+    for (const s2 of [-1, 1]) for (const s3 of [-1, 1]) this.cyl(0.012, 0.012, ROOM.h - hy, x + s2 * 1.45, hy + (ROOM.h - hy) / 2, z + s3 * 0.55, M.darkSteel, 6);
+    // The main duct across the room, west to east, flanged every couple of metres
+    this.box(ROOM.x1 - ROOM.x0 - 0.6, 0.42, 0.62, 0, ROOM.h - 0.35, z, M.steel, { shoot: false });
+    for (let dx = ROOM.x0 + 1; dx < ROOM.x1; dx += 2.2) this.box(0.06, 0.5, 0.7, dx, ROOM.h - 0.35, z, M.darkSteel, { shoot: false });
+    // ---- A specimen pod at each end: a man-sized glass cylinder, a figure curled in blue fluid
+    const podFluid = new THREE.MeshStandardMaterial({ color: 0x1a4a7a, emissive: 0x2a8cff, emissiveIntensity: 0.9, transparent: true, opacity: 0.55, roughness: 0.1, depthWrite: false });
+    this.tankGlow.push(podFluid);
+    const skin = new THREE.MeshStandardMaterial({ color: 0x6d7f88, roughness: 0.5 });
+    for (const px of [-3.9, x + 2.9]) {
+      this.cyl(0.62, 0.7, 0.4, px, 0.2, z, M.darkSteel, 24);
+      for (let k = 0; k < 6; k++) this.box(0.08, 0.04, 0.02, px + Math.cos(k) * 0.66, 0.3, z + Math.sin(k) * 0.66, k % 2 ? M.red : M.lampLens, { shoot: false });
+      this.cyl(0.62, 0.55, 0.45, px, 2.78, z, M.darkSteel, 24);
+      this.mesh(new THREE.CylinderGeometry(0.55, 0.55, 2.1, 26, 1, true), M.glass, px, 1.45, z);
+      const fluid = new THREE.Mesh(new THREE.CylinderGeometry(0.53, 0.53, 2.0, 26), podFluid);
+      fluid.position.set(px, 1.42, z);
+      fluid.renderOrder = 2;
+      this.group.add(fluid);
+      // The figure: knees up, head down, a mask and tubes
+      const fig = new THREE.Group();
+      fig.position.set(px, 1.35, z);
+      fig.rotation.y = px < x ? 0.9 : -2.2;
+      this.group.add(fig);
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.42, 6, 12), skin);
+      torso.rotation.x = 0.35;
+      fig.add(torso);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), skin);
+      head.position.set(0, 0.42, 0.12);
+      fig.add(head);
+      const mask = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.08, 10), M.rubber);
+      mask.rotation.x = Math.PI / 2;
+      mask.position.set(0, 0.4, 0.24);
+      fig.add(mask);
+      for (const s2 of [-1, 1]) {
+        const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.36, 4, 8), skin);
+        thigh.position.set(s2 * 0.1, -0.3, 0.16);
+        thigh.rotation.x = -1.1;
+        fig.add(thigh);
+        const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.34, 4, 8), skin);
+        shin.position.set(s2 * 0.1, -0.5, 0.36);
+        shin.rotation.x = 0.2;
+        fig.add(shin);
+        const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.4, 4, 8), skin);
+        arm.position.set(s2 * 0.2, 0.0, 0.18);
+        arm.rotation.x = -0.9;
+        arm.rotation.z = s2 * 0.2;
+        fig.add(arm);
+      }
+      for (let k = 0; k < 3; k++) {
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 1.0, 6), M.sheet);
+        tube.position.set((k - 1) * 0.1, 0.9, 0.1);
+        fig.add(tube);
+      }
+      this.floaters.push(fig);
+      // Hoses up out of its cap into the duct
+      for (const s2 of [-1, 1]) this.cyl(0.05, 0.05, ROOM.h - 3.0, px + s2 * 0.25, 3.0 + (ROOM.h - 3.0) / 2, z, M.darkSteel, 8);
+      this.collide(px - 0.72, 0, z - 0.72, px + 0.72, 3.0, z + 0.72);
+    }
+    // ---- Behind the island: gas bottles chained to a post, an IV stand
+    this.box(0.08, 1.7, 0.08, x - 0.4, 0.85, z - 1.25, M.darkSteel, { shoot: false });
+    for (let i = 0; i < 3; i++) {
+      this.cyl(0.13, 0.13, 1.45, x - 0.75 + i * 0.3, 0.73, z - 1.18, i === 1 ? M.yellow : M.steel, 14);
+      this.cyl(0.05, 0.07, 0.12, x - 0.75 + i * 0.3, 1.52, z - 1.18, M.darkSteel, 8);
+    }
+    this.box(1.1, 0.03, 0.03, x - 0.45, 1.1, z - 1.0, M.darkSteel, { shoot: false });
+    this.collide(x - 0.95, 0, z - 1.35, x + 0.0, 1.6, z - 1.0);
+    this.cyl(0.015, 0.015, 1.9, x + 1.6, 0.95, z - 1.2, M.steel, 8);
+    this.cyl(0.25, 0.25, 0.02, x + 1.6, 0.04, z - 1.2, M.darkSteel, 5);
+    this.box(0.14, 0.2, 0.05, x + 1.6, 1.8, z - 1.2, M.glass, { shoot: false });
+    // ---- Floor: a hazard band round the island and a cable run across to the east cabinets
+    for (let i = 0; i < 26; i++) {
+      const k = i / 26;
+      const px = x - 3.8 + k * 7.6;
+      this.box(0.15, 0.004, 0.15, px, 0.003, z - 1.55, i % 2 ? M.yellow : M.rubber, { shoot: false });
+    }
+    this.box(8.3, 0.04, 0.32, x + 6.4, 0.02, z + 0.35, M.yellow, { shoot: false });
+    for (let k = 0; k < 3; k++) this.cyl(0.025, 0.025, 8.3, x + 6.4, 0.045, z + 0.27 + k * 0.08, M.rubber, 6).rotation.z = Math.PI / 2;
+    // ---- A steel trolley by the machines with a tray of instruments and a box of gloves
+    const tx = 6.3;
+    const tz = -0.6;
+    for (const y of [0.35, 0.85]) this.box(0.9, 0.03, 0.5, tx, y, tz, M.steel, { shoot: false });
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      this.cyl(0.015, 0.015, 0.85, tx + sx * 0.42, 0.45, tz + sz * 0.22, M.steel, 6);
+      this.cyl(0.035, 0.035, 0.03, tx + sx * 0.42, 0.035, tz + sz * 0.22, M.rubber, 8).rotation.z = Math.PI / 2;
+    }
+    this.box(0.4, 0.02, 0.25, tx - 0.15, 0.875, tz, M.steel, { shoot: false });
+    for (let i = 0; i < 5; i++) this.box(0.008, 0.006, 0.17, tx - 0.3 + i * 0.07, 0.89, tz, M.steel, { shoot: false });
+    this.box(0.24, 0.1, 0.13, tx + 0.25, 0.92, tz, new THREE.MeshStandardMaterial({ color: 0x4a7ad0, roughness: 0.8 }), { shoot: false });
+    this.collide(tx - 0.46, 0, tz - 0.26, tx + 0.46, 0.9, tz + 0.26);
+    // (the old crate's gun, never placed: kept only so the scene's data stays the same shape)
     const q = quadShotgunModel();
-    q.group.position.set(x, 0.62, z + 0.02);
-    q.group.rotation.set(0, Math.PI / 2, Math.PI / 2 - 0.08);
-    this.group.add(q.group);
-    // A small cold light in the lid, so it catches the eye
-    const l = new THREE.PointLight(0xdfefff, 2.4, 2.2, 1.4);
-    l.position.set(x, 1.1, z - 0.2);
-    this.group.add(l);
+    q.group.visible = false;
     return { gun: q.group, gunPump: q.pump };
   }
 
@@ -1172,8 +1303,9 @@ export class Level14Builder {
     // A red lamp over it
     const lamp = this.box(0.3, 0.12, 0.1, -4, 2.95, z - 0.2, M.red, { shoot: false });
     lamp.userData.alarm = true;
-    const red = new THREE.PointLight(0xff2a1a, 0, 6, 1.6);
-    red.position.set(-4, 2.8, z - 0.6);
+    // The alarm's light: one, in the middle of the ceiling, reaching the whole room
+    const red = new THREE.PointLight(0xff2a1a, 0, 16, 1.3);
+    red.position.set(-1, ROOM.h - 0.6, 1);
     this.group.add(red);
     this.red.push(red);
     return { leaves: [l, r], collider: c, at: V(-4, 0, z) };
@@ -1188,10 +1320,6 @@ export class Level14Builder {
     leaf.position.set(-4.64, 0, z);
     this.group.add(leaf);
     const c = this.collide(-4.65, 0, z - 0.15, -3.35, 2.3, z + 0.15);
-    const red = new THREE.PointLight(0xff2a1a, 0, 5, 1.6);
-    red.position.set(-4, 2.6, z + 0.6);
-    this.group.add(red);
-    this.red.push(red);
     return { leaf, collider: c, at: V(-4, 0, z) };
   }
 
@@ -1230,9 +1358,10 @@ export class Level14Builder {
 
   // ------------------------------------------------------------- the hallway and the portal
 
-  private buildHall(): { pieces: HallPiece[]; portal: Level14Data['portal']; lights: THREE.PointLight[] } {
+  private buildHall(): { pieces: HallPiece[]; exit: Level14Data['exit']; lights: THREE.PointLight[] } {
     const M = this.M;
-    const { x0, x1, z0, z1, h, pit } = HALL;
+    const { x0, x1, z0, z1, h } = HALL;
+    const pit = z1;
     const cx = (x0 + x1) / 2;
     const hall = new THREE.Group();
     this.group.add(hall);
@@ -1243,13 +1372,7 @@ export class Level14Builder {
     hall.add(floor);
     this.shootables.push(floor);
     this.collide(x0, -1, z0 - 0.5, x1, 0, pit);
-    this.box(x1 - x0, 0.1, 0.1, cx, -0.05, pit, M.yellow, { shoot: false });
-    // The pit's walls going down into the mist
-    for (const s of [-1, 1]) this.box(0.3, 8, z1 - pit, s < 0 ? x0 : x1, -4, (pit + z1) / 2, M.darkSteel, { shoot: false });
-    this.box(x1 - x0, 8, 0.3, cx, -4.1, pit + 0.1, M.darkSteel, { shoot: false });
-    // End wall and the hall's sides (solid colliders behind the pieces that cave in)
-    this.box(x1 - x0 + 0.6, h, 0.3, cx, h / 2, z1, M.wall);
-    this.collide(x0, -10, z1 - 0.15, x1, h + 2, z1 + 0.5);
+    // The hall's sides (solid colliders behind the pieces that cave in)
     this.collide(x0 - 0.5, -10, z0, x0 + 0.1, h + 2, z1);
     this.collide(x1 - 0.1, -10, z0, x1 + 0.5, h + 2, z1);
     // The walls and the ceiling in 2.5 m pieces, each on its own pivot
@@ -1301,83 +1424,105 @@ export class Level14Builder {
         pieces.push({ obj: cg, kind: 'ceil', z: mid, collider: c, fallen: false });
       }
     }
-    // Lights down the hall, cold, every 7.5 m
+    // Lights down the hall: three, long reach
     const lights: THREE.PointLight[] = [];
-    for (let z = z0 + 4; z < pit; z += 7.5) {
-      const l = new THREE.PointLight(0xc8dcff, 5, 9, 1.5);
+    for (const z of [z0 + 5, z0 + 17, z0 + 29]) {
+      const l = new THREE.PointLight(0xc8dcff, 7, 15, 1.4);
       l.position.set(cx, h - 0.4, z);
       this.group.add(l);
       lights.push(l);
     }
-    // The portal: a ring of dark iron hung over the pit, a swirling disc, mist
-    const center = V(cx, 1.7, pit + 3.4);
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uK: { value: 1 } },
-      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `
-        uniform float uT; uniform float uK; varying vec2 vUv;
-        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
-        void main(){
-          vec2 p = vUv * 2.0 - 1.0;
-          float r = length(p);
-          if (r > 1.0) discard;
-          float a = atan(p.y, p.x);
-          float sw = a + 3.5 / (r + 0.25) - uT * 1.6;
-          // Sampled round a circle, so there is no seam where the angle wraps
-          float v = n(vec2(cos(sw), sin(sw)) * 2.2 + vec2(r * 4.0 - uT * 0.8, 0.0)) * 0.6 + n(vec2(cos(sw * 2.0), sin(sw * 2.0)) * 3.0 + vec2(0.0, r * 9.0 + uT)) * 0.4;
-          vec3 deep = vec3(0.12, 0.0, 0.22);
-          vec3 mid = vec3(0.55, 0.12, 0.85);
-          vec3 hot = vec3(1.0, 0.75, 1.0);
-          vec3 c = mix(deep, mid, smoothstep(0.25, 0.75, v));
-          c = mix(c, hot, smoothstep(0.78, 0.98, v) * (1.0 - r));
-          c += vec3(0.9, 0.6, 1.0) * pow(1.0 - r, 6.0) * 1.4;
-          float edge = smoothstep(1.0, 0.82, r);
-          gl_FragColor = vec4(c * uK, edge);
-        }`,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-    const disc = new THREE.Mesh(new THREE.CircleGeometry(1.45, 48), mat);
-    disc.position.copy(center);
-    this.group.add(disc);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.12, 12, 48), new THREE.MeshStandardMaterial({ color: 0x2a2030, roughness: 0.4, metalness: 0.8, emissive: 0x6a20a0, emissiveIntensity: 0.6 }));
-    ring.position.copy(center);
-    this.group.add(ring);
-    // Struts holding it to the walls
-    for (const s of [-1, 1]) {
-      const st = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.1), M.darkSteel);
-      st.position.set(center.x + s * 1.75, center.y, center.z);
-      this.group.add(st);
+    // ---- The way out: a fire door in the end wall, light under it, EXIT over it
+    const dw = 1.3;
+    const dh = 2.3;
+    const wallH = (w: number, x: number, y: number, hh: number): void => {
+      this.box(w, hh, 0.3, x, y + hh / 2, z1, M.wall);
+    };
+    wallH((x1 - x0 - dw) / 2 + 0.3, x0 + ((x1 - x0 - dw) / 2 + 0.3) / 2 - 0.3, 0, h);
+    wallH((x1 - x0 - dw) / 2 + 0.3, x1 - ((x1 - x0 - dw) / 2 + 0.3) / 2 + 0.3, 0, h);
+    wallH(dw, cx, dh, h - dh);
+    this.collide(x0, -10, z1 - 0.15, cx - dw / 2, h + 2, z1 + 0.5);
+    this.collide(cx + dw / 2, -10, z1 - 0.15, x1, h + 2, z1 + 0.5);
+    const doorC = this.collide(cx - dw / 2, 0, z1 - 0.15, cx + dw / 2, dh, z1 + 0.5);
+    // Its frame and push bar
+    this.box(dw + 0.16, 0.1, 0.34, cx, dh + 0.05, z1 - 0.02, M.darkSteel, { shoot: false });
+    for (const s2 of [-1, 1]) this.box(0.08, dh, 0.34, cx + s2 * (dw / 2 + 0.04), dh / 2, z1 - 0.02, M.darkSteel, { shoot: false });
+    const leaf = new THREE.Group();
+    leaf.position.set(cx - dw / 2, 0, z1 - 0.05);
+    this.group.add(leaf);
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x7a2a22, roughness: 0.55, metalness: 0.3 });
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(dw - 0.02, dh - 0.02, 0.06), doorMat);
+    slab.position.set(dw / 2, dh / 2, 0);
+    leaf.add(slab);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(dw * 0.8, 0.07, 0.06), M.steel);
+    bar.position.set(dw / 2, 1.05, -0.07);
+    leaf.add(bar);
+    const plate = makeCanvas(256, 96);
+    {
+      const g = plate.getContext('2d')!;
+      g.fillStyle = '#f2f2ee';
+      g.fillRect(0, 0, 256, 96);
+      g.fillStyle = '#1b6e2e';
+      g.fillRect(6, 6, 244, 84);
+      g.fillStyle = '#fff';
+      g.font = 'bold 30px Arial';
+      g.textAlign = 'center';
+      g.fillText('FIRE EXIT', 128, 44);
+      g.font = 'bold 18px Arial';
+      g.fillText('PUSH BAR TO OPEN', 128, 74);
     }
-    const light = new THREE.PointLight(0xa040ff, 9, 14, 1.4);
-    light.position.copy(center).add(V(0, 0, -1));
-    this.group.add(light);
-    // Heavy purple mist: sprites piled over the pit and spilling up the hall
-    const mc = makeCanvas(128, 128);
-    const mg = mc.getContext('2d')!;
-    const gr = mg.createRadialGradient(64, 64, 4, 64, 64, 64);
-    gr.addColorStop(0, 'rgba(255,255,255,0.9)');
-    gr.addColorStop(0.5, 'rgba(255,255,255,0.35)');
-    gr.addColorStop(1, 'rgba(255,255,255,0)');
-    mg.fillStyle = gr;
-    mg.fillRect(0, 0, 128, 128);
-    const mt = new THREE.CanvasTexture(mc);
-    const mist: THREE.Sprite[] = [];
-    for (let i = 0; i < 46; i++) {
-      const sm = new THREE.SpriteMaterial({ map: mt, color: new THREE.Color().setHSL(0.76 + Math.random() * 0.06, 0.7, 0.35 + Math.random() * 0.2), transparent: true, opacity: 0.32, depthWrite: false });
-      const s = new THREE.Sprite(sm);
-      const zz = pit - 6 + Math.random() * (z1 - pit + 6);
-      s.position.set(x0 + 0.4 + Math.random() * (x1 - x0 - 0.8), zz > pit ? -0.6 + Math.random() * 3.2 : Math.random() * 0.9, zz);
-      s.scale.setScalar(1.6 + Math.random() * 2.2);
-      s.userData.base = s.position.clone();
-      s.userData.ph = Math.random() * 10;
-      this.group.add(s);
-      mist.push(s);
+    const pt = new THREE.CanvasTexture(plate);
+    pt.colorSpace = THREE.SRGBColorSpace;
+    const pm = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.23), new THREE.MeshStandardMaterial({ map: pt, roughness: 0.6 }));
+    pm.position.set(dw / 2, 1.5, -0.035);
+    pm.rotation.y = Math.PI;
+    leaf.add(pm);
+    // The green running-man sign over it, lit
+    const ex = makeCanvas(256, 96);
+    {
+      const g = ex.getContext('2d')!;
+      g.fillStyle = '#0b8a34';
+      g.fillRect(0, 0, 256, 96);
+      g.fillStyle = '#eafff0';
+      g.font = 'bold 54px Arial';
+      g.textAlign = 'left';
+      g.fillText('EXIT', 108, 68);
+      // The running man
+      g.beginPath();
+      g.arc(62, 22, 9, 0, Math.PI * 2);
+      g.fill();
+      g.lineWidth = 9;
+      g.strokeStyle = '#eafff0';
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(58, 34);
+      g.lineTo(48, 58);
+      g.moveTo(48, 58);
+      g.lineTo(66, 80);
+      g.moveTo(48, 58);
+      g.lineTo(30, 76);
+      g.moveTo(56, 40);
+      g.lineTo(76, 50);
+      g.moveTo(56, 40);
+      g.lineTo(36, 44);
+      g.stroke();
     }
-    return { pieces, portal: { center, mat, ring, light, mist }, lights };
+    const et = new THREE.CanvasTexture(ex);
+    et.colorSpace = THREE.SRGBColorSpace;
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.26, 0.08), [M.darkSteel, M.darkSteel, M.darkSteel, M.darkSteel, M.darkSteel, new THREE.MeshBasicMaterial({ map: et, toneMapped: false })]);
+    sign.position.set(cx, dh + 0.35, z1 - 0.2);
+    sign.rotation.y = Math.PI;
+    this.group.add(sign);
+    // Daylight under the door, and the bright stairwell behind it
+    const day = new THREE.MeshBasicMaterial({ color: 0xfff6e0, toneMapped: false });
+    const under = new THREE.Mesh(new THREE.PlaneGeometry(dw - 0.1, 0.12), day);
+    under.rotation.x = -Math.PI / 2;
+    under.position.set(cx, 0.003, z1 - 0.2);
+    this.group.add(under);
+    const beyond = new THREE.Mesh(new THREE.BoxGeometry(dw + 1.2, dh + 1, 4), new THREE.MeshBasicMaterial({ color: 0xf4efe2, side: THREE.BackSide, toneMapped: false }));
+    beyond.position.set(cx, (dh + 1) / 2, z1 + 2.2);
+    this.group.add(beyond);
+    return { pieces, exit: { leaf, collider: doorC, at: V(cx, 1.6, z1) }, lights };
   }
 
   /** The way in: a blown-through hole in the west wall, its door bent on the floor, rubble. */
@@ -1420,6 +1565,7 @@ export class Level14Builder {
     // Strip fittings in rows; a few dead, the rest dim and cold
     const rows: [number, number][] = [];
     for (const x of [-8, -2.5, 3, 8.5]) for (const z of [-4.5, 0.2, 4.6]) rows.push([x, z]);
+    const fits: THREE.Group[] = [];
     rows.forEach(([x, z], i) => {
       const fit = new THREE.Group();
       fit.position.set(x, ROOM.h - 0.08, z);
@@ -1432,11 +1578,18 @@ export class Level14Builder {
       fit.add(tube);
       this.fixtures.push(fit);
       if (dead) return;
-      const l = new THREE.PointLight(0xcfe2ff, 2.7, 8, 1.5);
-      l.position.set(x, ROOM.h - 0.4, z);
-      l.userData.fit = fit;
+      fits.push(fit);
+    });
+    // Four lights between the twelve fittings (thirty-odd lights made the room crawl): each
+    // tied to a fitting near it, which can come down and take it out
+    for (const [x, z] of [[-5.3, -2.2], [-5.3, 3.4], [5.8, -2.2], [5.8, 3.4]]) {
+      const l = new THREE.PointLight(0xcfe2ff, 6.5, 13, 1.35);
+      l.position.set(x, ROOM.h - 0.5, z);
+      let best = fits[0];
+      for (const f of fits) if (f.position.distanceTo(l.position) < best.position.distanceTo(l.position)) best = f;
+      l.userData.fit = best;
       this.group.add(l);
       this.lamps.push(l);
-    });
+    }
   }
 }

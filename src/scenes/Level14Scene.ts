@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level14Builder, type Level14Data, ROOM, HALL, STAND, CRATE } from '../environment/Level14Builder';
+import { Level14Builder, type Level14Data, ROOM, HALL, STAND } from '../environment/Level14Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -26,16 +26,19 @@ import { smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
  *     Every attack slows the world down and flashes a key: hit it inside two
  *     seconds and he blocks it and kills them with his hands; miss it and
  *     the syringe goes in, he swells up purple and bursts.
- *  4. A fifth kicks the door in behind him with a rocket launcher. Dodge it,
- *     and it blows the wall out instead; the lab starts to come down.
- *  5. Run the hallway as it caves in behind him, and jump into the portal.
+ *  4. A fifth kicks the door in behind him with a rocket launcher (a
+ *     cutscene): Ravi dives, the rocket blows the wall out behind him, the
+ *     lab starts to come down and the ceiling lands on the man who fired it.
+ *  5. Run the hallway as it caves in behind him and dive through the fire
+ *     door at the end.
  */
 
-type Phase = 'enter' | 'play' | 'read' | 'pickup' | 'fight' | 'dying' | 'run' | 'portal' | 'dead' | 'done';
+type Phase = 'enter' | 'play' | 'read' | 'pickup' | 'fight' | 'dying' | 'run' | 'exit' | 'dead' | 'done';
 type FailKind = 'neck' | 'chest' | 'belly';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
-const QTE_TIME = 2;
+/** How long each key is up for (real seconds): less and less as the fight goes on. */
+const QTE_WIN: Record<string, number> = { stab: 1.3, throw1: 1.1, throw2: 1.0, throw3: 0.95, punch1: 1.0, punch2: 0.9, punch3: 0.85, punch3b: 0.75 };
 const KEY_POOL = 'QRTYUIOPFGHJKLZXCVBNM';
 /** The beats of the fight, in order. */
 const BEATS = ['barge', 'stab', 'throw1', 'throw2', 'throw3', 'punch1', 'punch2', 'punch3', 'lull', 'rocket'] as const;
@@ -44,7 +47,7 @@ type BeatName = (typeof BEATS)[number];
 const MARKS = [V(-1.4, 0, 3.2), V(0.4, 0, 4.7), V(2.5, 0, 3.8), V(1.6, 0, 6.0)];
 const DOOR_IN = V(-4, 0, 7.2);
 /** Where his dive takes him: off the rocket's line, away from the crate. */
-const DIVE_TO = V(-1.05, 0, 0.15);
+const DIVE_TO = V(-2.0, 0, -1.25);
 
 // ================================================================ hands
 
@@ -91,6 +94,19 @@ const PARRY_L1 = hp([-0.38, 0.02, -0.36], [-0.25, 0.9, -0.3], [-0.8, 0, -0.6], [
 /** The right hook: cocked, then landed. */
 const HOOK_R0 = hp([0.32, -0.12, -0.24], [-0.3, 0.25, -0.9], [-0.3, -1, 0], [0.35, -0.4, 0.85], FIST);
 const HOOK_R1 = hp([0.0, -0.03, -0.53], [-0.8, 0.1, -0.6], [0, -1, 0.1], [0.85, -0.25, 0.45], FIST);
+
+/** Catching a syringe out of the air: open, out in front; then shut on it; then flicking it away. */
+const CATCH_R0 = hp([0.07, -0.1, -0.44], [-0.1, 0.75, -0.65], [-0.15, 0, -1], [0.3, -0.6, 0.7], OPEN);
+const CATCH_R1 = hp([0.06, -0.09, -0.46], [-0.1, 0.75, -0.65], [-0.15, 0, -1], [0.3, -0.6, 0.7], FIST);
+const FLICK_R = hp([0.42, -0.08, -0.3], [0.6, 0.5, -0.6], [-0.5, 0, -0.85], [0.1, -0.6, 0.75], OPEN);
+/** The left hand closing on a fist in front of his face, and hauling it in. */
+const CATCH_L = hp([-0.06, -0.03, -0.4], [0.25, 0.55, -0.8], [0.35, 0, -0.95], [-0.35, -0.6, 0.7], FIST);
+const PULL_L = hp([-0.12, -0.12, -0.3], [0.3, 0.5, -0.8], [0.4, 0, -0.9], [-0.35, -0.7, 0.6], FIST);
+/** Ducked: the left forearm up over his head. */
+const DUCK_L = hp([-0.1, 0.04, -0.36], [0.25, 0.85, -0.45], [0.9, 0, -0.3], [-0.25, -0.75, 0.6], FIST);
+/** The uppercut: low and cocked, then up through his chin. */
+const UPPER_R0 = hp([0.16, -0.44, -0.3], [-0.1, 0.45, -0.9], [-0.35, 0.2, 0.9], [0.2, -0.85, 0.45], FIST);
+const UPPER_R1 = hp([0.03, 0.12, -0.5], [-0.1, 1, -0.15], [-0.25, 0.1, 0.95], [0.1, -0.85, 0.5], FIST);
 
 /** Two of Ravi's arms in front of the camera, each on a hand placed in camera space. */
 class MeleeArms {
@@ -180,6 +196,8 @@ interface Sci {
 interface QTE {
   code: string;
   t: number;
+  /** Real seconds he has to press it. */
+  win: number;
   state: 'live' | 'ok' | 'fail';
   hold: number;
   done: (ok: boolean) => void;
@@ -204,6 +222,10 @@ interface BeatState {
   kicked?: boolean;
   syrStart?: THREE.Vector3;
   arrived?: boolean;
+  /** A second key in the same beat. */
+  tq2?: number;
+  result2?: boolean;
+  tr2?: number;
 }
 
 export class Level14Scene extends CombatScene<Level14Data> {
@@ -262,7 +284,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
   private crumbleT = 0;
   private rumble: { set(k: number): void; stop(): void } | null = null;
   private klaxon: { set(k: number): void; stop(): void } | null = null;
-  private portalHum: { setDistance(m: number): void; stop(): void } | null = null;
+
   private slab: THREE.Mesh | null = null;
   private slabV = 0;
 
@@ -305,7 +327,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.ragdollOnDeath(() => (this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
 
     this.particles = new ParticleManager(this.scene);
-    this.flashPool = new MuzzleFlashPool(this.scene, 4);
+    this.flashPool = new MuzzleFlashPool(this.scene, 2);
     this.decals = new BloodDecalSystem(this.scene);
     this.bits = new Debris(this.particles, (x, z) => (z > HALL.pit && x > HALL.x0 && x < HALL.x1 ? -8 : 0));
     this.arsenal = new Arsenal(
@@ -389,7 +411,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     document.removeEventListener('keydown', this.keyHandler);
     this.rumble?.stop();
     this.klaxon?.stop();
-    this.portalHum?.stop();
+
     this.hud.destroy();
     this.flashPool.dispose();
     this.ui.remove();
@@ -488,7 +510,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
         this.paperPromptOn = true;
         if (this.ctx.input.wasPressed('KeyE')) this.startRead();
       }
-    } else if (Math.hypot(p.position.x - CRATE.x, p.position.z - CRATE.z) < 2.3) {
+    } else if (Math.hypot(p.position.x - STAND.x, p.position.z - STAND.z) < 2.6) {
       this.startPickup();
     }
     this.hud.setPrompt(this.paperPromptOn ? '[E] EXAMINE THE REPORT' : null);
@@ -521,6 +543,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
   }
 
   private paperAnchors: THREE.Object3D[] = [];
+  private paperGrips: { l: Grip | null; r: Grip | null } = { l: null, r: null };
 
   private startRead(): void {
     const p = this.player;
@@ -535,8 +558,10 @@ export class Level14Scene extends CombatScene<Level14Data> {
     // Each side edge pinched: fingers flat up the back of it, the thumb across the front
     const shape: HandShape = { fingers: [[4, 6, 3], [4, 6, 3], [6, 8, 4], [8, 10, 5]], thumb: [0.5, 0.3, 0.15] };
     const [al, ar] = this.paperAnchors;
-    this.paperArms.set('l', al, { wrist: V(-0.06, -0.035, -0.045), along: V(0.75, 0.65, 0).normalize(), palm: V(0, 0, 1), toward: V(-0.6, -0.5, 0.6).normalize(), shape });
-    this.paperArms.set('r', ar, { wrist: V(0.06, -0.035, -0.045), along: V(-0.75, 0.65, 0).normalize(), palm: V(0, 0, 1), toward: V(0.6, -0.5, 0.6).normalize(), shape });
+    this.paperGrips.l = { wrist: V(-0.06, -0.035, -0.045), along: V(0.75, 0.65, 0).normalize(), palm: V(0, 0, 1), toward: V(-0.6, -0.5, 0.6).normalize(), shape };
+    this.paperGrips.r = { wrist: V(0.06, -0.035, -0.045), along: V(-0.75, 0.65, 0).normalize(), palm: V(0, 0, 1), toward: V(0.6, -0.5, 0.6).normalize(), shape };
+    this.paperArms.set('l', al, this.paperGrips.l);
+    this.paperArms.set('r', ar, this.paperGrips.r);
   }
 
   /** Up off the desk to in front of his face; E (or a click) puts it back. */
@@ -546,6 +571,14 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const m = this.level.paper.mesh;
     const t = this.phaseT;
     const out = this.paperOut;
+    // Leaning in over the desk while his hands are down at it, upright again as it comes up
+    const lift = out ? smooth(t / 0.55) : 1 - smooth(t / 0.45);
+    const lean = (1 - lift) * (out ? smooth(t / 0.12) : 1 - smooth((t - 0.36) / 0.09));
+    {
+      const fw = p.forwardDir(Level14Scene.tmpB);
+      cam.position.addScaledVector(fw, 0.32 * lean);
+      cam.position.y -= 0.36 * lean;
+    }
     // Where it's held: just under his eyes, tipped back a touch
     cam.updateMatrixWorld(true);
     const held = new THREE.Matrix4().compose(V(0, -0.025, -0.33), new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0.02)), V(1, 1, 1)).premultiply(cam.matrixWorld);
@@ -555,6 +588,28 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const k = out ? smooth(t / 0.55) : 1 - smooth(t / 0.45);
     m.position.lerpVectors(this.paperHome.p, hpos, k);
     m.quaternion.slerpQuaternions(this.paperHome.q, hq, k);
+    // Each elbow back toward his own shoulder, the shoulders under his head: off the desk, the grip's
+    // own elbow pointed anywhere and his arms stretched out of shape
+    m.updateMatrixWorld(true);
+    const f = p.forwardDir(Level14Scene.tmpA);
+    const q = new THREE.Quaternion();
+    for (const [side, a, g] of [['l', this.paperAnchors[0], this.paperGrips.l], ['r', this.paperAnchors[1], this.paperGrips.r]] as const) {
+      if (!g) continue;
+      // The right hand takes it off the desk; the left only joins it once it's up near him
+      // and putting it down, the right lets go of it just before it lands
+      if ((side === 'l' && lift < 0.6) || (!out && t > 0.34)) {
+        this.paperArms.set(side, null);
+        continue;
+      }
+      const sg = side === 'r' ? 1 : -1;
+      const w = a.localToWorld(g.wrist.clone());
+      const sh = cam.position.clone().add(V(0, -0.32, 0)).add(V(-f.z * sg * 0.2, 0, f.x * sg * 0.2));
+      const dir = sh.sub(w).normalize().add(V(0, -0.3, 0)).normalize();
+      a.getWorldQuaternion(q);
+      dir.applyQuaternion(q.invert());
+      this.paperArms.set(side, a, { ...g, toward: dir });
+      this.paperArms.shoulder(side, cam.position.clone().add(V(0, -0.5, 0)).addScaledVector(f, -0.12).add(V(-f.z * sg * 0.22, 0, f.x * sg * 0.22)), true);
+    }
     // Reading: the lens closes in a little
     cam.fov += ((out ? 60 : 74) - cam.fov) * Math.min(1, dt * 4);
     cam.updateProjectionMatrix();
@@ -570,6 +625,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
       m.quaternion.copy(this.paperHome.q);
       this.paperArms.set('l', null);
       this.paperArms.set('r', null);
+      // (cleared now: it isn't updated again once he's done reading, and they'd be left hanging there)
+      this.paperArms.update();
       this.paperRead = true;
       this.hintEl.style.opacity = '0';
       this.phase = 'play';
@@ -735,6 +792,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.scene.add(e.root);
     e.update(1 / 60);
     dressScientist(e, 3);
+    e.root.visible = false;
     const lm = launcherModel();
     e.root.add(lm.group);
     lm.group.position.set(0.17, 1.52, -0.12);
@@ -752,7 +810,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.scene.add(e.root);
     e.update(1 / 60);
     dressScientist(e, i);
-    for (const part of e.parts) this.level.shootables.push(part);
+    // Behind the door till they burst in: not there to be seen or shot through it
+    e.root.visible = false;
     this.enemies.push(e);
     const syr = syringe();
     e.holdProp(syr, 0.02);
@@ -815,8 +874,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
 
   // ---- QTE
 
-  private startQte(code: string, hold: number, done: (ok: boolean) => void): void {
-    this.qte = { code, t: 0, state: 'live', hold, done };
+  private startQte(code: string, hold: number, done: (ok: boolean) => void, win = 1.2): void {
+    this.qte = { code, t: 0, win, state: 'live', hold, done };
     this.qteKey.textContent = code.replace('Key', '');
     this.qteEl.classList.remove('ok', 'fail');
     this.qteEl.style.display = 'flex';
@@ -846,8 +905,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const q = this.qte;
     if (!q || q.state !== 'live') return;
     q.t += dt;
-    this.qteRing.setAttribute('stroke-dashoffset', String(351.9 * Math.min(1, q.t / QTE_TIME)));
-    if (q.t >= QTE_TIME) this.resolveQte(false);
+    this.qteRing.setAttribute('stroke-dashoffset', String(351.9 * Math.min(1, q.t / q.win)));
+    if (q.t >= q.win) this.resolveQte(false);
   }
 
   private randomKey(): string {
@@ -858,11 +917,38 @@ export class Level14Scene extends CombatScene<Level14Data> {
   private ask(code: string, hold = 0.12): void {
     const bs = this.bs;
     bs.tq = this.bt;
-    this.startQte(code, this.bt + hold, (ok) => {
-      bs.result = ok;
-      bs.tr = this.bt;
-    });
+    this.startQte(
+      code,
+      this.bt + hold,
+      (ok) => {
+        bs.result = ok;
+        bs.tr = this.bt;
+      },
+      QTE_WIN[BEATS[this.beatI]] ?? 1.1
+    );
   }
+
+  /** A second key in the same beat, straight after the first. A miss counts as the first missed. */
+  private ask2(code: string, hold = 0.1): void {
+    const bs = this.bs;
+    bs.tq2 = this.bt;
+    this.startQte(
+      code,
+      this.bt + hold,
+      (ok) => {
+        bs.result2 = ok;
+        bs.tr2 = this.bt;
+        if (!ok) {
+          bs.result = false;
+          bs.tr = undefined;
+        }
+      },
+      QTE_WIN[BEATS[this.beatI] + 'b'] ?? 0.8
+    );
+  }
+
+  /** What the beat does to his head this frame: forward, down, pitched, rolled. Zeroed before every beat. */
+  private camFx = { fwd: 0, down: 0, pitch: 0, roll: 0 };
 
   // ---- the beats
 
@@ -873,6 +959,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     if (this.qte?.state === 'live') this.bt = Math.min(this.bt + sdt, this.qte.hold);
     else this.bt += sdt;
     const name = BEATS[this.beatI];
+    this.camFx.fwd = this.camFx.down = this.camFx.pitch = this.camFx.roll = 0;
     let done = false;
     if (name === 'barge') done = this.beatBarge(sdt);
     else if (name === 'stab') done = this.beatStab(sdt);
@@ -891,6 +978,14 @@ export class Level14Scene extends CombatScene<Level14Data> {
     p.yaw += wrapAngle(want.yaw - p.yaw) * Math.min(1, dt * this.lookRate);
     p.pitch += (want.pitch - p.pitch) * Math.min(1, dt * this.lookRate);
     p.update(dt, L.colliders);
+    {
+      const fx = this.camFx;
+      const cam = p.camera;
+      if (fx.fwd) cam.position.addScaledVector(cam.getWorldDirection(Level14Scene.tmpA), fx.fwd);
+      cam.position.y -= fx.down;
+      if (fx.pitch) cam.rotateX(fx.pitch);
+      if (fx.roll) cam.rotateZ(fx.roll);
+    }
     // The dive: off to the side and down on the floor, rolled over
     if (this.dive > 0) {
       const cam = p.camera;
@@ -918,9 +1013,13 @@ export class Level14Scene extends CombatScene<Level14Data> {
     // The doors flung open
     if (!bs.kicked && t > 0.35) {
       bs.kicked = true;
+      for (const s of this.scis) {
+        s.e.root.visible = true;
+        for (const part of s.e.parts) this.level.shootables.push(part);
+      }
       this.ctx.audio.doorBreach();
       this.shake = 0.5;
-      for (const r of L.lights.red) r.intensity = 6;
+      for (const r of L.lights.red) r.intensity = 2.2;
       this.klaxon = this.ctx.audio.klaxonLoop();
       this.klaxon.set(0.35);
     }
@@ -1079,7 +1178,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const back = this.bodyHand(e, V(0.08, 0.32, 0.32));
     const fwd = this.bodyHand(e, V(-0.02, 0.05, -0.55));
     e.pose = { handR: chest.clone().lerp(back, wind).lerp(fwd, fling), thumbR: V(0, 0.2, 1), palmR: V(-1, 0, 0), curl: bs.thrown ? 0.2 : 1, lean: -0.15 * wind + 0.35 * fling };
-    const right = n !== 2;
+    const right = n !== 3;
     if (!bs.thrown) {
       this.melee.set('r', GUARD_R);
       this.melee.set('l', GUARD_L);
@@ -1116,8 +1215,9 @@ export class Level14Scene extends CombatScene<Level14Data> {
       }
     }
     if (bs.result !== true) return false;
-    // The swat: the hand comes across as it arrives, and it's knocked away
     const contact = bs.tRel! + Math.max(total - 0.45 / 8, bs.tr! - bs.tRel!);
+    if (n === 2) return this.catchThrow(s, t, contact);
+    // The swat: the hand comes across as it arrives, and it's knocked away
     const sw = smooth((t - (contact - 0.12)) / 0.16);
     this.melee.set(right ? 'r' : 'l', mixHP(right ? SWAT_R0 : SWAT_L0, right ? SWAT_R1 : SWAT_L1, sw));
     if (t < contact - 0.12) this.melee.set(right ? 'r' : 'l', mixHP(right ? GUARD_R : GUARD_L, right ? SWAT_R0 : SWAT_L0, smooth((t - bs.tr!) / 0.1)));
@@ -1137,7 +1237,47 @@ export class Level14Scene extends CombatScene<Level14Data> {
     return bs.hit === true && t > contact + 0.8;
   }
 
-  /** The three left come in with their fists. A key: knock it past, and hit him. */
+  /** Snatched out of the air in his right fist, held a beat, and flicked away across the floor. */
+  private catchThrow(s: Sci, t: number, contact: number): boolean {
+    const bs = this.bs;
+    const cam = this.player.camera;
+    cam.updateMatrixWorld(true);
+    let hpR = mixHP(GUARD_R, CATCH_R0, smooth((t - bs.tr!) / 0.12));
+    if (t >= contact) {
+      hpR = mixHP(CATCH_R0, CATCH_R1, smooth((t - contact) / 0.05));
+      if (!bs.hit) {
+        bs.hit = true;
+        this.ctx.audio.clink();
+        this.ctx.audio.punchImpact(false);
+        this.shake = 0.25;
+      }
+      const fl = smooth((t - contact - 0.5) / 0.16);
+      if (fl > 0) hpR = mixHP(CATCH_R1, FLICK_R, fl);
+      if (!bs.dead) {
+        // In his fist, needle out past his little finger
+        const at = cam.localToWorld(hpR.w.clone().add(V(-0.02, 0.06, -0.05)));
+        s.syr.position.copy(at);
+        s.syr.quaternion.copy(cam.quaternion).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.3, -0.4, 1.3)));
+      }
+      if (fl >= 0.55 && !bs.dead) {
+        bs.dead = true;
+        this.ctx.audio.punchSwish();
+        const side = V(1, -0.2, -0.4).applyQuaternion(cam.quaternion).normalize();
+        this.bits.add({ obj: s.syr, vel: side.multiplyScalar(7), spin: V(18, 4, 11), size: 0.03, onLand: () => this.ctx.audio.clink() });
+      }
+    }
+    if (bs.dead) hpR = mixHP(FLICK_R, GUARD_R, smooth((t - contact - 0.9) / 0.35));
+    this.melee.set('r', hpR);
+    this.melee.set('l', GUARD_L);
+    return bs.dead === true && t > contact + 1.3;
+  }
+
+  /**
+   * The three left come in with their fists, each one finished differently:
+   * the first parried and hooked; the second's fist caught and the man
+   * hauled in onto a headbutt; the third ducked under (a key) and
+   * uppercut (another key, straight after).
+   */
   private beatPunch(n: number, dt: number): boolean {
     const s = this.scis[n];
     const e = s.e;
@@ -1168,6 +1308,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     let swing = 0;
     if (bs.tq !== undefined) {
       if (bs.result === undefined) swing = clamp01((t - bs.tq) / 0.5);
+      else if (bs.result && n === 3) swing = Math.min(1, clamp01((bs.tr! - bs.tq) / 0.5) + (t - bs.tr!) / 0.18);
       else if (bs.result) swing = Math.min(clamp01((bs.tr! - bs.tq) / 0.5) + 0.15, 0.45);
       else swing = 1;
     }
@@ -1180,6 +1321,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
         e.holdProp(s.spare, 0.02, 'L');
         bs.tr = t;
       }
+      if (bs.tr === undefined) bs.tr = t;
       const k = smooth((t - bs.tr!) / 0.22);
       const belly = this.reachable(e, this.toBody(e, this.raviPoint('belly')), 0.6).setX(-0.05);
       const handL = this.bodyHand(e, V(-0.45, -0.5, -0.1)).lerp(belly, k);
@@ -1194,36 +1336,99 @@ export class Level14Scene extends CombatScene<Level14Data> {
       e.pose = { handR, curl: 1, lean: leanK };
       return false;
     }
-    // Parried: the left forearm sweeps the fist out past his head
-    const k = t - bs.tr!;
-    const parry = smooth(k / 0.12);
-    this.melee.set('l', mixHP(PARRY_L0, PARRY_L1, parry));
     const cam = this.player.camera;
     cam.updateMatrixWorld(true);
-    const past = this.toBody(e, cam.localToWorld(V(-0.55, 0.05, -0.15)));
-    handR = handR.lerp(this.reachable(e, past, 0.6), parry);
-    if (k > 0.05 && k - this.lastSdt <= 0.05) this.ctx.audio.punchImpact(false);
-    // Then the hook, into his jaw
-    const hook = smooth((k - 0.16) / 0.16);
-    this.melee.set('r', hook > 0 ? mixHP(HOOK_R0, HOOK_R1, hook) : mixHP(GUARD_R, HOOK_R0, smooth((k - 0.02) / 0.14)));
-    if (!bs.dead) e.pose = { handR, curl: 1, lean: leanK + 0.15 * parry, twist: 0.4 * parry };
-    if (hook >= 1 && !bs.dead) {
+    const k = t - bs.tr!;
+    if (n === 1) {
+      // Parried: the left forearm sweeps the fist out past his head
+      const parry = smooth(k / 0.12);
+      this.melee.set('l', mixHP(PARRY_L0, PARRY_L1, parry));
+      const past = this.toBody(e, cam.localToWorld(V(-0.55, 0.05, -0.15)));
+      handR = handR.lerp(this.reachable(e, past, 0.6), parry);
+      if (k > 0.05 && k - this.lastSdt <= 0.05) this.ctx.audio.punchImpact(false);
+      // Then the hook, into his jaw, his whole head turning with it
+      const hook = smooth((k - 0.16) / 0.16);
+      this.melee.set('r', hook > 0 ? mixHP(HOOK_R0, HOOK_R1, hook) : mixHP(GUARD_R, HOOK_R0, smooth((k - 0.02) / 0.14)));
+      this.camFx.roll = -0.12 * hook * (1 - smooth((k - 0.5) / 0.4));
+      this.camFx.fwd = 0.08 * hook * (1 - smooth((k - 0.4) / 0.3));
+      if (!bs.dead) e.pose = { handR, curl: 1, lean: leanK + 0.15 * parry, twist: 0.4 * parry };
+      if (hook >= 1 && !bs.dead) {
+        bs.dead = true;
+        const jaw = e.headWorld(new THREE.Vector3()).add(V(0, -0.08, 0));
+        const right = V(1, 0, 0).applyQuaternion(cam.quaternion);
+        const dir = right.multiplyScalar(-0.6).add(cam.getWorldDirection(new THREE.Vector3())).setY(0.35).normalize();
+        this.ctx.audio.punchImpact(true);
+        this.ctx.audio.knockoutHit(3);
+        this.shake = 0.5;
+        e.pose = null;
+        e.die(jaw, dir, this.world, 'head', 2.6, { wound: false });
+      }
+      if (bs.dead) {
+        const back2 = smooth((k - 0.55) / 0.4);
+        this.melee.set('r', mixHP(HOOK_R1, GUARD_R, back2));
+        this.melee.set('l', mixHP(PARRY_L1, GUARD_L, back2));
+      }
+      return bs.dead === true && k > 1.1;
+    }
+    if (n === 2) {
+      // Caught: the left hand shuts on his fist, hauls him in, and the forehead meets his nose
+      const grab = smooth(k / 0.1);
+      const pull = smooth((k - 0.2) / 0.14);
+      this.melee.set('l', pull > 0 ? mixHP(CATCH_L, PULL_L, pull) : mixHP(GUARD_L, CATCH_L, grab));
+      this.melee.set('r', GUARD_R);
+      const caught = this.toBody(e, cam.localToWorld(CATCH_L.w.clone().add(V(0.02, 0.03, -0.06))));
+      const hauled = this.toBody(e, cam.localToWorld(PULL_L.w.clone().add(V(0.02, 0.03, -0.06))));
+      handR = handR.lerp(this.reachable(e, caught.lerp(hauled, pull), 0.66), grab);
+      if (k > 0.06 && k - this.lastSdt <= 0.06) this.ctx.audio.punchImpact(false);
+      const butt = smooth((k - 0.32) / 0.09) * (1 - smooth((k - 0.48) / 0.3));
+      this.camFx.fwd = 0.32 * butt;
+      this.camFx.pitch = -0.24 * butt;
+      if (!bs.dead) e.pose = { handR, curl: 1, lean: leanK + 0.3 * pull };
+      if (k >= 0.41 && !bs.dead) {
+        bs.dead = true;
+        const nose = e.headWorld(new THREE.Vector3());
+        const dir = cam.getWorldDirection(new THREE.Vector3()).setY(0.3).normalize();
+        this.ctx.audio.punchImpact(true);
+        this.ctx.audio.knockoutHit(4);
+        this.shake = 0.8;
+        this.particles.bloodSpray(nose, dir, false, 0);
+        e.pose = null;
+        e.die(nose, dir, this.world, 'head', 2.9, { wound: false });
+      }
+      if (bs.dead) this.melee.set('l', mixHP(PULL_L, GUARD_L, smooth((k - 0.6) / 0.35)));
+      return bs.dead === true && k > 1.25;
+    }
+    // n === 3: ducked under it — then a second key for the uppercut
+    const rise = bs.result2 === true ? smooth((t - bs.tr2!) / 0.16) : 0;
+    const duck = smooth(k / 0.12) * (1 - rise);
+    this.camFx.down = 0.42 * duck;
+    this.camFx.roll = 0.06 * duck;
+    this.melee.set('l', mixHP(GUARD_L, DUCK_L, smooth(k / 0.12)));
+    if (bs.tq2 === undefined && k >= 0.16) this.ask2(this.randomKey(), 0.06);
+    if (!bs.dead) e.pose = { handR, curl: 1, lean: leanK + 0.2 * smooth(k / 0.2) };
+    if (bs.result2 !== true) {
+      this.melee.set('r', mixHP(GUARD_R, UPPER_R0, smooth(k / 0.15)));
+      return false;
+    }
+    const k2 = t - bs.tr2!;
+    this.melee.set('r', mixHP(UPPER_R0, UPPER_R1, rise));
+    this.camFx.pitch = 0.14 * rise * (1 - smooth((k2 - 0.3) / 0.35));
+    if (k2 >= 0.16 && !bs.dead) {
       bs.dead = true;
-      const jaw = e.headWorld(new THREE.Vector3()).add(V(0, -0.08, 0));
-      const right = V(1, 0, 0).applyQuaternion(cam.quaternion);
-      const dir = right.multiplyScalar(-0.6).add(cam.getWorldDirection(new THREE.Vector3())).setY(0.35).normalize();
+      const chin = e.headWorld(new THREE.Vector3()).add(V(0, -0.1, 0));
+      const dir = cam.getWorldDirection(new THREE.Vector3()).multiplyScalar(0.5).add(V(0, 1, 0)).normalize();
       this.ctx.audio.punchImpact(true);
-      this.ctx.audio.knockoutHit(3);
-      this.shake = 0.5;
+      this.ctx.audio.knockoutHit(5);
+      this.shake = 0.9;
       e.pose = null;
-      e.die(jaw, dir, this.world, 'head', 2.6, { wound: false });
+      e.die(chin, dir, this.world, 'head', 3.4, { wound: false });
     }
     if (bs.dead) {
-      const back2 = smooth((k - 0.55) / 0.4);
-      this.melee.set('r', mixHP(HOOK_R1, GUARD_R, back2));
-      this.melee.set('l', mixHP(PARRY_L1, GUARD_L, back2));
+      const b2 = smooth((k2 - 0.55) / 0.4);
+      this.melee.set('r', mixHP(UPPER_R1, GUARD_R, b2));
+      this.melee.set('l', mixHP(DUCK_L, GUARD_L, b2));
     }
-    return bs.dead === true && k > 1.1;
+    return bs.dead === true && k2 > 1.2;
   }
 
   /** It goes quiet. He looks round at them. */
@@ -1239,7 +1444,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     return t > 1.4;
   }
 
-  /** The door behind him kicked in: the last of them, a launcher on his shoulder. A key: dive. */
+  /** The door behind him kicked in: the last of them, a launcher on his shoulder. He sees it coming and dives. */
   private beatRocket(dt: number): boolean {
     const t = this.bt;
     const bs = this.bs;
@@ -1250,6 +1455,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.ctx.audio.kickImpact();
       this.shake = 0.6;
       const e = this.gunner!;
+      e.root.visible = true;
       e.position.set(-4, 0, ROOM.z0 + 0.6);
       e.setFurious();
       this.faceTo(e, V(STAND.x, 0, STAND.z), 1, 1);
@@ -1259,7 +1465,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     // Leaf banged open
     L.rocketDoor.leaf.rotation.y = 1.95 * smooth(t / 0.12);
     if (t > 0.1) L.rocketDoor.collider.disabled = true;
-    for (const r of L.lights.red) r.intensity = 4 + 3 * Math.sin(this.t * 8);
+    for (const r of L.lights.red) r.intensity = 1.6 + 1.2 * Math.sin(this.t * 8);
     // He whips round to it
     const head = e.headWorld(new THREE.Vector3());
     if (!bs.fired) {
@@ -1278,7 +1484,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
       bs.tRel = t;
       bs.from = lm.muzzle.getWorldPosition(new THREE.Vector3());
       // On the line through where his head is to the wall behind him
-      bs.vel = aimAt.clone().sub(bs.from).normalize().multiplyScalar(11);
+      bs.vel = aimAt.clone().sub(bs.from).normalize().multiplyScalar(16);
       this.rocket = this.makeRocket();
       this.scene.add(this.rocket);
       this.ctx.audio.rocketLaunch(9);
@@ -1290,23 +1496,24 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.melee.set('l', LOW_L);
       return false;
     }
-    if (bs.tq === undefined && t - bs.tRel! >= 0.05) this.ask(this.randomKey(), 0.07);
+    // Slowed to a crawl while it's in the air
+    if (!bs.blown) this.slowWant = t - bs.tRel! < 0.4 ? 0.4 : 1;
+    if (bs.result === undefined) {
+      bs.result = true;
+      bs.tr = t + 0.06;
+    }
     const fl = t - bs.tRel!;
     if (!bs.blown && this.rocket) {
       const pos = bs.from!.clone().addScaledVector(bs.vel!, fl);
       this.rocket.position.copy(pos);
       this.rocket.quaternion.setFromUnitVectors(V(0, 0, -1), bs.vel!.clone().normalize());
       this.particles.rocketTrail(pos, bs.vel!.clone().normalize().negate(), 0.5);
-      if (bs.result !== true) this.look.lerp(pos, 0.04);
-      // Missed: straight into him
-      if (bs.result === false && pos.distanceTo(this.eye) < 0.8 && !bs.failed) {
-        bs.failed = true;
-        this.rocketDeath(pos);
-        return false;
-      }
-      // Dodged: on to the wall behind him
+      this.look.lerp(pos, 0.03);
+      // Past him, into the wall behind
       if (pos.z >= ROOM.z1 - 0.3) {
         bs.blown = true;
+        bs.tc = t;
+        this.slowWant = 1;
         this.blowWall();
       }
     }
@@ -1322,16 +1529,24 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.ctx.audio.bodyThud(1);
       this.shake = Math.max(this.shake, 0.4);
     }
-    // Round to the blast (turned by angle, not by dragging the point past his own head)
+    // On the floor, he looks back at the man with the launcher: reloading, then looking up as the ceiling over him goes
     if (bs.blown) {
-      this.look.copy(L.plug.at);
-      this.lookRate = 3;
-    }
-    // Up again once it's gone off
-    if (bs.blown && k > 1.4) {
-      const up = smooth((k - 1.4) / 0.6);
-      this.diveDrop = 1 - up;
-      if (up >= 1) return true;
+      const kb = t - bs.tc!;
+      this.look.copy(e.alive ? e.headWorld(Level14Scene.tmpB) : e.position.clone().setY(0.6));
+      this.lookRate = kb < 0.3 ? 2 : 4;
+      if (e.alive) {
+        // Fumbling another round in, then his head going up to the noise over him
+        const up = smooth((kb - 0.7) / 0.3);
+        e.pose = { handR: this.bodyHand(e, V(-0.05, -0.18, -0.32)), handL: this.bodyHand(e, V(-0.25 + 0.1 * Math.sin(kb * 12), -0.35, -0.1)), curl: 1, lean: -0.25 * up };
+        if (kb > 0.3 && kb - this.lastSdt <= 0.3) this.ctx.audio.launcherReload();
+      }
+      // Up again once it's all come down
+      if (kb > 2.4) {
+        const upK = smooth((kb - 2.4) / 0.6);
+        this.diveDrop = 1 - upK;
+        this.dive = 1;
+        if (upK >= 1) return true;
+      }
     }
     return false;
   }
@@ -1391,26 +1606,45 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.rumble.set(0.8);
     this.klaxon?.set(0.5);
     this.crumbleT = 0.3;
-    // A slab of ceiling comes down on the man with the launcher
-    this.later(0.5, () => this.dropSlabOnGunner());
+    // Over the man with the launcher the ceiling cracks, spits dust and sparks, and comes down on him
+    this.later(0.45, () => this.crackOverGunner());
+    this.later(1.1, () => this.dropSlabOnGunner());
+  }
+
+  private crackOverGunner(): void {
+    const g = this.gunner;
+    if (!g) return;
+    const at = V(g.position.x, ROOM.h - 0.1, g.position.z + 0.3);
+    this.ctx.audio.wallCollapse();
+    this.particles.dust(at, 1.6, 1.2);
+    this.particles.electricSparks(at.clone().add(V(0.6, -0.1, 0)), 22);
+    this.ctx.audio.electricCrackle(this.eye.distanceTo(at));
+    for (let i = 0; i < 6; i++) this.dropChunk(at.clone().add(V((Math.random() - 0.5) * 1.8, -0.1, (Math.random() - 0.5) * 1.4)), 0.06 + Math.random() * 0.12);
+    this.shake = Math.max(this.shake, 0.5);
   }
 
   private dropSlabOnGunner(): void {
     const g = this.gunner;
     if (!g) return;
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.35, 1.8), new THREE.MeshStandardMaterial({ color: 0x4b514f, roughness: 0.9 }));
-    slab.position.set(g.position.x, ROOM.h - 0.2, g.position.z + 0.2);
+    // A whole bay of ceiling: the slab, its beam, a light fitting still hanging off it
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.35, 2.2), new THREE.MeshStandardMaterial({ color: 0x4b514f, roughness: 0.9 }));
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.3, 0.25), new THREE.MeshStandardMaterial({ color: 0x3a4044, roughness: 0.5, metalness: 0.7 }));
+    beam.position.set(0, -0.3, 0.6);
+    const fit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.3), new THREE.MeshStandardMaterial({ color: 0x3a4044 }));
+    fit.position.set(0.3, -0.22, -0.4);
+    slab.add(beam, fit);
+    slab.position.set(g.position.x, ROOM.h - 0.2, g.position.z + 0.3);
     slab.rotation.set(0.15, 0.3, -0.1);
     this.scene.add(slab);
     this.slab = slab;
-    this.slabV = 0;
+    this.slabV = 3;
     this.ctx.audio.wallCollapse();
   }
 
   private updateSlab(dt: number): void {
     const s = this.slab;
     if (!s) return;
-    this.slabV += 9.8 * dt;
+    this.slabV += 16 * dt;
     s.position.y -= this.slabV * dt;
     const g = this.gunner;
     if (g && g.alive && s.position.y < 2.0) {
@@ -1628,24 +1862,6 @@ export class Level14Scene extends CombatScene<Level14Data> {
     }
   }
 
-  /** The rocket to the face. */
-  private rocketDeath(at: THREE.Vector3): void {
-    this.rocket?.removeFromParent();
-    this.rocket = null;
-    this.qteEl.style.display = 'none';
-    this.particles.explosion(at, 3.5);
-    this.flashPool.flash(at, 40);
-    this.ctx.audio.explosion(1);
-    this.shake = 1.5;
-    this.slow = this.slowWant = 1;
-    this.melee.set('l', null);
-    this.melee.set('r', null);
-    this.hud.show();
-    this.letterbox.classList.add('open');
-    this.phase = 'dead';
-    this.player.kill('THE ROCKET', this.gunner?.position.clone().add(V(0, 1.5, 0)));
-  }
-
   // ============================================================ 4. the run
 
   private startRun(): void {
@@ -1667,8 +1883,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     p.cinematic = false;
     this.cinema(false);
     this.arsenal.equip('shotgun', 0.8);
-    this.setObjective('RUN! — HOLD SHIFT — GET THROUGH THE HOLE');
-    this.portalHum = this.ctx.audio.portalHum();
+    this.setObjective('GET OUT');
     this.ctx.input.requestPointerLock();
   }
 
@@ -1703,7 +1918,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     slab.position.set(-4, 0.45, ROOM.z0 + 1.0);
     slab.rotation.set(0.15, 0.3, -0.1);
     this.scene.add(slab);
-    for (const r of L.lights.red) r.intensity = 5;
+    for (const r of L.lights.red) r.intensity = 2;
     this.rumble = this.ctx.audio.rumbleLoop();
     this.rumble.set(0.8);
     this.klaxon = this.ctx.audio.klaxonLoop();
@@ -1719,8 +1934,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.runT += dt;
     const inHall = p.position.z > ROOM.z1 - 0.2 && p.position.x > HALL.x0 && p.position.x < HALL.x1;
     // The collapse, chasing him up the hallway
-    const START = 2.8;
-    const SPEED = 6.0;
+    const START = 3.2;
+    const SPEED = 6.2;
     if (this.runT > START) this.front = HALL.z0 - 1 + (this.runT - START) * SPEED;
     for (const piece of L.hallPieces) {
       const ahead = piece.z - this.front;
@@ -1741,8 +1956,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.collapseDeath();
       return;
     }
-    // Into the portal
-    if (p.alive && p.position.z > HALL.pit + 0.5 && inHall) this.startPortal();
+    // At the door: through it
+    if (p.alive && p.position.z > HALL.z1 - 3.4 && inHall) this.startExit();
     // The rumble and the shaking get worse the nearer it is
     const near = Math.max(0, 1 - Math.abs(p.position.z - this.front) / 14);
     this.shake = Math.max(this.shake, 0.18 + 0.5 * near);
@@ -1836,46 +2051,68 @@ export class Level14Scene extends CombatScene<Level14Data> {
     p.kill('THE COLLAPSE', p.position.clone().add(V(0, 4, -1)));
   }
 
-  // ============================================================ 5. the portal
+  // ============================================================ 5. the door
 
-  private startPortal(): void {
+  private exitFrom: { p: THREE.Vector3; yaw: number; pitch: number } | null = null;
+
+  private startExit(): void {
     const p = this.player;
-    this.phase = 'portal';
+    this.phase = 'exit';
     this.phaseT = 0;
     p.cinematic = true;
     this.cinema(true);
     this.setObjective('');
-    this.ctx.audio.slideWhoosh(2.2);
-    this.rumble?.set(0.2);
+    this.exitFrom = { p: p.camera.position.clone(), yaw: p.yaw, pitch: p.pitch };
+    this.rumble?.set(0.9);
   }
 
-  private updatePortal(dt: number): void {
+  /** He throws himself shoulder-first at the bar: it bursts open, he goes through into the light, rolling, and it's over. */
+  private updateExit(dt: number): void {
     const t = this.phaseT;
     const p = this.player;
     const cam = p.camera;
-    const c = this.level.portal.center;
-    p.update(dt, this.level.colliders);
-    // Pulled in: forward into the swirl, rolling, the lens stretching
-    const from = this.portalFrom ?? (this.portalFrom = cam.position.clone());
-    const k = smooth(t / 1.1);
-    cam.position.lerpVectors(from, c.clone().add(V(0, 0, -0.35)), k);
-    cam.lookAt(c.clone().add(V(0, 0, 3)));
-    cam.rotateZ(t * t * 2.2);
-    cam.fov = 74 + 22 * k;
+    const L = this.level;
+    const from = this.exitFrom!;
+    const door = L.exit.at;
+    // The run-up and the leap at it
+    const go = smooth(t / 0.55);
+    const pos = from.p.clone().lerp(door.clone().add(V(0, -0.1, -0.6)), go);
+    // Through it and down: the dive
+    const through = smooth((t - 0.5) / 0.5);
+    pos.z += 2.2 * through;
+    pos.y -= 1.1 * through * through;
+    cam.position.copy(pos);
+    cam.rotation.set(-0.1 - 0.5 * through, from.yaw + wrapAngle(Math.PI - from.yaw) * go, 0.4 * Math.sin(Math.PI * clamp01((t - 0.45) / 0.7)), 'YXZ');
+    cam.fov = 74 + 14 * through;
     cam.updateProjectionMatrix();
-    this.tint.style.opacity = String(Math.min(1, t * 0.9));
-    if (t > 1.0) {
-      this.fadeEl.style.transition = 'opacity 0.8s';
-      this.fadeEl.style.opacity = '1';
+    // The door bursts
+    const open = smooth((t - 0.42) / 0.12);
+    L.exit.leaf.rotation.y = -1.9 * open;
+    if (t >= 0.42 && t - dt < 0.42) {
+      L.exit.collider.disabled = true;
+      this.ctx.audio.doorBreach();
+      this.ctx.audio.kickImpact();
+      this.shake = 0.9;
     }
-    if (t > 2.0) this.card.style.opacity = '1';
-    if (t > 6.5 && this.phase === 'portal') {
+    if (t >= 0.95 && t - dt < 0.95) {
+      this.ctx.audio.bodyThud(0);
+      this.shake = 1.2;
+      // And behind him the hallway's last stretch comes down in the doorway
+      this.ctx.audio.wallCollapse();
+      for (const piece of L.hallPieces) if (!piece.fallen) this.dropPiece(piece);
+    }
+    if (t > 1.0) {
+      this.fadeEl.style.transition = 'opacity 0.6s';
+      this.fadeEl.style.opacity = '1';
+      this.rumble?.set(0);
+      this.klaxon?.set(0);
+    }
+    if (t > 1.9) this.card.style.opacity = '1';
+    if (t > 6 && this.phase === 'exit') {
       this.phase = 'done';
       this.ctx.bus.emit(Events.Level14Complete);
     }
   }
-
-  private portalFrom: THREE.Vector3 | null = null;
 
   // ============================================================ the frame
 
@@ -1918,7 +2155,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
     } else if (this.phase === 'pickup') this.updatePickup(dt);
     else if (this.phase === 'fight') this.updateFight(dt, sdt);
     else if (this.phase === 'dying') this.updateDying(dt);
-    else if (this.phase === 'portal' || this.phase === 'done') this.updatePortal(dt);
+    else if (this.phase === 'exit' || this.phase === 'done') this.updateExit(dt);
     // Everyone in the room: alive and posed, or a ragdoll settling
     for (const e of this.enemies) e.update(this.phase === 'dying' ? dt : sdt);
     if (this.phase === 'fight' && BEATS[this.beatI] !== 'barge') this.arsenal.held.stow = 1;
@@ -1961,30 +2198,20 @@ export class Level14Scene extends CombatScene<Level14Data> {
 
   private updateAtmosphere(dt: number): void {
     const L = this.level;
-    const cam = this.player.camera.position;
-    // Toward the portal, everything goes purple
-    const toPortal = clamp01((cam.z - 30) / 25);
     const fog = this.scene.fog as THREE.FogExp2;
-    fog.color.setRGB(0.04 + 0.12 * toPortal, 0.055 - 0.03 * toPortal, 0.052 + 0.18 * toPortal);
-    fog.density = 0.03 + 0.03 * toPortal;
+    // Dust in the air once it starts coming down
+    const dusty = this.crumbleT > 0 || this.phase === 'run' ? 1 : 0;
+    fog.density += ((0.03 + 0.025 * dusty) - fog.density) * Math.min(1, dt);
+    fog.color.setRGB(0.04 + 0.03 * dusty, 0.055 + 0.02 * dusty, 0.052 + 0.01 * dusty);
     (this.scene.background as THREE.Color).copy(fog.color);
-    L.portal.mat.uniforms.uT.value = this.t;
-    L.portal.ring.rotation.z += dt * 0.3;
-    L.portal.light.intensity = 9 + 3 * Math.sin(this.t * 3.1) + 2 * Math.sin(this.t * 7.3);
-    for (const s of L.portal.mist) {
-      const b = s.userData.base as THREE.Vector3;
-      const ph = s.userData.ph as number;
-      s.position.set(b.x + Math.sin(this.t * 0.4 + ph) * 0.4, b.y + Math.sin(this.t * 0.6 + ph * 2) * 0.25, b.z + Math.cos(this.t * 0.3 + ph) * 0.4);
-    }
-    this.portalHum?.setDistance(cam.distanceTo(L.portal.center));
     // The tanks breathe; the things in them turn
     L.tankGlow.forEach((m, i) => (m.emissiveIntensity = 0.8 + 0.25 * Math.sin(this.t * 1.1 + i)));
     L.floaters.forEach((f, i) => {
       f.rotation.y += dt * 0.15 * (i % 2 ? 1 : -1);
       f.position.y = 1.4 + Math.sin(this.t * 0.5 + i) * 0.08;
     });
-    // Screens every few frames
-    if (Math.floor(this.t * 20) !== Math.floor((this.t - dt) * 20)) for (const s of L.screens) s.draw(this.t);
+    // The screens: one redrawn at a time, round and round (all of them at once was a texture upload storm)
+    if (Math.floor(this.t * 30) !== Math.floor((this.t - dt) * 30) && L.screens.length) L.screens[this.screenI++ % L.screens.length].draw(this.t);
     // The fittings buzz and flicker; worse once the place is coming down
     const bad = this.crumbleT > 0 || this.phase === 'run' ? 1 : 0;
     L.lights.lamps.forEach((l, i) => {
@@ -1997,8 +2224,10 @@ export class Level14Scene extends CombatScene<Level14Data> {
       const out = f < (bad ? -0.6 : -0.93);
       l.intensity = out ? 0.2 : (l.userData.k as number) * (0.9 + 0.1 * f);
     });
-    if (this.phase === 'run' || this.crumbleT > 0) for (const r of L.lights.red) r.intensity = 3 + 3 * Math.max(0, Math.sin(this.t * 6));
+    if (this.phase === 'run' || this.crumbleT > 0) for (const r of L.lights.red) r.intensity = 1.2 + 1.6 * Math.max(0, Math.sin(this.t * 6));
   }
+
+  private screenI = 0;
 
   private applyShake(dt: number): void {
     this.shake = Math.max(0, this.shake - dt * 1.4);

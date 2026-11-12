@@ -122,7 +122,7 @@ class Sentry {
     cone.rotateX(-Math.PI / 2);
     cone.translate(0, 0, -len / 2);
     this.beamMat = new THREE.ShaderMaterial({
-      uniforms: { uCol: { value: new THREE.Color(0.85, 0.92, 1) }, uK: { value: 1 } },
+      uniforms: { uCol: { value: new THREE.Color(1, 0.5, 0.46) }, uK: { value: 1.15 } },
       vertexShader: `varying float vZ; varying vec3 vN; varying vec3 vV; void main(){ vZ = -position.z / ${len.toFixed(1)}; vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
       fragmentShader: `uniform vec3 uCol; uniform float uK; varying float vZ; varying vec3 vN; varying vec3 vV; void main(){ float rim = pow(1.0 - abs(dot(vN, vV)), 0.6); float a = 0.12 * (1.0 - vZ) * (1.0 - vZ) * (0.35 + 0.65 * (1.0 - rim)) * uK; gl_FragColor = vec4(uCol, a); }`,
       transparent: true,
@@ -236,8 +236,8 @@ class Sentry {
     this.pitchG.rotation.x = this.pitch;
     this.pitchG.position.z = this.recoil * 0.05;
     const hot = this.state === 'lock' || this.state === 'fire';
-    this.beamMat.uniforms.uCol.value.setRGB(hot ? 1 : 0.85, hot ? 0.18 : 0.92, hot ? 0.12 : 1);
-    this.beamMat.uniforms.uK.value = hot ? 1.5 : 1;
+    this.beamMat.uniforms.uCol.value.setRGB(1, hot ? 0.16 : 0.5, hot ? 0.1 : 0.46);
+    this.beamMat.uniforms.uK.value = hot ? 1.6 : 1.15;
     return out;
   }
 
@@ -327,7 +327,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private pickFrom = { p: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private swapped = false;
   private cratePromptOn = false;
-  private hint = 0;
+  /** What E would do at the lift's buttons, if he's at one. */
+  private liftPrompt: string | null = null;
+  private liftRequest = false;
   // ---- The waste room: what's falling in it, each chute's clock, and Ravi knocked off his feet
   private trash: { mesh: THREE.Object3D; body: CANNON.Body; live: boolean; r: number; rest: number }[] = [];
   private chuteT: number[] = [];
@@ -480,7 +482,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
       const gc = L.gunCrate;
       cam.add(this.pickRoot);
       this.pickRoot.add(this.pickA.l, this.pickA.r);
-      this.pickArms = new FirstPersonArms(this.pickRoot, cam);
+  
+    this.pickArms = new FirstPersonArms(this.pickRoot, cam);
       this.pickRoot.visible = false;
       this.gunA.r.position.set(0, -0.038, 0.228);
       this.gunA.r.rotation.x = 0.15;
@@ -498,6 +501,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       }
     }
     this.buildTrash();
+    this.buildHopperBodies();
     this.chuteT = L.grinder.chutes.map((c) => c.phase);
     this.chuteWarned = L.grinder.chutes.map(() => false);
     this.updateRides(0);
@@ -665,15 +669,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.setObjective(
       [
         'FIND A WAY UP OUT OF THE SEWERS',
-        Level13Scene.quadTaken ? 'CROSS THE WALKWAYS — RIGHT CLICK THROWS YOU AWAY FROM WHERE YOU AIM' : 'THERE’S A WEAPONS CRATE ON THE PLATFORM',
-        'THROUGH WASTE PROCESSING — MIND WHAT FALLS OUT OF THE CHUTES',
-        'ACROSS THE BROKEN SPAN',
-        'PULL THE LEVER',
-        'DROP ONTO A VAT CART — CHANGE LINES BEFORE EACH STERILISER ARCH',
-        'HOP THE CARGO CRATES ACROSS TO THE LIFT',
-        'TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW',
         'GET THROUGH THE DOOR AT THE END'
-      ][this.checkpoint] ?? ''
+      ][Math.min(this.checkpoint, 1)] ?? ''
     );
     this.ctx.input.requestPointerLock();
   }
@@ -1205,7 +1202,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.ctx.audio.leverThrow();
       this.later(0.6, () => this.callMover(false));
     }
-    if (this.phase === 'play') this.hud.setPrompt(this.cratePromptOn ? '[ E ] TAKE THE QUAD-BARREL' : near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
+    if (this.phase === 'play') this.hud.setPrompt(this.cratePromptOn ? '[ E ] TAKE THE QUAD-BARREL' : this.liftPrompt ? this.liftPrompt : near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
   }
 
   /** The lever's done: the platform starts over to him (`instant`: already crossed, a restart past it). */
@@ -1218,7 +1215,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
     this.moverState = 'coming';
     this.moverT = 0;
-    this.setObjective('THE PLATFORM’S COMING — RIDE IT ACROSS');
+
   }
 
   private updateMover(dt: number): void {
@@ -1403,18 +1400,42 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const p = this.player.position;
     const audio = this.ctx.audio;
     const inside = this.inLift() && this.player.alive;
-    if (this.liftState === 'idle') {
-      if (!inside) this.liftArmed = true;
-      this.liftInT = inside && this.liftArmed ? this.liftInT + dt : 0;
-      // Called from the other floor: he's waiting by the gate there
-      const otherY = this.liftAt === 'bottom' ? l.yTop : l.yBottom;
-      const waiting = Math.abs(p.y - otherY) < 0.4 && p.x > l.x0 - 1 && p.x < l.x1 + 1 && Math.abs(p.z - (l.z0 + l.z1) / 2) < 4.5;
-      this.liftCallT = waiting ? this.liftCallT + dt : 0;
-      if (this.liftInT > 0.8 || this.liftCallT > 0.8) {
-        this.liftState = 'closing';
-        this.liftT = 0;
-        audio.elevatorDoors(0.6);
+    // ---- The buttons: the panel in the car (up or down, whichever it isn't), the call buttons by each gate
+    this.liftPrompt = null;
+    const B = l.buttons;
+    let want = false;
+    if (this.playable && !this.climbing) {
+      if (inside && this.liftState === 'idle') {
+        this.liftPrompt = this.liftAt === 'bottom' ? '[ E ] PRESS ▲' : '[ E ] PRESS ▼';
+        if (this.ctx.input.wasPressed('KeyE')) {
+          want = true;
+          (this.liftAt === 'bottom' ? B.up : B.down).emissiveIntensity = 4;
+        }
+      } else {
+        for (const c of B.calls) {
+          if (Math.hypot(p.x - c.at.x, p.z - c.at.z) > 1.5 || Math.abs(p.y - c.at.y) > 0.6) continue;
+          if (c.level === this.liftAt && this.liftState === 'idle') break;
+          this.liftPrompt = '[ E ] CALL THE LIFT';
+          if (this.ctx.input.wasPressed('KeyE')) {
+            want = true;
+            c.lamp.emissiveIntensity = 4;
+          }
+          break;
+        }
       }
+    }
+    if (want && this.liftState === 'idle') {
+      this.liftState = 'closing';
+      this.liftT = 0;
+      audio.uiBeep();
+      audio.elevatorDoors(0.6);
+    }
+    // Lit while it's on its way, then back to dim
+    if (this.liftState === 'idle' || this.liftState === 'opening') {
+      for (const m of [B.up, B.down, ...B.calls.map((c) => c.lamp)]) m.emissiveIntensity = Math.max(0.6, m.emissiveIntensity - dt * 4);
+    }
+    if (this.liftState === 'idle') {
+      // (nothing: it waits for a button)
     } else if (this.liftState === 'closing') {
       this.liftGate = Math.max(0, this.liftGate - dt / 0.6);
       if (this.liftGate <= 0) {
@@ -1432,9 +1453,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
         this.liftState = 'opening';
         audio.elevatorDing();
         audio.elevatorDoors(0.6);
-        if (this.liftAt === 'top' && !this.liftArrived && !this.ladderReleased) this.setObjective('FIND THE RELEASE FOR WALKWAY 7’S LADDER');
         if (this.liftAt === 'top') this.liftArrived = true;
-        if (this.liftAt === 'bottom' && this.ladderReleased) this.setObjective('CLIMB THE LADDER TO WALKWAY 7');
       }
     } else {
       this.liftGate = Math.min(1, this.liftGate + dt / 0.6);
@@ -1500,7 +1519,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.officeLeverT = 0;
     this.ladderDrop = 0;
     if (this.checkpoint < 7) this.checkpoint = 7;
-    this.setObjective('TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW');
+
   }
 
   // ------------------------------------------------------------ the door
@@ -1688,19 +1707,36 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const down = yawPitchTo(eye, this.gunHome.p);
     const rise = smooth((t - 0.95) / 0.8);
     p.yaw = this.pickFrom.yaw + wrapAngle(down.yaw - this.pickFrom.yaw) * go;
-    const lookDown = Math.max(down.pitch, -0.95);
+    const lookDown = Math.max(down.pitch, -0.9);
     p.pitch = THREE.MathUtils.lerp(this.pickFrom.pitch + (lookDown - this.pickFrom.pitch) * go, -0.05, rise);
     p.update(dt, L.colliders);
     // Bent over it: lower, leaning in
     const bend = go * (1 - rise);
-    cam.position.y -= 0.34 * bend;
+    cam.position.y -= 0.52 * bend;
     const f = p.forwardDir(Level13Scene.tmpA);
-    cam.position.addScaledVector(f, 0.2 * bend);
+    cam.position.addScaledVector(f, 0.34 * bend);
     cam.updateMatrixWorld(true);
+
     // Hands in, then the gun up with them
     const reach = smooth((t - 0.3) / 0.6);
-    this.blendAnchor(this.pickA.r, V(0.26, -0.5, -0.22), this.gunA.r, reach);
-    this.blendAnchor(this.pickA.l, V(-0.3, -0.62, -0.18), this.gunA.l, smooth((t - 1.35) / 0.5));
+    this.blendAnchor(this.pickA.r, V(0.3, -0.62, 0.2), this.gunA.r, reach);
+    this.blendAnchor(this.pickA.l, V(-0.32, -0.66, 0.22), this.gunA.l, smooth((t - 1.35) / 0.5));
+    // Each elbow back toward its shoulder and a little down — the grips' own elbows are for a gun
+    // held at the shoulder, and on a gun lying on its side they'd point anywhere
+    if (!this.swapped) {
+      const q = new THREE.Quaternion();
+      for (const [side, a, g0] of [['r', this.pickA.r, GRIP_R], ['l', this.pickA.l, GRIP_L]] as const) {
+        a.updateWorldMatrix(true, false);
+        const w = a.getWorldPosition(new THREE.Vector3());
+        const sh = cam.position.clone().add(V(0, -0.3, 0)).add(V(-f.z * (side === 'r' ? 0.2 : -0.2), 0, f.x * (side === 'r' ? 0.2 : -0.2)));
+        const dir = sh.sub(w).normalize().add(V(0, -0.35, 0)).normalize();
+        a.getWorldQuaternion(q);
+        dir.applyQuaternion(q.invert());
+        this.pickArms.set(side, a, { ...g0, toward: dir });
+        // The shoulder itself low and back, so the top of the arm is below the frame
+        this.pickArms.shoulder(side, cam.position.clone().add(V(0, -0.5, 0)).addScaledVector(f, -0.12).add(V(-f.z * (side === 'r' ? 0.22 : -0.22), 0, f.x * (side === 'r' ? 0.22 : -0.22))), true);
+      }
+    }
     if (t >= 0.9 && t - dt < 0.9) this.ctx.audio.clink();
     if (!this.swapped) {
       // Up out of the foam to in front of him, its left side turned to him; then down to where he holds it
@@ -1739,7 +1775,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.phaseT = 0;
       p.cinematic = false;
       this.cinema(false);
-      this.setObjective('RIGHT CLICK: A PRESSURE SHOT THROWS YOU AWAY FROM WHERE YOU AIM — AIM AT THE FLOOR TO GO UP');
+
       a.showInventory();
     }
   }
@@ -1913,7 +1949,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       t.mesh.position.set(b.position.x, b.position.y, b.position.z);
       t.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
       // Into the teeth
-      if (b.position.y < GRIND.killY - 1.2) {
+      if (b.position.y < GRIND.killY - 0.7) {
         const at = t.mesh.position.clone().setY(GRIND.killY - 0.6);
         if (inside || dist < 30) {
           this.particles.sparks(at, V((Math.random() - 0.5) * 0.6, 1, (Math.random() - 0.5) * 0.6), 18, GRIND.floor);
@@ -1948,13 +1984,49 @@ export class Level13Scene extends CombatScene<Level13Data> {
         if (d < t.r + 0.32 && b.position.y - t.r < pos.y + 1.75 && b.position.y + t.r > pos.y + 0.3) this.knockDown(dx, dz, d);
       }
     }
-    // The hopper: anything in it is gone
+    // The hopper's plates: steep, steel, greasy. Land on one and down he goes into the teeth
+    this.hopperSlide(dt);
+    // The rollers: anything down there is gone
     if (p.alive && inside && pos.y < GRIND.killY) {
       this.particles.sparks(pos.clone(), V(0, 1, 0), 30, GRIND.floor);
       this.ctx.audio.gateCrash(2);
       this.shake = 1.2;
       p.stunned = false;
       p.kill('THE GRINDER');
+    }
+  }
+
+  /** The hopper's plates for the falling scrap to hit and slide down: static, tilted boxes. */
+  private buildHopperBodies(): void {
+    for (const h of this.level.grinder.hopper) {
+      const b = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Box(new CANNON.Vec3(h.half.x, h.half.y, h.half.z)) });
+      b.position.set(h.center.x, h.center.y, h.center.z);
+      b.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), h.angle);
+      this.world.addBody(b);
+    }
+  }
+
+  /** On a hopper plate: held on its surface, and it takes him down toward the rollers. */
+  private hopperSlide(dt: number): void {
+    const p = this.player;
+    const pos = p.position;
+    if (!p.alive || pos.x < GRIND.x0 || pos.x > GRIND.x1) return;
+    for (const h of this.level.grinder.hopper) {
+      const lo = Math.min(h.wallZ, h.lipZ);
+      const hi = Math.max(h.wallZ, h.lipZ);
+      if (pos.z < lo || pos.z > hi) continue;
+      const k = Math.abs(pos.z - h.lipZ) / Math.abs(h.wallZ - h.lipZ);
+      const surf = h.lipY + (h.wallY - h.lipY) * k + 0.08;
+      if (pos.y > surf + 0.02 || pos.y < surf - 1.5 || p.velocity.y > 0) continue;
+      pos.y = surf;
+      p.velocity.y = 0;
+      // Down the slope, faster than he can walk up it
+      const down = Math.sign(h.lipZ - h.wallZ);
+      p.boost.z += down * 16 * dt;
+      p.boost.x *= Math.exp(-3 * dt);
+      p.stunned = true;
+      this.knockT = Math.max(this.knockT, 0.3);
+      if (Math.random() < dt * 8) this.particles.sparks(pos.clone(), V(0, 1, -down), 4, GRIND.floor);
     }
   }
 
@@ -2028,30 +2100,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (c < 5 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 5;
     if (c < 6 && Math.abs(p.y - Y6) < 0.3 && p.x > 50 && p.x < 56 && p.z > 6 && p.z < 14) c = 6;
     if (c < 8 && Math.abs(p.y - H4) < 0.3 && p.x > 50 && p.z < -16) c = 8;
-    // The gun's lessons, as he comes to what needs them
-    if (Level13Scene.quadTaken && c === 1) {
-      if (this.hint < 1 && p.x > -44.5 && p.y > H1 + 2) {
-        this.hint = 1;
-        this.setObjective('JUMP FIRST, THEN FIRE AT THE FLOOR, AND YOU GO HIGHER');
-      }
-      if (this.hint < 2 && p.x > -36 && p.z > -29) {
-        this.hint = 2;
-        this.setObjective('THE GAP: JUMP, FIRE DOWN — THEN TURN YOUR BACK ON THE FAR SIDE AND FIRE AGAIN');
-      }
-      if (this.hint < 3 && p.z > -4 && p.x < -28) {
-        this.hint = 3;
-        this.setObjective('WEST, THROUGH WASTE PROCESSING');
-      }
-    }
     if (c !== this.checkpoint) {
       this.checkpoint = c;
-      if (c === 1 && !Level13Scene.quadTaken) this.setObjective('THERE’S A WEAPONS CRATE ON THE PLATFORM');
-      if (c === 2) this.setObjective('THROUGH WASTE PROCESSING — MIND WHAT FALLS OUT OF THE CHUTES');
-      if (c === 3) this.setObjective('ACROSS THE BROKEN SPAN');
-      if (c === 4 && !this.leverPulled) this.setObjective('PULL THE LEVER');
-      if (c === 5) this.setObjective('DROP ONTO A VAT CART — CHANGE LINES BEFORE EACH STERILISER ARCH');
-      if (c === 6) this.setObjective('HOP THE CARGO CRATES ACROSS TO THE LIFT');
-      if (c === 8) this.setObjective('GET THROUGH THE DOOR AT THE END');
+      if (c === 1) this.setObjective('GET THROUGH THE DOOR AT THE END');
     }
   }
 

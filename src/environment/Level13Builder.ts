@@ -46,7 +46,7 @@ export const VAT_Y = 59.6;
 /** The second vat line, west of the first: the one he drops onto. */
 export const VAT_XB = 38.7;
 /** The waste room off the hall's west wall: inside it, and the height its grinder takes anything below. */
-export const GRIND = { x0: -88, x1: -61, z0: -8, z1: 20, floor: 36, top: 63, killY: 42 };
+export const GRIND = { x0: -88, x1: -61, z0: -8, z1: 20, floor: 36, top: 63, killY: 41.1 };
 /** Below this, inside the hall, he's gone over. */
 export const FALL_Y = 38;
 /** The sewer tunnels: walls straight up to SPRING, then a vault rising RISE to its crown under the slab. */
@@ -120,9 +120,23 @@ export interface Level13Data extends CombatLevel {
   grinder: {
     rollers: THREE.Object3D[];
     chutes: { mouth: THREE.Vector3; period: number; phase: number; lamp: THREE.MeshStandardMaterial }[];
+    /** The hopper's two plates, sloping down from the long walls to the rollers. */
+    hopper: { center: THREE.Vector3; half: THREE.Vector3; angle: number; wallZ: number; lipZ: number; wallY: number; lipY: number }[];
   };
   cargo: { lines: { z: number; top: number; speed: number; x0: number; x1: number }[]; boxes: { group: THREE.Group; collider: Collider; line: number; x: number }[] };
-  lift: { car: THREE.Group; floor: Collider; x0: number; x1: number; z0: number; z1: number; yBottom: number; yTop: number; gates: { pivot: THREE.Group; collider: Collider; level: 'bottom' | 'top' }[] };
+  lift: {
+    car: THREE.Group;
+    floor: Collider;
+    x0: number;
+    x1: number;
+    z0: number;
+    z1: number;
+    yBottom: number;
+    yTop: number;
+    gates: { pivot: THREE.Group; collider: Collider; level: 'bottom' | 'top' }[];
+    /** The car's two buttons, and a call button by each gate (where he stands to press it). */
+    buttons: { up: THREE.MeshStandardMaterial; down: THREE.MeshStandardMaterial; calls: { at: THREE.Vector3; level: 'bottom' | 'top'; lamp: THREE.MeshStandardMaterial }[] };
+  };
   officeLever: { pivot: THREE.Group; at: THREE.Vector3 };
   dropLadder: { group: THREE.Group; raise: number; ladder: Ladder };
   /** The vats' liquid, one material per colour: the scene runs their clock and fog. */
@@ -641,6 +655,150 @@ function vatLiquidMaterial(colour: number): THREE.ShaderMaterial {
       }
     `
   });
+}
+
+/**
+ * A safety sign with a pictogram: a black-edged yellow triangle with a
+ * figure in it — tumbling head first into a pair of toothed rollers, broken
+ * up into dots in the arcs of a steriliser, or stepping off an edge — and
+ * DANGER over what it is, underneath.
+ */
+const hazardCache = new Map<string, THREE.MeshStandardMaterial>();
+export function hazardSign(kind: 'grinder' | 'steriliser' | 'fall', w: number, h: number): THREE.Mesh {
+  let mat = hazardCache.get(kind);
+  if (!mat) {
+    const c = makeCanvas(256, 340);
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#f2efe6';
+    g.fillRect(0, 0, 256, 340);
+    g.strokeStyle = '#1a1a1a';
+    g.lineWidth = 6;
+    g.strokeRect(5, 5, 246, 330);
+    // The triangle
+    g.beginPath();
+    g.moveTo(128, 20);
+    g.lineTo(240, 222);
+    g.lineTo(16, 222);
+    g.closePath();
+    g.fillStyle = '#1a1a1a';
+    g.fill();
+    g.beginPath();
+    g.moveTo(128, 40);
+    g.lineTo(224, 212);
+    g.lineTo(32, 212);
+    g.closePath();
+    g.fillStyle = '#f5c400';
+    g.fill();
+    g.fillStyle = '#111';
+    g.strokeStyle = '#111';
+    g.lineCap = 'round';
+    /** A figure: head at (hx, hy), limbs from the body's angle. */
+    const figure = (hx: number, hy: number, ang: number, s: number, armA: number, legA: number): void => {
+      g.beginPath();
+      g.arc(hx, hy, 7 * s, 0, Math.PI * 2);
+      g.fill();
+      const bx = hx + Math.sin(ang) * 10 * s;
+      const by = hy + Math.cos(ang) * 10 * s;
+      const ex = hx + Math.sin(ang) * 34 * s;
+      const ey = hy + Math.cos(ang) * 34 * s;
+      g.lineWidth = 7 * s;
+      g.beginPath();
+      g.moveTo(bx, by);
+      g.lineTo(ex, ey);
+      g.stroke();
+      g.lineWidth = 5 * s;
+      for (const sgn of [-1, 1]) {
+        const ax = hx + Math.sin(ang) * 15 * s;
+        const ay = hy + Math.cos(ang) * 15 * s;
+        g.beginPath();
+        g.moveTo(ax, ay);
+        g.lineTo(ax + Math.sin(ang + sgn * armA) * 18 * s, ay + Math.cos(ang + sgn * armA) * 18 * s);
+        g.stroke();
+        g.beginPath();
+        g.moveTo(ex, ey);
+        g.lineTo(ex + Math.sin(ang + sgn * legA) * 20 * s, ey + Math.cos(ang + sgn * legA) * 20 * s);
+        g.stroke();
+      }
+    };
+    let title = 'DANGER';
+    let sub = '';
+    if (kind === 'grinder') {
+      // Two rollers, teeth round them, and him going in head first
+      for (const cx of [104, 152]) {
+        g.beginPath();
+        g.arc(cx, 186, 20, 0, Math.PI * 2);
+        g.fill();
+        for (let k = 0; k < 10; k++) {
+          const a = (k / 10) * Math.PI * 2;
+          g.save();
+          g.translate(cx + Math.cos(a) * 22, 186 + Math.sin(a) * 22);
+          g.rotate(a);
+          g.fillRect(-4, -4, 9, 8);
+          g.restore();
+        }
+      }
+      figure(126, 140, Math.PI + 0.25, 1, 2.3, 0.35);
+      g.lineWidth = 3;
+      for (const dx of [-26, 30]) {
+        g.beginPath();
+        g.moveTo(126 + dx, 90);
+        g.lineTo(126 + dx * 0.8, 118);
+        g.stroke();
+      }
+      sub = 'CRUSH HAZARD — GRINDER';
+    } else if (kind === 'steriliser') {
+      // The arch, arcs across it, him half gone to dots
+      g.fillRect(70, 96, 10, 112);
+      g.fillRect(176, 96, 10, 112);
+      g.fillRect(70, 90, 116, 10);
+      g.lineWidth = 2.5;
+      for (let k = 0; k < 4; k++) {
+        g.beginPath();
+        let yy = 108 + k * 24;
+        g.moveTo(80, yy);
+        for (let x = 92; x <= 176; x += 12) g.lineTo(x, (yy += (k + x) % 2 ? 7 : -7));
+        g.stroke();
+      }
+      g.save();
+      g.beginPath();
+      g.rect(0, 0, 128, 340);
+      g.clip();
+      figure(128, 128, 0, 1.05, 0.5, 0.25);
+      g.restore();
+      for (let k = 0; k < 34; k++) {
+        const x = 130 + ((k * 37) % 40);
+        const y = 122 + ((k * 53) % 86);
+        g.fillRect(x, y, 4 + (k % 3), 4 + (k % 3));
+      }
+      sub = 'HIGH VOLTAGE — DO NOT RIDE';
+    } else {
+      // An edge, and him stepping off it
+      g.fillRect(56, 150, 60, 10);
+      g.fillRect(56, 160, 10, 50);
+      figure(148, 128, 0.7, 1, 2.0, 0.6);
+      g.lineWidth = 3;
+      for (const dy of [0, 16]) {
+        g.beginPath();
+        g.moveTo(170, 168 + dy);
+        g.lineTo(184, 190 + dy);
+        g.stroke();
+      }
+      sub = 'FALL HAZARD';
+    }
+    g.textAlign = 'center';
+    g.fillStyle = '#111';
+    g.font = 'bold 38px Arial, sans-serif';
+    g.fillText(title, 128, 270);
+    g.font = 'bold 17px Arial, sans-serif';
+    g.fillText(sub, 128, 304);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    mat = new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 });
+    hazardCache.set(kind, mat);
+  }
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  return m;
 }
 
 let arcTex: THREE.CanvasTexture | null = null;
@@ -1728,7 +1886,13 @@ export class Level13Builder {
     this.coverStack(-41.5, UP1, -31.5, 1.0);
     for (const z of [-32.0, -30.0]) this.add(M.darkSteel, span(-45.45, -10, z - 0.1, -45.25, H1 - 0.32, z + 0.1));
     // ---- 1: the first junction, crates and a vat on it
-    this.platform(-36, -36, -28, -27, H1, 'n');
+    this.platform(-36, -36, -28, -27, H1, '');
+    this.walkRail(-36, -36, -34, -35.92, H1);
+    this.walkRail(-32, -36, -28, -35.92, H1);
+    // A walkway north to a door in the wall: where the people who work here come and go
+    this.walkway({ x0: -34, z0: -70, x1: -32, z1: -36, y: H1, rails: 'both' });
+    this.serviceDoor(-33, H1, HALL.z0, 1, 'MAINTENANCE 4B');
+    this.controlConsole(-33.5, H1, -69.3, 0, 'cams');
     // West rail either side of where S1 comes in, not across it
     this.walkRail(-36, -36, -35.92, -32.1, H1);
     this.walkRail(-36, -29.9, -35.92, -27, H1);
@@ -1749,6 +1913,7 @@ export class Level13Builder {
       g.rotateX(rz);
       g.translate(-32, y, z);
       this.add(M.darkSteel, g);
+      this.slantSolid(V(-32, y, z), V(0, -Math.sin(rz), Math.cos(rz)), 1.0, 0.9);
     }
     // ---- 2: the platform at its end, and the ladder up to 3
     this.platform(-36, -3, -28, 5.4, H1, 'es');
@@ -1762,7 +1927,12 @@ export class Level13Builder {
     this.walkway({ x0: -60, z0: 0, x1: -36, z1: 2.2, y: H1, rails: 'both' });
     this.coverStack(-47, H1, 0.55, 0.9);
     // ---- 3: above, and the span east that's been broken
-    this.platform(-36, 5.8, -28, 13, H2, 'ns');
+    this.platform(-36, 5.8, -28, 13, H2, 'n');
+    this.walkRail(-36, 12.92, -33.5, 13, H2);
+    this.walkRail(-31.5, 12.92, -28, 13, H2);
+    this.walkway({ x0: -33.5, z0: 13, x1: -31.5, z1: HALL.z1, y: H2, rails: 'both' });
+    this.serviceDoor(-32.5, H2, HALL.z1, -1, 'PUMP ROOM 2');
+    this.controlConsole(-31.9, H2, 69.3, Math.PI, 'vats');
     this.walkRail(-36, 5.8, -35.92, 9, H2);
     this.walkRail(-36, 11, -35.92, 13, H2);
     // Back out of the waste room: east along the wall's upper door to here
@@ -1775,12 +1945,14 @@ export class Level13Builder {
       g.translate(-18.9, H2 - 1.0, 10);
       return g;
     })());
+    this.slantSolid(V(-18.9, H2 - 1.0, 10), V(Math.cos(-0.9), Math.sin(-0.9), 0), 1.2, 0.9);
     this.add(M.darkSteel, (() => {
       const g = new THREE.BoxGeometry(2.2, 0.06, 1.8);
       g.rotateZ(0.8);
       g.translate(-10.1, H2 - 0.9, 10);
       return g;
     })());
+    this.slantSolid(V(-10.1, H2 - 0.9, 10), V(Math.cos(0.8), Math.sin(0.8), 0), 1.1, 0.9);
     // Beams to jump across: I-beams left from the old frame, at odd heights and lines
     const beams: [number, number, number, number][] = [
       [-18.0, -14.8, 10.1, H2 - 0.05],
@@ -1829,7 +2001,12 @@ export class Level13Builder {
     ladders.push({ base: V(30, H2, 39.0), face: Math.PI, top: H3, off: V(30, H3, 41.4) });
     this.ladderMesh(V(30, H2, 39.8), Math.PI, H3 - H2 + 1.1, 'lamp', true);
     // ---- 7, and the last long walkway east under the turret
-    this.platform(26, 40, 34, 48, H3, 'ws');
+    this.platform(26, 40, 34, 48, H3, 'w');
+    this.walkRail(26, 47.92, 29, 48, H3);
+    this.walkRail(31, 47.92, 34, 48, H3);
+    this.walkway({ x0: 29, z0: 48, x1: 31, z1: HALL.z1 - 1.2, y: H3, rails: 'both' });
+    this.serviceDoor(30, H3, HALL.z1 - 1.2, -1, 'SENTRY CONTROL');
+    this.controlConsole(30.6, H3, 68.1, Math.PI, 'sentries');
     this.walkRail(26, 40, 29.2, 40.08, H3);
     this.walkRail(30.8, 40, 34, 40.08, H3);
     this.vat(27.4, H3, 46.5, 0.8, 2.0, 0x7dff5a);
@@ -1994,6 +2171,7 @@ export class Level13Builder {
       // The girder under the carts, the rails on it, trestles down into the fog every 12 m
       this.add(M.darkSteel, span(X - 1.0, Y - 1.05, z0, X + 1.0, Y - 0.62, z1));
       for (const s of [-0.7, 0.7]) this.add(M.steel, span(X + s - 0.06, Y - 0.62, z0, X + s + 0.06, Y - 0.5, z1));
+      this.solidBox(X - 1.0, Y - 1.05, z0, X + 1.0, Y - 0.5, z1);
       this.add(M.hazard, span(X - 1.02, Y - 0.85, z0, X - 1.0, Y - 0.7, z1), false, 0.5);
       this.add(M.hazard, span(X + 1.0, Y - 0.85, z0, X + 1.02, Y - 0.7, z1), false, 0.5);
       for (let z = z0 + 6; z < z1; z += 12) {
@@ -2058,12 +2236,14 @@ export class Level13Builder {
       const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), new THREE.MeshStandardMaterial({ color: 0x1a1030, emissive: 0xa070ff, emissiveIntensity: 3 }));
       lamp.position.set(X, Y + 4.08, z);
       this.group.add(lamp);
-      for (const s of [-1, 1]) {
-        const sign = warnPlate('STERILISER — DO NOT RIDE THROUGH', 3.0, 0.36);
-        sign.position.set(X, Y + 3.75, z + s * 0.235);
-        if (s < 0) sign.rotation.y = Math.PI;
-        this.group.add(sign);
-      }
+      const sign = warnPlate('STERILISER — DO NOT RIDE THROUGH', 3.0, 0.36);
+      sign.position.set(X, Y + 3.75, z + 0.235);
+      this.group.add(sign);
+      // The pictogram on the post away from the other line
+      const out = X < VAT_X ? -1 : 1;
+      const pic = hazardSign('steriliser', 0.7, 0.95);
+      pic.position.set(X + out * 1.55, Y + 1.7, z + 0.18);
+      this.group.add(pic);
       arches.push({ x: X, z, mat });
     };
     arch(VAT_X, 39);
@@ -2114,10 +2294,10 @@ export class Level13Builder {
     sign.position.set(xa + 0.02, 67.6, 2);
     this.group.add(sign);
     const lines: Level13Data['cargo']['lines'] = [
-      // 1.5 m gaps: platform edge 6 | crates 4.5..2.5 | 1.0..-1.0 | -2.5..-4.5 | landing -6
-      { z: 3.5, top: 59.95, speed: 1.5 },
-      { z: 0, top: 60.2, speed: -1.4 },
-      { z: -3.5, top: 60.0, speed: 1.35 }
+      // 2 m gaps: platform edge 8 | crates 6..4 | 2..0 | -2..-4 | landing -6
+      { z: 5, top: 59.95, speed: 1.5 },
+      { z: 1, top: 60.2, speed: -1.4 },
+      { z: -3, top: 60.0, speed: 1.35 }
     ].map((l) => ({ ...l, x0: xa - 1.5, x1: xb + 1.5 }));
     const crateMats = [0, 1, 2, 3, 4].map((i) => new THREE.MeshStandardMaterial({ map: cargoTexture(i), roughness: 0.6, metalness: 0.3 }));
     const topMat = new THREE.MeshStandardMaterial({ color: 0x4a5560, roughness: 0.55, metalness: 0.4 });
@@ -2170,10 +2350,10 @@ export class Level13Builder {
       }
     }
     // The cargo platform he starts from, and its sign
-    this.platform(50, 6, 56, 14, Y6, 'es');
-    this.walkRail(50, 6, 50.08, 9.4, Y6);
+    this.platform(50, 8, 56, 14, Y6, 'es');
+    this.walkRail(50, 8, 50.08, 9.4, Y6);
     this.walkRail(50, 11.6, 50.08, 14, Y6);
-    this.add(M.hazard, span(50, Y6, 6, 56, Y6 + 0.012, 6.3), false, 0.5);
+    this.add(M.hazard, span(50, Y6, 8, 56, Y6 + 0.012, 8.3), false, 0.5);
     this.crate(55, Y6, 13, 1.1, 1.1);
     return { lines, boxes };
   }
@@ -2287,10 +2467,24 @@ export class Level13Builder {
     );
     const walls = new THREE.Mesh(merge([span(-w / 2, 0.02, -d / 2, -w / 2 + 0.03, H - 0.08, d / 2), span(w / 2 - 0.03, 0.02, -d / 2, w / 2, H - 0.08, d / 2), span(-w / 2, H - 0.12, -d / 2, w / 2, H - 0.09, d / 2)]), M.grating);
     worldUVs(walls.geometry, 1.2);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.25), M.yellow);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.46, 0.26), M.yellow);
     panel.position.set(w / 2 - 0.06, 1.3, -d / 2 + 0.4);
-    const btn = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff3020, emissiveIntensity: 2.5 }));
-    btn.position.set(w / 2 - 0.1, 1.35, -d / 2 + 0.4);
+    const upMat = new THREE.MeshStandardMaterial({ color: 0x062206, emissive: 0x40ff60, emissiveIntensity: 0.6 });
+    const downMat = new THREE.MeshStandardMaterial({ color: 0x221400, emissive: 0xffa020, emissiveIntensity: 0.6 });
+    const btn = new THREE.Group();
+    for (const [m, y, up] of [[upMat, 1.4, true], [downMat, 1.2, false]] as const) {
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 14), M.darkSteel);
+      ring.rotation.z = Math.PI / 2;
+      ring.position.set(w / 2 - 0.095, y, -d / 2 + 0.4);
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.03, 14), m);
+      b.rotation.z = Math.PI / 2;
+      b.position.set(w / 2 - 0.105, y, -d / 2 + 0.4);
+      // An arrow on it
+      const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.03, 3), M.black);
+      arrow.position.set(w / 2 - 0.122, y, -d / 2 + 0.4);
+      if (!up) arrow.rotation.x = Math.PI;
+      btn.add(ring, b, arrow);
+    }
     const light = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.2), M.lamp);
     light.position.y = H - 0.15;
     car.add(floor, rim, frame, walls, panel, btn, light);
@@ -2303,7 +2497,22 @@ export class Level13Builder {
     this.group.add(car);
     const floorC: Collider = { box: new THREE.Box3() };
     this.dyn.push(floorC);
-    return { car, floor: floorC, x0: cx0, x1: cx1, z0, z1, yBottom: yb, yTop: yt, gates };
+    // Call buttons beside each gate, on the cage
+    const calls: Level13Data['lift']['buttons']['calls'] = [];
+    for (const [y, z, out, level] of [[yb, z1, 1, 'bottom'], [yb, z0, -1, 'bottom'], [yt, z0, -1, 'top']] as const) {
+      const lamp = new THREE.MeshStandardMaterial({ color: 0x062206, emissive: 0x40ff60, emissiveIntensity: 0.6 });
+      const box_ = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.3, 0.06), M.yellow);
+      box_.position.set(55.05, y + 1.25, z + out * 0.13);
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 14), lamp);
+      b.rotation.x = Math.PI / 2;
+      b.position.set(55.05, y + 1.27, z + out * 0.17);
+      const plate = warnPlate('CALL', 0.16, 0.06);
+      plate.position.set(55.05, y + 1.15, z + out * 0.165);
+      if (out < 0) plate.rotation.y = Math.PI;
+      this.group.add(box_, b, plate);
+      calls.push({ at: V(55.05, y, z + out * 0.7), level, lamp });
+    }
+    return { car, floor: floorC, x0: cx0, x1: cx1, z0, z1, yBottom: yb, yTop: yt, gates, buttons: { up: upMat, down: downMat, calls } };
   }
 
   // -------------------------------------------------------------- the control office
@@ -2594,7 +2803,7 @@ export class Level13Builder {
     this.group.add(q.group);
     // A strip of light inside the lid
     this.add(M.lamp, box(0.9, 0.02, 0.03, x, y + 0.98, z + 0.5));
-    return { gun: q.group, pump: q.pump, setPressure: q.setPressure, stand: V(x, y, z - 1.2), yaw: Math.PI };
+    return { gun: q.group, pump: q.pump, setPressure: q.setPressure, stand: V(x, y, z - 0.8), yaw: Math.PI };
   }
 
   // -------------------------------------------------------------- the waste room
@@ -2628,21 +2837,25 @@ export class Level13Builder {
     this.add(M.hazard, span(x1 - 0.06, 44.2, z0, x1 - 0.02, 44.9, z1), false, 1.2);
     // ---- The hopper: steel plates sloping in from the long walls down to the rollers
     const zc = (z0 + z1) / 2;
+    const hopper: Level13Data['grinder']['hopper'] = [];
     for (const s of [-1, 1]) {
+      // High against the wall, down to a lip over the rollers
       const wallZ = s < 0 ? z0 : z1;
       const lipZ = zc + s * 3.9;
       const len = Math.hypot(wallZ - lipZ, 3.6);
+      const angle = -s * Math.atan2(3.6, Math.abs(wallZ - lipZ));
       const g = new THREE.BoxGeometry(x1 - x0, 0.14, len);
-      g.rotateX(Math.atan2(3.6, Math.abs(wallZ - lipZ)) * s);
+      g.rotateX(angle);
       g.translate((x0 + x1) / 2, 42.4, (wallZ + lipZ) / 2);
       this.add(M.rust, g);
       // Ribs down it
       for (let x = x0 + 1.5; x < x1; x += 3) {
         const r = new THREE.BoxGeometry(0.16, 0.3, len);
-        r.rotateX(Math.atan2(3.6, Math.abs(wallZ - lipZ)) * s);
+        r.rotateX(angle);
         r.translate(x, 42.5, (wallZ + lipZ) / 2);
         this.add(M.darkSteel, r);
       }
+      hopper.push({ center: V((x0 + x1) / 2, 42.4, (wallZ + lipZ) / 2), half: V((x1 - x0) / 2, 0.07, len / 2), angle, wallZ, lipZ, wallY: 44.2, lipY: 40.6 });
     }
     // ---- The rollers: drums the length of the room, rings of teeth staggered round them
     const rollers: THREE.Object3D[] = [];
@@ -2798,9 +3011,124 @@ export class Level13Builder {
     put(warnPlate('WASTE PROCESSING 2 — EXIT', 2.4, 0.36), HALL.x0 + 0.08, H2 + 3.7, 10, Math.PI / 2);
     put(warnPlate('GRINDER LIVE — KEEP CLEAR OF HOPPER', 6, 0.7), x0 + 0.03, H1 + 6, zc, Math.PI / 2);
     put(warnPlate('CHUTES DISCHARGE WITHOUT WARNING', 6, 0.6), (x0 + x1) / 2, H2 + 4.5, z0 + 0.03, 0);
-    put(warnPlate('DO NOT STAND UNDER CHUTES', 5, 0.6), (x0 + x1) / 2, H1 + 3.2, z1 - 0.03, Math.PI);
-    put(warnPlate('EXIT ↑', 1.4, 0.4), x1 - 0.08, H2 + 3.7, 10, -Math.PI / 2);
-    return { rollers, chutes };
+    put(hazardSign('grinder', 1.1, 1.45), x0 + 0.04, H1 + 3.4, zc - 4, Math.PI / 2);
+    put(hazardSign('grinder', 1.1, 1.45), x0 + 0.04, H1 + 3.4, zc + 4, Math.PI / 2);
+    put(hazardSign('grinder', 0.7, 0.92), x1 - 0.05, H1 + 1.7, -1.6, -Math.PI / 2);
+    put(hazardSign('grinder', 0.7, 0.92), HALL.x0 + 0.08, H1 + 1.6, -1.4, Math.PI / 2);
+    return { rollers, chutes, hopper };
+  }
+
+  // -------------------------------------------------------------- slants, doors, consoles
+
+  /**
+   * Something solid leaning at an angle (a torn walkway end): the player's
+   * boxes can't tilt, so it's a run of short boxes stepping down along it,
+   * each a little more than a stair's height below the last.
+   */
+  private slantSolid(c: THREE.Vector3, dir: THREE.Vector3, half: number, width: number, n = 3): void {
+    const across = Math.abs(dir.x) > Math.abs(dir.z) ? 'z' : 'x';
+    for (let i = 0; i < n; i++) {
+      const a = c.clone().addScaledVector(dir, -half + (2 * half * i) / n);
+      const b = c.clone().addScaledVector(dir, -half + (2 * half * (i + 1)) / n);
+      const lo = V(Math.min(a.x, b.x), Math.min(a.y, b.y) - 0.05, Math.min(a.z, b.z));
+      const hi = V(Math.max(a.x, b.x), Math.max(a.y, b.y) + 0.03, Math.max(a.z, b.z));
+      if (across === 'z') {
+        lo.z = c.z - width;
+        hi.z = c.z + width;
+      } else {
+        lo.x = c.x - width;
+        hi.x = c.x + width;
+      }
+      this.solidBox(lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+    }
+  }
+
+  /** A steel door in the hall's wall at the end of a walkway (shut; staff only): frame, keypad, lamp, its name. `out` is +1 facing +z, −1 facing −z. */
+  private serviceDoor(x: number, y: number, z: number, out: 1 | -1, name: string): void {
+    const M = this.M;
+    const f = (a: number): number => z + out * a;
+    const zs = (a: number, b: number): [number, number] => [Math.min(f(a), f(b)), Math.max(f(a), f(b))];
+    let [za, zb] = zs(0, 0.06);
+    this.add(M.darkSteel, span(x - 0.75, y, za, x + 0.75, y + 2.45, zb));
+    [za, zb] = zs(0.06, 0.1);
+    this.add(M.steel, span(x - 0.6, y, za, x + 0.6, y + 2.2, zb));
+    this.add(M.darkSteel, span(x - 0.55, y + 1.0, za - 0.005, x - 0.42, y + 1.12, zb + 0.005));
+    for (const yy of [0.5, 1.6]) this.add(M.darkSteel, span(x - 0.58, y + yy, za - 0.002, x + 0.58, y + yy + 0.04, zb + 0.002));
+    [za, zb] = zs(0.06, 0.13);
+    this.add(M.hazard, span(x - 0.75, y + 2.2, za, x + 0.75, y + 2.45, zb), false, 0.6);
+    // The keypad beside it, its light red: locked
+    this.add(M.darkSteel, span(x + 0.85, y + 1.15, za, x + 1.05, y + 1.45, zb));
+    const red = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.02), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 2.4 }));
+    red.position.set(x + 0.95, y + 1.4, f(0.14));
+    this.group.add(red);
+    // A caged bulkhead lamp over it
+    this.add(M.darkSteel, span(x - 0.18, y + 2.55, za, x + 0.18, y + 2.75, zb + 0.08 * Math.max(0, out)));
+    this.add(M.lamp, span(x - 0.14, y + 2.58, Math.min(f(0.14), f(0.2)), x + 0.14, y + 2.72, Math.max(f(0.14), f(0.2))));
+    const sign = doorSign(name, 'AUTHORISED PERSONNEL ONLY', 0.9, 0.3);
+    sign.position.set(x, y + 3.05, f(0.08));
+    if (out < 0) sign.rotation.y = Math.PI;
+    this.group.add(sign);
+  }
+
+  /**
+   * A control console: a steel cabinet, a sloped desk of switches and lamps,
+   * a screen up on a hood behind it. `ry` turns its front (where an
+   * operator stands) from +z; multiples of a right angle only.
+   */
+  private controlConsole(x: number, y: number, z: number, ry: number, screen: ScreenKind): void {
+    const M = this.M;
+    const g = new THREE.Group();
+    const cab = new THREE.MeshStandardMaterial({ color: 0x55606a, roughness: 0.55, metalness: 0.5 });
+    const b = (m: THREE.Material, w: number, h: number, d: number, px: number, py: number, pz: number, rx = 0): THREE.Mesh => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(px, py, pz);
+      o.rotation.x = rx;
+      g.add(o);
+      return o;
+    };
+    b(cab, 0.9, 0.95, 0.5, 0, 0.475, 0);
+    b(M.darkSteel, 0.92, 0.06, 0.06, 0, 0.03, 0.24);
+    // The desk, sloped toward the operator
+    b(cab, 0.9, 0.05, 0.42, 0, 1.0, 0.03, 0.38);
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x1d2024, roughness: 0.6 });
+    b(panelMat, 0.82, 0.02, 0.34, 0, 1.03, 0.03, 0.38);
+    // Switches, knobs and lamps on it
+    const lamps = [0x40ff60, 0xffa020, 0xff3020, 0x40c0ff];
+    for (let i = 0; i < 6; i++) {
+      const lm = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: lamps[(i * 7 + Math.round(x)) % 4], emissiveIntensity: 1.8 });
+      const l = b(lm, 0.035, 0.02, 0.035, -0.32 + i * 0.07, 1.075, -0.08, 0.38);
+      l.position.y += 0.0;
+    }
+    for (let i = 0; i < 4; i++) {
+      const k = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.03, 10), M.darkSteel);
+      k.position.set(0.14 + i * 0.075, 1.06, 0.02);
+      k.rotation.x = 0.38;
+      g.add(k);
+    }
+    for (let i = 0; i < 5; i++) b(M.steel, 0.012, 0.05, 0.012, -0.3 + i * 0.05, 1.05, 0.12, 0.38 - 0.5);
+    b(new THREE.MeshStandardMaterial({ color: 0x5a0d0a, roughness: 0.5 }), 0.07, 0.03, 0.07, 0.34, 1.02, 0.15, 0.38);
+    // The hood and its screen
+    b(cab, 0.9, 0.5, 0.12, 0, 1.35, -0.2);
+    const scr = screenPanel(screen, 0.66, 0.36);
+    scr.position.set(0, 1.36, -0.135);
+    g.add(scr);
+    // A beacon on top, and cable down the back into the deck
+    b(M.darkSteel, 0.12, 0.05, 0.12, 0.36, 1.63, -0.2);
+    b(new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffa21a, emissiveIntensity: 1.6 }), 0.08, 0.08, 0.08, 0.36, 1.69, -0.2);
+    b(M.black, 0.08, 1.4, 0.04, -0.3, 0.7, -0.27);
+    g.position.set(x, y, z);
+    g.rotation.y = ry;
+    g.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.userData.surface = 'metal';
+        this.shootables.push(o);
+      }
+    });
+    this.group.add(g);
+    const side = Math.abs(Math.sin(ry)) > 0.5;
+    const hw = side ? 0.28 : 0.46;
+    const hd = side ? 0.46 : 0.28;
+    this.solidBox(x - hw, y, z - hd, x + hw, y + 1.1, z + hd);
   }
 
   // -------------------------------------------------------------- signs and fittings
@@ -2820,21 +3148,19 @@ export class Level13Builder {
     };
     // The first platform and the step
     post('SECTOR 4 — WALKWAY A', -53.6, H1, -33.6, -Math.PI / 2);
-    put(warnPlate('PRESSURE-ASSIST ACCESS ONLY', 2.0, 0.34), -45.53, H1 + 2.05, -31, -Math.PI / 2);
-    put(warnPlate('↑ 2.6 m', 0.9, 0.34), -45.53, H1 + 1.5, -31, -Math.PI / 2);
+    put(hazardSign('fall', 0.6, 0.8), -45.53, H1 + 1.4, -31.6, -Math.PI / 2);
     // S2's gap
     post('SPAN REMOVED', -32.7, H1, -18.6, Math.PI, 1.3);
-    post('NO RAILS — HOLD ON TO NOTHING', -32.7, H1, -26.4, Math.PI, 1.7, 0.3);
+
     // Platform 2: the ladder's gone
     put(warnPlate('LADDER OUT OF SERVICE', 1.6, 0.3), -32, H1 + 1.9, 5.3, Math.PI);
     put(warnPlate('WASTE PROCESSING 2 →', 1.7, 0.3), -35.9, H1 + 1.35, 3.8, Math.PI / 2);
     // The broken span, the lever, the vat lines
     post('SPAN CLOSED', -27.4, H2, 9.25, -Math.PI / 2, 1.2);
-    post('LEVER CALLS PLATFORM', -1.4, H2, 36.9, Math.PI / 2, 1.6);
+
     post('VAT LINES B · A — NORTHBOUND', 34.4, H3, 45.0, -Math.PI / 2, 2.0);
-    post('CHANGE LINES BEFORE EACH ARCH', 34.4, H3, 43.0, -Math.PI / 2, 2.0, 0.3);
-    post('ALIGHT HERE', 46.6, Y6, 8.8, 0, 1.1);
-    post('CARGO LINE — MIND THE GAPS', 55.6, Y6, 7.4, -Math.PI / 2, 1.9);
+
+
     // Level markers on the columns and walls: big stencilled plates
     for (const [text, x, y, z, ry] of [
       ['LEVEL 1', -45, H1 + 2, -53.96, 0],
@@ -2847,12 +3173,19 @@ export class Level13Builder {
     }
     // Beacons on the corners of the platforms the route crosses
     const amber = new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffa21a, emissiveIntensity: 2.6 });
-    for (const [x, y, z] of [[-53.2, H1, -28.2], [-36, H1, -36], [-28.2, H1, 5.2], [-36, H2, 13], [6, H2, 14], [6, H2, 30], [34, H2, 30.2], [34, H3, 48], [47, Y6, 8.6], [56, Y6, 6.2]]) {
+    for (const [x, y, z] of [[-53.2, H1, -28.2], [-36, H1, -36], [-28.2, H1, 5.2], [-36, H2, 13], [6, H2, 14], [6, H2, 30], [34, H2, 30.2], [34, H3, 48], [47, Y6, 8.6], [56, Y6, 8.2]]) {
       this.add(M.darkSteel, span(x - 0.04, y + 1.12, z - 0.04, x + 0.04, y + 1.4, z + 0.04));
       const b = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), amber);
       b.position.set(x, y + 1.46, z);
       this.group.add(b);
     }
+    // Control consoles: what all these walkways are for
+    this.controlConsole(-28.55, H1, 0.9, -Math.PI / 2, 'sentries');
+    this.controlConsole(5.45, H2, 12.4, -Math.PI / 2, 'vats');
+    this.controlConsole(5.45, H2, 36.4, -Math.PI / 2, 'map');
+    this.controlConsole(33.45, H2, 35.4, -Math.PI / 2, 'cams');
+    this.controlConsole(33.45, H3, 46.9, -Math.PI / 2, 'specimen');
+    this.controlConsole(55.45, Y6, 11.2, -Math.PI / 2, 'map');
     // Drums, a hose reel, extinguishers, a toolbox: left where people were working
     for (const [kind, x, y, z] of [['yellow', -54.2, H1, -33.3], ['blue', -29.2, H1, 4.4], ['rust', -29.3, H1, 3.3], ['blue', 5.2, H2, 31], ['yellow', 33, H3, 41], ['rust', 51, Y6, 13.2]] as const) {
       const b = barrel(kind);

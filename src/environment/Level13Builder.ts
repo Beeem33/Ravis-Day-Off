@@ -1717,10 +1717,10 @@ export class Level13Builder {
     this.platform(-60, -34, -53, -28, H1, 'ns');
     this.crate(-55, H1, -33.2, 1.1, 1.1);
     // S1, east, railed both sides; crates on its north side to duck behind
-    // The gun's first lesson: it stops at a step three metres high, and goes on from the top of it
+    // The gun's first lesson: it stops at a step higher than he can climb, and goes on from the top of it
     this.walkway({ x0: -53, z0: -32.1, x1: -45.5, z1: -29.9, y: H1, rails: 'both' });
     this.coverStack(-50, H1, -31.5, 1.0);
-    const UP1 = H1 + 3;
+    const UP1 = H1 + 2.6;
     this.add(M.darkSteel, span(-45.5, H1 - 0.32, -32.1, -45.3, UP1, -29.9), true);
     this.add(M.hazard, span(-45.52, UP1 - 0.5, -32.1, -45.5, UP1, -29.9), false, 0.5);
     this.add(M.hazard, span(-45.52, H1, -32.1, -45.5, H1 + 0.3, -29.9), false, 0.5);
@@ -1739,7 +1739,7 @@ export class Level13Builder {
     // S2, south, no rails at all
     // (its middle's gone, and the far end hangs two and a half metres higher: up, then thrown across)
     this.walkway({ x0: -32.9, z0: -27, x1: -31.1, z1: -18, y: H1, rails: 'none' });
-    this.coverStack(-31.55, H1, -22.5, 0.9);
+    this.coverStack(-31.55, H1, -25, 0.9);
     const UP2 = H1 + 2.5;
     this.walkway({ x0: -32.9, z0: -10, x1: -31.1, z1: -3, y: UP2, rails: 'none' });
     this.coverStack(-31.55, UP2, -5.5, 0.9);
@@ -2820,8 +2820,8 @@ export class Level13Builder {
     };
     // The first platform and the step
     post('SECTOR 4 — WALKWAY A', -53.6, H1, -33.6, -Math.PI / 2);
-    put(warnPlate('PRESSURE-ASSIST ACCESS ONLY', 2.0, 0.34), -45.53, H1 + 2.1, -31, -Math.PI / 2);
-    put(warnPlate('↑ 3 m', 0.8, 0.34), -45.53, H1 + 1.5, -31, -Math.PI / 2);
+    put(warnPlate('PRESSURE-ASSIST ACCESS ONLY', 2.0, 0.34), -45.53, H1 + 2.05, -31, -Math.PI / 2);
+    put(warnPlate('↑ 2.6 m', 0.9, 0.34), -45.53, H1 + 1.5, -31, -Math.PI / 2);
     // S2's gap
     post('SPAN REMOVED', -32.7, H1, -18.6, Math.PI, 1.3);
     post('NO RAILS — HOLD ON TO NOTHING', -32.7, H1, -26.4, Math.PI, 1.7, 0.3);

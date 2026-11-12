@@ -232,6 +232,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
   private gunA: Record<Side, THREE.Object3D> = { l: new THREE.Object3D(), r: new THREE.Object3D() };
   private gunHome = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
   private swapped = false;
+  /** He came in with the quad-barrel (it's his from the Underworks on): the crate here is empty. */
+  private cameArmed = false;
   // ---- The fight
   private melee!: MeleeArms;
   private scis: Sci[] = [];
@@ -372,8 +374,12 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.makeGunner();
     }
 
-    if (this.checkpoint === 0) this.startEnter();
-    else if (this.checkpoint === 1) this.startFight();
+    if (this.checkpoint === 0) {
+      this.cameArmed = true;
+      L.crate.gun.visible = false;
+      this.giveQuad();
+      this.startEnter();
+    } else if (this.checkpoint === 1) this.startFight();
     else this.startRunCheckpoint();
   }
 
@@ -592,6 +598,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.pickFrom.p.copy(p.position);
     this.pickFrom.yaw = p.yaw;
     this.pickFrom.pitch = p.pitch;
+    // Nothing to take: he only steps up to the crate, and they're on him
+    if (this.cameArmed) return;
     this.pickRoot.visible = true;
     for (const v of this.arsenal.all) v.stow = 1;
     this.pickArms.set('r', this.pickA.r, GRIP_R).set('l', this.pickA.l, GRIP_L);
@@ -619,6 +627,15 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const cam = p.camera;
     const L = this.level;
     const t = this.phaseT;
+    if (this.cameArmed) {
+      p.position.lerpVectors(this.pickFrom.p, STAND, smooth(t / 0.7));
+      p.update(dt, L.colliders);
+      if (t > 0.75) {
+        this.swapped = true;
+        this.startFight();
+      }
+      return;
+    }
     // Over to the crate's side, looking down into it
     const go = smooth(t / 0.6);
     p.position.lerpVectors(this.pickFrom.p, STAND, go);

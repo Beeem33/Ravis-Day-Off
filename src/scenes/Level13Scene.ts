@@ -327,6 +327,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private pickFrom = { p: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private swapped = false;
   private cratePromptOn = false;
+  private hint = 0;
   // ---- The waste room: what's falling in it, each chute's clock, and Ravi knocked off his feet
   private trash: { mesh: THREE.Object3D; body: CANNON.Body; live: boolean; r: number; rest: number }[] = [];
   private chuteT: number[] = [];
@@ -668,7 +669,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
         'THROUGH WASTE PROCESSING — MIND WHAT FALLS OUT OF THE CHUTES',
         'ACROSS THE BROKEN SPAN',
         'PULL THE LEVER',
-        'DROP ONTO A PASSING VAT CART — RIDE IT NORTH',
+        'DROP ONTO A VAT CART — CHANGE LINES BEFORE EACH STERILISER ARCH',
         'HOP THE CARGO CRATES ACROSS TO THE LIFT',
         'TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW',
         'GET THROUGH THE DOOR AT THE END'
@@ -2027,6 +2028,21 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (c < 5 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 5;
     if (c < 6 && Math.abs(p.y - Y6) < 0.3 && p.x > 50 && p.x < 56 && p.z > 6 && p.z < 14) c = 6;
     if (c < 8 && Math.abs(p.y - H4) < 0.3 && p.x > 50 && p.z < -16) c = 8;
+    // The gun's lessons, as he comes to what needs them
+    if (Level13Scene.quadTaken && c === 1) {
+      if (this.hint < 1 && p.x > -44.5 && p.y > H1 + 2) {
+        this.hint = 1;
+        this.setObjective('JUMP FIRST, THEN FIRE AT THE FLOOR, AND YOU GO HIGHER');
+      }
+      if (this.hint < 2 && p.x > -36 && p.z > -29) {
+        this.hint = 2;
+        this.setObjective('THE GAP: JUMP, FIRE DOWN — THEN TURN YOUR BACK ON THE FAR SIDE AND FIRE AGAIN');
+      }
+      if (this.hint < 3 && p.z > -4 && p.x < -28) {
+        this.hint = 3;
+        this.setObjective('WEST, THROUGH WASTE PROCESSING');
+      }
+    }
     if (c !== this.checkpoint) {
       this.checkpoint = c;
       if (c === 1 && !Level13Scene.quadTaken) this.setObjective('THERE’S A WEAPONS CRATE ON THE PLATFORM');

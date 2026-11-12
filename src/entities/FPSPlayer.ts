@@ -80,6 +80,45 @@ export class FPSPlayer {
   private deathAnim = 0;
   private landedHard = false;
 
+  /**
+   * Speed he's been thrown with (a blast, a shove), over and above his own
+   * walking: it isn't held to walking pace, it barely fades in the air, and
+   * the floor takes it off him quickly once he's down.
+   */
+  readonly boost = new THREE.Vector3();
+  /** Knocked silly: he goes where he's thrown, the keys do nothing. */
+  stunned = false;
+
+  /**
+   * Thrown along `n` (a unit vector) at `speed`. What he was already doing
+   * along it counts toward it, up to a fifth more; anything against it (a
+   * fall, when he's blasted up) is cancelled first. Stood on the ground and
+   * thrown mostly sideways, his feet hold half of it back.
+   */
+  launch(n: THREE.Vector3, speed: number): void {
+    const k = Math.min(1, Math.max(0, (n.y - 0.2) / 0.35));
+    const planted = this.grounded ? 0.5 + 0.5 * k * k * (3 - 2 * k) : 1;
+    const c = (this.velocity.x + this.boost.x) * n.x + this.velocity.y * n.y + (this.velocity.z + this.boost.z) * n.z;
+    const target = Math.max(c, Math.min(Math.max(c, 0) + speed * planted, speed * 1.2));
+    const d = target - c;
+    this.boost.x += d * n.x;
+    this.boost.z += d * n.z;
+    this.velocity.y += d * n.y;
+    if (this.velocity.y > 0.5) {
+      this.grounded = false;
+      this.coyote = 0;
+    }
+  }
+
+  /** Pushed by something solid moving into him: walls still stop him. True if he couldn't go all the way. */
+  push(dx: number, dz: number, colliders: Collider[]): boolean {
+    const x = this.position.x;
+    const z = this.position.z;
+    this.moveAxis(dx, 0, colliders, false);
+    this.moveAxis(dz, 2, colliders, false);
+    return Math.abs(this.position.x - x - dx) > 1e-4 || Math.abs(this.position.z - z - dz) > 1e-4;
+  }
+
   /** Horizontal speed of last frame, used by AI accuracy + weapon spread. */
   currentSpeed = 0;
   /** >0 while vaulting: step-up limit is raised and glass ahead gets smashed. */
@@ -224,10 +263,12 @@ export class FPSPlayer {
     // ---- Wish direction
     let fwd = 0;
     let strafe = 0;
-    if (input.isDown('KeyW')) fwd += 1;
-    if (input.isDown('KeyS')) fwd -= 1;
-    if (input.isDown('KeyD')) strafe += 1;
-    if (input.isDown('KeyA')) strafe -= 1;
+    if (!this.stunned) {
+      if (input.isDown('KeyW')) fwd += 1;
+      if (input.isDown('KeyS')) fwd -= 1;
+      if (input.isDown('KeyD')) strafe += 1;
+      if (input.isDown('KeyA')) strafe -= 1;
+    }
     const moving = fwd !== 0 || strafe !== 0;
     this.sprinting = input.isDown('ShiftLeft') && fwd > 0 && !this.crouching && !this.aiming;
     let maxSpeed = this.crouching ? CROUCH_SPEED : this.sprinting ? SPRINT_SPEED : WALK_SPEED;
@@ -263,7 +304,7 @@ export class FPSPlayer {
     // ---- Jump / gravity
     const onGround = this.grounded;
     let jumped = false;
-    if (input.wasPressed('Space')) this.jumpBuffer = JUMP_BUFFER;
+    if (input.wasPressed('Space') && !this.stunned) this.jumpBuffer = JUMP_BUFFER;
     if ((this.grounded || this.coyote > 0) && this.jumpBuffer > 0) {
       jumped = true;
       this.jumpBuffer = 0;
@@ -284,9 +325,20 @@ export class FPSPlayer {
     this.velocity.y -= GRAVITY * dt;
 
     // ---- Move with collision (axis separated, with step-up on X/Z)
-    this.moveAxis(this.velocity.x * dt, 0, colliders);
-    this.moveAxis(this.velocity.z * dt, 2, colliders);
+    const bx = this.boost.x;
+    const bz = this.boost.z;
+    const x0 = this.position.x;
+    const z0 = this.position.z;
+    this.moveAxis((this.velocity.x + bx) * dt, 0, colliders);
+    this.moveAxis((this.velocity.z + bz) * dt, 2, colliders);
     this.moveVertical(this.velocity.y * dt, colliders);
+    if (bx || bz) {
+      // Into a wall: that's the end of it that way. Otherwise the air keeps most of it, the floor very little
+      if (bx && Math.abs(this.position.x - x0) < Math.abs((this.velocity.x + bx) * dt) * 0.3) this.boost.x = 0;
+      if (bz && Math.abs(this.position.z - z0) < Math.abs((this.velocity.z + bz) * dt) * 0.3) this.boost.z = 0;
+      this.boost.multiplyScalar(Math.exp(-(this.grounded ? 9 : 0.4) * dt));
+      if (this.boost.lengthSq() < 0.01) this.boost.set(0, 0, 0);
+    }
     // Off the edge of a step: down onto the next one, still on his feet
     // (and for a moment after, in case the first frame off it found nothing yet)
     if (!this.grounded && (onGround || this.coyote > 0) && !jumped && this.velocity.y <= 0) this.stepDown(colliders);

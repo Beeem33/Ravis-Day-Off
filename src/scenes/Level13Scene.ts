@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SEW_Y, SLUDGE_Y, H1, H2, H3, H4, Y6, OFFICE_Y, FALL_Y, HALL } from '../environment/Level13Builder';
+import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SEW_Y, SLUDGE_Y, H1, H2, H3, H4, Y6, OFFICE_Y, FALL_Y, HALL, GRIND, VAT_Y } from '../environment/Level13Builder';
 import type { Collider as Col } from '../environment/OfficeLevelBuilder';
 import { FirstPersonArms, mixGrip } from '../entities/RaviVisual';
 import { GRENADE_HOLD, GRENADE_OPEN, GRENADE_PIN } from '../entities/Grenades';
@@ -15,6 +16,8 @@ import { KnifeTwirlViewmodel } from '../entities/KnifeTwirlViewmodel';
 import { Arsenal, loadoutFor } from '../entities/Arsenal';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { hideInventory } from '../ui/InventoryUI';
+import { GRIP_L, GRIP_R } from '../entities/ShotgunViewmodel';
+import { yawPitchTo, wrapAngle } from './cutscene';
 import type { Enemy } from '../entities/Enemy';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { FPSHUD } from '../ui/FPSHUD';
@@ -34,7 +37,7 @@ import { FPSHUD } from '../ui/FPSHUD';
  *  4. The door at the end: a grenade planted on it, and it goes.
  */
 
-type Phase = 'tube' | 'play' | 'plant' | 'done';
+type Phase = 'tube' | 'play' | 'pickup' | 'plant' | 'done';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 const smooth = (x: number): number => {
@@ -314,6 +317,22 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private arsenal!: Arsenal;
   private knife!: KnifeTwirlViewmodel;
   private drink!: DrinkViewmodel;
+  /** The quad-barrel out of its crate: kept across restarts of the level, lost by starting it again from the top. */
+  private static quadTaken = false;
+  private pickArms!: FirstPersonArms;
+  private pickRoot = new THREE.Group();
+  private pickA = { l: new THREE.Object3D(), r: new THREE.Object3D() };
+  private gunA = { l: new THREE.Object3D(), r: new THREE.Object3D() };
+  private gunHome = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+  private pickFrom = { p: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  private swapped = false;
+  private cratePromptOn = false;
+  // ---- The waste room: what's falling in it, each chute's clock, and Ravi knocked off his feet
+  private trash: { mesh: THREE.Object3D; body: CANNON.Body; live: boolean; r: number; rest: number }[] = [];
+  private chuteT: number[] = [];
+  private chuteWarned: boolean[] = [];
+  private knockT = 0;
+  private grind: { set(k: number): void; stop(): void } | null = null;
   private hud!: FPSHUD;
   private phase: Phase = 'play';
   private phaseT = 0;
@@ -414,6 +433,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
       'rifle'
     );
     this.arsenal.startWithKnife();
+    this.arsenal.onPressureShot = () => {
+      this.shake = Math.max(this.shake, 0.55);
+    };
     this.knife = new KnifeTwirlViewmodel(this.player.camera);
     this.knife.onSlash = () => this.knifeSlash();
     this.knife.onCatch = () => audio.pocket();
@@ -447,10 +469,36 @@ export class Level13Scene extends CombatScene<Level13Data> {
       L.colliders.push(c);
       this.moverRails.push(c);
     }
-    if (this.checkpoint >= 3) this.callMover(true);
-    if (this.checkpoint >= 5) this.releaseLadder(true);
-    this.liftY = this.checkpoint === 5 ? L.lift.yTop : L.lift.yBottom;
-    this.liftAt = this.checkpoint === 5 ? 'top' : 'bottom';
+    if (this.checkpoint >= 5) this.callMover(true);
+    if (this.checkpoint >= 7) this.releaseLadder(true);
+    this.liftY = this.checkpoint === 7 ? L.lift.yTop : L.lift.yBottom;
+    this.liftAt = this.checkpoint === 7 ? 'top' : 'bottom';
+    // The crate's gun: his hands' places on it, for lifting it out; or it's already his
+    {
+      const cam = this.player.camera;
+      const gc = L.gunCrate;
+      cam.add(this.pickRoot);
+      this.pickRoot.add(this.pickA.l, this.pickA.r);
+      this.pickArms = new FirstPersonArms(this.pickRoot, cam);
+      this.pickRoot.visible = false;
+      this.gunA.r.position.set(0, -0.038, 0.228);
+      this.gunA.r.rotation.x = 0.15;
+      gc.gun.add(this.gunA.r);
+      this.gunA.l.position.set(0, -0.008, 0.01);
+      gc.pump.add(this.gunA.l);
+      this.gunHome.p.copy(gc.gun.position);
+      this.gunHome.q.copy(gc.gun.quaternion);
+      if (this.from === 0) Level13Scene.quadTaken = false;
+      if (this.checkpoint >= 2) Level13Scene.quadTaken = true;
+      if (Level13Scene.quadTaken) {
+        this.swapped = true;
+        gc.gun.visible = false;
+        this.giveQuad();
+      }
+    }
+    this.buildTrash();
+    this.chuteT = L.grinder.chutes.map((c) => c.phase);
+    this.chuteWarned = L.grinder.chutes.map(() => false);
     this.updateRides(0);
     this.syncMover();
     this.buildFlies();
@@ -483,6 +531,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.ambience = audio.undergroundLoop();
     this.fliesSound = audio.fliesLoop();
     this.winch = audio.winchLoop();
+    this.grind = audio.rumbleLoop();
 
     if (this.from === 0) this.startTube();
     else this.startPlay();
@@ -495,6 +544,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.ambience?.stop();
     this.fliesSound?.stop();
     this.winch?.stop();
+    this.grind?.stop();
     this.hud.destroy();
     hideInventory();
     this.flashPool.dispose();
@@ -614,7 +664,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.setObjective(
       [
         'FIND A WAY UP OUT OF THE SEWERS',
-        'CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT',
+        Level13Scene.quadTaken ? 'CROSS THE WALKWAYS — RIGHT CLICK THROWS YOU AWAY FROM WHERE YOU AIM' : 'THERE’S A WEAPONS CRATE ON THE PLATFORM',
+        'THROUGH WASTE PROCESSING — MIND WHAT FALLS OUT OF THE CHUTES',
+        'ACROSS THE BROKEN SPAN',
         'PULL THE LEVER',
         'DROP ONTO A PASSING VAT CART — RIDE IT NORTH',
         'HOP THE CARGO CRATES ACROSS TO THE LIFT',
@@ -648,6 +700,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     // ---- The platform carries whoever's stood on it; so do the carts, the crates and the lift
     this.updateMover(dt);
     if (this.phase !== 'tube') this.updateRides(dt);
+    if (this.phase === 'pickup') this.updatePickup(dt);
 
     // ---- Ladders: on one, he goes up it
     // ---- His hands: a can of Deadbull on G; nothing in them on a ladder or in a cutscene
@@ -655,8 +708,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (input.wasPressed('KeyG') && free && !this.arsenal.reloading && !this.knife.busy) this.drink.start();
     if (!p.alive || this.falling) this.drink.abort();
     const busy = !!this.climbing || this.phase !== 'play' || this.drink.engaged;
-    this.arsenal.preUpdate(dt, input, { canSwitch: free && !this.knife.busy, busy });
-    const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching;
+    this.arsenal.preUpdate(dt, input, { canSwitch: free && !this.knife.busy, busy, hold: this.phase === 'pickup' });
+    const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching && !this.arsenal.pressureArmed;
     p.aiming = aiming;
     if (this.phase === 'play' || this.dead || this.falling) {
       if (this.climbing) this.climb(dt);
@@ -676,6 +729,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     a.updateViewmodels(dt, aiming);
     a.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
     this.hud.setAmmoShown(!a.knifeActive && !a.knifeWanted);
+    this.hud.setPressure(a.pressureArmed ? a.pressure : null);
     this.drink.update(dt, p);
     if (this.phase === 'play') {
       const targetFov = 74 - a.zoomFov;
@@ -686,7 +740,11 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
     this.hud.setAiming(a.aimBlend > 0.5);
 
+    if (this.pickRoot.visible) this.pickArms.update();
     // ---- The route
+    this.updateGunCrate();
+    this.updateGrinder(dt);
+    this.updateArches(dt);
     this.updateSentries(dt);
     this.updateOfficeLever(dt);
     this.updateLever(dt);
@@ -1146,7 +1204,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.ctx.audio.leverThrow();
       this.later(0.6, () => this.callMover(false));
     }
-    if (this.phase === 'play') this.hud.setPrompt(near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
+    if (this.phase === 'play') this.hud.setPrompt(this.cratePromptOn ? '[ E ] TAKE THE QUAD-BARREL' : near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
   }
 
   /** The lever's done: the platform starts over to him (`instant`: already crossed, a restart past it). */
@@ -1251,19 +1309,20 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const p = this.player;
     const moves: { c: Col; d: THREE.Vector3 }[] = [];
     // The vat carts, north, round through the walls
-    const vl = L.vatLine;
-    const vlen = vl.z1 - vl.z0;
-    for (const c of vl.carts) {
-      const prev = c.z;
-      c.z += vl.speed * dt;
-      if (c.z < vl.z0) c.z += vlen;
-      if (c.z > vl.z1) c.z -= vlen;
-      c.group.position.z = c.z;
-      c.deck.box.set(V(vl.x - 1.2, vl.y - 0.3, c.z - 3.5), V(vl.x + 1.2, vl.y, c.z + 3.5));
-      c.vats.forEach((v, i) => v.box.set(V(vl.x - 0.85, vl.y, c.z + (i ? 2.35 : -2.35) - 0.85), V(vl.x + 0.85, vl.y + 2.45, c.z + (i ? 2.35 : -2.35) + 0.85)));
-      if (Math.abs(c.z - prev) < 5) {
-        const d = V(0, 0, c.z - prev);
-        moves.push({ c: c.deck, d }, ...c.vats.map((v) => ({ c: v, d })));
+    for (const vl of [L.vatLine, L.vatLineB]) {
+      const vlen = vl.z1 - vl.z0;
+      for (const c of vl.carts) {
+        const prev = c.z;
+        c.z += vl.speed * dt;
+        if (c.z < vl.z0) c.z += vlen;
+        if (c.z > vl.z1) c.z -= vlen;
+        c.group.position.z = c.z;
+        c.deck.box.set(V(vl.x - 1.2, vl.y - 0.3, c.z - 3.5), V(vl.x + 1.2, vl.y, c.z + 3.5));
+        c.vats.forEach((v, i) => v.box.set(V(vl.x - 0.85, vl.y, c.z + (i ? 2.35 : -2.35) - 0.85), V(vl.x + 0.85, vl.y + 2.45, c.z + (i ? 2.35 : -2.35) + 0.85)));
+        if (Math.abs(c.z - prev) < 5) {
+          const d = V(0, 0, c.z - prev);
+          moves.push({ c: c.deck, d }, ...c.vats.map((v) => ({ c: v, d })));
+        }
       }
     }
     // The crates, each line its own way
@@ -1311,8 +1370,18 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const me = new THREE.Box3(V(pos.x - 0.33, pos.y + 0.05, pos.z - 0.33), V(pos.x + 0.33, pos.y + 1.7, pos.z + 0.33));
     for (const m of moves) {
       if (m === on || (!m.d.x && !m.d.z) || !me.intersectsBox(m.c.box)) continue;
-      pos.x += m.d.x;
-      pos.z += m.d.z;
+      // Shoved along with it — but the level's still solid: caught between it and a wall, that's that
+      // (it used to carry him straight through the wall and out of the map)
+      const stuck = p.push(m.d.x, m.d.z, L.colliders);
+      if (stuck) {
+        me.set(V(pos.x - 0.25, pos.y + 0.1, pos.z - 0.25), V(pos.x + 0.25, pos.y + 1.6, pos.z + 0.25));
+        if (me.intersectsBox(m.c.box)) {
+          this.shake = 1;
+          this.ctx.audio.bodyThud(0);
+          p.kill('CRUSHED AGAINST THE WALL');
+          return;
+        }
+      }
     }
   }
 
@@ -1429,7 +1498,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
     this.officeLeverT = 0;
     this.ladderDrop = 0;
-    if (this.checkpoint < 5) this.checkpoint = 5;
+    if (this.checkpoint < 7) this.checkpoint = 7;
     this.setObjective('TAKE THE LIFT BACK DOWN — THE LADDER’S DOWN NOW');
   }
 
@@ -1544,6 +1613,406 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.slab = { vel: V(13, 4.5, (Math.random() - 0.5) * 2), spin: V((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, -4) };
   }
 
+  // ------------------------------------------------------------ the weapons crate
+
+  private giveQuad(): void {
+    const a = this.arsenal;
+    a.shotgun.useQuad();
+    a.give('shotgun');
+    a.knifeWanted = false;
+    a.knifeActive = false;
+    a.knifeStow = 1;
+    a.equip('shotgun', 0);
+    a.shells = 6;
+    a.pressureOn = true;
+    a.pressure = Arsenal.PRESSURE_MAX;
+    Level13Scene.quadTaken = true;
+  }
+
+  private updateGunCrate(): void {
+    const p = this.player;
+    const gc = this.level.gunCrate;
+    this.cratePromptOn = false;
+    if (Level13Scene.quadTaken || this.phase !== 'play' || !this.playable || this.climbing) return;
+    if (Math.hypot(p.position.x - gc.stand.x, p.position.z - gc.stand.z) > 1.7 || Math.abs(p.position.y - gc.stand.y) > 0.5) return;
+    this.cratePromptOn = true;
+    if (!this.ctx.input.wasPressed('KeyE') || this.drink.engaged || this.knife.busy) return;
+    this.cratePromptOn = false;
+    this.phase = 'pickup';
+    this.phaseT = 0;
+    p.cinematic = true;
+    this.cinema(true);
+    this.hud.setPrompt(null);
+    this.setObjective('');
+    this.pickFrom.p.copy(p.position);
+    this.pickFrom.yaw = p.yaw;
+    this.pickFrom.pitch = p.pitch;
+    this.pickRoot.visible = true;
+    this.pickArms.set('r', this.pickA.r, GRIP_R).set('l', this.pickA.l, GRIP_L);
+  }
+
+  /** Blend an anchor under the camera from a camera-space spot to a world object's frame. */
+  private blendAnchor(dst: THREE.Object3D, camPos: THREE.Vector3, to: THREE.Object3D, k: number): void {
+    const cam = this.player.camera;
+    const a = new THREE.Matrix4().compose(camPos, new THREE.Quaternion(), V(1, 1, 1)).premultiply(cam.matrixWorld);
+    const ap = new THREE.Vector3();
+    const aq = new THREE.Quaternion();
+    a.decompose(ap, aq, new THREE.Vector3());
+    to.updateWorldMatrix(true, false);
+    const bp = new THREE.Vector3();
+    const bq = new THREE.Quaternion();
+    to.matrixWorld.decompose(bp, bq, new THREE.Vector3());
+    const w = new THREE.Matrix4().compose(ap.lerp(bp, k), aq.slerp(bq, k), V(1, 1, 1));
+    dst.matrix.copy(cam.matrixWorld).invert().multiply(w);
+    dst.matrix.decompose(dst.position, dst.quaternion, dst.scale);
+  }
+
+  /**
+   * The knife away, down into the crate, both hands on the gun, up out of
+   * the foam to look it over — its gauge filling, cell by cell — and into
+   * his shoulder, racked.
+   */
+  private updatePickup(dt: number): void {
+    const p = this.player;
+    const cam = p.camera;
+    const L = this.level;
+    const gc = L.gunCrate;
+    const t = this.phaseT;
+    const a = this.arsenal;
+    a.knifeStow = Math.min(1, a.knifeStow + dt * 6);
+    if (!this.swapped) for (const v of a.all) v.stow = Math.min(1, v.stow + dt * 6);
+    const go = smooth(t / 0.6);
+    p.position.lerpVectors(this.pickFrom.p, gc.stand, go);
+    const eye = V(gc.stand.x, gc.stand.y + 1.62, gc.stand.z);
+    const down = yawPitchTo(eye, this.gunHome.p);
+    const rise = smooth((t - 0.95) / 0.8);
+    p.yaw = this.pickFrom.yaw + wrapAngle(down.yaw - this.pickFrom.yaw) * go;
+    const lookDown = Math.max(down.pitch, -0.95);
+    p.pitch = THREE.MathUtils.lerp(this.pickFrom.pitch + (lookDown - this.pickFrom.pitch) * go, -0.05, rise);
+    p.update(dt, L.colliders);
+    // Bent over it: lower, leaning in
+    const bend = go * (1 - rise);
+    cam.position.y -= 0.34 * bend;
+    const f = p.forwardDir(Level13Scene.tmpA);
+    cam.position.addScaledVector(f, 0.2 * bend);
+    cam.updateMatrixWorld(true);
+    // Hands in, then the gun up with them
+    const reach = smooth((t - 0.3) / 0.6);
+    this.blendAnchor(this.pickA.r, V(0.26, -0.5, -0.22), this.gunA.r, reach);
+    this.blendAnchor(this.pickA.l, V(-0.3, -0.62, -0.18), this.gunA.l, smooth((t - 1.35) / 0.5));
+    if (t >= 0.9 && t - dt < 0.9) this.ctx.audio.clink();
+    if (!this.swapped) {
+      // Up out of the foam to in front of him, its left side turned to him; then down to where he holds it
+      const lift = smooth((t - 1.0) / 0.8);
+      const settle = smooth((t - 2.3) / 0.4);
+      const pose = (pos: THREE.Vector3, e: THREE.Euler): [THREE.Vector3, THREE.Quaternion] => {
+        const m = new THREE.Matrix4().compose(pos, new THREE.Quaternion().setFromEuler(e), V(1, 1, 1)).premultiply(cam.matrixWorld);
+        const pp = new THREE.Vector3();
+        const qq = new THREE.Quaternion();
+        m.decompose(pp, qq, new THREE.Vector3());
+        return [pp, qq];
+      };
+      const [ap, aq] = pose(V(0.1, -0.14, -0.5), new THREE.Euler(0.1, -0.7, 0.35));
+      const [bp, bq] = pose(V(0.2, -0.24, -0.46), new THREE.Euler(0, 0, 0));
+      gc.gun.position.lerpVectors(this.gunHome.p, ap, lift).lerp(bp, settle);
+      gc.gun.quaternion.slerpQuaternions(this.gunHome.q, aq, lift).slerp(bq, settle);
+      // The canister wakes up in his hands: one cell, two, three
+      const charge = Math.min(3, Math.max(0, (t - 1.45) / 0.27));
+      gc.setPressure(charge);
+      for (const k of [1, 2, 3]) {
+        const at = 1.45 + k * 0.27;
+        if (t >= at && t - dt < at) this.ctx.audio.chargeBeep(k === 3);
+      }
+    }
+    // In his hands for real, and racked
+    if (t >= 2.72 && !this.swapped) {
+      this.swapped = true;
+      gc.gun.visible = false;
+      this.pickRoot.visible = false;
+      this.giveQuad();
+      a.shotgun.rack();
+      this.ctx.audio.itemGet();
+    }
+    if (t > 3.5) {
+      this.phase = 'play';
+      this.phaseT = 0;
+      p.cinematic = false;
+      this.cinema(false);
+      this.setObjective('RIGHT CLICK: A PRESSURE SHOT THROWS YOU AWAY FROM WHERE YOU AIM — AIM AT THE FLOOR TO GO UP');
+      a.showInventory();
+    }
+  }
+
+  // ------------------------------------------------------------ the waste room
+
+  /** Ten pieces of scrap, made once and parked: what the chutes drop, over and over. */
+  private buildTrash(): void {
+    const mat = (c: number, r = 0.7, m = 0.2): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+    const white = mat(0xc9cdc8, 0.5, 0.3);
+    const grey = mat(0x6d7378, 0.5, 0.6);
+    const dark = mat(0x1c1e21, 0.6, 0.4);
+    const rust = mat(0x6a4630, 0.8, 0.4);
+    const blue = mat(0x2b4f8a, 0.6, 0.5);
+    const red = mat(0x8a2b22, 0.6, 0.5);
+    const card = mat(0x9a7b52, 0.9, 0);
+    const green = mat(0x2f5a3a, 0.7, 0.3);
+    const bx = (g: THREE.Group, m: THREE.Material, w: number, h: number, d: number, x = 0, y = 0, z = 0): THREE.Mesh => {
+      const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      o.position.set(x, y, z);
+      g.add(o);
+      return o;
+    };
+    const kinds: (() => { mesh: THREE.Group; half: [number, number, number]; mass: number })[] = [
+      // A fridge, its door hanging
+      () => {
+        const g = new THREE.Group();
+        bx(g, white, 0.8, 1.7, 0.72);
+        bx(g, grey, 0.04, 0.5, 0.04, 0.3, 0.3, 0.38);
+        bx(g, dark, 0.74, 0.02, 0.02, 0, 0.22, 0.365);
+        bx(g, rust, 0.3, 0.4, 0.01, -0.2, -0.5, 0.365);
+        return { mesh: g, half: [0.4, 0.85, 0.36], mass: 70 };
+      },
+      // A washing machine
+      () => {
+        const g = new THREE.Group();
+        bx(g, white, 0.85, 0.9, 0.8);
+        const door = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.05, 16), dark);
+        door.rotation.x = Math.PI / 2;
+        door.position.set(0, -0.05, 0.41);
+        g.add(door);
+        bx(g, grey, 0.8, 0.12, 0.02, 0, 0.36, 0.405);
+        return { mesh: g, half: [0.425, 0.45, 0.4], mass: 60 };
+      },
+      // An oil drum, dented
+      () => {
+        const g = new THREE.Group();
+        const d = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.0, 14), blue);
+        g.add(d);
+        for (const y of [-0.3, 0.3]) {
+          const r = new THREE.Mesh(new THREE.TorusGeometry(0.345, 0.02, 5, 14), grey);
+          r.rotation.x = Math.PI / 2;
+          r.position.y = y;
+          g.add(r);
+        }
+        return { mesh: g, half: [0.3, 0.5, 0.3], mass: 30 };
+      },
+      // A car crushed to a cube
+      () => {
+        const g = new THREE.Group();
+        bx(g, red, 1.3, 1.1, 1.3);
+        bx(g, dark, 1.32, 0.2, 0.9, 0, 0.2, 0);
+        bx(g, grey, 0.9, 0.16, 1.32, 0, -0.3, 0);
+        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.2, 12), dark);
+        w.rotation.z = Math.PI / 2;
+        w.position.set(0.66, -0.25, 0.3);
+        g.add(w);
+        return { mesh: g, half: [0.65, 0.55, 0.65], mass: 220 };
+      },
+      // A bale of flattened cardboard, strapped
+      () => {
+        const g = new THREE.Group();
+        bx(g, card, 1.2, 0.9, 0.9);
+        for (const x of [-0.35, 0.35]) bx(g, dark, 0.04, 0.92, 0.92, x);
+        return { mesh: g, half: [0.6, 0.45, 0.45], mass: 45 };
+      },
+      // A filing cabinet
+      () => {
+        const g = new THREE.Group();
+        bx(g, grey, 0.5, 1.35, 0.62);
+        for (const y of [-0.42, 0, 0.42]) {
+          bx(g, dark, 0.46, 0.01, 0.01, 0, y + 0.2, 0.312);
+          bx(g, white, 0.14, 0.03, 0.03, 0, y, 0.32);
+        }
+        return { mesh: g, half: [0.25, 0.675, 0.31], mass: 40 };
+      },
+      // A skip's worth of girder offcuts welded together
+      () => {
+        const g = new THREE.Group();
+        bx(g, rust, 1.5, 0.22, 0.22);
+        bx(g, rust, 0.22, 0.22, 1.1, 0.3, 0.1, 0);
+        bx(g, grey, 0.2, 0.9, 0.2, -0.4, 0.2, 0.1);
+        return { mesh: g, half: [0.75, 0.3, 0.45], mass: 90 };
+      },
+      // A chemical tote in its cage
+      () => {
+        const g = new THREE.Group();
+        bx(g, green, 0.95, 0.95, 0.95);
+        for (const s of [-0.49, 0.49]) {
+          bx(g, grey, 0.03, 1.0, 1.0, s);
+          bx(g, grey, 1.0, 1.0, 0.03, 0, 0, s);
+        }
+        bx(g, dark, 1.05, 0.12, 1.05, 0, -0.52, 0);
+        return { mesh: g, half: [0.5, 0.55, 0.5], mass: 80 };
+      }
+    ];
+    for (let i = 0; i < 10; i++) {
+      const k = kinds[i % kinds.length]();
+      k.mesh.visible = false;
+      k.mesh.position.set(-74, GRIND.floor - 4, 6);
+      k.mesh.traverse((o) => {
+        o.userData.noDecal = true;
+      });
+      this.scene.add(k.mesh);
+      const body = new CANNON.Body({
+        mass: k.mass,
+        shape: new CANNON.Box(new CANNON.Vec3(...k.half)),
+        linearDamping: 0.02,
+        angularDamping: 0.08
+      });
+      this.trash.push({ mesh: k.mesh, body, live: false, r: Math.max(k.half[0], k.half[2]) * 1.1, rest: 0 });
+    }
+  }
+
+  private inWasteRoom(p: THREE.Vector3): boolean {
+    return p.x > GRIND.x0 && p.x < GRIND.x1 && p.z > GRIND.z0 && p.z < GRIND.z1 && p.y > GRIND.floor - 2 && p.y < GRIND.top;
+  }
+
+  /**
+   * The rollers turn; each chute, on its own clock, flashes its lamps and
+   * lets something go. What falls is a real body: it hits a girder, tips
+   * and goes on down into the teeth. If it hits Ravi on the way he's
+   * knocked off whatever he was standing on, and the rest is the grinder's.
+   */
+  private updateGrinder(dt: number): void {
+    const L = this.level;
+    const G = L.grinder;
+    const p = this.player;
+    const pos = p.position;
+    const dist = Math.hypot(pos.x - (GRIND.x0 + GRIND.x1) / 2, pos.z - (GRIND.z0 + GRIND.z1) / 2);
+    const inside = this.inWasteRoom(pos);
+    this.grind?.set(dist > 60 || pos.y < H1 - 3 ? 0 : inside ? 0.9 : Math.max(0, 0.45 * (1 - (dist - 14) / 46)));
+    G.rollers[0].rotation.x += dt * 1.5;
+    G.rollers[1].rotation.x -= dt * 1.5;
+    // Knocked down: back on his feet after a moment, if there's anything under them
+    if (this.knockT > 0) {
+      this.knockT -= dt;
+      if (this.knockT <= 0) p.stunned = false;
+    }
+    // Only run the chutes while he's anywhere near
+    const active = dist < 48 && pos.y > H1 - 4;
+    if (active) {
+      G.chutes.forEach((c, i) => {
+        this.chuteT[i] -= dt;
+        const warn = this.chuteT[i] < 0.9;
+        c.lamp.emissiveIntensity = warn ? (Math.sin(this.t * 34) > 0 ? 4.5 : 0.6) : 0.3;
+        if (warn && !this.chuteWarned[i]) {
+          this.chuteWarned[i] = true;
+          if (inside && c.mouth.distanceTo(pos) < 16) this.ctx.audio.lockBeep();
+        }
+        if (this.chuteT[i] <= 0) {
+          this.chuteT[i] = c.period * (0.9 + Math.random() * 0.2);
+          this.chuteWarned[i] = false;
+          this.dropTrash(c.mouth);
+        }
+      });
+    }
+    for (const t of this.trash) {
+      if (!t.live) continue;
+      const b = t.body;
+      t.mesh.position.set(b.position.x, b.position.y, b.position.z);
+      t.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+      // Into the teeth
+      if (b.position.y < GRIND.killY - 1.2) {
+        const at = t.mesh.position.clone().setY(GRIND.killY - 0.6);
+        if (inside || dist < 30) {
+          this.particles.sparks(at, V((Math.random() - 0.5) * 0.6, 1, (Math.random() - 0.5) * 0.6), 18, GRIND.floor);
+          this.particles.dust(at, 1.4, 0.6);
+          if (inside) {
+            this.ctx.audio.gateCrash(8 + at.distanceTo(pos));
+            this.shake = Math.max(this.shake, 0.18);
+          }
+        }
+        this.world.removeBody(b);
+        t.mesh.visible = false;
+        t.live = false;
+        continue;
+      }
+      const speed = b.velocity.length();
+      // Come to rest on something: it doesn't stay — the next shudder of the room tips it off
+      if (speed < 0.5) {
+        t.rest += dt;
+        if (t.rest > 1.1) {
+          t.rest = 0;
+          b.wakeUp();
+          const side = b.position.z < (GRIND.z0 + GRIND.z1) / 2 ? 1 : -1;
+          b.velocity.set((Math.random() - 0.5) * 2, 2.2, side * (2 + Math.random() * 1.5));
+          b.angularVelocity.set((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 5);
+        }
+      } else t.rest = 0;
+      // On Ravi
+      if (p.alive && this.knockT <= 0 && this.playable && speed > 2.5) {
+        const dx = pos.x - b.position.x;
+        const dz = pos.z - b.position.z;
+        const d = Math.hypot(dx, dz);
+        if (d < t.r + 0.32 && b.position.y - t.r < pos.y + 1.75 && b.position.y + t.r > pos.y + 0.3) this.knockDown(dx, dz, d);
+      }
+    }
+    // The hopper: anything in it is gone
+    if (p.alive && inside && pos.y < GRIND.killY) {
+      this.particles.sparks(pos.clone(), V(0, 1, 0), 30, GRIND.floor);
+      this.ctx.audio.gateCrash(2);
+      this.shake = 1.2;
+      p.stunned = false;
+      p.kill('THE GRINDER');
+    }
+  }
+
+  private dropTrash(mouth: THREE.Vector3): void {
+    const free = this.trash.filter((t) => !t.live);
+    if (!free.length) return;
+    const t = free[Math.floor(Math.random() * free.length)];
+    const b = t.body;
+    b.position.set(mouth.x + (Math.random() - 0.5) * 0.4, mouth.y, mouth.z + (Math.random() - 0.5) * 0.4);
+    b.velocity.set((Math.random() - 0.5) * 0.8, -3, (Math.random() - 0.5) * 0.8);
+    b.angularVelocity.set((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 4);
+    b.quaternion.setFromEuler(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+    b.wakeUp();
+    this.world.addBody(b);
+    t.live = true;
+    t.rest = 0;
+    t.mesh.visible = true;
+    t.mesh.position.set(b.position.x, b.position.y, b.position.z);
+    if (this.inWasteRoom(this.player.position)) this.particles.dust(mouth.clone().setY(mouth.y + 0.4), 1.2, 0.5);
+  }
+
+  /** Hit: off his feet and thrown clear of it, the keys doing nothing for a moment. */
+  private knockDown(dx: number, dz: number, d: number): void {
+    const p = this.player;
+    const n = d > 0.05 ? V(dx / d, 0, dz / d) : V(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+    // Off a girder the short way if he's on one: across it, not along it
+    if (Math.abs(n.x) > Math.abs(n.z) * 3) n.set(n.x * 0.5, 0, Math.sign(n.z || Math.random() - 0.5)).normalize();
+    p.stunned = true;
+    this.knockT = 1.6;
+    p.velocity.y = Math.max(p.velocity.y, 2.6);
+    p.grounded = false;
+    p.launch(V(n.x * 0.94, 0.34, n.z * 0.94), 7.5);
+    this.drink.abort();
+    this.shake = 1.1;
+    this.ctx.audio.punchImpact(true);
+    this.ctx.audio.bodyThud(0);
+    this.ctx.bus.emit(Events.PlayerDamaged, { health: p.health, maxHealth: p.maxHealth });
+  }
+
+  // ------------------------------------------------------------ the steriliser arches
+
+  private updateArches(dt: number): void {
+    const p = this.player;
+    const pos = p.position;
+    const arches = this.level.arches;
+    const map = arches[0]?.mat.map;
+    if (map) map.offset.set(Math.floor(this.t * 14) * 0.37, this.t * 1.7);
+    for (const a of arches) {
+      a.mat.opacity = 0.5 + 0.4 * Math.abs(Math.sin(this.t * 23 + a.z)) * (Math.sin(this.t * 7.3 + a.z * 2) > -0.6 ? 1 : 0.3);
+      if (!p.alive || this.phase !== 'play') continue;
+      if (Math.abs(pos.x - a.x) < 1.3 && Math.abs(pos.z - a.z) < 0.32 + Math.abs(p.velocity.z + p.boost.z) * dt && pos.y > VAT_Y - 0.6 && pos.y < VAT_Y + 3.5) {
+        this.particles.electricSparks(p.eyePosition(), 26);
+        this.ctx.audio.electrocute();
+        this.shake = 1;
+        p.kill('THE STERILISER');
+      }
+    }
+  }
+
   // ------------------------------------------------------------ checkpoints, falls
 
   private updateCheckpoints(): void {
@@ -1551,17 +2020,22 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (!this.player.alive || this.phase !== 'play') return;
     let c = this.checkpoint;
     if (c < 1 && p.x > -61 && Math.abs(p.y - H1) < 0.3) c = 1;
-    if (c < 2 && p.x > -2 && p.x < 6 && p.z > 30 && p.z < 38 && Math.abs(p.y - H2) < 0.3) c = 2;
-    if (c < 3 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 3;
-    if (c < 4 && Math.abs(p.y - Y6) < 0.3 && p.x > 50 && p.x < 56 && p.z > 6 && p.z < 14) c = 4;
-    if (c < 6 && Math.abs(p.y - H4) < 0.3 && p.x > 50 && p.z < -16) c = 6;
+    // (the waste room's only a checkpoint with the gun: without it there's no way through)
+    if (c < 2 && Level13Scene.quadTaken && p.x < -50 && p.x > -62 && p.z > -0.5 && p.z < 2.7 && Math.abs(p.y - H1) < 0.3) c = 2;
+    if (c < 3 && p.x > -37 && p.x < -28 && p.z > 5.8 && p.z < 13 && Math.abs(p.y - H2) < 0.3) c = 3;
+    if (c < 4 && p.x > -2 && p.x < 6 && p.z > 30 && p.z < 38 && Math.abs(p.y - H2) < 0.3) c = 4;
+    if (c < 5 && Math.abs(p.y - H3) < 0.3 && p.x > 25) c = 5;
+    if (c < 6 && Math.abs(p.y - Y6) < 0.3 && p.x > 50 && p.x < 56 && p.z > 6 && p.z < 14) c = 6;
+    if (c < 8 && Math.abs(p.y - H4) < 0.3 && p.x > 50 && p.z < -16) c = 8;
     if (c !== this.checkpoint) {
       this.checkpoint = c;
-      if (c === 1) this.setObjective('CROSS THE WALKWAYS — STAY OUT OF THE TURRETS’ LIGHT');
-      if (c === 2 && !this.leverPulled) this.setObjective('PULL THE LEVER');
-      if (c === 3) this.setObjective('DROP ONTO A PASSING VAT CART — RIDE IT NORTH');
-      if (c === 4) this.setObjective('HOP THE CARGO CRATES ACROSS TO THE LIFT');
-      if (c === 6) this.setObjective('GET THROUGH THE DOOR AT THE END');
+      if (c === 1 && !Level13Scene.quadTaken) this.setObjective('THERE’S A WEAPONS CRATE ON THE PLATFORM');
+      if (c === 2) this.setObjective('THROUGH WASTE PROCESSING — MIND WHAT FALLS OUT OF THE CHUTES');
+      if (c === 3) this.setObjective('ACROSS THE BROKEN SPAN');
+      if (c === 4 && !this.leverPulled) this.setObjective('PULL THE LEVER');
+      if (c === 5) this.setObjective('DROP ONTO A VAT CART — CHANGE LINES BEFORE EACH STERILISER ARCH');
+      if (c === 6) this.setObjective('HOP THE CARGO CRATES ACROSS TO THE LIFT');
+      if (c === 8) this.setObjective('GET THROUGH THE DOOR AT THE END');
     }
   }
 
@@ -1587,7 +2061,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private updateAtmosphere(dt: number): void {
     const L = this.level;
     const cam = this.player.camera.position;
-    const inSewer = cam.x < HALL.x0 - 0.5 && cam.y < H1 - 1;
+    const inSewer = cam.x < HALL.x0 - 0.5 && cam.y < H1 - 1 && !(cam.x > GRIND.x0 && cam.z > GRIND.z0 && cam.z < GRIND.z1 && cam.y > GRIND.floor);
     const k = inSewer ? 0 : 1;
     // Fog and sky: the sewer's green murk, the hall's grey haze
     const fog = this.scene.fog as THREE.FogExp2;

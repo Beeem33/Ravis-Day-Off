@@ -4,6 +4,7 @@ import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas, tiling, noiseTile } from './Level8Builder';
 import { barrel } from './MechanicalProps';
+import { quadShotgunModel } from '../entities/QuadShotgun';
 import { officeChair, officeDesk, trashCan, flowerPot, waterCooler, printer, fileCabinet, paperStack, deskPhone, sodaCan, snack, fireAlarm } from './OfficeProps';
 import { cargoTexture, scissorGateTexture, monitor, screenPanel, poster, orderSheet, comic, type ScreenKind } from './Level13Props';
 import { shelfUnit, shelfTops, cleanerJug, sprayBottle, paintCan, cardboardBox, rollPack, mopBucket, mop, broom, wetFloorSign, toolbox, pegboard, hoseReel, hardHat, rubberBoots, workbench, janitorCart, doorSign, warnPlate, ecMug, wallClock, whiteboardStand, penCup, binderShelf, coatRack, fireExtinguisher, headset, stickyNotes } from './Level13Props';
@@ -42,6 +43,10 @@ export const OFFICE_Y = 78;
 /** The vat line: its track along z at this x, the carts' decks at this height. */
 export const VAT_X = 42.5;
 export const VAT_Y = 59.6;
+/** The second vat line, west of the first: the one he drops onto. */
+export const VAT_XB = 38.7;
+/** The waste room off the hall's west wall: inside it, and the height its grinder takes anything below. */
+export const GRIND = { x0: -88, x1: -61, z0: -8, z1: 20, floor: 36, top: 63, killY: 42 };
 /** Below this, inside the hall, he's gone over. */
 export const FALL_Y = 38;
 /** The sewer tunnels: walls straight up to SPRING, then a vault rising RISE to its crown under the slab. */
@@ -105,6 +110,17 @@ export interface Level13Data extends CombatLevel {
   fogLayers: THREE.Mesh[];
   /** The maintenance room's door: slides into the wall (along z) when he comes up to it. */
   vatLine: { x: number; y: number; z0: number; z1: number; speed: number; carts: { group: THREE.Group; z: number; deck: Collider; vats: Collider[] }[] };
+  /** The second line, beside it and in step with it. */
+  vatLineB: Level13Data['vatLine'];
+  /** The steriliser arches over the vat lines: the line each is on (its x), where along it, its curtain. */
+  arches: { x: number; z: number; mat: THREE.MeshBasicMaterial }[];
+  /** The weapons crate at the top of the shaft: the quad-barrel in it, where he stands to take it. */
+  gunCrate: { gun: THREE.Group; pump: THREE.Group; setPressure(p: number, flash?: number): void; stand: THREE.Vector3; yaw: number };
+  /** The waste room: its grinder's two rollers, and the chutes in its ceiling (those over the way through drop on a clock). */
+  grinder: {
+    rollers: THREE.Object3D[];
+    chutes: { mouth: THREE.Vector3; period: number; phase: number; lamp: THREE.MeshStandardMaterial }[];
+  };
   cargo: { lines: { z: number; top: number; speed: number; x0: number; x1: number }[]; boxes: { group: THREE.Group; collider: Collider; line: number; x: number }[] };
   lift: { car: THREE.Group; floor: Collider; x0: number; x1: number; z0: number; z1: number; yBottom: number; yTop: number; gates: { pivot: THREE.Group; collider: Collider; level: 'bottom' | 'top' }[] };
   officeLever: { pivot: THREE.Group; at: THREE.Vector3 };
@@ -627,6 +643,35 @@ function vatLiquidMaterial(colour: number): THREE.ShaderMaterial {
   });
 }
 
+let arcTex: THREE.CanvasTexture | null = null;
+/** Arcs of light: bright ragged lines across a faint glow, to scroll and flicker. */
+function arcTexture(): THREE.CanvasTexture {
+  if (arcTex) return arcTex;
+  const c = makeCanvas(128, 256);
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#1a1030';
+  g.fillRect(0, 0, 128, 256);
+  let s = 11;
+  const r = (): number => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+  for (let i = 0; i < 26; i++) {
+    const y = r() * 256;
+    g.strokeStyle = `rgba(${200 + r() * 55},${170 + r() * 70},255,${0.35 + r() * 0.6})`;
+    g.lineWidth = 0.6 + r() * 1.8;
+    g.beginPath();
+    g.moveTo(0, y);
+    for (let x = 16; x <= 128; x += 16) g.lineTo(x, y + (r() - 0.5) * 22);
+    g.stroke();
+  }
+  arcTex = new THREE.CanvasTexture(c);
+  arcTex.wrapS = arcTex.wrapT = THREE.RepeatWrapping;
+  arcTex.colorSpace = THREE.SRGBColorSpace;
+  return arcTex;
+}
+
+// ------------------------------------------------------------- builder
 // ------------------------------------------------------------- builder
 
 interface WalkwaySpec {
@@ -687,7 +732,9 @@ export class Level13Builder {
     this.buildShaft();
     this.buildHall();
     const route = this.buildRoute();
-    const vatLine = this.buildVatLine();
+    const vats = this.buildVatLine();
+    const gunCrate = this.buildGunCrate();
+    const grinder = this.buildGrinder();
     const cargo = this.buildCargoLine();
     const lift = this.buildLift();
     const officeLever = this.buildOffice();
@@ -695,6 +742,7 @@ export class Level13Builder {
     route.ladders.push(finale.dropLadder.ladder);
     this.buildAbyss();
     this.buildHallDressing();
+    this.buildSigns();
     this.flush();
     const tube = this.buildTube();
     return {
@@ -706,6 +754,8 @@ export class Level13Builder {
       checkpoints: [
         { pos: V(-128.5, CH_Y, 0), yaw: -Math.PI / 2 },
         { pos: V(-57, H1, -31), yaw: -Math.PI / 2 },
+        { pos: V(-57.5, H1, 1.1), yaw: Math.PI / 2 },
+        { pos: V(-34, H2, 10), yaw: -Math.PI / 2 },
         { pos: V(1, H2, 35.5), yaw: -Math.PI / 2 },
         { pos: V(30, H3, 45.5), yaw: -Math.PI / 2 },
         { pos: V(53, Y6, 10.5), yaw: 0 },
@@ -723,7 +773,11 @@ export class Level13Builder {
       lever: route.lever,
       mover: route.mover,
       door: finale.door,
-      vatLine,
+      vatLine: vats.a,
+      vatLineB: vats.b,
+      arches: vats.arches,
+      gunCrate,
+      grinder,
       cargo,
       lift,
       officeLever,
@@ -1454,9 +1508,17 @@ export class Level13Builder {
     const { x0, x1, z0, z1, top, bottom } = HALL;
     // Walls (the west one round the recess's opening, the east one round the door)
     this.add(M.concrete, span(x0 - 1, bottom, z0, x0, H1 - 0.4, z1), true, 8);
-    this.add(M.concrete, span(x0 - 1, H1 + 3.5, z0, x0, top, z1), true, 8);
+    this.add(M.concrete, span(x0 - 1, H1 + 3.5, z0, x0, H2, z1), true, 8);
+    this.add(M.concrete, span(x0 - 1, H2 + 3, z0, x0, top, z1), true, 8);
+    // (the waste room's way out, at the level of platform 3)
+    this.add(M.concrete, span(x0 - 1, H2, z0, x0, H2 + 3, 8.8), true, 8);
+    this.add(M.concrete, span(x0 - 1, H2, 11.2, x0, H2 + 3, z1), true, 8);
     this.add(M.concrete, span(x0 - 1, H1 - 0.4, z0, x0, H1 + 3.5, -34), true, 8);
-    this.add(M.concrete, span(x0 - 1, H1 - 0.4, -28, x0, H1 + 3.5, z1), true, 8);
+    // (and its way in, off platform 2)
+    this.add(M.concrete, span(x0 - 1, H1 - 0.4, -28, x0, H1 + 3.5, -0.2), true, 8);
+    this.add(M.concrete, span(x0 - 1, H1 - 0.4, 2.4, x0, H1 + 3.5, z1), true, 8);
+    this.add(M.concrete, span(x0 - 1, H1 - 0.4, -0.2, x0, H1, 2.4), true, 8);
+    this.add(M.concrete, span(x0 - 1, H1 + 3, -0.2, x0, H1 + 3.5, 2.4), true, 8);
     this.add(M.concrete, span(x1, bottom, z0, x1 + 1, H4, z1), true, 8);
     this.add(M.concrete, span(x1, H4 + 4, z0, x1 + 1, top, z1), true, 8);
     this.add(M.concrete, span(x1, H4, z0, x1 + 1, H4 + 4, -32), true, 8);
@@ -1469,6 +1531,8 @@ export class Level13Builder {
       for (const x of [x0, x1 - 1.2]) {
         // None where the cargo line runs into the east wall, nor behind the office
         if (x > 0 && z > -26 && z < 8) continue;
+        // Nor across the waste room's doorway
+        if (x < 0 && z === 0) continue;
         this.add(M.darkConcrete, span(x, bottom, z - 1, x + 1.2, top, z + 1), false, 4);
       }
     }
@@ -1653,9 +1717,16 @@ export class Level13Builder {
     this.platform(-60, -34, -53, -28, H1, 'ns');
     this.crate(-55, H1, -33.2, 1.1, 1.1);
     // S1, east, railed both sides; crates on its north side to duck behind
-    this.walkway({ x0: -53, z0: -32.1, x1: -36, z1: -29.9, y: H1, rails: 'both' });
-    this.coverStack(-48.5, H1, -31.5, 1.0);
-    this.coverStack(-42, H1, -31.5, 1.0);
+    // The gun's first lesson: it stops at a step three metres high, and goes on from the top of it
+    this.walkway({ x0: -53, z0: -32.1, x1: -45.5, z1: -29.9, y: H1, rails: 'both' });
+    this.coverStack(-50, H1, -31.5, 1.0);
+    const UP1 = H1 + 3;
+    this.add(M.darkSteel, span(-45.5, H1 - 0.32, -32.1, -45.3, UP1, -29.9), true);
+    this.add(M.hazard, span(-45.52, UP1 - 0.5, -32.1, -45.5, UP1, -29.9), false, 0.5);
+    this.add(M.hazard, span(-45.52, H1, -32.1, -45.5, H1 + 0.3, -29.9), false, 0.5);
+    this.walkway({ x0: -45.5, z0: -32.1, x1: -37.6, z1: -29.9, y: UP1, rails: 'both' });
+    this.coverStack(-41.5, UP1, -31.5, 1.0);
+    for (const z of [-32.0, -30.0]) this.add(M.darkSteel, span(-45.45, -10, z - 0.1, -45.25, H1 - 0.32, z + 0.1));
     // ---- 1: the first junction, crates and a vat on it
     this.platform(-36, -36, -28, -27, H1, 'n');
     // West rail either side of where S1 comes in, not across it
@@ -1666,18 +1737,36 @@ export class Level13Builder {
     this.crate(-29.3, H1, -34.8, 1.1, 1.1);
     this.vat(-29.6, H1, -29.6, 0.9, 2.4, 0x7dff5a);
     // S2, south, no rails at all
-    this.walkway({ x0: -32.9, z0: -27, x1: -31.1, z1: -3, y: H1, rails: 'none' });
-    this.coverStack(-31.55, H1, -19, 0.9);
-    this.coverStack(-31.55, H1, -10, 0.9);
+    // (its middle's gone, and the far end hangs two and a half metres higher: up, then thrown across)
+    this.walkway({ x0: -32.9, z0: -27, x1: -31.1, z1: -18, y: H1, rails: 'none' });
+    this.coverStack(-31.55, H1, -22.5, 0.9);
+    const UP2 = H1 + 2.5;
+    this.walkway({ x0: -32.9, z0: -10, x1: -31.1, z1: -3, y: UP2, rails: 'none' });
+    this.coverStack(-31.55, UP2, -5.5, 0.9);
+    // Torn ends, hanging
+    for (const [z, y, rz] of [[-17.2, H1 - 0.75, 0.95], [-10.8, UP2 - 0.7, -0.9]] as const) {
+      const g = new THREE.BoxGeometry(1.8, 0.06, 2.0);
+      g.rotateX(rz);
+      g.translate(-32, y, z);
+      this.add(M.darkSteel, g);
+    }
     // ---- 2: the platform at its end, and the ladder up to 3
-    this.platform(-36, -3, -28, 5.4, H1, 'we');
+    this.platform(-36, -3, -28, 5.4, H1, 'es');
+    this.walkRail(-36, -3, -35.92, 0, H1);
+    this.walkRail(-36, 2.2, -35.92, 5.4, H1);
     this.crate(-34.8, H1, -1.8, 1.1, 1.1);
-    ladders.push({ base: V(-32, H1, 5.0), face: Math.PI, top: H2, off: V(-32, H2, 7.2) });
-    this.ladderMesh(V(-32, H1, 5.8), Math.PI, H2 - H1 + 1.1, 'lamp', true);
+    // The ladder that went up to 3 has been cut away: its top two metres still hang off the platform above
+    for (const s of [-0.24, 0.24]) this.add(M.yellow, span(-32 + s - 0.032, H2 - 2.2, 5.68, -32 + s + 0.032, H2 + 1.0, 5.76));
+    for (let y = H2 - 2.0; y < H2 + 0.9; y += 0.3) this.add(M.yellow, span(-32.24, y - 0.024, 5.7, -31.76, y + 0.024, 5.74));
+    // West, to the wall and the waste room's door
+    this.walkway({ x0: -60, z0: 0, x1: -36, z1: 2.2, y: H1, rails: 'both' });
+    this.coverStack(-47, H1, 0.55, 0.9);
     // ---- 3: above, and the span east that's been broken
-    this.platform(-36, 5.8, -28, 13, H2, 'ws');
-    this.walkRail(-36, 5.8, -32.8, 5.88, H2);
-    this.walkRail(-31.2, 5.8, -28, 5.88, H2);
+    this.platform(-36, 5.8, -28, 13, H2, 'ns');
+    this.walkRail(-36, 5.8, -35.92, 9, H2);
+    this.walkRail(-36, 11, -35.92, 13, H2);
+    // Back out of the waste room: east along the wall's upper door to here
+    this.walkway({ x0: -60, z0: 9, x1: -36, z1: 11, y: H2, rails: 'both' });
     this.walkway({ x0: -28, z0: 9, x1: -19.5, z1: 11, y: H2, rails: '+' });
     // The gap: the walkway's gone between x −19.5 and −9.5, and its ends torn and hanging
     this.add(M.darkSteel, (() => {
@@ -1745,8 +1834,8 @@ export class Level13Builder {
     this.walkRail(30.8, 40, 34, 40.08, H3);
     this.vat(27.4, H3, 46.5, 0.8, 2.0, 0x7dff5a);
     // S5: east to where it stops, over the vat line (buildVatLine marks its end)
-    this.walkway({ x0: 34, z0: 42.9, x1: 40.6, z1: 45.1, y: H3, rails: 'both' });
-    this.coverStack(37.4, H3, 43.45, 0.9);
+    this.walkway({ x0: 34, z0: 42.9, x1: 37.2, z1: 45.1, y: H3, rails: 'both' });
+    this.coverStack(35.4, H3, 43.45, 0.9);
     // ---- The turrets' mounts are the scene's (it builds the guns); here, the sites
     const turrets: TurretSite[] = [
       // Each sweeps one walkway and nothing else: the platforms between them are never in two beams
@@ -1866,29 +1955,11 @@ export class Level13Builder {
    * through the hall and out through the wall at each end. He drops onto one
    * from the end of walkway 5 and rides it to the landing beside the track.
    */
-  private buildVatLine(): Level13Data['vatLine'] {
+  private buildVatLine(): { a: Level13Data['vatLine']; b: Level13Data['vatLine']; arches: Level13Data['arches'] } {
     const M = this.M;
-    const X = VAT_X;
     const Y = VAT_Y;
     const z0 = HALL.z0;
     const z1 = HALL.z1;
-    // The girder under the carts, the rails on it, trestles down into the fog every 12 m
-    this.add(M.darkSteel, span(X - 1.0, Y - 1.05, z0, X + 1.0, Y - 0.62, z1));
-    for (const s of [-0.7, 0.7]) this.add(M.steel, span(X + s - 0.06, Y - 0.62, z0, X + s + 0.06, Y - 0.5, z1));
-    this.add(M.hazard, span(X - 1.02, Y - 0.85, z0, X - 1.0, Y - 0.7, z1), false, 0.5);
-    this.add(M.hazard, span(X + 1.0, Y - 0.85, z0, X + 1.02, Y - 0.7, z1), false, 0.5);
-    for (let z = z0 + 6; z < z1; z += 12) {
-      for (const s of [-0.85, 0.85]) this.add(M.darkSteel, span(X + s - 0.12, -10, z - 0.12, X + s + 0.12, Y - 1.05, z + 0.12));
-      for (let yy = Y - 7; yy > 0; yy -= 9) this.add(M.darkSteel, span(X - 0.85, yy, z - 0.08, X + 0.85, yy + 0.18, z + 0.08));
-    }
-    // The portals it goes through, at both ends
-    for (const z of [z0, z1]) {
-      const s = z === z0 ? 1 : -1;
-      this.add(M.black, span(X - 1.6, Y - 1.1, Math.min(z, z + s * 0.04), X + 1.6, Y + 3.4, Math.max(z, z + s * 0.04)));
-      this.add(M.hazard, span(X - 1.9, Y - 1.1, Math.min(z, z + s * 0.12), X - 1.6, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
-      this.add(M.hazard, span(X + 1.6, Y - 1.1, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
-      this.add(M.hazard, span(X - 1.9, Y + 3.4, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
-    }
     // A cart: a deck on two bogies, a vat at each end, the middle clear to stand in
     const deck = merge([
       span(-1.2, -0.28, -3.5, 1.2, 0, 3.5),
@@ -1917,39 +1988,95 @@ export class Level13Builder {
     const vSteel = merge(vparts.steel.flatMap((g) => [-2.35, 2.35].map((vz) => g.clone().translate(0, 0, vz))));
     const vDark = merge(vparts.dark.flatMap((g) => [-2.35, 2.35].map((vz) => g.clone().translate(0, 0, vz))));
     for (const g of [...vparts.steel, ...vparts.dark]) g.dispose();
-    const carts: Level13Data['vatLine']['carts'] = [];
     const n = 7;
     const len = z1 - z0 + 10;
-    for (let i = 0; i < n; i++) {
-      const g = new THREE.Group();
-      const parts: THREE.Mesh[] = [new THREE.Mesh(deck, M.darkSteel), new THREE.Mesh(edge, M.yellow), new THREE.Mesh(wheels, M.darkSteel), new THREE.Mesh(stripes, M.hazard), new THREE.Mesh(vSteel, M.steel), new THREE.Mesh(vDark, M.darkSteel)];
-      const liq = this.liquid(colours[i % colours.length]);
-      for (const vz of [-2.35, 2.35]) {
-        const b = new THREE.Mesh(vparts.band, liq);
-        b.position.z = vz;
-        parts.push(b);
+    const track = (X: number, tint: number): Level13Data['vatLine'] => {
+      // The girder under the carts, the rails on it, trestles down into the fog every 12 m
+      this.add(M.darkSteel, span(X - 1.0, Y - 1.05, z0, X + 1.0, Y - 0.62, z1));
+      for (const s of [-0.7, 0.7]) this.add(M.steel, span(X + s - 0.06, Y - 0.62, z0, X + s + 0.06, Y - 0.5, z1));
+      this.add(M.hazard, span(X - 1.02, Y - 0.85, z0, X - 1.0, Y - 0.7, z1), false, 0.5);
+      this.add(M.hazard, span(X + 1.0, Y - 0.85, z0, X + 1.02, Y - 0.7, z1), false, 0.5);
+      for (let z = z0 + 6; z < z1; z += 12) {
+        for (const s of [-0.85, 0.85]) this.add(M.darkSteel, span(X + s - 0.12, -10, z - 0.12, X + s + 0.12, Y - 1.05, z + 0.12));
+        for (let yy = Y - 7; yy > 0; yy -= 9) this.add(M.darkSteel, span(X - 0.85, yy, z - 0.08, X + 0.85, yy + 0.18, z + 0.08));
       }
-      for (const m of parts) {
-        g.add(m);
-        m.userData.surface = 'metal';
-        m.userData.noDecal = true;
-        this.shootables.push(m);
+      // The portals it goes through, at both ends
+      for (const z of [z0, z1]) {
+        const s = z === z0 ? 1 : -1;
+        this.add(M.black, span(X - 1.6, Y - 1.1, Math.min(z, z + s * 0.04), X + 1.6, Y + 3.4, Math.max(z, z + s * 0.04)));
+        this.add(M.hazard, span(X - 1.9, Y - 1.1, Math.min(z, z + s * 0.12), X - 1.6, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
+        this.add(M.hazard, span(X + 1.6, Y - 1.1, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
+        this.add(M.hazard, span(X - 1.9, Y + 3.4, Math.min(z, z + s * 0.12), X + 1.9, Y + 3.7, Math.max(z, z + s * 0.12)), false, 0.6);
       }
-      const z = z0 - 5 + (i / n) * len;
-      g.position.set(X, Y, z);
-      this.group.add(g);
-      const deckC: Collider = { box: new THREE.Box3() };
-      const vatsC: Collider[] = [{ box: new THREE.Box3() }, { box: new THREE.Box3() }];
-      this.dyn.push(deckC, ...vatsC);
-      carts.push({ group: g, z, deck: deckC, vats: vatsC });
-    }
+      const carts: Level13Data['vatLine']['carts'] = [];
+      for (let i = 0; i < n; i++) {
+        const g = new THREE.Group();
+        const parts: THREE.Mesh[] = [new THREE.Mesh(deck, M.darkSteel), new THREE.Mesh(edge, M.yellow), new THREE.Mesh(wheels, M.darkSteel), new THREE.Mesh(stripes, M.hazard), new THREE.Mesh(vSteel, M.steel), new THREE.Mesh(vDark, M.darkSteel)];
+        const liq = this.liquid(colours[(i + tint) % colours.length]);
+        for (const vz of [-2.35, 2.35]) {
+          const b = new THREE.Mesh(vparts.band, liq);
+          b.position.z = vz;
+          parts.push(b);
+        }
+        for (const m of parts) {
+          g.add(m);
+          m.userData.surface = 'metal';
+          m.userData.noDecal = true;
+          this.shootables.push(m);
+        }
+        // Both lines in step: a cart on one always has a cart beside it on the other
+        const z = z0 - 5 + (i / n) * len;
+        g.position.set(X, Y, z);
+        this.group.add(g);
+        const deckC: Collider = { box: new THREE.Box3() };
+        const vatsC: Collider[] = [{ box: new THREE.Box3() }, { box: new THREE.Box3() }];
+        this.dyn.push(deckC, ...vatsC);
+        carts.push({ group: g, z, deck: deckC, vats: vatsC });
+      }
+      return { x: X, y: Y, z0: z0 - 5, z1: z1 + 5, speed: -2.4, carts };
+    };
+    const a = track(VAT_X, 0);
+    const b = track(VAT_XB, 1);
+    // ---- The steriliser arches: a frame over one line, a curtain of arcing light in it.
+    // The vats go through; anyone riding with them doesn't. They alternate, line to line,
+    // so the way north is from one line's carts to the other's and back.
+    const arches: Level13Data['arches'] = [];
+    const arch = (X: number, z: number): void => {
+      for (const s of [-1, 1]) {
+        this.add(M.darkSteel, span(X + s * 1.55 - 0.16, -10, z - 0.16, X + s * 1.55 + 0.16, Y + 3.9, z + 0.16));
+        this.add(M.hazard, span(X + s * 1.55 - 0.17, Y - 0.6, z - 0.17, X + s * 1.55 + 0.17, Y + 0.3, z + 0.17), false, 0.5);
+        // Emitters down the inside of each post
+        for (let y = Y + 0.3; y < Y + 3.4; y += 0.62) this.add(M.steel, span(X + s * 1.36 - 0.05, y, z - 0.07, X + s * 1.36 + 0.05, y + 0.3, z + 0.07));
+      }
+      this.add(M.darkSteel, span(X - 1.75, Y + 3.5, z - 0.22, X + 1.75, Y + 4.0, z + 0.22));
+      this.add(M.hazard, span(X - 1.76, Y + 3.42, z - 0.23, X + 1.76, Y + 3.5, z + 0.23), false, 0.5);
+      const mat = new THREE.MeshBasicMaterial({ map: arcTexture(), color: 0xb8a0ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const curtain = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.9), mat);
+      curtain.position.set(X, Y + 1.5, z);
+      curtain.renderOrder = 5;
+      this.group.add(curtain);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), new THREE.MeshStandardMaterial({ color: 0x1a1030, emissive: 0xa070ff, emissiveIntensity: 3 }));
+      lamp.position.set(X, Y + 4.08, z);
+      this.group.add(lamp);
+      for (const s of [-1, 1]) {
+        const sign = warnPlate('STERILISER — DO NOT RIDE THROUGH', 3.0, 0.36);
+        sign.position.set(X, Y + 3.75, z + s * 0.235);
+        if (s < 0) sign.rotation.y = Math.PI;
+        this.group.add(sign);
+      }
+      arches.push({ x: X, z, mat });
+    };
+    arch(VAT_X, 39);
+    arch(VAT_XB, 30);
+    arch(VAT_X, 21);
+    arch(VAT_XB, 3);
     // Where he gets off: a landing pad beside the track, a walkway east to the cargo platform
     this.platform(44.0, 8.5, 47, 12.5, Y6, 'ns');
     this.add(M.hazard, span(44.0, Y6, 8.5, 44.3, Y6 + 0.012, 12.5), false, 0.5);
     this.walkway({ x0: 47, z0: 9.4, x1: 50, z1: 11.6, y: Y6, rails: 'both' });
-    // The end of walkway 5, where he drops onto it: a hazard stripe
-    this.add(M.hazard, span(40.2, H3, 42.9, 40.6, H3 + 0.012, 45.1), false, 0.5);
-    return { x: X, y: Y, z0: z0 - 5, z1: z1 + 5, speed: -2.4, carts };
+    // The end of walkway 5, where he drops onto the near line: a hazard stripe
+    this.add(M.hazard, span(36.8, H3, 42.9, 37.2, H3 + 0.012, 45.1), false, 0.5);
+    return { a, b, arches };
   }
 
   /** The liquid in a vat: one material per colour, shared, the scene running its clock. */
@@ -2419,6 +2546,339 @@ export class Level13Builder {
     return { dropLadder: { group: g, raise, ladder }, door };
   }
 
+  // -------------------------------------------------------------- the weapons crate
+
+  /** On the first platform, against its south rail: an armoury crate, its lid up, the quad-barrel in the foam. */
+  private buildGunCrate(): Level13Data['gunCrate'] {
+    const M = this.M;
+    const x = -56.5;
+    const z = -28.75;
+    const y = H1;
+    const olive = new THREE.MeshStandardMaterial({ color: 0x343b2a, roughness: 0.8 });
+    const foam = new THREE.MeshStandardMaterial({ color: 0x151617, roughness: 1 });
+    this.add(M.darkSteel, box(1.3, 0.08, 0.7, x, y, z));
+    this.add(olive, box(1.3, 0.5, 0.7, x, y + 0.08, z));
+    this.add(foam, box(1.16, 0.02, 0.56, x, y + 0.57, z));
+    for (const s of [-1, 1]) {
+      this.add(M.darkSteel, box(1.32, 0.06, 0.04, x, y + 0.39, z + s * 0.36));
+      this.add(M.darkSteel, box(0.04, 0.5, 0.72, x + s * 0.55, y + 0.08, z));
+    }
+    this.solidBox(x - 0.66, y, z - 0.36, x + 0.66, y + 0.58, z + 0.36);
+    // The lid, thrown back against the rail
+    const lid = new THREE.BoxGeometry(1.3, 0.05, 0.7);
+    lid.translate(0, 0, 0.35);
+    lid.rotateX(-1.3);
+    lid.translate(x, y + 0.58, z + 0.35);
+    this.add(olive, lid);
+    // Its stencil, on the side he comes to
+    const c = makeCanvas(512, 128);
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#343b2a';
+    g.fillRect(0, 0, 512, 128);
+    g.fillStyle = '#d8d2b4';
+    g.font = 'bold 54px Arial';
+    g.fillText('EC ARMORY', 20, 62);
+    g.font = 'bold 28px Arial';
+    g.fillText('QB-4 — PRESSURE-ASSIST', 20, 108);
+    const tx = new THREE.CanvasTexture(c);
+    tx.colorSpace = THREE.SRGBColorSpace;
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.25), new THREE.MeshStandardMaterial({ map: tx, roughness: 0.8 }));
+    label.position.set(x, y + 0.33, z - 0.352);
+    label.rotation.y = Math.PI;
+    this.group.add(label);
+    // The gun in its foam, on its side, the gauge up
+    const q = quadShotgunModel();
+    q.group.position.set(x, y + 0.63, z);
+    q.group.rotation.set(0, Math.PI / 2, -(Math.PI / 2 - 0.08));
+    q.setPressure(0);
+    this.group.add(q.group);
+    // A strip of light inside the lid
+    this.add(M.lamp, box(0.9, 0.02, 0.03, x, y + 0.98, z + 0.5));
+    return { gun: q.group, pump: q.pump, setPressure: q.setPressure, stand: V(x, y, z - 1.2), yaw: Math.PI };
+  }
+
+  // -------------------------------------------------------------- the waste room
+
+  /**
+   * Waste Processing 2, through the hall's west wall: a tall concrete box
+   * with no floor — under it a hopper, and in the hopper two toothed rollers
+   * turning into each other. Chutes in the ceiling drop the Collective's
+   * scrap into it. The way through is what's left of a gantry: a ledge
+   * inside each door, three girders and a platform between them, each one
+   * higher than the last; three of the chutes drop straight onto it.
+   */
+  private buildGrinder(): Level13Data['grinder'] {
+    const M = this.M;
+    const { x0, x1, z0, z1, floor, top } = GRIND;
+    // ---- The box (the hall's wall is its east side)
+    this.add(M.darkConcrete, span(x0 - 1, floor - 1, z0 - 1, x0, top + 1, z1 + 1), true, 5);
+    this.add(M.darkConcrete, span(x0, floor - 1, z0 - 1, x1, top + 1, z0), true, 5);
+    this.add(M.darkConcrete, span(x0, floor - 1, z1, x1, top + 1, z1 + 1), true, 5);
+    this.add(M.darkConcrete, span(x0 - 1, top, z0 - 1, x1, top + 1, z1 + 1), true, 5);
+    this.add(M.darkConcrete, span(x0, floor - 1, z0, x1, floor, z1), true, 5);
+    // Bands round the walls, and a rust-streaked steel skirt above the hopper
+    for (const y of [H1 - 1.2, H2 - 0.4, top - 2.2]) {
+      this.add(M.concrete, span(x0, y, z0, x0 + 0.25, y + 0.5, z1), false, 4);
+      this.add(M.concrete, span(x0, y, z0, x1, y + 0.5, z0 + 0.25), false, 4);
+      this.add(M.concrete, span(x0, y, z1 - 0.25, x1, y + 0.5, z1), false, 4);
+    }
+    this.add(M.hazard, span(x0, 44.2, z0 + 0.02, x1, 44.9, z0 + 0.06), false, 1.2);
+    this.add(M.hazard, span(x0, 44.2, z1 - 0.06, x1, 44.9, z1 - 0.02), false, 1.2);
+    this.add(M.hazard, span(x0 + 0.02, 44.2, z0, x0 + 0.06, 44.9, z1), false, 1.2);
+    this.add(M.hazard, span(x1 - 0.06, 44.2, z0, x1 - 0.02, 44.9, z1), false, 1.2);
+    // ---- The hopper: steel plates sloping in from the long walls down to the rollers
+    const zc = (z0 + z1) / 2;
+    for (const s of [-1, 1]) {
+      const wallZ = s < 0 ? z0 : z1;
+      const lipZ = zc + s * 3.9;
+      const len = Math.hypot(wallZ - lipZ, 3.6);
+      const g = new THREE.BoxGeometry(x1 - x0, 0.14, len);
+      g.rotateX(Math.atan2(3.6, Math.abs(wallZ - lipZ)) * s);
+      g.translate((x0 + x1) / 2, 42.4, (wallZ + lipZ) / 2);
+      this.add(M.rust, g);
+      // Ribs down it
+      for (let x = x0 + 1.5; x < x1; x += 3) {
+        const r = new THREE.BoxGeometry(0.16, 0.3, len);
+        r.rotateX(Math.atan2(3.6, Math.abs(wallZ - lipZ)) * s);
+        r.translate(x, 42.5, (wallZ + lipZ) / 2);
+        this.add(M.darkSteel, r);
+      }
+    }
+    // ---- The rollers: drums the length of the room, rings of teeth staggered round them
+    const rollers: THREE.Object3D[] = [];
+    const rollMat = new THREE.MeshStandardMaterial({ color: 0x6d5f55, roughness: 0.55, metalness: 0.65 });
+    const toothMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.35, metalness: 0.8 });
+    const L = x1 - x0 - 0.6;
+    for (const s of [-1, 1]) {
+      const g = new THREE.Group();
+      const drum = new THREE.CylinderGeometry(1.55, 1.55, L, 20);
+      drum.rotateZ(Math.PI / 2);
+      const teeth: THREE.BufferGeometry[] = [];
+      let ring = 0;
+      for (let x = -L / 2 + 0.6; x < L / 2 - 0.3; x += 1.15, ring++) {
+        for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * Math.PI * 2 + (ring % 2) * 0.45 + (s > 0 ? 0.22 : 0);
+          const t = new THREE.BoxGeometry(0.42, 0.75, 0.42);
+          t.translate(0, 1.75, 0);
+          // Raked into the turn
+          t.rotateX(a);
+          t.translate(x, 0, 0);
+          teeth.push(t);
+        }
+      }
+      const d = new THREE.Mesh(drum, rollMat);
+      const tm = new THREE.Mesh(merge(teeth), toothMat);
+      g.add(d, tm);
+      g.position.set((x0 + x1) / 2, 39.4, zc + s * 2.0);
+      this.group.add(g);
+      rollers.push(g);
+      // Its bearings in the end walls
+      for (const ex of [x0 + 0.15, x1 - 0.15]) {
+        const b = new THREE.CylinderGeometry(0.7, 0.7, 0.3, 14);
+        b.rotateZ(Math.PI / 2);
+        b.translate(ex, 39.4, zc + s * 2.0);
+        this.add(M.darkSteel, b);
+      }
+    }
+    // A furnace glow from under them
+    this.add(new THREE.MeshBasicMaterial({ color: 0xff5a14 }), span(x0, floor, zc - 1.2, x1, floor + 0.05, zc + 1.2));
+    // ---- The way through
+    const ledge = (lx0: number, lz0: number, lx1: number, lz1: number, y: number): void => {
+      this.add(M.grating, span(lx0, y - 0.04, lz0, lx1, y, lz1), false, 1.5);
+      this.solidBox(lx0, y - 0.3, lz0, lx1, y, lz1);
+      this.add(M.darkSteel, span(lx0, y - 0.4, lz0, lx1, y - 0.04, lz0 + 0.18));
+      this.add(M.darkSteel, span(lx0, y - 0.4, lz1 - 0.18, lx1, y - 0.04, lz1));
+      this.add(M.darkSteel, span(lx0, y - 0.4, lz0, lx0 + 0.18, y - 0.04, lz1));
+      this.add(M.hazard, span(lx0, y, lz0, lx0 + 0.3, y + 0.012, lz1), false, 0.5);
+      this.walkRail(lx0, lz0, lx1, lz0 + 0.08, y);
+      this.walkRail(lx0, lz1 - 0.08, lx1, lz1, y);
+      // Brackets back to the wall under it
+      for (const z of [lz0 + 0.3, lz1 - 0.3]) {
+        const b = new THREE.BoxGeometry(0.14, 0.14, Math.hypot(lx1 - lx0 - 0.4, 2.4));
+        b.rotateY(Math.PI / 2);
+        b.rotateZ(Math.atan2(2.4, lx1 - lx0 - 0.4));
+        b.translate((lx0 + lx1) / 2 + 0.2, y - 1.55, z);
+        this.add(M.darkSteel, b);
+      }
+    };
+    ledge(-66, -0.6, x1, 2.8, H1);
+    ledge(-66, 8.6, x1, 11.4, H2);
+    /** A girder to walk: an I-beam 0.7 wide, hung from the roof on chains. */
+    const girder = (gx0: number, gz0: number, gx1: number, gz1: number, y: number): void => {
+      const alongX = gx1 - gx0 > gz1 - gz0;
+      this.add(M.yellow, span(gx0, y - 0.07, gz0, gx1, y, gz1));
+      if (alongX) {
+        const zm = (gz0 + gz1) / 2;
+        this.add(M.rust, span(gx0, y - 0.5, zm - 0.06, gx1, y - 0.07, zm + 0.06));
+        this.add(M.rust, span(gx0, y - 0.57, gz0, gx1, y - 0.5, gz1));
+        for (const x of [gx0 + 0.3, gx1 - 0.3]) for (const z of [gz0 + 0.04, gz1 - 0.04]) this.add(M.darkSteel, span(x - 0.02, y, z - 0.02, x + 0.02, top, z + 0.02));
+        this.add(M.hazard, span(gx0, y, gz0, gx0 + 0.4, y + 0.01, gz1), false, 0.5);
+        this.add(M.hazard, span(gx1 - 0.4, y, gz0, gx1, y + 0.01, gz1), false, 0.5);
+      } else {
+        const xm = (gx0 + gx1) / 2;
+        this.add(M.rust, span(xm - 0.06, y - 0.5, gz0, xm + 0.06, y - 0.07, gz1));
+        this.add(M.rust, span(gx0, y - 0.57, gz0, gx1, y - 0.5, gz1));
+        for (const z of [gz0 + 0.3, gz1 - 0.3]) for (const x of [gx0 + 0.04, gx1 - 0.04]) this.add(M.darkSteel, span(x - 0.02, y, z - 0.02, x + 0.02, top, z + 0.02));
+        this.add(M.hazard, span(gx0, y, gz0, gx1, y + 0.01, gz0 + 0.4), false, 0.5);
+        this.add(M.hazard, span(gx0, y, gz1 - 0.4, gx1, y + 0.01, gz1), false, 0.5);
+      }
+      this.solidBox(gx0, y - 0.57, gz0, gx1, y, gz1);
+    };
+    girder(-76.2, 0.75, -68.2, 1.45, H1);
+    girder(-80.35, 3, -79.65, 10, H1 + 1.6);
+    girder(-75, 13.2, -67.5, 13.9, H1 + 5);
+    // The rest platform between the second and third: what's left of the old gantry's corner
+    const PY = H1 + 1.9;
+    this.add(M.grating, span(-84, PY - 0.04, 12, -78, PY, 16.5), false, 1.5);
+    this.solidBox(-84, PY - 0.3, 12, -78, PY, 16.5);
+    for (const [a, b, c, d] of [[-84, 12, -78, 12.18], [-84, 16.32, -78, 16.5], [-84, 12, -83.82, 16.5], [-78.18, 12, -78, 16.5]]) this.add(M.darkSteel, span(a, PY - 0.4, b, c, PY - 0.04, d));
+    this.walkRail(-84, 16.42, -78, 16.5, PY);
+    this.walkRail(-84, 12, -83.92, 16.5, PY);
+    for (const [x, z] of [[-83.8, 12.2], [-78.2, 12.2], [-83.8, 16.3], [-78.2, 16.3]]) this.add(M.darkSteel, span(x - 0.03, PY + 1.1, z - 0.03, x + 0.03, top, z + 0.03));
+    this.add(M.darkSteel, span(-88, PY - 0.35, 13.9, -84, PY - 0.1, 14.2));
+    this.add(M.darkSteel, span(-88, PY - 0.35, 15.6, -84, PY - 0.1, 15.9));
+    // ---- The chutes: fat ducts down out of the ceiling, a hazard collar and a warning lamp at each mouth
+    const chutes: Level13Data['grinder']['chutes'] = [];
+    const duct = new THREE.MeshStandardMaterial({ color: 0x4a4f55, roughness: 0.55, metalness: 0.6, side: THREE.DoubleSide });
+    const chute = (cx: number, cz: number, period: number, phase: number): void => {
+      const mouthY = top - 3.4;
+      const tube = new THREE.CylinderGeometry(1.25, 1.25, 3.4, 18, 1, true);
+      tube.translate(cx, mouthY + 1.7, cz);
+      this.add(duct, tube);
+      const collar = new THREE.CylinderGeometry(1.38, 1.38, 0.35, 18, 1, true);
+      collar.translate(cx, mouthY + 0.18, cz);
+      this.add(M.hazard, collar, false, 0);
+      for (const y of [mouthY + 1.4, mouthY + 2.6]) {
+        const band = new THREE.TorusGeometry(1.27, 0.05, 6, 20);
+        band.rotateX(Math.PI / 2);
+        band.translate(cx, y, cz);
+        this.add(M.darkSteel, band);
+      }
+      const dark = new THREE.CircleGeometry(1.24, 18);
+      dark.rotateX(Math.PI / 2);
+      dark.translate(cx, top - 0.02, cz);
+      this.add(M.black, dark);
+      const lampMat = new THREE.MeshStandardMaterial({ color: 0x220a00, emissive: 0xff7a1a, emissiveIntensity: 0.3 });
+      for (const a of [0.6, 2.7, 4.8]) {
+        const l = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), lampMat);
+        l.position.set(cx + Math.cos(a) * 1.42, mouthY + 0.1, cz + Math.sin(a) * 1.42);
+        this.group.add(l);
+      }
+      chutes.push({ mouth: V(cx, mouthY - 0.6, cz), period, phase, lamp: lampMat });
+    };
+    // Over the first girder, the second and the third; and two off the route that just feed the grinder
+    chute(-72.2, 1.1, 3.6, 0.4);
+    chute(-80, 6.5, 4.3, 1.9);
+    chute(-71.4, 13.55, 3.3, 2.6);
+    chute(-84.5, -4.5, 5.2, 0.9);
+    chute(-66, 16.5, 6.1, 3.3);
+    // ---- Light: the furnace from below, a cold flood from the roof
+    const glow = new THREE.PointLight(0xff6a22, 70, 34, 1.5);
+    glow.position.set((x0 + x1) / 2, 41.5, zc);
+    const flood = new THREE.PointLight(0xcfe0ee, 46, 36, 1.4);
+    flood.position.set((x0 + x1) / 2, top - 4.5, zc);
+    this.group.add(glow, flood);
+    this.add(M.lamp, span(-75.5, top - 0.06, zc - 3, -73.5, top, zc + 3));
+    // ---- Signs, and the door frames
+    for (const [y, za, zb] of [[H1, -0.2, 2.4], [H2, 8.8, 11.2]] as const) {
+      for (const x of [x1 - 0.06, HALL.x0]) {
+        this.add(M.hazard, span(x, y, za - 0.3, x + 0.06, y + 3.3, za), false, 0.6);
+        this.add(M.hazard, span(x, y, zb, x + 0.06, y + 3.3, zb + 0.3), false, 0.6);
+        this.add(M.hazard, span(x, y + 3, za - 0.3, x + 0.06, y + 3.3, zb + 0.3), false, 0.6);
+      }
+    }
+    const put = (m: THREE.Object3D, x: number, y: number, z: number, ry: number): void => {
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      this.group.add(m);
+    };
+    put(warnPlate('WASTE PROCESSING 2', 2.4, 0.44), HALL.x0 + 0.08, H1 + 3.75, 1.1, Math.PI / 2);
+    put(warnPlate('DANGER — FALLING WASTE', 2.4, 0.36), HALL.x0 + 0.08, H1 + 4.25, 1.1, Math.PI / 2);
+    put(warnPlate('GANTRY UNSAFE — NO ENTRY', 1.9, 0.3), HALL.x0 + 0.08, H1 + 1.6, 3.6, Math.PI / 2);
+    put(warnPlate('WASTE PROCESSING 2 — EXIT', 2.4, 0.36), HALL.x0 + 0.08, H2 + 3.7, 10, Math.PI / 2);
+    put(warnPlate('GRINDER LIVE — KEEP CLEAR OF HOPPER', 6, 0.7), x0 + 0.03, H1 + 6, zc, Math.PI / 2);
+    put(warnPlate('CHUTES DISCHARGE WITHOUT WARNING', 6, 0.6), (x0 + x1) / 2, H2 + 4.5, z0 + 0.03, 0);
+    put(warnPlate('DO NOT STAND UNDER CHUTES', 5, 0.6), (x0 + x1) / 2, H1 + 3.2, z1 - 0.03, Math.PI);
+    put(warnPlate('EXIT ↑', 1.4, 0.4), x1 - 0.08, H2 + 3.7, 10, -Math.PI / 2);
+    return { rollers, chutes };
+  }
+
+  // -------------------------------------------------------------- signs and fittings
+
+  /** What a works like this has screwed to every surface: plates, placards, beacons, drums, hose reels. */
+  private buildSigns(): void {
+    const M = this.M;
+    const put = (m: THREE.Object3D, x: number, y: number, z: number, ry = 0): void => {
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      this.group.add(m);
+    };
+    /** A plate on a post standing on a deck, facing `ry`. */
+    const post = (text: string, x: number, y: number, z: number, ry: number, w = 1.5, h = 0.34): void => {
+      this.add(M.darkSteel, span(x - 0.03, y, z - 0.03, x + 0.03, y + 2.0, z + 0.03));
+      put(warnPlate(text, w, h), x - Math.sin(ry) * -0.04, y + 2.0, z + Math.cos(ry) * 0.04, ry);
+    };
+    // The first platform and the step
+    post('SECTOR 4 — WALKWAY A', -53.6, H1, -33.6, -Math.PI / 2);
+    put(warnPlate('PRESSURE-ASSIST ACCESS ONLY', 2.0, 0.34), -45.53, H1 + 2.1, -31, -Math.PI / 2);
+    put(warnPlate('↑ 3 m', 0.8, 0.34), -45.53, H1 + 1.5, -31, -Math.PI / 2);
+    // S2's gap
+    post('SPAN REMOVED', -32.7, H1, -18.6, Math.PI, 1.3);
+    post('NO RAILS — HOLD ON TO NOTHING', -32.7, H1, -26.4, Math.PI, 1.7, 0.3);
+    // Platform 2: the ladder's gone
+    put(warnPlate('LADDER OUT OF SERVICE', 1.6, 0.3), -32, H1 + 1.9, 5.3, Math.PI);
+    put(warnPlate('WASTE PROCESSING 2 →', 1.7, 0.3), -35.9, H1 + 1.35, 3.8, Math.PI / 2);
+    // The broken span, the lever, the vat lines
+    post('SPAN CLOSED', -27.4, H2, 9.25, -Math.PI / 2, 1.2);
+    post('LEVER CALLS PLATFORM', -1.4, H2, 36.9, Math.PI / 2, 1.6);
+    post('VAT LINES B · A — NORTHBOUND', 34.4, H3, 45.0, -Math.PI / 2, 2.0);
+    post('CHANGE LINES BEFORE EACH ARCH', 34.4, H3, 43.0, -Math.PI / 2, 2.0, 0.3);
+    post('ALIGHT HERE', 46.6, Y6, 8.8, 0, 1.1);
+    post('CARGO LINE — MIND THE GAPS', 55.6, Y6, 7.4, -Math.PI / 2, 1.9);
+    // Level markers on the columns and walls: big stencilled plates
+    for (const [text, x, y, z, ry] of [
+      ['LEVEL 1', -45, H1 + 2, -53.96, 0],
+      ['LEVEL 2', -6, H2 + 2, -27.96, 0],
+      ['LEVEL 3', 16, H3 + 2, 57.96, Math.PI],
+      ['BAY 7', -45.96, H2 + 2, 26, Math.PI / 2],
+      ['BAY 9', 13.96, H2 + 3, -14, -Math.PI / 2]
+    ] as const) {
+      put(warnPlate(text, 2.6, 0.7), x, y, z, ry);
+    }
+    // Beacons on the corners of the platforms the route crosses
+    const amber = new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffa21a, emissiveIntensity: 2.6 });
+    for (const [x, y, z] of [[-53.2, H1, -28.2], [-36, H1, -36], [-28.2, H1, 5.2], [-36, H2, 13], [6, H2, 14], [6, H2, 30], [34, H2, 30.2], [34, H3, 48], [47, Y6, 8.6], [56, Y6, 6.2]]) {
+      this.add(M.darkSteel, span(x - 0.04, y + 1.12, z - 0.04, x + 0.04, y + 1.4, z + 0.04));
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), amber);
+      b.position.set(x, y + 1.46, z);
+      this.group.add(b);
+    }
+    // Drums, a hose reel, extinguishers, a toolbox: left where people were working
+    for (const [kind, x, y, z] of [['yellow', -54.2, H1, -33.3], ['blue', -29.2, H1, 4.4], ['rust', -29.3, H1, 3.3], ['blue', 5.2, H2, 31], ['yellow', 33, H3, 41], ['rust', 51, Y6, 13.2]] as const) {
+      const b = barrel(kind);
+      put(b, x, y, z, x);
+      this.solidBox(x - 0.3, y, z - 0.3, x + 0.3, y + 0.9, z + 0.3);
+    }
+    put(fireExtinguisher(), -59.8, H1 + 0.9, -29.2, Math.PI / 2);
+    put(fireExtinguisher(), -61.12, H1 + 0.9, 2.5, -Math.PI / 2);
+    put(hoseReel(), HALL.x0 + 0.12, H1 + 1.4, -2.2, Math.PI / 2);
+    put(toolbox(), -29.4, H1, -2.2, 0.5);
+    put(toolbox(), -82.6, H1 + 1.9, 15.6, 0.3);
+    put(hardHat(), -82.9, H1 + 2.13, 15.5, 1);
+    // Cable trays along the west wall, and conduit down to the door controls
+    for (const y of [H1 + 4.6, H2 + 4.2]) {
+      this.add(M.darkSteel, span(HALL.x0, y, -27, HALL.x0 + 0.3, y + 0.06, 40));
+      for (let z = -26; z < 40; z += 2.2) this.add(M.darkSteel, span(HALL.x0, y - 0.25, z, HALL.x0 + 0.05, y, z + 0.05));
+      for (const k of [0.07, 0.15, 0.22]) this.add(M.black, span(HALL.x0 + k - 0.02, y + 0.06, -27, HALL.x0 + k + 0.02, y + 0.1, 40));
+    }
+    for (const [y, z] of [[H1, 2.9], [H2, 11.7]]) {
+      this.add(M.darkSteel, span(HALL.x0, y + 1.1, z, HALL.x0 + 0.1, y + 1.5, z + 0.3));
+      this.add(M.greenLamp, span(HALL.x0 + 0.1, y + 1.35, z + 0.08, HALL.x0 + 0.12, y + 1.42, z + 0.22));
+      this.add(M.pipe, span(HALL.x0 + 0.02, y + 1.5, z + 0.12, HALL.x0 + 0.06, y + 4.4, z + 0.18));
+    }
+  }
+
+  // -------------------------------------------------------------- the abyss
   // -------------------------------------------------------------- the abyss
 
   /**

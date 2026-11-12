@@ -281,6 +281,28 @@ export class ShotgunViewmodel {
   }
 
   private quad: THREE.Group | null = null;
+  private quadGauge: ((p: number, flash?: number) => void) | null = null;
+  /** Thrown back and up by a pressure shot; it eases home on its own. */
+  private blastKick = 0;
+
+  /** The quad-barrel's gauge: charges held, and a red flash when he asks for one it hasn't got. */
+  setPressure(p: number, flash = 0): void {
+    this.quadGauge?.(p, flash);
+  }
+
+  /** A pressure shot: all four at once, no pump — the gun slams back into him. */
+  blast(): void {
+    const pumpT = this.pumpT;
+    const fired = new Set(this.pumpFired);
+    this.fire();
+    this.pumpT = pumpT;
+    this.pumpFired = fired;
+    this.recoil = 1.15;
+    this.blastKick = 1;
+    this.flashSprite.scale.multiplyScalar(1.7);
+    this.flashHalo.scale.multiplyScalar(1.7);
+    this.flashLight.intensity = 16;
+  }
 
   /**
    * Swap the 12-gauge for the Collective's quad-barrel from the lab crate.
@@ -291,6 +313,7 @@ export class ShotgunViewmodel {
     if (this.quad) return;
     const q = quadShotgunModel();
     this.quad = q.group;
+    this.quadGauge = q.setPressure;
     this.model.visible = false;
     this.gun.add(q.group);
     q.pump.removeFromParent();
@@ -501,10 +524,15 @@ export class ShotgunViewmodel {
       py + this.swayY + bobY + sprintSwayY + r * 0.02 + rlPosY,
       pz + r * 0.11 + rlPosZ
     );
+    // A pressure shot: shoved back at his shoulder and rolled, then settling
+    this.blastKick = Math.max(0, this.blastKick - dt * 3.2);
+    const bk = this.blastKick * this.blastKick;
+    this.root.position.z += bk * 0.07;
+    this.root.position.y -= bk * 0.03;
     this.root.rotation.set(
-      -r * 0.42 + this.swayY * 3 + this.sprintRot.x * sp + rlX + pumpPitch,
+      -r * 0.42 + this.swayY * 3 + this.sprintRot.x * sp + rlX + pumpPitch + bk * 0.18,
       this.swayX * 3 + this.sprintRot.y * sp + rlY,
-      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ
+      this.swayX * 1.5 + this.sprintRot.z * sp + sprintRoll + rlZ - bk * 0.22
     );
     this.pump.position.z = -0.2 + pumpSlide * 0.095;
     // The wood rides the same stroke; inside the model group, back is −X

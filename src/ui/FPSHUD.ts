@@ -245,6 +245,34 @@ export class FPSHUD {
     this.ammoEl.classList.toggle('reloading', reloading);
   }
 
+  private pressureEl: HTMLElement | null = null;
+  private shownPressure = '';
+
+  /** The quad-barrel's charges, over the ammo: three cells, the one refilling part full. `null` takes it away. */
+  setPressure(p: number | null): void {
+    if (p === null) {
+      if (this.pressureEl) this.pressureEl.style.display = 'none';
+      this.shownPressure = '';
+      return;
+    }
+    if (!this.pressureEl) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;right:26px;bottom:104px;display:flex;align-items:center;gap:5px;font:11px "Courier New",monospace;letter-spacing:2px;color:#bfe9f5;text-shadow:0 1px 2px #000';
+      el.innerHTML = '<span style="opacity:.75;margin-right:4px">RMB PRESSURE</span>' + '<i style="display:block;width:26px;height:9px;border:1px solid rgba(160,230,250,.7);background:rgba(0,0,0,.45);position:relative;overflow:hidden"><b style="position:absolute;left:0;top:0;bottom:0;width:0;background:#35e0ff"></b></i>'.repeat(3);
+      this.hud.appendChild(el);
+      this.pressureEl = el;
+    }
+    const key = (Math.round(p * 25) / 25).toFixed(2);
+    if (key === this.shownPressure) return;
+    this.shownPressure = key;
+    this.pressureEl.style.display = 'flex';
+    this.pressureEl.querySelectorAll('b').forEach((b, i) => {
+      const k = Math.min(1, Math.max(0, p - i));
+      (b as HTMLElement).style.width = `${k * 100}%`;
+      (b as HTMLElement).style.background = k >= 1 ? '#35e0ff' : '#ff9a2a';
+    });
+  }
+
   /** The readout there or not (not, with a knife in his hand). */
   setAmmoShown(on: boolean): void {
     if (this.ammoEl) this.ammoEl.style.visibility = on ? '' : 'hidden';

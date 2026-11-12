@@ -97,6 +97,26 @@ export class Arsenal {
   knifeWanted = false;
   knifeActive = false;
   knifeStow = 1;
+  /**
+   * The quad-barrel's pressure shot (right mouse, where a level turns it on):
+   * no pellets, all gas — it throws him the opposite way to where he's
+   * aiming. Three charges, each five seconds to come back, one at a time.
+   */
+  pressureOn = false;
+  pressure = 3;
+  private pressureCd = 0;
+  private pressureFlash = 0;
+  static readonly PRESSURE_MAX = 3;
+  static readonly PRESSURE_REGEN = 5;
+  static readonly PRESSURE_SPEED = 11.5;
+  /** A pressure shot going off, for the scene (shake, dust). */
+  onPressureShot: ((away: THREE.Vector3) => void) | null = null;
+
+  /** Right mouse is the pressure shot, not the sights: the quad-barrel's in hand and charged up. */
+  get pressureArmed(): boolean {
+    return this.pressureOn && !this.knifeWanted && !this.knifeActive && this.active === 'shotgun' && this.shotgun.isQuad;
+  }
+
   /** Stow speeds: how fast the gun goes down, and comes back up. */
   stowRate = 5;
   drawRate = 5;
@@ -261,6 +281,13 @@ export class Arsenal {
   preUpdate(dt: number, input: InputManager, o: { canSwitch: boolean; busy: boolean; hold?: boolean }): void {
     if (o.hold) return;
     const held = this.held;
+    // The canister refills whatever he's doing
+    if (this.pressureOn) {
+      this.pressure = Math.min(Arsenal.PRESSURE_MAX, this.pressure + dt / Arsenal.PRESSURE_REGEN);
+      this.pressureCd -= dt;
+      this.pressureFlash = Math.max(0, this.pressureFlash - dt * 3);
+      this.shotgun.setPressure(this.pressure, this.pressureFlash);
+    }
     const wheel = input.consumeWheel();
     if (o.canSwitch && !o.busy && !held.reloading) {
       let picked = false;
@@ -338,8 +365,16 @@ export class Arsenal {
       !this.held.reloading &&
       !this.switching &&
       (this.active !== 'shotgun' || !this.shotgun.pumping);
+    const right = input.consumeRightClick();
     // The knife's out: the click is the scene's (its tricks), not a trigger's
     if (this.knifeWanted || this.knifeActive) return null;
+    if (right && canFire && this.pressureArmed && this.held.stow < 0.1 && this.pressureCd <= 0) {
+      if (this.pressure >= 1) this.pressureShot();
+      else {
+        audio.dryFire();
+        this.pressureFlash = 1;
+      }
+    }
     const clicked = input.consumeClick();
     let fired: Gun | null = null;
     if (clicked && canFire && this.active === 'shotgun' && this.shotgun.reloading && this.shells > 0) {
@@ -455,6 +490,25 @@ export class Arsenal {
       const end = this.host.castBullet(eye, this.aimDir(spread));
       particles.tracer(muzzle, end);
     }
+  }
+
+  /** All gas: nothing comes out of it but the bang, and he goes the other way. */
+  private pressureShot(): void {
+    const { audio, bus, player, particles } = this.host;
+    this.pressure -= 1;
+    this.pressureCd = 0.22;
+    if (this.shotgun.reloading) this.shotgun.cancelReload();
+    this.shotgun.blast();
+    audio.shotgunBlast();
+    audio.kickWhoosh();
+    bus.emit(Events.Sound, { position: player.position.clone(), radius: 40, kind: 'gunshot' });
+    const dir = new THREE.Vector3();
+    player.camera.getWorldDirection(dir);
+    const muzzle = this.shotgun.muzzleWorld();
+    for (let i = 0; i < 3; i++) particles.barrelSmoke(muzzle, dir);
+    const away = dir.clone().negate();
+    player.launch(away, Arsenal.PRESSURE_SPEED);
+    this.onPressureShot?.(away);
   }
 
   private shootRifle(): void {

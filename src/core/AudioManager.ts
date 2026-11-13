@@ -199,7 +199,20 @@ export class AudioManager {
   }
   setSfxVolume(v: number): void {
     this.sfxVolume = v;
-    if (this.ctx) this.sfxBus.gain.value = v;
+    if (this.ctx && !this.hushed) this.sfxBus.gain.value = v;
+  }
+
+  private hushed = false;
+
+  /** Every sound but the music faded out (Ravi's death), or back up to its level. */
+  hushSfx(on: boolean, seconds = 0.4): void {
+    if (!this.ctx || on === this.hushed) return;
+    this.hushed = on;
+    const g = this.sfxBus.gain;
+    const now = this.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(on ? 0 : this.sfxVolume, now + Math.max(0.02, seconds));
   }
   setMusicVolume(v: number): void {
     this.musicVolume = v;
@@ -3878,9 +3891,10 @@ export class AudioManager {
         src.loopEnd = loopEnd > 0 ? loopEnd : buf.duration;
         src.connect(out);
         if (fadeIn > 0) {
+          // Straight up (an exponential ramp sat near silent for most of it)
           const now = ctx.currentTime;
-          out.gain.setValueAtTime(0.0001, now);
-          out.gain.exponentialRampToValueAtTime(level, now + fadeIn);
+          out.gain.setValueAtTime(0, now);
+          out.gain.linearRampToValueAtTime(level, now + fadeIn);
         }
         src.start();
         t.src = src;

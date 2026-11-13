@@ -97,8 +97,7 @@ const WITH_CREW = 10;
 /** The cover the in-between sections are made of: how far down the lot (z). */
 const SECTION_A_Z = -50;
 const SECTION_B_Z = -96;
-/** Ravi's death: the song, and how long before a click can take him back (ms). */
-const DEATH_SONG = 'audio/death.wav';
+/** Ravi's death: how long before a click can take him back (ms). */
 const DEATH_HOLD = 2500;
 /** How far out in front of the fight's front line the Collective's men come in. */
 const SPAWN_AHEAD = 18;
@@ -1829,37 +1828,19 @@ export class HQScene extends CombatScene<HQData> {
   }
 
   /**
-   * Ravi's down: the HUD goes, the colour drains out of the picture, the
-   * world slows, the camera drifts round him where he lies, and the song
-   * comes up. The restart prompt fades in after a few seconds, over the
-   * bottom of the shot, not across it.
+   * Ravi's down. The grey, the silence, the slow-motion, the song and the
+   * drifting camera are the game's (DeathFx, on Events.PlayerDied); this is
+   * the lot's part: his flashlight out, the hold before a click restarts.
    */
   private deathScene(): void {
-    const { audio } = this.ctx;
     this.deadAt = performance.now();
-    this.slowT = 4.5;
-    const canvas = this.ctx.engine.renderer.domElement;
-    canvas.style.transition = 'filter 1.8s ease-out';
-    canvas.style.filter = 'grayscale(1) contrast(1.12) brightness(0.82)';
-    this.ui.style.transition = 'opacity 0.5s';
-    this.ui.style.opacity = '0';
-    const over = document.getElementById('death-overlay');
-    const hudRoot = over?.parentElement;
-    if (hudRoot) for (const c of Array.from(hudRoot.children)) if (c !== over) (c as HTMLElement).style.visibility = 'hidden';
-    this.hud.setCinematic(false);
-    this.hud.setPrompt(null);
-    if (over) {
-      over.style.transition = 'opacity 2.5s';
-      over.style.opacity = '0';
-      over.style.background = 'linear-gradient(to bottom, rgba(0,0,0,0) 45%, rgba(0,0,0,0.78) 100%)';
-      over.style.justifyContent = 'flex-end';
-      over.style.paddingBottom = '10vh';
-      window.setTimeout(() => (over.style.opacity = '1'), 5000);
-    }
-    if (this.raviRagdoll) this.raviRagdoll.orbit = 0.16;
-    this.klaxon?.set(0.12);
-    audio.stopBossMusic(1.2);
-    audio.startTrackMusic(DEATH_SONG, 0, 0, 0.85, 2.5);
+    this.onRaviDeath();
+  }
+
+  /** Asked by DeathFx: the flashlight goes out with him. */
+  onRaviDeath(): void {
+    this.torchOn = false;
+    this.torch.intensity = 0;
   }
 
   /**

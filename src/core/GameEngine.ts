@@ -93,6 +93,8 @@ export class GameEngine {
 
   /** Held by the pause menu: nothing updates or draws (the last frame stays up). */
   paused = false;
+  /** How fast the world runs (1 normal; Ravi's death slows it right down). */
+  timeScale = 1;
   /** Called whenever a new scene is asked for (the pause menu closes). */
   onSceneChange: (() => void) | null = null;
 
@@ -210,7 +212,7 @@ export class GameEngine {
         return; // card only until then
       }
       if (this.scene) {
-        this.scene.update(dt, this.elapsed);
+        this.scene.update(dt * this.timeScale, this.elapsed);
         this.scene.render(this.renderer);
       }
       // The card comes down a frame after the scene has drawn once, so the

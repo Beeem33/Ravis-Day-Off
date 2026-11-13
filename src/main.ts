@@ -24,6 +24,7 @@ import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
+import { DeathFx } from './fx/DeathFx';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -32,6 +33,8 @@ export interface GameContext {
   input: InputManager;
   audio: AudioManager;
   uiRoot: HTMLElement;
+  /** Ravi's death, the same everywhere: grey, no HUD, slow, the song (started on Events.PlayerDied; the street starts it itself). */
+  death: DeathFx;
 }
 
 const container = document.getElementById('app')!;
@@ -41,8 +44,12 @@ const bus = new EventBus();
 const engine = new GameEngine(container, bus);
 const input = new InputManager(engine.domElement);
 const audio = new AudioManager();
+const death = new DeathFx(engine, audio, uiRoot);
 
-const ctx: GameContext = { engine, bus, input, audio, uiRoot };
+const ctx: GameContext = { engine, bus, input, audio, uiRoot, death };
+
+// Ravi down, on foot, in any level: the death (the HUD's YOU DIED panel is the prompt it keeps)
+bus.on(Events.PlayerDied, () => death.start(document.getElementById('death-overlay')));
 
 // Any first gesture unlocks the audio context (browser autoplay policy)
 const unlockOnce = (): void => {
@@ -296,7 +303,11 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
       bus.emit(Events.ReturnToMenu);
     }
   };
-  engine.onSceneChange = () => setPaused(false);
+  engine.onSceneChange = () => {
+    setPaused(false);
+    // A restart, or the menu: the death's grey, silence and song all go
+    death.end();
+  };
   // The player let go of the mouse (Esc while it was captured, or tabbing away)
   input.onUserUnlock = () => {
     if (inLevel()) setPaused(true);

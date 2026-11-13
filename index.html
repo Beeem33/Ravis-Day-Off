@@ -386,13 +386,14 @@
       const splash = document.getElementById('boot-splash');
       const b = document.getElementById('splash-studio');
       const m = document.getElementById('splash-music');
+      // Each card up for about 4.8 s
       setTimeout(() => b.classList.add('show'), 150);
-      setTimeout(() => b.classList.remove('show'), 3000);
+      setTimeout(() => b.classList.remove('show'), 5000);
       // The studio fades out, then the music credit fades in on the black
-      setTimeout(() => m.classList.add('show'), 3900);
-      setTimeout(() => m.classList.remove('show'), 6400);
-      setTimeout(() => { splash.style.opacity = '0'; }, 7200); // reveal the menu underneath
-      setTimeout(() => splash.remove(), 8100);
+      setTimeout(() => m.classList.add('show'), 5900);
+      setTimeout(() => m.classList.remove('show'), 10400);
+      setTimeout(() => { splash.style.opacity = '0'; }, 11200); // reveal the menu underneath
+      setTimeout(() => splash.remove(), 12100);
     })();
   </script>
   <script type="module" src="/src/main.ts"></script>

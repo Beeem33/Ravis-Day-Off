@@ -70,6 +70,13 @@ export class Level4Scene extends CombatScene<Level4Data> {
   /** Ravi's own torch. Off at the start; F works it. */
   private torch!: THREE.SpotLight;
   private torchOn = false;
+
+  /** Asked by DeathFx when he dies: the flashlight goes out with him. */
+  onRaviDeath(): void {
+    this.torchOn = false;
+    this.torch.intensity = 0;
+    this.ui?.querySelector('.torch-hint')?.classList.remove('on');
+  }
   private leaveWalk = -1;
   private leaveFrom = new THREE.Vector3();
 

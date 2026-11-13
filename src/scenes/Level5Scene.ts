@@ -153,6 +153,13 @@ export class Level5Scene extends CombatScene<Level5Data> {
   private torch!: THREE.SpotLight;
   private torchOn = false;
 
+  /** Asked by DeathFx when he dies: the flashlight goes out with him. */
+  onRaviDeath(): void {
+    this.torchOn = false;
+    this.torch.intensity = 0;
+    this.ui?.querySelector('.torch-hint')?.classList.remove('on');
+  }
+
   private stage: Stage = 'hall';
   private stageT = 0;
   /** 1 = fully open, 0 = shut. */

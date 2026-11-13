@@ -150,9 +150,10 @@ export interface CopRig {
    * 'feetUp': leant back, boots up on the dash, doughnut in his right hand;
    * 'bite': same, the doughnut at his mouth (blend with `k`);
    * 'startled': feet down, bolt upright, hands up, doughnut gone;
-   * 'driving': both hands on the wheel, leaning into it.
+   * 'driving': both hands on the wheel, leaning into it;
+   * 'flip': the right hand on the wheel, the left out of his window giving whoever's behind the finger.
    */
-  pose(p: 'feetUp' | 'bite' | 'startled' | 'driving', k?: number): void;
+  pose(p: 'feetUp' | 'bite' | 'startled' | 'driving' | 'flip', k?: number): void;
   /** Advance blends and any idle motion. */
   update(dt: number): void;
   /** The doughnut, as its own object (in his hand until thrown: the scene can reparent it and fling it). */

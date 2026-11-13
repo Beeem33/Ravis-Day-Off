@@ -748,7 +748,7 @@ function doughnutMesh(): THREE.Mesh {
 }
 
 type V3 = THREE.Vector3;
-type CopPoseName = 'feetUp' | 'bite' | 'startled' | 'driving';
+type CopPoseName = 'feetUp' | 'bite' | 'startled' | 'driving' | 'flip';
 
 /** A pose: where his joints go (car-local) and how his trunk and head are turned. */
 interface Pose {
@@ -971,11 +971,28 @@ function copPoses(m: Model): Record<CopPoseName, Pose> {
   driving.rollL = 0;
   driving.rollR = 0;
 
-  return { feetUp, bite, startled, driving };
+  // ---- flip: the right hand on the wheel, the left out of his window and up, the finger to whoever's behind him;
+  // leant over to the door, his head turned to his mirror
+  const flip = clonePose(driving);
+  flip.spYaw = 0.12;
+  flip.hdYaw = 0.35;
+  flip.hdPitch = 0.05;
+  flip.pelYaw = 0.05;
+  // Slid over against the door, to get his arm right out
+  flip.hip.x -= 0.12;
+  const tF = trunkOf(flip);
+  const shL = at(tF.torso, -MAN.shoulderX, MAN.shoulderY, 0);
+  // Elbow out on the sill, the forearm up outside the car past the roof line
+  flip.wristL.set(shL.x - 0.42, shL.y + 0.36, shL.z + 0.06);
+  flip.elbowL.set(-0.6, -1.4, 0.1);
+  // Back of the hand to the road behind
+  flip.rollL = Math.PI / 2;
+
+  return { feetUp, bite, startled, driving, flip };
 }
 
 /** How quickly each pose is reached (exponential rate, 1/s): the startle is a jolt, the drive a settle. */
-const POSE_RATE: Record<CopPoseName, number> = { feetUp: 6, bite: 7, startled: 18, driving: 5 };
+const POSE_RATE: Record<CopPoseName, number> = { feetUp: 6, bite: 7, startled: 18, driving: 5, flip: 9 };
 
 /**
  * The highway cop: a big man in a tan short-sleeved uniform, brown trousers
@@ -1017,6 +1034,11 @@ export function copRig(): CopRig {
   doughnut.rotation.set(1.2, 0, 0.2);
   bones[B.handR].add(doughnut);
   const doughnutHome = { pos: doughnut.position.clone(), rot: doughnut.rotation.clone() };
+  // His middle finger, up out of the mitt (only there while he's using it)
+  const finger = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.03), new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.72 }));
+  finger.position.set(0, -0.15, 0);
+  finger.visible = false;
+  bones[B.handL].add(finger);
 
   let target: Pose = clonePose(poses.feetUp);
   const cur: Pose = clonePose(poses.feetUp);
@@ -1114,6 +1136,15 @@ export function copRig(): CopRig {
         work.hdYaw += 0.04 * Math.sin(time * 0.9);
       }
       if (name === 'startled') work.hdYaw += 0.05 * Math.sin(time * 23) * Math.exp(-time * 0.2);
+      if (name === 'flip') {
+        // Jabbing it at him
+        const jab = Math.max(0, Math.sin(time * 7)) * 0.06;
+        work.wristL.y += jab;
+        work.wristL.x -= jab * 0.3;
+        const w = 0.012 * Math.sin(time * 1.3);
+        work.wristR.y -= w;
+      }
+      finger.visible = name === 'flip';
       apply(work);
       // The doughnut: gone from his hand when he is startled, back when he is not (if the scene has not taken it)
       if (doughnut.parent === bones[B.handR]) {

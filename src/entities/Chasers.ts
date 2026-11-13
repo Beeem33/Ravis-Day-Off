@@ -587,6 +587,119 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     return this.ramT > 0;
   }
 
+  // ---- the rest of his repertoire (the scene picks): out in front of Ravi, on the brakes in front of him, into his side
+  private frontT = 0;
+  private brakeT = 0;
+  private swipeT = 0;
+  private swipeSide = 0;
+  /** Sat in front of Ravi in his lane, a few lengths ahead (where the scene has him give Ravi the finger). */
+  inFront = false;
+
+  /** Past Ravi and into his lane in front of him, and sit there, for up to `seconds`. */
+  cutIn(seconds: number): void {
+    this.frontT = seconds;
+    this.swipeT = 0;
+    this.ramT = 0;
+  }
+
+  /** In front of him: stand on the brakes. Only if he's there; true if he did. */
+  brakeCheck(): boolean {
+    if (!this.inFront) return false;
+    this.brakeT = 1.15;
+    return true;
+  }
+
+  get braking(): boolean {
+    return this.brakeT > 0;
+  }
+
+  /** On his way into Ravi's side (the scene ends it when they touch: bumped()). */
+  get swiping(): boolean {
+    return this.swipeT > 0;
+  }
+
+  /** Up alongside Ravi and into his side, to put him off the road, for up to `seconds`. */
+  swipe(seconds: number): void {
+    if (this.bumpCd > 0) return;
+    this.swipeT = seconds;
+    this.frontT = 0;
+    this.ramT = 0;
+    this.swipeSide = 0;
+  }
+
+  /** Is he busy at one of them (the scene leaves him to it)? */
+  get busy(): boolean {
+    return this.frontT > 0 || this.brakeT > 0 || this.swipeT > 0 || this.ramT > 0;
+  }
+
+  /** The next lane over from `d`, the nearest one to him. */
+  private besideLane(d: number): number {
+    const n = this.candidates(this.cands2);
+    let best = d + 3.6;
+    let bd = Infinity;
+    for (let i = 0; i < n; i++) {
+      const c = this.cands2[i];
+      const off = Math.abs(c.d - d);
+      if (c.pen >= 20 || off < 2.4 || off > 6) continue;
+      const score = Math.abs(c.d - this.car.at.d) + off * 0.3;
+      if (score < bd) {
+        bd = score;
+        best = c.d;
+      }
+    }
+    return best;
+  }
+
+  /** One frame of whichever he's at: cutting in, brake-checking, side-swiping. */
+  private tactics(dt: number, ravi: ICar, traffic: ITraffic, boss?: ICar | null): void {
+    const me = this.car;
+    // Ravi's not something to keep clear of now: he's what it's about
+    this.gather(traffic, [boss ?? null]);
+    const behind = this.routeGap(ravi, me);
+    const rv = Math.max(0, ravi.speed);
+    const top = me.tune.topSpeed;
+    const lat = ravi.at.d - me.at.d;
+    this.inFront = false;
+    let v: number;
+    if (this.brakeT > 0) {
+      // Stood on it, square in front of him
+      this.wantD = ravi.at.d;
+      this.inFront = true;
+      this.vWant = 0;
+      this.driveTo(dt, 0, true);
+      return;
+    }
+    if (this.frontT > 0) {
+      if (behind > -6) {
+        // Not past him yet: by him in the next lane, flat out, and over into his once he's most of a length clear
+        this.wantD = behind < -4 ? ravi.at.d : this.besideLane(ravi.at.d);
+        v = Math.min(top, rv + 14);
+      } else {
+        // In front of him, a couple of lengths up, matching him
+        this.wantD = ravi.at.d;
+        v = rv + clamp((behind + 9) * 0.7, -9, 8);
+        this.inFront = Math.abs(lat) < 1.5;
+      }
+      v = this.followLimit(Math.max(0, v));
+    } else {
+      // Alongside in the next lane, then into his side
+      // The side he comes at him from: the one he's on, or (in his lane) whichever has a lane to come up in
+      if (!this.swipeSide) this.swipeSide = Math.abs(me.at.d - ravi.at.d) > 1.5 ? Math.sign(me.at.d - ravi.at.d) : Math.sign(this.besideLane(ravi.at.d) - ravi.at.d) || 1;
+      const side = this.swipeSide;
+      if (Math.abs(behind) > 2.2) {
+        this.wantD = ravi.at.d + side * 3.4;
+        v = rv + clamp(behind * 0.9, -8, 12);
+        // Out in front of him in his lane still: over into the next one at his speed first, not back into his bonnet
+        if (behind < 0 && Math.abs(lat) < 2.6) v = rv + 1.5;
+      } else {
+        this.wantD = ravi.at.d + side * 0.3;
+        v = rv + behind * 0.8;
+      }
+    }
+    this.vWant = v;
+    this.driveTo(dt, clamp(v, 0, top));
+  }
+
   constructor(net: RoadNet, tune: CarTune = COP_TUNE) {
     super(net, tune, 'cop', COP_STYLE);
     this.car.onImpact = null;
@@ -605,6 +718,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     this.bumpCd = 2.2;
     this.bumping = false;
     this.ramT = 0;
+    this.swipeT = 0;
+    this.brakeT = 0;
   }
 
   update(dt: number, ravi: ICar, traffic: ITraffic, boss?: ICar | null): void {
@@ -651,6 +766,14 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     }
 
     this.ramT = Math.max(0, this.ramT - dt);
+    this.frontT = Math.max(0, this.frontT - dt);
+    this.brakeT = Math.max(0, this.brakeT - dt);
+    this.swipeT = Math.max(0, this.swipeT - dt);
+    if (this.frontT > 0 || this.brakeT > 0 || this.swipeT > 0) {
+      this.tactics(dt, ravi, traffic, boss);
+      return;
+    }
+    this.inFront = false;
     this.gather(traffic, [this.bumping ? null : ravi, boss ?? null]);
     const behind = this.routeGap(ravi, me);
     const rv = Math.max(0, ravi.speed);

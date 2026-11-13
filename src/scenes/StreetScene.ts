@@ -161,7 +161,12 @@ export class StreetScene implements GameScene {
   /** His hands round the wheel, turning with it. */
   private wheelGrip: WheelGrip | null = null;
   /** The bullet cracks on the windscreen, drawn over the closing shot. */
-  private crackCanvas: HTMLCanvasElement | null = null;
+  /** The windscreen's bullet holes: drawn into a texture on a sheet just inside the glass, so they're on the glass, not on the screen. */
+  private glassCanvas: HTMLCanvasElement | null = null;
+  private glassTex: THREE.CanvasTexture | null = null;
+  private glassSheet: THREE.Mesh | null = null;
+  private readonly glassRay = new THREE.Raycaster();
+  private readonly glassNdc = new THREE.Vector2();
 
   private phase: Phase = 'intro';
   private phaseT = 0;
@@ -282,6 +287,13 @@ export class StreetScene implements GameScene {
   private swapT = -1;
   /** Seconds till the cop next goes for Ravi's bumper. */
   private copRamT = 8;
+  /** How long he's been sat in front of Ravi this time, and when (into it) he stands on the brakes (-1: not this time). */
+  private copFrontT = 0;
+  private copBrakeAt = -1;
+  /** He's just been going for Ravi (a ram, a swipe): a touch now throws Ravi off his line. */
+  private copAttackT = 0;
+  private copPose: 'driving' | 'flip' = 'driving';
+  private copShoveCd = 0;
   /** Ravi out through the windscreen: his ragdoll (the same as on foot) and its little world with the road for a floor. DeathFx finds it here. */
   private raviRagdoll: RaviRagdoll | null = null;
   private ejectWorld: CANNON.World | null = null;
@@ -464,6 +476,7 @@ export class StreetScene implements GameScene {
     const hip = this.civicRig.seat.hip;
     this.interior = new CivicInterior(this.civicRig);
     this.junk = new CabinJunk(this.civicRig);
+    this.buildGlassCracks();
     // Whatever flies about, out of his face (the cabin's frame: where his eyes are in the seat)
     this.junk.keepClear(new THREE.Vector3(hip.x, hip.y + 0.68, hip.z + 0.06), 0.34);
     this.buildEject();
@@ -509,7 +522,6 @@ export class StreetScene implements GameScene {
       bus.on(Events.Resize, () => {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
-        this.sizeCracks();
       })
     );
     document.addEventListener('keydown', this.keyHandler);
@@ -952,7 +964,6 @@ export class StreetScene implements GameScene {
           background:radial-gradient(ellipse at center, rgba(160,0,0,0) 50%, rgba(170,0,0,0.6) 100%); }
       </style>
       <div class="st-hurt"></div>
-      <canvas class="st-cracks" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0"></canvas>
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="st-hud off">
@@ -993,7 +1004,6 @@ export class StreetScene implements GameScene {
     this.hintEl = el.querySelector('.st-hint')!;
     this.failEl = el.querySelector('.st-fail')!;
     this.endCard = el.querySelector('.st-end')!;
-    this.crackCanvas = el.querySelector('.st-cracks');
     this.crossEl = el.querySelector('.st-cross')!;
     this.combatHint = el.querySelector('.st-aimhint')!;
     this.heliBar = el.querySelector('.st-heli')!;
@@ -1002,14 +1012,36 @@ export class StreetScene implements GameScene {
     this.hurtEl = el.querySelector('.st-hurt')!;
     this.hitEl = el.querySelector('.st-hit')!;
     this.warnEl = el.querySelector('.st-warn')!;
-    this.sizeCracks();
   }
 
-  private sizeCracks(): void {
-    const c = this.crackCanvas;
-    if (!c) return;
-    c.width = Math.round(window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
-    c.height = Math.round(window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
+  /**
+   * The sheet the bullet holes go on: the windscreen's own shape and slope
+   * (CivicInterior: its foot at y 0.89, z -0.60, its top at y 1.42, z 0.24),
+   * a couple of centimetres inside it, riding the body with the glass.
+   */
+  private buildGlassCracks(): void {
+    const foot = new THREE.Vector3(0, 0.89, -0.6);
+    const top = new THREE.Vector3(0, 1.42, 0.24);
+    const W = 1.5;
+    const H = foot.distanceTo(top);
+    const c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = Math.round((1024 * H) / W);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const sheet = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    // Up the plane is up the glass; its face toward the cabin, and just off the glass that way
+    sheet.rotation.x = Math.atan2(top.z - foot.z, top.y - foot.y);
+    sheet.position.copy(foot).add(top).multiplyScalar(0.5).add(new THREE.Vector3(0, -0.017, 0.011));
+    sheet.renderOrder = 2;
+    const holder = new THREE.Group();
+    holder.position.y = -this.civicRig.body.position.y;
+    holder.add(sheet);
+    this.civicRig.body.add(holder);
+    this.glassCanvas = c;
+    this.glassTex = tex;
+    this.glassSheet = sheet;
   }
 
   /**
@@ -1343,19 +1375,42 @@ export class StreetScene implements GameScene {
       const t = this.cop.car.tune;
       t.topSpeed = behind > 80 ? 78 : behind > 40 ? 68 : COP_TUNE.topSpeed + 9;
       t.accel = behind > 80 ? 15 : behind > 40 ? 11 : COP_TUNE.accel + 3;
+      if (this.cop.ramming || this.cop.swiping) this.copAttackT = 0.7;
+      this.copAttackT = Math.max(0, this.copAttackT - dt);
+      this.copShoveCd = Math.max(0, this.copShoveCd - dt);
+      const pose = this.cop.inFront && !this.cop.braking ? 'flip' : 'driving';
+      if (pose !== this.copPose) {
+        this.copPose = pose;
+        this.copMan.pose(pose);
+      }
     }
     if (this.copChasing && !this.heliUp) {
       this.copSurgeT -= dt;
-      if (this.copSurgeT <= 0) {
+      if (this.copSurgeT <= 0 && !this.cop.busy) {
         this.copSurging = 6;
         this.copSurgeT = 15 + Math.random() * 10;
       }
       this.copSurging = Math.max(0, this.copSurging - dt);
-      // And every several seconds he goes for Ravi's back bumper
-      this.copRamT -= dt;
-      if (this.copRamT <= 0 && this.copSurging <= 0) {
-        this.cop.ram(6);
-        this.copRamT = 6 + Math.random() * 5;
+      // And every few seconds he tries something: past him and in front of him (the finger, and as
+      // often as not the brakes), up alongside and into his side, or up his tail into his bumper
+      if (!this.cop.busy) this.copRamT -= dt;
+      if (this.copRamT <= 0 && this.copSurging <= 0 && !this.cop.busy) {
+        const r = Math.random();
+        if (r < 0.42) {
+          this.cop.cutIn(9 + Math.random() * 4);
+          this.copFrontT = 0;
+          this.copBrakeAt = Math.random() < 0.85 ? 1.4 + Math.random() * 2.6 : -1;
+        } else if (r < 0.75) this.cop.swipe(7);
+        else this.cop.ram(6);
+        this.copRamT = 3 + Math.random() * 4;
+      }
+      // In front of him: the finger out of the window; then, maybe, the brakes
+      if (this.cop.inFront && !this.cop.braking) {
+        this.copFrontT += dt;
+        if (this.copBrakeAt > 0 && this.copFrontT > this.copBrakeAt && this.cop.brakeCheck()) {
+          this.copBrakeAt = -1;
+          this.ctx.audio.tyreSqueal(1.1, this.cop.car.position.distanceTo(p.position));
+        }
       }
       this.cop.gapMin = this.copSurging > 0 ? -8 : 4;
       this.cop.gapMax = this.copSurging > 0 ? 0 : 14;
@@ -1451,6 +1506,25 @@ export class StreetScene implements GameScene {
         audio.carCrash(0, speed > 10);
       }
       if (speed > 6) this.particles.sparks(point, StreetScene.tmpA.set(0, 0.8, 0), Math.min(30, speed * 1.5));
+    }
+    // The cop meaning it (a ram, a swipe into his side): Ravi's knocked off his line, sliding, his tail kicked round
+    if (other === 'cop' && this.phase === 'drive' && this.copAttackT > 0 && this.copShoveCd <= 0) {
+      this.copShoveCd = 1.2;
+      this.copAttackT = 0;
+      this.cop.bumped();
+      const p = this.player;
+      const away = StreetScene.tmpB.subVectors(p.position, this.cop.car.position).setY(0);
+      if (away.lengthSq() > 1e-4) away.normalize();
+      p.velocity.addScaledVector(away, 5.5);
+      // Which way it turns him: hit on his right, his nose goes left, and the other way about
+      const rightX = Math.cos(p.yaw);
+      const rightZ = -Math.sin(p.yaw);
+      const fromRight = -(away.x * rightX + away.z * rightZ);
+      p.yawRate += (fromRight > 0 ? 1 : -1) * 1.5;
+      this.shake = Math.min(1.4, this.shake + 0.7);
+      this.hurt = Math.max(this.hurt, 0.5);
+      audio.carCrash(0, true);
+      this.particles.sparks(point, StreetScene.tmpA.set(0, 0.9, 0), 30);
     }
     // Cutscenes are on autopilot: no damage while Ravi isn't driving
     if (this.phase !== 'drive') dmg = 0;
@@ -1561,7 +1635,8 @@ export class StreetScene implements GameScene {
     this.ejected = true;
     if (this.driverRig) this.driverRig.root.visible = false;
     this.shot = 'eject';
-    if (this.crackCanvas) this.crackCanvas.style.opacity = '0';
+    // (the glass is gone, and its holes with it)
+    if (this.glassSheet) this.glassSheet.visible = false;
     const glass = new THREE.Vector3(-0.2, 1.15, -0.25).applyMatrix4(g.matrixWorld);
     this.particles.glassShards(glass, fwd.clone().setY(0.4), p.position.y);
     this.particles.glassShards(glass.clone().addScaledVector(right, 0.4), fwd.clone().setY(0.6), p.position.y);
@@ -2150,17 +2225,45 @@ export class StreetScene implements GameScene {
     this.shake = Math.min(1, this.shake + 0.12);
   }
 
-  /** A bullet through the windscreen: a hole and the cracks running out from it, on the glass in front of him. */
+  /**
+   * A bullet through the windscreen: a hole and the cracks running out from
+   * it, on the glass itself — where his line of sight through screen point
+   * (sx, sy) meets it, or (looking out of a side window, say) somewhere on it.
+   * It stays there: look away and it's on the glass behind you, not on your eyes.
+   */
   private crack(sx: number, sy: number): void {
-    const c = this.crackCanvas;
-    if (!c) return;
+    const c = this.glassCanvas;
+    const sheet = this.glassSheet;
+    if (!c || !sheet || !this.glassTex) return;
     const ctx = c.getContext('2d');
     if (!ctx) return;
-    const x = sx * c.width;
-    const y = sy * c.height;
-    const r = c.height * (0.035 + Math.random() * 0.035);
-    ctx.strokeStyle = 'rgba(235,240,245,0.75)';
-    ctx.lineWidth = Math.max(1, c.height / 700);
+    let u = 0.16 + Math.random() * 0.68;
+    let v = 0.22 + Math.random() * 0.56;
+    if (this.shot === 'chase' || this.shot === 'pov') {
+      this.civicRig.group.updateMatrixWorld(true);
+      this.camera.updateMatrixWorld();
+      this.glassRay.setFromCamera(this.glassNdc.set(sx * 2 - 1, -(sy * 2 - 1)), this.camera);
+      const hit = this.glassRay.intersectObject(sheet, false)[0];
+      if (hit?.uv && hit.uv.x > 0.08 && hit.uv.x < 0.92 && hit.uv.y > 0.1 && hit.uv.y < 0.9) {
+        u = hit.uv.x;
+        v = hit.uv.y;
+      }
+    }
+    this.glassTex.needsUpdate = true;
+    const x = u * c.width;
+    const y = (1 - v) * c.height;
+    const r = c.height * (0.07 + Math.random() * 0.07);
+    // Only on the glass: the windscreen's outline (narrower at the top, under the header)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0.01 * c.width, c.height);
+    ctx.lineTo(0.99 * c.width, c.height);
+    ctx.lineTo(0.94 * c.width, 0.07 * c.height);
+    ctx.lineTo(0.06 * c.width, 0.07 * c.height);
+    ctx.closePath();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(235,240,245,0.8)';
+    ctx.lineWidth = Math.max(1.5, c.height / 320);
     const n = 7 + Math.floor(Math.random() * 5);
     for (let i = 0; i < n; i++) {
       let a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
@@ -2183,14 +2286,15 @@ export class StreetScene implements GameScene {
       ctx.arc(x, y, r * k * (0.8 + Math.random() * 0.4), Math.random() * 6, Math.random() * 6 + 3.5);
       ctx.stroke();
     }
-    ctx.fillStyle = 'rgba(20,22,24,0.85)';
+    ctx.fillStyle = 'rgba(20,22,24,0.9)';
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(2, c.height / 260), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(2, c.height / 120), 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = 'rgba(240,244,248,0.35)';
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(4, c.height / 140), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(4, c.height / 60), 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
   }
 
 
@@ -3731,7 +3835,6 @@ export class StreetScene implements GameScene {
     // From his own eyes his head is out of the way; from outside, he's whole
     const head = this.driverRig?.bones.get('head');
     if (head) head.scale.setScalar(inCar ? 0.001 : 1);
-    if (this.crackCanvas) this.crackCanvas.style.opacity = this.shot === 'pov' ? '1' : '0';
   }
 
   /** Ravi's eyes in the seat, carried by the car's heading and the road's slope only — not its lean or lurch. */
@@ -3807,8 +3910,6 @@ export class StreetScene implements GameScene {
     this.warnEl.classList.toggle('on', this.phase === 'drive' && (this.missiles.flying > 0 || this.volleyLeft > 0));
     this.hitMark = Math.max(0, this.hitMark - 0.08);
     this.hitEl.style.opacity = this.hitMark.toFixed(3);
-    // Cracks in the glass show from his seat while he's driving too
-    if (this.crackCanvas && this.shot === 'chase') this.crackCanvas.style.opacity = this.cracks > 0 ? '0.85' : '0';
   }
 
   // ---------------------------------------------------------------- render

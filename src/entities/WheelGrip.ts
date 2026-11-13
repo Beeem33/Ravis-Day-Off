@@ -29,11 +29,13 @@ export class WheelGrip {
   private readonly n: THREE.Vector3;
   private readonly wR = new THREE.Vector3();
   private readonly wU = new THREE.Vector3();
-  private readonly shoulder: Record<Side, THREE.Vector3>;
+  private shoulder: Record<Side, THREE.Vector3>;
   private readonly radius: number;
   /** Each hand as update() last laid it, model space. */
   private readonly holds: Record<Side, Grip | null> = { l: null, r: null };
   angle = 0;
+  /** A hand off the wheel (doing something else): update() leaves that arm alone. */
+  readonly free: Record<Side, boolean> = { l: false, r: false };
 
   constructor(
     private readonly rig: RaviRig,
@@ -68,10 +70,16 @@ export class WheelGrip {
       const pole = new THREE.Vector3(sx * T.elbowOut, -T.elbowDown, -T.elbowBack);
       const S = this.shoulder[side];
       const toward = elbowToward(wrist, S, pole);
-      r.reach(side, wrist, along, palm, toward, S, 0.5, false).hand(side, GRIP);
+      // (a free hand's hold is still worked out: it's where that hand goes back to)
+      if (!this.free[side]) r.reach(side, wrist, along, palm, toward, S, 0.5, false).hand(side, GRIP);
       this.holds[side] = { wrist, along, palm, toward, shape: GRIP };
     }
     r.apply();
+  }
+
+  /** The shoulders where they are now (after the body's been re-posed and applied: a lean). */
+  refreshShoulders(): void {
+    this.shoulder = { l: this.rig.at('upperarm_l'), r: this.rig.at('upperarm_r') };
   }
 
   /**

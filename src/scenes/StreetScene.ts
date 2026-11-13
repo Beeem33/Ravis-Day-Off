@@ -15,7 +15,7 @@ import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
 import { buildAirside } from '../environment/AirsideProps';
-import { RaviVisual, type RaviRig } from '../entities/RaviVisual';
+import { RaviVisual, elbowToward, type RaviRig, type HandShape, type SeatPose } from '../entities/RaviVisual';
 import { ParticleManager } from '../fx/ParticleManager';
 import { Helicopter, HELI_HP } from '../entities/Helicopter';
 import { StreetMissiles, type MissileHit } from '../entities/StreetMissiles';
@@ -25,6 +25,10 @@ import { Debris } from '../fx/Debris';
 import { HighwayCollapse, type HolePlan } from '../fx/HighwayCollapse';
 import { cutDeck } from '../fx/DeckCut';
 import { rocketLauncher } from '../entities/General';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { CarMirrors } from '../fx/CarMirrors';
+import { CivicInterior } from '../environment/CivicInterior';
+import { highwayRamp, type Ramp } from '../environment/HighwayRamp';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
 
@@ -57,6 +61,40 @@ const HELI_ROUND = 2.9;
 const HELI_AT = [720, 1950];
 /** Highway checkpoints past the helicopters (1, past the cop, is set by the level). */
 const CP_HELI = [1600, 2750];
+/** How far round he can turn his head in the seat (radians each way), and up and down. */
+const LOOK_YAW = 2.35;
+const LOOK_UP = 0.9;
+const LOOK_DOWN = -0.65;
+/** The pistol out of the window: a magazine of it; and how many rounds put into a traffic car spin it out. */
+const PISTOL_MAG = 17;
+const SPINOUT_HITS = 3;
+/** The finger: up, held, back on the wheel (seconds). */
+const FLIP_T = 2.1;
+/** Off the ramp: how long the world goes slow (real seconds), and how slow. */
+const SLOWMO = 3;
+const SLOWMO_SCALE = 0.3;
+/**
+ * The street's song (Fuzzeke, "Extra Cash"): from the top once, then round
+ * the main part for good, never into the breakdown and fade at its end.
+ * 102.8 BPM; 16.536 s is the crash the beat comes in on, 65.571 s is
+ * exactly 21 bars on, the last beat before it drops out.
+ */
+const STREET_SONG = { url: 'audio/street.mp3', loopStart: 16.536, loopEnd: 65.571 };
+/** Half a hole's length along the road (HighwayCollapse's HALF). */
+const HOLE_HALF = 18;
+/** Round the rim (WheelGrip's grip), the finger, and a pistol's grip: what his hands go between. */
+const WHEEL_HAND: HandShape = { fingers: [[78, 88, 52], [80, 90, 52], [82, 92, 54], [84, 94, 56]], thumb: [0.5, 0.45, 0.35] };
+const FLIP_HAND: HandShape = { fingers: [[88, 100, 60], [0, 3, 2], [88, 100, 60], [90, 100, 60]], thumb: [0.55, 0.9, 0.8] };
+const PISTOL_HAND: HandShape = { fingers: [[28, 38, 18], [80, 92, 55], [82, 94, 56], [84, 96, 58]], thumb: [0.4, 0.5, 0.4] };
+
+/** Part way from one hand shape to another. */
+function blendHand(a: HandShape, b: HandShape, k: number): HandShape {
+  const L = (x: number, y: number): number => x + (y - x) * k;
+  return {
+    fingers: a.fingers.map((f, i) => f.map((d, j) => L(d, b.fingers[i][j]))) as HandShape['fingers'],
+    thumb: a.thumb.map((d, j) => L(d, b.thumb[j])) as HandShape['thumb']
+  };
+}
 
 type Phase = 'intro' | 'drive' | 'cop' | 'airport' | 'failed' | 'done';
 type Shot = 'chase' | 'roadside' | 'cabin' | 'radar' | 'behindCop' | 'launch' | 'gate' | 'jetside' | 'pov';
@@ -142,6 +180,38 @@ export class StreetScene implements GameScene {
   private headPitch = 0;
   /** His head held on the road against the car's swerves (relative to the car, + left). */
   private headSteady = 0;
+  /** Seconds since the mouse last moved: after a while, not fighting, his eyes drift back to the road. */
+  private lookIdle = 0;
+  // ---- Out of the window with the pistol (right button held), and the finger (T)
+  /** How he was sat at the wheel: the lean is laid over it. */
+  private seatPose: SeatPose | null = null;
+  /** 0 at the wheel .. 1 out of the window, pistol up; and whether the body's been re-posed for it. */
+  private leanK = 0;
+  private leanPosed = false;
+  /** Seconds into the finger (−1: not doing it). */
+  private flipT = -1;
+  private readonly pistol = new THREE.Group();
+  private pistolAmmo = PISTOL_MAG;
+  private pistolCd = 0;
+  private pistolKick = 0;
+  private pistolReload = 0;
+  /** Rounds into each traffic car (by id): enough and it spins out. */
+  private trafficHits = new Map<number, number>();
+  private mirrors: CarMirrors | null = null;
+  private mirrorFrame = 0;
+  /** The inside of the Civic: the dash and its live dials, the doors, the roof, the seats. */
+  private interior: CivicInterior | null = null;
+  // ---- The ramp short of a hole, and the jump off it
+  private ramp: (Ramp & { origin: THREE.Vector3; fwd: THREE.Vector3; right: THREE.Vector3; pop: number; s: number }) | null = null;
+  /** How far up the ramp he is (0..1, 0 off it). */
+  private onRamp = 0;
+  private jump: { vel: THREE.Vector3; pitch: number; t: number } | null = null;
+  /** Real seconds of slow motion left, and whether its look is on. */
+  private slowmo = 0;
+  private slowFx = false;
+  /** The suspension taking the landing: 1 on touchdown, dying away. */
+  private landBounce = 0;
+  private landT = 0;
   private introClear = false;
   private armsAway = false;
   private hp = RAVI_HP;
@@ -274,6 +344,11 @@ export class StreetScene implements GameScene {
     this.buildDriver();
     this.buildGuards();
     this.cockpitGlass();
+    // His mirrors, turned to his eyes in the seat
+    const hip = this.civicRig.seat.hip;
+    this.interior = new CivicInterior(this.civicRig);
+    this.mirrors = new CarMirrors(this.civicRig, { x: hip.x, y: hip.y + 0.68, z: hip.z + 0.06 }, CivicInterior.MIRROR_AT);
+    this.buildPistol();
     this.bossMan = new Enemy(new THREE.Vector3(0, -60, 0), 0, 7, { name: 'THE BOSS', boss: true });
     this.bossMan.holdProp(dataDrive(), 0.045);
     this.bossMan.root.visible = false;
@@ -321,6 +396,8 @@ export class StreetScene implements GameScene {
 
     this.engine = audio.engineLoop();
     this.tyres = audio.tyreSlideLoop();
+    // The song, from the moment he pulls out
+    audio.startTrackMusic(STREET_SONG.url, STREET_SONG.loopStart, STREET_SONG.loopEnd);
 
     this.placeCast();
     if (this.checkpoint >= 1) this.startDrive(true);
@@ -339,9 +416,15 @@ export class StreetScene implements GameScene {
     this.heliCraft.dispose(this.scene);
     this.collapse.dispose();
     this.jetSound?.stop();
-    this.ctx.audio.stopBossMusic(1);
+    this.ctx.audio.stopTrackMusic(1);
     this.traffic.dispose();
     this.ui.remove();
+    this.mirrors?.dispose();
+    this.interior?.dispose();
+    this.clearRamp();
+    const canvas = this.ctx.engine.renderer.domElement;
+    canvas.style.filter = '';
+    canvas.style.cursor = '';
     this.ctx.engine.renderer.toneMappingExposure = 1;
   }
 
@@ -372,11 +455,184 @@ export class StreetScene implements GameScene {
     this.traffic.update(0.001, this.player.at, [this.player, this.boss.car, this.cop.car]);
   }
 
-  /** The Civic's wheel turned as he steers, his hands round it. */
+  /**
+   * The Civic's wheel turned as he steers, his hands round it — or one of
+   * them off it: the right giving the finger, or the left out of the window
+   * with the pistol (him leaning out after it).
+   */
   private steerWheel(): void {
     const a = -this.player.steerNow * WHEEL_TURN;
     if (this.civicRig.steeringWheel) this.civicRig.steeringWheel.rotation.z = a;
-    this.wheelGrip?.update(a);
+    const grip = this.wheelGrip;
+    const r = this.driverRig;
+    if (!grip || !r) return;
+    const lean = smooth(this.leanK);
+    // Leaning out: the top half of him over to the window (his left), shoulders and all
+    if (this.seatPose && (lean > 0.001 || this.leanPosed)) {
+      const base = this.seatPose;
+      // Up off the seat onto the sill, over toward the door: his shoulders come out over it, his head out of the window
+      r.seat({
+        ...base,
+        hips: base.hips.clone().add(StreetScene.tmpA.set(0.3 * lean, 0.2 * lean, 0)),
+        lean: base.lean.map((d, i) => d + [0, 8, 8, 6, -4, -6][i] * lean),
+        roll: [0, -3, -4, -4, 3, 4].map((d) => d * lean),
+        twist: [0, 4, 6, 8, 0, 0].map((d) => d * lean)
+      });
+      r.apply();
+      grip.refreshShoulders();
+      this.leanPosed = lean > 0.001;
+    }
+    const flip = this.flipK();
+    grip.free.l = lean > 0.001;
+    grip.free.r = flip > 0.001;
+    grip.update(a);
+    if (lean > 0.001) this.layPistolArm(lean);
+    if (flip > 0.001) this.layFlipArm(flip);
+    if (lean > 0.001 || flip > 0.001) r.apply();
+    if (lean > 0.001) this.placePistol(lean);
+  }
+
+  /** How far up the finger is (0 on the wheel, 1 up). */
+  private flipK(): number {
+    const t = this.flipT;
+    if (t < 0) return 0;
+    if (t < 0.28) return smooth(t / 0.28);
+    if (t < FLIP_T - 0.35) return 1;
+    return smooth((FLIP_T - t) / 0.35);
+  }
+
+  /** The finger: the right hand up off the rim in front of his face, back of the hand to the road, a jab or two. */
+  private layFlipArm(k: number): void {
+    const r = this.driverRig!;
+    const hold = this.wheelGrip!.hold('r');
+    if (!hold) return;
+    const S = hold.shoulder;
+    const t = this.flipT;
+    const jab = t > 0.3 && t < FLIP_T - 0.4 ? Math.max(0, Math.sin((t - 0.3) * 9)) * 0.05 : 0;
+    // Model space: he faces +Z, his left is +X
+    const up = new THREE.Vector3(S.x + 0.12, S.y + 0.2 + jab * 0.4, S.z + 0.42 + jab);
+    const wrist = hold.grip.wrist.clone().lerp(up, k);
+    const along = hold.grip.along.clone().lerp(new THREE.Vector3(0.05, 1, 0.22).normalize(), k).normalize();
+    const palm = hold.grip.palm.clone().lerp(new THREE.Vector3(0, 0.1, -1).normalize(), k);
+    palm.addScaledVector(along, -palm.dot(along)).normalize();
+    const toward = elbowToward(wrist, S, new THREE.Vector3(-0.7, -0.7, -0.1));
+    r.reach('r', wrist, along, palm, toward, S, 0.5, false).hand('r', blendHand(WHEEL_HAND, FLIP_HAND, k));
+  }
+
+  /** Where he aims, in his model space: down the middle of his view. */
+  private aimInModel(out: THREE.Vector3): THREE.Vector3 {
+    const r = this.driverRig!;
+    r.root.updateWorldMatrix(true, false);
+    this.camera.getWorldDirection(out);
+    const q = r.root.getWorldQuaternion(new THREE.Quaternion()).invert();
+    return out.applyQuaternion(q).normalize();
+  }
+
+  /** The pistol arm's pose this frame: wrist, back of the hand, palm (model space). */
+  private pistolPose = { wrist: new THREE.Vector3(), along: new THREE.Vector3(), palm: new THREE.Vector3() };
+
+  /**
+   * The left hand off the rim, down to the door pocket for the pistol, then
+   * up and out of the window with it, the arm out straight along his aim and
+   * the gun canted over; a kick up on each shot, a dip for a new magazine.
+   */
+  private layPistolArm(k: number): void {
+    const r = this.driverRig!;
+    const hold = this.wheelGrip!.hold('l');
+    if (!hold) return;
+    const S = hold.shoulder;
+    const aim = this.aimInModel(new THREE.Vector3());
+    const up = new THREE.Vector3(0, 1, 0);
+    // Square to his aim: his right (−X when he looks straight ahead), and up
+    const rgt = new THREE.Vector3().crossVectors(aim, up).normalize();
+    const aimUp = new THREE.Vector3().crossVectors(rgt, aim).normalize();
+    const pocket = new THREE.Vector3(0.36, 0.62, 0.22);
+    // Out along the aim from the shoulder, near straight; kicked back and up by a shot, dipped for a reload
+    const reload = this.pistolReload > 0 ? Math.sin(Math.min(1, (1.15 - this.pistolReload) / 1.15) * Math.PI) : 0;
+    // The arm's raised a little off his aim, so the gun comes up near his eye line rather than at his shoulder's height
+    const arm = aim.clone().addScaledVector(aimUp, 0.32).normalize();
+    const out = S.clone().addScaledVector(arm, 0.5 - this.pistolKick * 0.06).addScaledVector(aimUp, this.pistolKick * 0.03);
+    out.lerp(pocket, reload * 0.45);
+    let wrist: THREE.Vector3;
+    let along: THREE.Vector3;
+    let palm: THREE.Vector3;
+    const cant = 0.42;
+    const aimPalm = rgt.clone().multiplyScalar(Math.cos(cant)).addScaledVector(aimUp, -Math.sin(cant));
+    const aimAlong = aim.clone().addScaledVector(aimUp, 0.25 + this.pistolKick * 0.5).normalize();
+    if (k < 0.4) {
+      // Off the wheel and down for it
+      const u = smooth(k / 0.4);
+      wrist = hold.grip.wrist.clone().lerp(pocket, u);
+      along = hold.grip.along.clone().lerp(new THREE.Vector3(0, -0.4, 1).normalize(), u).normalize();
+      palm = hold.grip.palm.clone().lerp(new THREE.Vector3(-1, 0, 0), u);
+    } else {
+      // Up and out with it
+      const u = smooth((k - 0.4) / 0.6);
+      wrist = pocket.clone().lerp(out, u);
+      along = new THREE.Vector3(0, -0.4, 1).normalize().lerp(aimAlong, u).normalize();
+      palm = new THREE.Vector3(-1, 0, 0).lerp(aimPalm, u);
+    }
+    palm.addScaledVector(along, -palm.dot(along)).normalize();
+    const toward = elbowToward(wrist, S, new THREE.Vector3(0.5, -0.8, -0.25));
+    const shape = k < 0.4 ? blendHand(WHEEL_HAND, PISTOL_HAND, smooth(k / 0.4)) : PISTOL_HAND;
+    r.reach('l', wrist, along, palm, toward, S, 0.5, false).hand('l', shape);
+    this.pistolPose.wrist.copy(wrist);
+    this.pistolPose.along.copy(along);
+    this.pistolPose.palm.copy(palm);
+  }
+
+  /** The pistol in his left hand, pointed where he's looking (once he's got it out of the door pocket). */
+  private placePistol(k: number): void {
+    const r = this.driverRig!;
+    const P = this.pistol;
+    P.visible = k >= 0.4;
+    if (!P.visible) return;
+    const { wrist, along, palm } = this.pistolPose;
+    // The grip in the hollow of the hand
+    const grip = wrist.clone().addScaledVector(along, 0.07).addScaledVector(palm, 0.035);
+    r.root.updateWorldMatrix(true, false);
+    r.root.localToWorld(grip);
+    const cam = this.camera;
+    const camPos = cam.getWorldPosition(new THREE.Vector3());
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    const target = camPos.addScaledVector(dir, 60);
+    // Coming up out of the pocket it points down the footwell, then onto the aim
+    const u = smooth((k - 0.4) / 0.6);
+    const low = grip.clone().add(StreetScene.tmpA.copy(dir).setY(dir.y - 1.4));
+    const at = low.lerp(target, u);
+    const m = new THREE.Matrix4().lookAt(grip, at, StreetScene.tmpB.set(0, 1, 0));
+    P.position.copy(grip);
+    P.quaternion.setFromRotationMatrix(m);
+    // Canted over, gangster-style; kicked up by a shot
+    P.rotateZ(0.42 * u);
+    P.rotateX(this.pistolKick * 0.4);
+  }
+
+  /** The Glock from the office, for the window. The model points down its local −Z, like the viewmodel's. */
+  private buildPistol(): void {
+    const inner = new THREE.Group();
+    inner.rotation.y = Math.PI / 2;
+    // Its origin is mid-slide: up and forward of that is where the hand closes on the grip
+    inner.position.set(0.0, 0.06, -0.085);
+    this.pistol.add(inner);
+    this.pistol.visible = false;
+    this.scene.add(this.pistol);
+    new GLTFLoader().load(`${import.meta.env.BASE_URL}models/glock.glb`, (gltf) => {
+      gltf.scene.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = false;
+          m.frustumCulled = false;
+        }
+      });
+      inner.add(gltf.scene);
+    });
+  }
+
+  /** The muzzle, in the world. */
+  private pistolMuzzle(out: THREE.Vector3): THREE.Vector3 {
+    this.pistol.updateWorldMatrix(true, false);
+    return this.pistol.localToWorld(out.set(0, 0.085, -0.225));
   }
 
   /** Ravi at the wheel, seen through the glass: the whole modelled man, as Level 8's getaway sat him. */
@@ -393,7 +649,7 @@ export class StreetScene implements GameScene {
       const wy = rig.seat.wheel.y;
       const grip = { fingers: [[70, 80, 40], [72, 82, 40], [74, 84, 42], [76, 86, 44]], thumb: [0.45, 0.5, 0.3] } as const;
       const shape = (): never => ({ fingers: grip.fingers.map((f) => [...f]), thumb: [...grip.thumb] }) as never;
-      r.seat({
+      const pose: SeatPose = {
         hips: V(0, rig.seat.hip.y, 0),
         lean: [-10, 3, 3, 2, 2, -2],
         legs: {
@@ -404,7 +660,9 @@ export class StreetScene implements GameScene {
           l: { wrist: V(0.17, wy + 0.04, fwd - 0.06), along: V(-0.25, 0.55, 0.8), palm: V(-0.75, -0.1, 0.6), elbow: V(0.6, -0.6, -0.4), shape: shape() },
           r: { wrist: V(-0.17, wy + 0.04, fwd - 0.06), along: V(0.25, 0.55, 0.8), palm: V(0.75, -0.1, 0.6), elbow: V(-0.6, -0.6, -0.4), shape: shape() }
         }
-      });
+      };
+      r.seat(pose);
+      this.seatPose = pose;
       this.driver = r.root;
       this.driverRig = r;
       this.wheelGrip = new WheelGrip(r, { ...wheelInModel(rig.seat, 0), radius: WHEEL_RIM });
@@ -483,7 +741,7 @@ export class StreetScene implements GameScene {
         <div class="st-hit"></div>
         <div class="st-warn">◆ INCOMING ◆</div>
         <div class="st-aimhint">CLICK TO AIM — MOUSE TO LOOK — HOLD CLICK TO FIRE</div>
-        <div class="st-hint"><span class="k">W</span>GAS<span class="k">S</span>BRAKE<span class="k">A</span><span class="k" style="margin-left:0">D</span>STEER<span class="k">SPACE</span>HANDBRAKE</div>
+        <div class="st-hint"><span class="k">W</span>GAS<span class="k">S</span>BRAKE<span class="k">A</span><span class="k" style="margin-left:0">D</span>STEER<span class="k">SPACE</span>HANDBRAKE<span class="k">MOUSE</span>LOOK<span class="k">RMB</span>LEAN OUT &amp; SHOOT<span class="k">T</span>THE FINGER</div>
       </div>
       <div class="st-title" style="position:absolute;left:0;right:0;bottom:22vh;text-align:center;pointer-events:none;
         opacity:0;transition:opacity 0.9s, transform 3.5s ease-out;transform:translateY(8px)">
@@ -543,7 +801,11 @@ export class StreetScene implements GameScene {
         if (!c) {
           c = mat.clone();
           c.side = THREE.DoubleSide;
-          if (c.transparent) c.opacity = Math.min(c.opacity, 0.16);
+          // Glass you can see is there: a faint green-grey tint
+          if (c.transparent) {
+            c.opacity = Math.min(c.opacity, 0.2);
+            if ((c as THREE.MeshStandardMaterial).color) (c as THREE.MeshStandardMaterial).color.lerp(new THREE.Color(0x4d6b66), 0.5);
+          }
           done.set(mat, c);
         }
         return c;
@@ -630,6 +892,12 @@ export class StreetScene implements GameScene {
 
   update(dt: number, _time: number): void {
     dt = Math.min(dt, 0.05);
+    // Off the ramp: the world slows right down, then comes back up to speed
+    if (this.slowmo > 0) {
+      this.slowmo = Math.max(0, this.slowmo - dt);
+      dt *= this.slowmo > 0.6 ? SLOWMO_SCALE : THREE.MathUtils.lerp(1, SLOWMO_SCALE, this.slowmo / 0.6);
+    }
+    this.slowLook(this.slowmo > 0.05);
     this.phaseT += dt;
     this.hornCd -= dt;
     this.scrapeCd -= dt;
@@ -659,10 +927,12 @@ export class StreetScene implements GameScene {
       this.boss.update(dt, this.player, this.traffic, this.cop.car);
       this.cop.update(dt, this.player, this.traffic, this.boss.car);
       if (this.fall) this.updateFall(dt);
+      else if (this.jump) this.updateJump(dt, input);
       else this.player.update(dt, input);
       const hz = this.collapse.laneHazards;
       this.traffic.update(dt, this.player.at, hz.length ? [this.player, this.boss.car, this.cop.car, ...hz] : [this.player, this.boss.car, this.cop.car]);
-      resolveCollisions([this.player, this.boss.car, this.cop.car], this.traffic);
+      // (in the air he's over them, not into them)
+      resolveCollisions(this.jump ? [this.boss.car, this.cop.car] : [this.player, this.boss.car, this.cop.car], this.traffic);
       if (this.cop.mode === 'launch' && this.cop.merged) this.cop.mode = 'chase';
     } else {
       this.updateAirport(dt);
@@ -678,6 +948,9 @@ export class StreetScene implements GameScene {
     this.collapse.update(dt);
     this.updateMissiles(dt);
     this.updateRifle(dt);
+    this.updateHands(dt);
+    this.updateRamp(dt);
+    this.interior?.update(dt, this.player.speed, this.player.throttleNow, this.player.yawRate * this.player.speed);
     if (this.burning) {
       const g = this.civicRig.group;
       const at = StreetScene.tmpA.set(0, 0.9, -1.2).applyQuaternion(g.quaternion).add(g.position);
@@ -694,8 +967,22 @@ export class StreetScene implements GameScene {
       this.player.applyTo(this.civicRig, dt);
       this.boss.car.applyTo(this.bossRig, dt);
       this.cop.car.applyTo(this.police, dt);
-      this.steerWheel();
       if (this.fall) this.fallPose();
+      else if (this.jump) this.civicRig.group.rotation.x = this.jump.pitch;
+      else if (this.onRamp > 0 && this.ramp) {
+        // Up the ramp: lifted, nose up
+        const R = this.ramp;
+        this.civicRig.group.position.y += this.onRamp * R.height;
+        this.civicRig.group.rotation.x += Math.atan2(R.height, R.length) * Math.min(1, (this.onRamp * R.length) / 1.2);
+      }
+      // The suspension taking the landing
+      if (this.landBounce > 0.01) {
+        this.landT += dt;
+        this.landBounce *= Math.exp(-dt * 3.5);
+        this.civicRig.body.rotation.x += Math.sin(this.landT * 17) * 0.06 * this.landBounce;
+        this.civicRig.body.position.y = 0.3 - Math.abs(Math.sin(this.landT * 17)) * 0.09 * this.landBounce;
+      } else this.civicRig.body.position.y = 0.3;
+      this.steerWheel();
     }
     this.lamps();
     this.copMan.update(dt);
@@ -745,8 +1032,10 @@ export class StreetScene implements GameScene {
     this.phaseT = 0;
     this.shot = 'chase';
     this.cinematic(false);
+    // The mouse is his eyes from here: captured, and no pointer over the road
+    this.ctx.engine.renderer.domElement.style.cursor = 'none';
+    this.ctx.input.requestPointerLock();
     this.fadeEl.style.opacity = '0';
-    this.ctx.audio.startBossMusic();
     // The title has had its moment
     setTimeout(() => (this.titleEl.style.opacity = '0'), 900);
     if (fromCheckpoint) {
@@ -866,7 +1155,7 @@ export class StreetScene implements GameScene {
     this.failWhy = why;
     (this.failEl.querySelector('.t') as HTMLElement).textContent = why;
     setTimeout(() => this.failEl.classList.add('show'), 900);
-    this.ctx.audio.stopBossMusic(2);
+    this.ctx.audio.stopTrackMusic(2);
     this.setObjective('');
   }
 
@@ -1100,7 +1389,7 @@ export class StreetScene implements GameScene {
     this.shot = 'gate';
     this.cinematic(true);
     this.traffic.enabled = false;
-    this.ctx.audio.stopBossMusic(4);
+    this.ctx.audio.stopTrackMusic(4);
     this.setObjective('');
     const ap = this.net.roads.airport;
     const A = (a: number, b: number): THREE.Vector3 => this.apt(a, b);
@@ -1572,7 +1861,8 @@ export class StreetScene implements GameScene {
   private updateMissiles(dt: number): void {
     const p = this.player;
     const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
-    const can = this.phase === 'drive' && !this.heliUp && this.missileZone() && gap > 30 && gap < 170;
+    // (not at a man in the air off the ramp: he couldn't do a thing about it)
+    const can = this.phase === 'drive' && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 30 && gap < 170;
     if (can) {
       this.volleyCd -= dt;
       if (this.volleyCd <= 0 && this.volleyLeft === 0 && this.lean > 0.92) {
@@ -1813,6 +2103,7 @@ export class StreetScene implements GameScene {
     if (plan) {
       this.boss.hazards = this.collapse.driverHazards;
       this.cop.hazards = this.collapse.driverHazards;
+      this.spawnRamp(plan);
     }
     const at = plan ? plan.aim.clone() : this.net.point({ road: p.at.road, s: sWant, d: side > 0 ? 3.5 : -8 }, new THREE.Vector3());
     this.crash = { t: 0, tau, at, plan, down: false };
@@ -1863,7 +2154,7 @@ export class StreetScene implements GameScene {
       if (!c.down && c.t > c.tau + 0.5) this.crashImpact();
     }
     const p = this.player;
-    if (this.phase === 'drive' && !this.fall && p.at.road === 'highway' && this.collapse.holeAt(p.position)) this.startFall();
+    if (this.phase === 'drive' && !this.fall && !this.jump && p.at.road === 'highway' && this.collapse.holeAt(p.position)) this.startFall();
     // Whoever's on it when it goes — or can't stop in time after — goes down with it
     if (this.collapse.anyOpen) {
       for (const car of this.traffic.take((t) => this.collapse.holeAt(t.position))) this.collapse.dropCar(car.kind, car.colour, car.position, car.yaw, car.vel);
@@ -1970,7 +2261,8 @@ export class StreetScene implements GameScene {
   private updateRifle(dt: number): void {
     const { input, audio } = this.ctx;
     const r = this.rifle;
-    const armed = this.combat && this.phase === 'drive';
+    // (out of the window with the pistol, the rifle's down)
+    const armed = this.combat && this.phase === 'drive' && this.leanK < 0.02 && !input.rightHeld;
     r.stow += ((armed ? 0 : 1) - r.stow) * Math.min(1, dt * (armed ? 6 : 4));
     if (r.stow > 0.995) r.stow = 1;
     // His own arms off the wheel while the rifle's up: the viewmodel's are his
@@ -1988,16 +2280,25 @@ export class StreetScene implements GameScene {
       r.restLeftHand(root, hold.grip, hold.shoulder.clone().applyMatrix4(root.matrixWorld));
     }
     const { dx, dy } = input.consumeMouseDelta();
-    if (armed) {
-      if (!input.pointerLocked && input.mouseHeld) input.requestPointerLock();
-      this.headYaw = THREE.MathUtils.clamp(this.headYaw - dx * 0.0021, -1.35, 1.35);
-      this.headPitch = THREE.MathUtils.clamp(this.headPitch - dy * 0.0021, -0.3, 1.0);
+    if (this.phase === 'drive') {
+      // The mouse is his head, the whole drive: look round the car, out of the windows, behind
+      if (!input.pointerLocked && (input.mouseHeld || input.rightHeld)) input.requestPointerLock();
+      this.lookIdle = Math.abs(dx) + Math.abs(dy) > 0.5 ? 0 : this.lookIdle + dt;
+      this.headYaw = THREE.MathUtils.clamp(this.headYaw - dx * 0.0021, -LOOK_YAW, LOOK_YAW);
+      this.headPitch = THREE.MathUtils.clamp(this.headPitch - dy * 0.0021, LOOK_DOWN, LOOK_UP);
+      // Not fighting, and the mouse left alone a while: his eyes drift back to the road
+      if (!armed && this.leanK < 0.02 && this.lookIdle > 1.8) {
+        this.headYaw *= Math.max(0, 1 - dt * 1.6);
+        this.headPitch *= Math.max(0, 1 - dt * 1.6);
+      }
     } else {
       this.headYaw *= Math.max(0, 1 - dt * 3);
       this.headPitch *= Math.max(0, 1 - dt * 3);
     }
-    this.combatHint.classList.toggle('show', armed && !input.pointerLocked);
-    this.crossEl.classList.toggle('on', armed && r.stow < 0.3);
+    const hint = armed ? 'CLICK TO AIM — MOUSE TO LOOK — HOLD CLICK TO FIRE' : 'CLICK — MOUSE TO LOOK AROUND';
+    if (this.combatHint.textContent !== hint) this.combatHint.textContent = hint;
+    this.combatHint.classList.toggle('show', this.phase === 'drive' && !input.pointerLocked);
+    this.crossEl.classList.toggle('on', (armed && r.stow < 0.3) || this.leanK > 0.9);
     const fake = { sprinting: false, currentSpeed: 0, crouching: false, bob: { phase: 0, amount: 0 } } as unknown as FPSPlayer;
     r.update(dt, fake, dx, dy, false);
     this.rifleCd -= dt;
@@ -2031,33 +2332,359 @@ export class StreetScene implements GameScene {
       const hitP = new THREE.Vector3();
       if (ray.intersectSphere(new THREE.Sphere(c, 2.5), hitP)) {
         end = hitP;
-        h.hp--;
-        this.particles.sparks(hitP, StreetScene.tmpC.copy(dir).negate(), 9);
-        audio.armourHit(o.distanceTo(hitP));
-        this.hitMark = 1;
-        if (h.hp <= 0) {
-          const right = this.net.sample(this.player.at.road, this.player.at.s).right;
-          const side = Math.sign((h.group.position.x - this.player.position.x) * right.x + (h.group.position.z - this.player.position.z) * right.z) || 1;
-          this.shootDown(h, side > 0 ? 1 : -1);
-          this.heliDown();
-        }
+        this.hitHeli(h, hitP, dir, o);
       }
     }
     this.particles.tracer(r.muzzleWorld(new THREE.Vector3()), end, 0xffe6b0);
+  }
+
+  /** A round into the helicopter's cabin, the rifle's or the pistol's: ten and it goes down. */
+  private hitHeli(h: Helicopter, at: THREE.Vector3, dir: THREE.Vector3, from: THREE.Vector3): void {
+    h.hp--;
+    this.particles.sparks(at, StreetScene.tmpC.copy(dir).negate(), 9);
+    this.ctx.audio.armourHit(from.distanceTo(at));
+    this.hitMark = 1;
+    if (h.hp <= 0) {
+      const right = this.net.sample(this.player.at.road, this.player.at.s).right;
+      const side = Math.sign((h.group.position.x - this.player.position.x) * right.x + (h.group.position.z - this.player.position.z) * right.z) || 1;
+      this.shootDown(h, side > 0 ? 1 : -1);
+      this.heliDown();
+    }
+  }
+
+  // ---------------------------------------------------- the finger, the window
+
+  /**
+   * T: the finger, the left hand still on the wheel. Right button held: the
+   * left hand off the wheel for the pistol, him leaning out of the window
+   * with it, the right hand driving; left button fires it.
+   */
+  private updateHands(dt: number): void {
+    const { input, audio } = this.ctx;
+    const drive = this.phase === 'drive' && !this.fall;
+    // The rifle's arms have to be his again before he can lean out (they're hidden while it's up)
+    const want = drive && input.rightHeld && input.pointerLocked && !this.armsAway;
+    this.leanK = THREE.MathUtils.clamp(this.leanK + (want ? dt / 0.5 : -dt / 0.4), 0, 1);
+    if (!this.driverRig) this.leanK = 0;
+    if (this.leanK < 0.001) this.pistol.visible = false;
+    // The finger, if both hands aren't busy
+    if (input.wasPressed('KeyT') && drive && this.leanK < 0.05 && !this.armsAway) this.flipT = 0;
+    if (this.flipT >= 0) {
+      this.flipT += dt;
+      // Out of the window instead: back on the wheel
+      if (this.leanK > 0.02 && this.flipT < FLIP_T - 0.35) this.flipT = FLIP_T - 0.35;
+      if (this.flipT >= FLIP_T || this.armsAway) this.flipT = -1;
+    }
+    // ---- The pistol
+    this.pistolKick = Math.max(0, this.pistolKick - dt * 8);
+    this.pistolCd -= dt;
+    if (this.pistolReload > 0) {
+      this.pistolReload -= dt;
+      if (this.pistolReload <= 0) {
+        this.pistolAmmo = PISTOL_MAG;
+        audio.magIn();
+      }
+    }
+    if (this.leanK < 0.97 || this.pistolReload > 0 || !input.mouseHeld || !input.pointerLocked || this.pistolCd > 0) return;
+    if (this.pistolAmmo <= 0) {
+      this.pistolReload = 1.15;
+      audio.magOut();
+      return;
+    }
+    this.pistolCd = 0.14;
+    this.pistolAmmo--;
+    this.pistolKick = 1;
+    audio.playerGunshot();
+    this.shake = Math.min(0.7, this.shake + 0.1);
+    const cam = this.camera;
+    const o = cam.getWorldPosition(new THREE.Vector3());
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    // One arm, out of a car doing ninety: it wanders a little
+    dir.x += (Math.random() - 0.5) * 0.016;
+    dir.y += (Math.random() - 0.5) * 0.016;
+    dir.z += (Math.random() - 0.5) * 0.016;
+    dir.normalize();
+    const muzzle = this.pistolMuzzle(new THREE.Vector3());
+    this.particles.muzzleFlash(muzzle, dir);
+    const end = this.pistolHit(o, dir);
+    this.particles.tracer(muzzle, end, 0xffe6b0);
+    if (this.pistolAmmo <= 0) {
+      this.pistolReload = 1.15;
+      audio.magOut();
+    }
+  }
+
+  /** Where a ray first meets a car's box (its pose, half width, half length): the distance, or null. */
+  private rayCar(o: THREE.Vector3, dir: THREE.Vector3, pos: THREE.Vector3, yaw: number, hw: number, hl: number): number | null {
+    const c = Math.cos(-yaw);
+    const sn = Math.sin(-yaw);
+    const ox = o.x - pos.x;
+    const oz = o.z - pos.z;
+    const lo = StreetScene.tmpA.set(ox * c + oz * sn, o.y - pos.y, -ox * sn + oz * c);
+    const ld = StreetScene.tmpB.set(dir.x * c + dir.z * sn, dir.y, -dir.x * sn + dir.z * c);
+    const ray = new THREE.Ray(lo, ld);
+    const hit = ray.intersectBox(new THREE.Box3(new THREE.Vector3(-hw, 0, -hl), new THREE.Vector3(hw, 1.45, hl)), StreetScene.tmpC);
+    return hit ? hit.distanceTo(lo) : null;
+  }
+
+  /**
+   * One of his pistol rounds, from his eye down `dir`: the helicopter, the
+   * boss's man at his window (back in he goes, his volley with him), the
+   * boss's car, the cop's, or the traffic (a few in one and it spins out).
+   * Returns where it ended up.
+   */
+  private pistolHit(o: THREE.Vector3, dir: THREE.Vector3): THREE.Vector3 {
+    const { audio } = this.ctx;
+    const FAR = 170;
+    let best = FAR;
+    let what: 'heli' | 'man' | 'boss' | 'cop' | 'traffic' | null = null;
+    let carId = -1;
+    const ray = new THREE.Ray(o, dir);
+    const tmp = new THREE.Vector3();
+    const h = this.heli;
+    if (h && (h.state === 'in' || h.state === 'fight')) {
+      if (ray.intersectSphere(new THREE.Sphere(h.centre(new THREE.Vector3()), 2.5), tmp)) {
+        best = tmp.distanceTo(o);
+        what = 'heli';
+      }
+    }
+    const man = this.passenger;
+    if (this.lean > 0.5 && man.root.visible) {
+      const chest = man.chest.getWorldPosition(new THREE.Vector3());
+      if (ray.intersectSphere(new THREE.Sphere(chest, 0.55), tmp) && tmp.distanceTo(o) < best) {
+        best = tmp.distanceTo(o);
+        what = 'man';
+      }
+    }
+    const tryCar = (pos: THREE.Vector3, yaw: number, hw: number, hl: number, kind: 'boss' | 'cop' | 'traffic', id = -1): void => {
+      if (pos.distanceTo(o) > FAR + 5) return;
+      const d = this.rayCar(o, dir, pos, yaw, hw, hl);
+      if (d !== null && d < best && d > 0.5) {
+        best = d;
+        what = kind;
+        carId = id;
+      }
+    };
+    tryCar(this.boss.car.position, this.boss.car.yaw, this.boss.car.halfWidth, this.boss.car.halfLength, 'boss');
+    tryCar(this.cop.car.position, this.cop.car.yaw, this.cop.car.halfWidth, this.cop.car.halfLength, 'cop');
+    for (const c of this.traffic.cars) tryCar(c.position, c.yaw, c.halfWidth, c.halfLength, 'traffic', c.id);
+    const end = o.clone().addScaledVector(dir, best);
+    if (!what) return end;
+    const back = StreetScene.tmpC.copy(dir).negate();
+    const dist = o.distanceTo(end);
+    switch (what as string) {
+      case 'heli':
+        this.hitHeli(h!, end, dir, o);
+        break;
+      case 'man':
+        // Hit: back into the car with him, and no missiles for a while
+        this.particles.bloodSpray(end, dir, true, end.y - 1.5);
+        man.flinch(0.8);
+        this.volleyLeft = 0;
+        this.volleyCd = Math.max(this.volleyCd, 7);
+        this.hitMark = 1;
+        audio.armourHit(dist);
+        break;
+      default: {
+        // Into a car: sparks off the body, now and then the glass
+        this.particles.sparks(end, back, 10);
+        if (Math.random() < 0.35) {
+          this.particles.glassShards(end, dir, end.y - 1.2);
+          audio.glassShatter(dist);
+        } else audio.ricochet(dist);
+        this.hitMark = 0.6;
+        if (carId >= 0) {
+          const n = (this.trafficHits.get(carId) ?? 0) + 1;
+          this.trafficHits.set(carId, n);
+          if (n === SPINOUT_HITS) {
+            // A tyre, or the driver's nerve: it spins out across the lanes
+            const side = Math.random() < 0.5 ? -1 : 1;
+            const c = this.traffic.cars.find((q) => q.id === carId);
+            if (c) {
+              const imp = new THREE.Vector3(Math.cos(c.yaw) * side * 6, 0, -Math.sin(c.yaw) * side * 6);
+              this.traffic.hit(carId, imp, side * 3.2);
+              this.particles.tyreSmoke(c.position, StreetScene.tmpA.set(0, 1, 0), 2);
+              audio.tyreSqueal(1.2, dist);
+            }
+          }
+        }
+      }
+    }
+    return end;
+  }
+
+  // ------------------------------------------------------- the ramp, the jump
+
+  /** A ramp dropped in one of the lanes running into the hole, its lip a few metres short of the broken edge. */
+  private spawnRamp(plan: HolePlan): void {
+    this.clearRamp();
+    const lanes = this.net.roads.highway.lanes.filter((l) => l.dir === 1 && l.offset - 1.0 > plan.lo && l.offset + 1.0 < Math.min(plan.hi, STREET.deck.edge));
+    if (!lanes.length) return;
+    const lane = lanes[Math.floor(Math.random() * lanes.length)];
+    const R = highwayRamp();
+    const s = plan.s - HOLE_HALF - 5 - R.length;
+    const f = this.net.sample('highway', s);
+    const origin = f.pos.clone().addScaledVector(f.right, lane.offset);
+    const fwd = new THREE.Vector3(f.tangent.x, 0, f.tangent.z).normalize();
+    const right = new THREE.Vector3(f.right.x, 0, f.right.z).normalize();
+    R.group.position.copy(origin);
+    R.group.rotation.y = Math.atan2(-fwd.x, -fwd.z);
+    R.group.scale.setScalar(0.001);
+    this.scene.add(R.group);
+    this.ramp = { ...R, origin, fwd, right, pop: 0, s };
+    this.onRamp = 0;
+    // Nobody stopped on it, or queued in front of it
+    this.traffic.clear('highway', s - 40, plan.s + HOLE_HALF);
+  }
+
+  private clearRamp(): void {
+    if (!this.ramp) return;
+    this.ramp.group.removeFromParent();
+    this.ramp = null;
+    this.onRamp = 0;
+  }
+
+  /** The ramp popping up out of the road, riding up it, off the lip, and gone once he's well past. */
+  private updateRamp(dt: number): void {
+    const R = this.ramp;
+    if (!R) return;
+    if (R.pop < 1) {
+      if (R.pop === 0) {
+        const mid = R.origin.clone().addScaledVector(R.fwd, R.length * 0.5);
+        this.particles.dust(mid, 3, 1.2);
+        this.particles.sparks(mid, StreetScene.tmpA.set(0, 1, 0), 20);
+        this.ctx.audio.stomp(this.camera.position.distanceTo(mid));
+      }
+      R.pop = Math.min(1, R.pop + dt * 2.8);
+      // Up with a little overshoot
+      const t = R.pop;
+      const k = 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2);
+      R.group.scale.set(1, Math.max(0.001, k), 1);
+    }
+    const p = this.player;
+    if (p.at.road === 'highway' && p.at.s > R.s + 260) {
+      this.clearRamp();
+      return;
+    }
+    if (this.jump || this.fall || this.phase !== 'drive') {
+      this.onRamp = 0;
+      return;
+    }
+    // Where he is against it: along it from its low edge, across it from its middle
+    const rx = p.position.x - R.origin.x;
+    const rz = p.position.z - R.origin.z;
+    const al = rx * R.fwd.x + rz * R.fwd.z;
+    const la = rx * R.right.x + rz * R.right.z;
+    const across = Math.abs(la) < R.halfWidth + 0.35 && Math.abs(p.position.y - R.origin.y) < 2;
+    if (across && al > -0.2 && al < R.length && p.speed > 3) {
+      this.onRamp = Math.max(0, al) / R.length;
+      return;
+    }
+    // Off the lip
+    if (this.onRamp > 0.6 && across && al >= R.length) this.launch();
+    this.onRamp = 0;
+  }
+
+  /** Off the lip at the speed he had, up at the ramp's angle — and the world goes slow. */
+  private launch(): void {
+    const p = this.player;
+    const R = this.ramp!;
+    const ang = Math.atan2(R.height, R.length);
+    const v = Math.max(8, p.speed);
+    const fx = -Math.sin(p.yaw);
+    const fz = -Math.cos(p.yaw);
+    p.position.y += R.height;
+    this.jump = { vel: new THREE.Vector3(fx * v * Math.cos(ang), v * Math.sin(ang), fz * v * Math.cos(ang)), pitch: ang, t: 0 };
+    this.onRamp = 0;
+    this.slowmo = SLOWMO;
+    this.shake = Math.max(this.shake, 0.5);
+    const lip = R.origin.clone().addScaledVector(R.fwd, R.length).setY(R.origin.y + R.height);
+    this.particles.sparks(lip, StreetScene.tmpA.set(0, 1, 0), 40);
+    this.ctx.audio.carWhoosh(0);
+    this.ctx.audio.carScrape(0);
+  }
+
+  /** In the air: gravity, the nose following the arc, a touch of steer, and down — on the far side, or into the hole. */
+  private updateJump(dt: number, input: DriveInput | null): void {
+    const j = this.jump!;
+    const p = this.player;
+    j.t += dt;
+    // He's still got the wheel: a little turn in the air
+    const turn = -(input?.steer ?? 0) * 0.3 * dt;
+    p.yaw += turn;
+    const c = Math.cos(turn);
+    const sn = Math.sin(turn);
+    const vx = j.vel.x;
+    j.vel.x = vx * c + j.vel.z * sn;
+    j.vel.z = -vx * sn + j.vel.z * c;
+    j.vel.y -= 9.8 * dt;
+    p.position.addScaledVector(j.vel, dt);
+    p.velocity.set(j.vel.x, 0, j.vel.z);
+    const horiz = Math.hypot(j.vel.x, j.vel.z);
+    j.pitch += (Math.atan2(j.vel.y, horiz) * 0.7 - j.pitch) * Math.min(1, dt * 2.5);
+    // Where that is on the highway
+    const f = this.net.sample('highway', p.at.s);
+    p.at.s += (p.position.x - f.pos.x) * f.tangent.x + (p.position.z - f.pos.z) * f.tangent.z;
+    const f2 = this.net.sample('highway', p.at.s);
+    p.at.d = (p.position.x - f2.pos.x) * f2.right.x + (p.position.z - f2.pos.z) * f2.right.z;
+    if (j.vel.y > 0) return;
+    const deck = f2.pos.y;
+    const floor = this.floorAt(p.position.x, p.position.z);
+    if (floor > 0.5 && p.position.y <= floor) {
+      this.land(horiz);
+      return;
+    }
+    // Short of the far side: down past the broken edge, and all the way down
+    if (p.position.y < deck - 0.5 || p.position.y < 0.1) {
+      this.jump = null;
+      this.fall = { t: 0, vel: j.vel.clone(), pitch: 0, down: false };
+      this.ctx.audio.tyreSqueal(0.5);
+      this.fail("SO CLOSE — THE ROAD WASN'T THERE");
+    }
+  }
+
+  /** Down on the far side: a hard landing, sparks off the sump, and on he drives. */
+  private land(speed: number): void {
+    const p = this.player;
+    const yaw = p.yaw;
+    this.jump = null;
+    p.place({ road: 'highway', s: p.at.s, d: p.at.d }, speed);
+    p.yaw = yaw;
+    p.velocity.set(-Math.sin(yaw) * speed, 0, -Math.cos(yaw) * speed);
+    this.slowmo = Math.min(this.slowmo, 0.35);
+    this.landBounce = 1;
+    this.landT = 0;
+    this.shake = Math.max(this.shake, 1.3);
+    this.damage = Math.min(99, this.damage + 6);
+    this.ctx.audio.carCrash(0, false);
+    const at = p.position;
+    this.particles.sparks(at, StreetScene.tmpA.set(0, 1, 0), 36, at.y);
+    this.particles.dust(at, 3, 1.4);
+    this.particles.tyreSmoke(at, StreetScene.tmpA.set(0, 1, 0), 2);
+  }
+
+  /** The slow motion's look: the colour drained a little, bars top and bottom. */
+  private slowLook(on: boolean): void {
+    if (on === this.slowFx) return;
+    this.slowFx = on;
+    const canvas = this.ctx.engine.renderer.domElement;
+    canvas.style.transition = 'filter 0.35s';
+    canvas.style.filter = on ? 'saturate(0.55) contrast(1.15) brightness(1.06)' : '';
+    if (this.phase === 'drive') this.letterbox.classList.toggle('open', !on);
   }
 
   /** It's going down: the fight is over. */
   private heliDown(): void {
     this.heliIndex++;
     this.combat = false;
-    this.ctx.input.exitPointerLock();
     this.hp = Math.min(RAVI_HP, this.hp + 35);
     // A breather before the passenger's back at the window
     this.volleyCd = 6;
     const plan = this.crash?.plan;
     if (plan) {
       // Where it's coming down, the road goes: get over
-      this.setObjective(plan.side > 0 ? "HELICOPTER DOWN — THE ROAD'S GOING, KEEP LEFT!" : "HELICOPTER DOWN — THE ROAD'S GOING, KEEP RIGHT!");
+      const dodge = plan.side > 0 ? 'KEEP LEFT' : 'KEEP RIGHT';
+      this.setObjective(this.ramp ? `HELICOPTER DOWN — THE ROAD'S GOING! ${dodge}, OR HIT THE RAMP!` : `HELICOPTER DOWN — THE ROAD'S GOING, ${dodge}!`);
       setTimeout(() => {
         if (this.phase === 'drive') this.setObjective('STAY ON THE BOSS');
       }, 7000);
@@ -2157,7 +2784,16 @@ export class StreetScene implements GameScene {
         const want = THREE.MathUtils.clamp(-off * 0.2 * clamp01((1.1 - Math.abs(off)) / 0.4), -0.15, 0.15);
         this.headSteady += (want - this.headSteady) * Math.min(1, dt * 10);
         this.lookSteady(this.headSteady + this.headYaw, this.headPitch, this.lookAt);
-        fov = 74 + 8 * k;
+        // Leaning out with the pistol: his eyes go where his head's gone, out of the window, looking the same way
+        const lean = smooth(this.leanK);
+        const head = this.driverRig?.bones.get('head');
+        if (lean > 0 && head) {
+          const at = head.getWorldPosition(StreetScene.tmpA).add(StreetScene.tmpB.set(-0.16, 0.07, 0.02).applyQuaternion(this.civicRig.group.quaternion));
+          const off = at.sub(cam.position).multiplyScalar(lean);
+          cam.position.add(off);
+          this.lookAt.add(off);
+        }
+        fov = 74 + 8 * k + (this.jump ? 12 : 0);
         break;
       }
       case 'roadside': {
@@ -2330,9 +2966,16 @@ export class StreetScene implements GameScene {
     this.copEl.classList.toggle('on', this.copChasing && this.phase === 'drive');
     this.hpEl.style.width = `${this.hp}%`;
     this.hpEl.style.background = this.hp > 50 ? '#e8f4ec' : this.hp > 25 ? '#e0c452' : '#ff5a46';
-    const ammo = this.rifle.reloading ? 'RELOADING' : `${this.ammo} / 30`;
+    const pistol = this.leanK > 0.5;
+    const ammo = pistol
+      ? this.pistolReload > 0
+        ? 'RELOADING'
+        : `PISTOL ${this.pistolAmmo} / ${PISTOL_MAG}`
+      : this.rifle.reloading
+        ? 'RELOADING'
+        : `${this.ammo} / 30`;
     if (this.ammoEl.textContent !== ammo) this.ammoEl.textContent = ammo;
-    this.ammoEl.classList.toggle('on', this.combat && this.phase === 'drive');
+    this.ammoEl.classList.toggle('on', (this.combat || pistol) && this.phase === 'drive');
     this.hurt = Math.max(0, this.hurt - 0.05);
     this.hurtEl.style.opacity = (this.hurt * 0.9 + (this.combat ? Math.max(0, (60 - this.hp) / 100) : 0)).toFixed(3);
     // The lock tone's on, or one's in the air
@@ -2347,6 +2990,9 @@ export class StreetScene implements GameScene {
 
   render(renderer: THREE.WebGLRenderer): void {
     if (!this.warmedUp) this.warmUp(renderer);
+    // What's behind him, into the mirrors (only worth it from his seat)
+    // (every other frame: thirty a second is plenty for a mirror, and it halves what they cost)
+    if (this.mirrors && this.shot === 'chase' && (this.mirrorFrame++ & 1) === 0) this.mirrors.render(renderer, this.scene);
     renderer.render(this.scene, this.camera);
   }
 

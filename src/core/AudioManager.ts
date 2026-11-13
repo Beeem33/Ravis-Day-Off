@@ -2005,6 +2005,9 @@ export class AudioManager {
   private lotIn: GainNode | null = null;
   private echoIn: GainNode | null = null;
   private boss: { timer: number; out: GainNode } | null = null;
+  /** A song on a seamless loop (the street's), and the decoded songs, kept. */
+  private track: { src: AudioBufferSourceNode | null; out: GainNode; url: string } | null = null;
+  private tracks = new Map<string, Promise<AudioBuffer>>();
   private hallIR: AudioBuffer | null = null;
 
   /** The soft-clipped bus every Level 8 sound goes through (see softClipCurve). */
@@ -3817,6 +3820,86 @@ export class AudioManager {
     b.out.gain.setValueAtTime(Math.max(0.0001, b.out.gain.value), now);
     b.out.gain.exponentialRampToValueAtTime(0.0001, now + f);
     window.setTimeout(() => b.out.disconnect(), (f + 0.3) * 1000);
+  }
+
+  /**
+   * A song from public/audio, through the music bus: from the top once,
+   * then round and round between `loopStart` and `loopEnd` (seconds) for
+   * as long as it's wanted, sample-accurate, no gap. The seam's made
+   * smooth in the decoded copy: the last few milliseconds before
+   * `loopEnd` fade into the ones just before `loopStart`, so what plays
+   * into the jump is what played into that point the first time. Calling
+   * it while the same song's going does nothing.
+   */
+  startTrackMusic(url: string, loopStart: number, loopEnd: number, level = 0.6): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (ctx.state === 'suspended') void ctx.resume();
+    if (this.track?.url === url) return;
+    this.stopTrackMusic(0.3);
+    const out = ctx.createGain();
+    out.gain.value = level;
+    out.connect(this.musicBus);
+    const t: { src: AudioBufferSourceNode | null; out: GainNode; url: string } = { src: null, out, url };
+    this.track = t;
+    let load = this.tracks.get(url);
+    if (!load) {
+      load = fetch(`${import.meta.env.BASE_URL}${url}`)
+        .then((r) => r.arrayBuffer())
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          // The seam: the tail into the loop's end crossfaded with what led into its start
+          const sr = buf.sampleRate;
+          const ls = Math.round(loopStart * sr);
+          const le = Math.round(loopEnd * sr);
+          const F = Math.min(Math.round(0.03 * sr), ls);
+          for (let c = 0; c < buf.numberOfChannels; c++) {
+            const d = buf.getChannelData(c);
+            for (let i = 0; i < F; i++) {
+              const w = (i + 0.5) / F;
+              const a = Math.cos((w * Math.PI) / 2);
+              const b = Math.sin((w * Math.PI) / 2);
+              d[le - F + i] = d[le - F + i] * a + d[ls - F + i] * b;
+            }
+          }
+          return buf;
+        });
+      this.tracks.set(url, load);
+    }
+    load
+      .then((buf) => {
+        // Stopped (or another song started) while it was loading
+        if (this.track !== t) return;
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        src.loopStart = loopStart;
+        src.loopEnd = loopEnd;
+        src.connect(out);
+        src.start();
+        t.src = src;
+      })
+      .catch((err) => console.warn('[music] could not load', url, err));
+  }
+
+  /** Fades the looping song out over `fadeSeconds` and lets it go. Safe to call when nothing's playing. */
+  stopTrackMusic(fadeSeconds = 1): void {
+    const t = this.track;
+    if (!t || !this.ctx) return;
+    this.track = null;
+    const now = this.ctx.currentTime;
+    const f = Math.max(0.03, fadeSeconds);
+    t.out.gain.cancelScheduledValues(now);
+    t.out.gain.setValueAtTime(Math.max(0.0001, t.out.gain.value), now);
+    t.out.gain.exponentialRampToValueAtTime(0.0001, now + f);
+    window.setTimeout(() => {
+      try {
+        t.src?.stop();
+      } catch {
+        /* never started */
+      }
+      t.out.disconnect();
+    }, (f + 0.2) * 1000);
   }
 
   /**

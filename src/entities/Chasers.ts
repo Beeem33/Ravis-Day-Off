@@ -480,6 +480,12 @@ export class BossDriver extends RouteDriver implements IBossDriver {
   private swerveSide = 0;
   static readonly SWERVE_T = 5;
 
+  /** Down to `speed` and held there in his lane, whatever Ravi does (Ravi's done: he takes his time leaving). */
+  crawl(speed: number): void {
+    this.mode = 'hold';
+    this.holdSpeed = speed;
+  }
+
   /** Thrown off line to `side` (+1 his right), then he cuts across in front of Ravi and sits there a while, close. */
   swerve(side: number): void {
     this.swerveT = BossDriver.SWERVE_T;

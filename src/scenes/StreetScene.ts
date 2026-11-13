@@ -15,7 +15,7 @@ import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
 import { armWithAK } from '../entities/AkModel';
 import { buildAirside } from '../environment/AirsideProps';
-import { RaviVisual, elbowToward, type RaviRig, type HandShape, type SeatPose } from '../entities/RaviVisual';
+import { RaviVisual, elbowToward, HAND, type RaviRig, type HandShape, type SeatPose, type Side } from '../entities/RaviVisual';
 import { ParticleManager } from '../fx/ParticleManager';
 import { Helicopter, HELI_HP } from '../entities/Helicopter';
 import { StreetMissiles, type MissileHit } from '../entities/StreetMissiles';
@@ -28,6 +28,7 @@ import { rocketLauncher } from '../entities/General';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CarMirrors } from '../fx/CarMirrors';
 import { CivicInterior } from '../environment/CivicInterior';
+import { CabinJunk } from '../fx/CabinJunk';
 import { AimSway } from '../entities/AimSway';
 import { highwayRamp, type Ramp } from '../environment/HighwayRamp';
 import type { FPSPlayer } from '../entities/FPSPlayer';
@@ -236,6 +237,16 @@ export class StreetScene implements GameScene {
   private susp = { on: false, t: 0, y: 0, vy: 0, p: 0, vp: 0, r: 0, vr: 0 };
   // ---- Blown off the road by a missile: up, over and over, down on its roof, sliding
   private wreck: { t: number; vel: THREE.Vector3; yaw0: number; yaw1: number; roll: number; deckY: number; down: boolean; stillT: number; dead: boolean } | null = null;
+  /** Into a car at speed: his head into the wheel (seconds since, and whether it's landed yet). */
+  private smash: { t: number; hit: boolean } | null = null;
+  /** The rubbish in the car, loose when it's thrown about. */
+  private junk: CabinJunk | null = null;
+  /** His arms gone limp (a wreck, a crash): each one's hang from its shoulder, model space, and how it's swinging. */
+  private limp: Record<Side, { d: THREE.Vector3; v: THREE.Vector3 } | null> = { l: null, r: null };
+  /** This frame's step, and the car's velocity last frame and the acceleration from it (world): what the loose things in it feel. */
+  private frameDt = 0;
+  private carVelPrev = new THREE.Vector3();
+  private readonly carAcc = new THREE.Vector3();
   /** Out of the window (1) or back in his seat aiming across the car out of the passenger side (0): which way he's looking decides. */
   private outK = 1;
   // ---- The boss's man at his window
@@ -404,6 +415,7 @@ export class StreetScene implements GameScene {
     // His mirrors, turned to his eyes in the seat
     const hip = this.civicRig.seat.hip;
     this.interior = new CivicInterior(this.civicRig);
+    this.junk = new CabinJunk(this.civicRig);
     this.mirrors = new CarMirrors(this.civicRig, { x: hip.x, y: hip.y + 0.68, z: hip.z + 0.06 }, CivicInterior.MIRROR_AT);
     this.buildPistol();
     this.bossMan = new Enemy(new THREE.Vector3(0, -60, 0), 0, 7, { name: 'THE BOSS', boss: true });
@@ -479,6 +491,7 @@ export class StreetScene implements GameScene {
     this.ui.remove();
     this.mirrors?.dispose();
     this.interior?.dispose();
+    this.junk?.dispose();
     this.clearRamp();
     const canvas = this.ctx.engine.renderer.domElement;
     canvas.style.filter = '';
@@ -524,6 +537,10 @@ export class StreetScene implements GameScene {
     const grip = this.wheelGrip;
     const r = this.driverRig;
     if (!grip || !r) return;
+    if (this.wreck || this.smash) {
+      this.limpArms(a);
+      return;
+    }
     // The arm's off the wheel whenever the pistol's out; he's only out of the window when he's looking that way
     const lean = smooth(this.leanK);
     const out = lean * smooth(this.outK);
@@ -550,6 +567,61 @@ export class StreetScene implements GameScene {
     if (flip > 0.001) this.layFlipArm(flip);
     if (lean > 0.001 || flip > 0.001) r.apply();
     // (the pistol itself is placed once the camera's set for the frame: see updateCamera)
+  }
+
+  /**
+   * Both arms gone limp: off the wheel, each hanging from its shoulder the
+   * way gravity and the car's lurching take it, swinging as the car rolls,
+   * hanging down past his head when it's on its roof. Into the wheel, his
+   * top half slumps forward over it too.
+   */
+  private limpArms(wheelAngle: number): void {
+    const r = this.driverRig!;
+    const grip = this.wheelGrip!;
+    const dt = Math.min(0.05, this.frameDt);
+    if (this.smash && this.seatPose) {
+      const t = this.smash.t;
+      const k = t < 0.11 ? smooth(t / 0.11) : 1;
+      const base = this.seatPose;
+      r.seat({ ...base, lean: base.lean.map((d, i) => d + [4, 10, 16, 14, 10, 6][i] * k) });
+      r.apply();
+      grip.refreshShoulders();
+      this.leanPosed = true;
+    }
+    grip.free.l = true;
+    grip.free.r = true;
+    grip.update(wheelAngle);
+    r.root.updateWorldMatrix(true, false);
+    const inv = r.root.getWorldQuaternion(new THREE.Quaternion()).invert();
+    // Down, as his arms feel it: gravity, less what the car's doing (thrown forward as it stops dead, and so on)
+    const down = new THREE.Vector3(0, -9.8, 0).sub(this.carAcc).applyQuaternion(inv);
+    if (down.lengthSq() < 1e-6) down.set(0, -1, 0);
+    down.normalize();
+    for (const side of ['l', 'r'] as Side[]) {
+      const hold = grip.hold(side);
+      if (!hold) continue;
+      const S = hold.shoulder;
+      let st = this.limp[side];
+      if (!st) {
+        st = { d: r.at(`hand_${side}`).sub(S).normalize(), v: new THREE.Vector3() };
+        this.limp[side] = st;
+      }
+      // A loose pendulum: pulled toward hanging straight, with a little drag. In the wreck his
+      // window arm falls a little back of straight down (the seat back's there), out of the window he's looking through
+      const want = StreetScene.tmpB.copy(down);
+      if (this.wreck && side === 'l') want.add(StreetScene.tmpC.set(0, 0, -1.1)).normalize();
+      st.v.addScaledVector(StreetScene.tmpA.copy(want).sub(st.d), 34 * dt).multiplyScalar(Math.exp(-dt * 2.6));
+      st.d.addScaledVector(st.v, dt).normalize();
+      const wrist = S.clone().addScaledVector(st.d, 0.54);
+      const along = st.d.clone();
+      const palm = new THREE.Vector3(side === 'l' ? 1 : -1, 0, 0);
+      palm.addScaledVector(along, -palm.dot(along));
+      if (palm.lengthSq() < 1e-4) palm.set(0, 0, 1).addScaledVector(along, -along.z);
+      palm.normalize();
+      const toward = elbowToward(wrist, S, new THREE.Vector3(side === 'l' ? 0.4 : -0.4, -0.2, -0.6));
+      r.reach(side, wrist, along, palm, toward, S, 0.5, false).hand(side, HAND.relaxed);
+    }
+    r.apply();
   }
 
   /** How far up the finger is (0 on the wheel, 1 up). */
@@ -983,6 +1055,7 @@ export class StreetScene implements GameScene {
       dt *= this.slowmo > 0.6 ? SLOWMO_SCALE : THREE.MathUtils.lerp(1, SLOWMO_SCALE, this.slowmo / 0.6);
     }
     this.slowLook(this.slowmo > 0.05);
+    this.frameDt = dt;
     this.phaseT += dt;
     this.hornCd -= dt;
     this.scrapeCd -= dt;
@@ -1053,8 +1126,17 @@ export class StreetScene implements GameScene {
       this.player.applyTo(this.civicRig, dt);
       this.boss.car.applyTo(this.bossRig, dt);
       this.cop.car.applyTo(this.police, dt);
+      // What everything loose in the car feels: how hard the car's speeding up, slowing, falling
+      const vNow = StreetScene.tmpA.copy(this.player.velocity);
+      if (this.wreck && !this.wreck.down) vNow.y = this.wreck.vel.y;
+      if (dt > 0) this.carAcc.subVectors(vNow, this.carVelPrev).divideScalar(dt).clampLength(0, 80);
+      this.carVelPrev.copy(vNow);
+      if (this.smash) this.smash.t += dt;
       if (this.fall) this.fallPose();
-      else if (this.wreck) this.civicRig.group.rotation.set(0, this.player.yaw, this.wreck.roll, 'YXZ');
+      else if (this.wreck) {
+        this.civicRig.group.rotation.set(0, this.player.yaw, this.wreck.roll, 'YXZ');
+        this.junk?.update(dt, this.civicRig.group.quaternion, vNow);
+      }
       else if (this.jump) this.civicRig.group.rotation.x = this.jump.pitch;
       else if (this.onRamp > 0 && this.ramp) {
         // Up the ramp: lifted, nose up
@@ -1230,7 +1312,8 @@ export class StreetScene implements GameScene {
     }
     if (this.phase === 'drive' && this.phaseT > 1.2 && lethal) {
       this.particles.sparks(point, StreetScene.tmpA.set(0, 0.8, 0), 30);
-      this.blowUp('YOU CRASHED');
+      this.particles.glassShards(point, StreetScene.tmpA.set(0, 0.6, 0), point.y - 1);
+      this.crashHead();
       return;
     }
     let dmg = 0;
@@ -1279,10 +1362,27 @@ export class StreetScene implements GameScene {
     } else if (death === 'now') this.die();
   }
 
+  /**
+   * Into another car at speed: the Civic stops dead and he doesn't — his
+   * head goes into the wheel, bounces off it and drops back onto it, his
+   * arms gone loose. And that's him.
+   */
+  private crashHead(): void {
+    if (this.phase !== 'drive') return;
+    this.smash = { t: 0, hit: false };
+    // Stopped dead against it
+    this.player.velocity.multiplyScalar(0.08);
+    this.leanK = 0;
+    this.flipT = -1;
+    this.ctx.audio.carCrash(0, true);
+    this.shake = 1.2;
+    this.fail('YOU CRASHED', 'now');
+  }
+
   /** He's dead: the game's death, the try-again card the one thing left on screen. */
-  private die(): void {
+  private die(o: { slow?: number; slowFor?: number } = {}): void {
     this.failEl.classList.add('show');
-    this.ctx.death.start(this.failEl);
+    this.ctx.death.start(this.failEl, o);
   }
 
   // ------------------------------------------------------------ the cop
@@ -2263,10 +2363,12 @@ export class StreetScene implements GameScene {
     this.ctx.audio.carCrash(0, true);
     this.shake = 1.6;
     this.burning = true;
-    // A missile throws the car over and over; anything else, it's all over where it is
+    // A missile throws the car over and over — the grey, the song and the slow-motion from the
+    // moment it hits, a little slow, so the roll can be watched; anything else, it's all over where it is
     if (why === 'HIT BY A MISSILE') {
       this.startWreck();
       this.fail(why, 'later');
+      this.die({ slow: 0.5, slowFor: 3.4 });
     } else this.fail(why, 'now');
   }
 
@@ -2288,6 +2390,13 @@ export class StreetScene implements GameScene {
     this.wreck = { t: 0, vel: new THREE.Vector3(p.velocity.x * 0.7, 8.1, p.velocity.z * 0.7), yaw0: p.yaw, yaw1, roll: 0, deckY: p.position.y, down: false, stillT: 0, dead: false };
     this.leanK = 0;
     this.flipT = -1;
+    // Everything in the car comes loose, his arms with it
+    this.junk?.loosen();
+    // The boss lifts off: in close enough to watch from where Ravi ends up, and away down the road at his leisure
+    const b = this.boss;
+    const gap = this.net.routeS(b.car.at) - this.net.routeS(p.at);
+    if (b.car.at.road === p.at.road && gap > 26) b.place({ road: p.at.road, s: p.at.s + 22, d: b.car.at.d }, 14);
+    b.crawl(14);
   }
 
   /** The car through the air and on its roof down the road; and, once it's still, the death. */
@@ -2313,6 +2422,7 @@ export class StreetScene implements GameScene {
         w.vel.y = 0;
         this.shake = 1.5;
         this.hurt = 1;
+        this.junk?.jolt(1.3);
         this.ctx.audio.carCrash(0, true);
         this.particles.sparks(p.position, StreetScene.tmpA.set(0, 1, 0), 40, w.deckY);
         this.particles.dust(StreetScene.tmpA.copy(p.position).setY(w.deckY), 4, 1.5);
@@ -2330,6 +2440,8 @@ export class StreetScene implements GameScene {
       const sp = Math.hypot(w.vel.x, w.vel.z);
       if (sp > 2 && Math.random() < 0.7) this.particles.sparks(StreetScene.tmpA.copy(p.position).setY(w.deckY + 0.1), StreetScene.tmpB.set(-w.vel.x, 2, -w.vel.z).normalize(), 4, w.deckY);
       if (sp < 1.2) w.stillT += dt;
+      // He's seen what he came to see: off at a crawl
+      if (w.t > 3) this.boss.crawl(7);
       if (w.stillT > 0.9 && !w.dead) {
         w.dead = true;
         this.die();
@@ -3162,6 +3274,21 @@ export class StreetScene implements GameScene {
           cam.position.add(off);
           this.lookAt.add(off);
         }
+        // Into the wheel: there in a tenth of a second, back off it a little, and down on it again
+        if (this.smash) {
+          const t = this.smash.t;
+          const k = t < 0.11 ? smooth(t / 0.11) : t < 0.42 ? 1 - 0.3 * Math.sin(((t - 0.11) / 0.31) * Math.PI) : Math.min(1, 0.94 + (t - 0.42) * 0.06);
+          if (!this.smash.hit && t >= 0.11) {
+            this.smash.hit = true;
+            this.ctx.audio.punchImpact(true);
+            this.hurt = 1;
+            this.shake = Math.max(this.shake, 1.4);
+          }
+          const off = StreetScene.tmpA.set(0, -0.2 * k, -0.33 * k).applyQuaternion(this.civicRig.group.quaternion);
+          cam.position.add(off);
+          this.lookAt.add(off);
+          this.lookAt.y -= 4.5 * k;
+        }
         // The landing's jolt through the seat: he goes down with the car and comes up with it, the view nodding with the nose
         if (this.susp.on) {
           // Where the bounce takes his eyes: the body's pitched and rolled about the axles and dropped,
@@ -3177,6 +3304,15 @@ export class StreetScene implements GameScene {
           this.lookAt.y += S.p * 7;
         }
         fov = 74 + 8 * k + (this.jump ? 12 : 0);
+        // On its roof and still: his eyes settle on the boss going away, the view closing in on him,
+        // his head lolled toward the window
+        if (this.wreck?.down) {
+          const settle = Math.min(1, this.wreck.stillT / 1.2 + 0.3);
+          fov = 74 - 20 * settle;
+          const off = StreetScene.tmpA.set(-0.12 * settle, 0, 0).applyQuaternion(this.civicRig.group.quaternion);
+          cam.position.add(off);
+          this.lookAt.add(off);
+        }
         break;
       }
       case 'roadside': {

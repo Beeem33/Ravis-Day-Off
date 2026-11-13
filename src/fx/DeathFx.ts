@@ -47,8 +47,11 @@ export class DeathFx {
     return this.on;
   }
 
-  /** He's dead. `prompt`: the level's restart prompt, kept (and faded in later) when the rest of the UI goes. */
-  start(prompt: HTMLElement | null): void {
+  /**
+   * He's dead. `prompt`: the level's restart prompt, kept (and faded in later) when the rest of the UI goes.
+   * `slow`/`slowFor`: how slow the world goes and for how long (real seconds), if not the usual.
+   */
+  start(prompt: HTMLElement | null, o: { slow?: number; slowFor?: number } = {}): void {
     if (this.on) return;
     this.on = true;
     this.at = performance.now();
@@ -71,13 +74,15 @@ export class DeathFx {
     this.audio.hushSfx(true, 0.5);
     this.audio.startTrackMusic(DEATH_SONG, 0, 0, 1, 0.8);
     // Slow, then back up to speed
-    this.engine.timeScale = SLOW;
+    const slow = o.slow ?? SLOW;
+    const slowFor = o.slowFor ?? SLOW_FOR;
+    this.engine.timeScale = slow;
     const t0 = performance.now();
     this.slowTimer = window.setInterval(() => {
       const t = (performance.now() - t0) / 1000;
-      if (t < SLOW_FOR) return;
-      const k = Math.min(1, (t - SLOW_FOR) / SLOW_EASE);
-      this.engine.timeScale = SLOW + (1 - SLOW) * k * k * (3 - 2 * k);
+      if (t < slowFor) return;
+      const k = Math.min(1, (t - slowFor) / SLOW_EASE);
+      this.engine.timeScale = slow + (1 - slow) * k * k * (3 - 2 * k);
       if (k >= 1 && this.slowTimer !== null) {
         clearInterval(this.slowTimer);
         this.slowTimer = null;

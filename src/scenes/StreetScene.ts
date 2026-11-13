@@ -88,8 +88,15 @@ const GUN_OUT = 0.46;
 const SIGHT_H = 0.133;
 /** A helicopter shot in the tail: how long it spins before it hits the road. */
 const SPIN_T = 4.2;
-/** The boss's man giving Ravi the finger: window down, out, both hands up (4 s), back in, window up (seconds). */
-const MAN_FLIP = { down: 0.8, out: 1.2, up: 5.2, in: 5.6, end: 6.4 };
+/**
+ * The boss's man giving Ravi the finger (seconds in): his window comes down
+ * (0–0.9); he leans out to look back at Ravi (0.5–1.6); his arms come up
+ * (1.3–1.75) and he gives him both for four seconds; arms down (5.75–6.15),
+ * back in (6.0–7.0), window up (6.9 on). He does it every so often — far
+ * more often with Ravi right on his bumper (MAN_FLIP_CLOSE).
+ */
+const MAN_FLIP = { down: 0.9, outA: 0.5, outB: 1.6, armsA: 1.3, armsB: 1.75, hold: 5.75, armsDown: 6.15, inA: 6.0, inB: 7.0, winUp: 6.9, end: 7.8 };
+const MAN_FLIP_CLOSE = 35;
 /** Half a hole's length along the road (HighwayCollapse's HALF). */
 const HOLE_HALF = 18;
 /** Round the rim (WheelGrip's grip), the finger, and a pistol's grip: what his hands go between. */
@@ -237,8 +244,9 @@ export class StreetScene implements GameScene {
   /** The finger: seconds into it (−1, not doing it), and seconds till he next thinks of it. */
   private manFlipT = -1;
   private manFlipCd = 12;
-  /** How far out of the window he is for the finger (or hanging dead out of it). */
+  /** How far out of the window he is for the finger (or hanging dead out of it), and how far up his arms are. */
   private manLean = 0;
+  private manArms = 0;
   private manDead = false;
   /** The passenger window's glass: its top corners, where they were, and the sill they roll down to. */
   private bossWindow: { attr: THREE.BufferAttribute; tops: { i: number; x: number; y: number }[]; sillX: number; sillY: number } | null = null;
@@ -1208,9 +1216,18 @@ export class StreetScene implements GameScene {
   private onPlayerImpact(speed: number, point: THREE.Vector3, other: 'wall' | 'traffic' | 'boss' | 'cop' | 'player'): void {
     const { audio } = this.ctx;
     if (this.phase === 'done') return;
-    // Another car, at any speed worth the name: that's it. The boss's own
-    // bumper only kills at a proper ram — a nudge on it is just a nudge
-    const lethal = other === 'traffic' ? speed > 2 : other === 'boss' && speed > 8;
+    // Another car, at any speed worth the name: that's it. The boss's car
+    // isn't: ram it all he likes (it costs the Civic, not his life, for now)
+    const lethal = other === 'traffic' && speed > 2;
+    if (other === 'boss' && speed > 5 && this.phase === 'drive' && this.crashCd <= 0) {
+      // A proper shunt: his tail lights in pieces, sparks off both bumpers, the saloon twitched off line
+      this.particles.glassShards(point, StreetScene.tmpA.set(0, 0.6, 0), point.y - 1);
+      this.particles.sparks(point, StreetScene.tmpA.set(0, 0.9, 0), Math.min(40, speed * 2.4));
+      this.particles.dust(point, 1.2, 0.8);
+      this.boss.car.yawRate += (Math.random() < 0.5 ? -1 : 1) * Math.min(1.1, speed * 0.06);
+      audio.glassShatter(2);
+      this.hitMark = 0.6;
+    }
     if (this.phase === 'drive' && this.phaseT > 1.2 && lethal) {
       this.particles.sparks(point, StreetScene.tmpA.set(0, 0.8, 0), 30);
       this.blowUp('YOU CRASHED');
@@ -1228,7 +1245,7 @@ export class StreetScene implements GameScene {
       }
       this.particles.sparks(point, StreetScene.tmpA.set(0, 0.6, 0), Math.min(26, 6 + speed * 1.2));
     } else {
-      dmg = Math.max(0, speed - 3) * (other === 'traffic' ? 1.7 : 1.2);
+      dmg = Math.max(0, speed - 3) * (other === 'traffic' ? 1.7 : other === 'boss' ? 0.75 : 1.2);
       if (this.crashCd <= 0) {
         this.crashCd = 0.2;
         audio.carCrash(0, speed > 10);
@@ -1238,7 +1255,7 @@ export class StreetScene implements GameScene {
     // Cutscenes are on autopilot: no damage while Ravi isn't driving
     if (this.phase !== 'drive') dmg = 0;
     this.damage = Math.min(100, this.damage + Math.min(35, dmg));
-    this.shake = Math.min(1.2, this.shake + speed * 0.045);
+    this.shake = Math.min(1.2, this.shake + speed * (other === 'boss' ? 0.07 : 0.045));
   }
 
   /**
@@ -1980,11 +1997,13 @@ export class StreetScene implements GameScene {
   private updateBossMan(dt: number, gap: number, missileSoon: boolean): void {
     if (!this.manDead) {
       if (this.manFlipT < 0) {
-        this.manFlipCd -= dt;
-        const quiet = this.phase === 'drive' && !this.heliUp && this.volleyLeft === 0 && this.lean < 0.05 && this.volleyCd > 3 && gap > 15 && gap < 140;
+        // Ravi right on his bumper winds him up a lot faster
+        const close = gap > 6 && gap < MAN_FLIP_CLOSE;
+        this.manFlipCd -= dt * (close ? 4 : 1);
+        const quiet = this.phase === 'drive' && !this.heliUp && this.volleyLeft === 0 && this.lean < 0.05 && this.volleyCd > 3 && gap > 6 && gap < 140;
         if (this.manFlipCd <= 0 && quiet) {
           this.manFlipT = 0;
-          this.manFlipCd = 16 + Math.random() * 18;
+          this.manFlipCd = 12 + Math.random() * 10;
           this.volleyCd = Math.max(this.volleyCd, MAN_FLIP.end + 2);
         }
       } else {
@@ -1993,13 +2012,31 @@ export class StreetScene implements GameScene {
       }
     }
     const f = this.manFlipT;
-    const flipping = f >= 0 && f < MAN_FLIP.in;
-    const winWant = this.manDead || this.lean > 0.02 || missileSoon || flipping ? 1 : 0;
+    const winWant = this.manDead || this.lean > 0.02 || missileSoon || (f >= 0 && f < MAN_FLIP.winUp) ? 1 : 0;
     this.winK = THREE.MathUtils.clamp(this.winK + (winWant ? 1 : -1) * (dt / MAN_FLIP.down), 0, 1);
     this.setBossWindow(smooth(this.winK));
-    // How far out of it he is for the finger
-    const out = f < MAN_FLIP.down ? 0 : f < MAN_FLIP.out ? (f - MAN_FLIP.down) / (MAN_FLIP.out - MAN_FLIP.down) : f < MAN_FLIP.up ? 1 : f < MAN_FLIP.in ? 1 - (f - MAN_FLIP.up) / (MAN_FLIP.in - MAN_FLIP.up) : 0;
-    this.manLean = this.manDead ? 0.5 : f >= 0 ? 0.42 * smooth(out) : 0;
+    if (this.manDead) {
+      this.manLean = 0.5;
+      this.manArms = 0;
+      return;
+    }
+    if (f < 0) {
+      this.manLean = 0;
+      this.manArms = 0;
+      return;
+    }
+    const c01 = (x: number): number => Math.min(1, Math.max(0, x));
+    // Out with a little overshoot, as if he's pulled himself up on the sill to get a good look; back in easy
+    const backOut = (x: number): number => {
+      const c = 1.5;
+      return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2);
+    };
+    const outU = c01((f - MAN_FLIP.outA) / (MAN_FLIP.outB - MAN_FLIP.outA));
+    const inU = c01((f - MAN_FLIP.inA) / (MAN_FLIP.inB - MAN_FLIP.inA));
+    this.manLean = 0.42 * (f < MAN_FLIP.inA ? backOut(outU) : 1 - smooth(inU));
+    const upU = c01((f - MAN_FLIP.armsA) / (MAN_FLIP.armsB - MAN_FLIP.armsA));
+    const downU = c01((f - MAN_FLIP.hold) / (MAN_FLIP.armsDown - MAN_FLIP.hold));
+    this.manArms = smooth(upU) * (1 - smooth(downU));
   }
 
   /** Ravi's round finds the boss's man at his open window: dead, the boss thrown off line and then across in front of Ravi. */
@@ -2025,22 +2062,29 @@ export class StreetScene implements GameScene {
   private placePassenger(dt: number): void {
     const e = this.passenger;
     const f = this.manFlipT;
-    const fingering = !this.manDead && f >= MAN_FLIP.down && f < MAN_FLIP.in;
+    const flipping = !this.manDead && f >= 0;
     // The launcher's pose, the finger, or dead: hands where they go, the tube with him or not
-    if (this.launcherPose === null && e.pose && !this.manDead && !fingering) this.launcherPose = e.pose;
+    if (this.launcherPose === null && e.pose && !this.manDead && !flipping) this.launcherPose = e.pose;
     if (this.manDead) e.pose = this.deadPose;
-    else if (fingering) {
-      // Both hands up, pumping
-      const pump = Math.sin(f * 10) * 0.045;
-      this.flipPose.handL.y = 1.3 + pump;
-      this.flipPose.handR.y = 1.3 - pump;
-      e.pose = this.flipPose;
+    else if (flipping) {
+      // His hands come up off his knees to either side of his head and give it him, pumping,
+      // his shoulders rocking with it
+      const a = this.manArms;
+      const pump = Math.sin(f * 10) * 0.045 * a;
+      const P = this.flipPose;
+      P.handL.set(-0.16, 0.72, -0.2).lerp(StreetScene.tmpA.set(-0.22, 1.3 + pump, -0.3), a);
+      P.handR.set(0.16, 0.72, -0.2).lerp(StreetScene.tmpA.set(0.22, 1.3 - pump, -0.3), a);
+      P.lean = -0.05 + 0.05 * Math.sin(f * 5) * a;
+      e.pose = P;
     } else if (this.launcherPose) e.pose = this.launcherPose;
-    const up = fingering && f > MAN_FLIP.out - 0.15 && f < MAN_FLIP.up + 0.1;
+    const up = flipping && this.manArms > 0.6;
     e.setMiddleFingers(up, up);
-    this.launcher.visible = !this.manDead && !fingering;
+    // Looking back at Ravi the whole time he's out
+    e.setHeadLook(flipping && this.manLean > 0.05 ? this.camera.position : null);
+    this.launcher.visible = !this.manDead && !flipping;
     const k = Math.max(this.lean, this.manLean);
-    e.root.visible = k > 0.03;
+    // In his seat, he's there to be seen whenever his window's open: he doesn't appear out of nowhere
+    e.root.visible = k > 0.03 || this.winK > 0.04;
     if (!e.root.visible) return;
     // Knees on the passenger seat, facing back down the road at Ravi; he
     // gets up on them and leans out from there, hips in the window, until

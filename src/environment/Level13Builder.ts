@@ -2803,6 +2803,30 @@ export class Level13Builder {
     this.group.add(q.group);
     // A strip of light inside the lid
     this.add(M.lamp, box(0.9, 0.02, 0.03, x, y + 0.98, z + 0.5));
+    // A caged wall lamp on the hall's wall above the recess, tipped down at the crate, so the
+    // gun in it shows from across the platform (in the dark it was hard to make out)
+    const wx = HALL.x0 + 0.06;
+    const wy = y + 4.6;
+    this.add(M.darkSteel, box(0.08, 0.36, 0.36, wx + 0.04, wy, z));
+    this.add(M.darkSteel, box(0.34, 0.06, 0.06, wx + 0.2, wy - 0.12, z));
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.26, 12), M.darkSteel);
+    head.position.set(wx + 0.38, wy - 0.18, z);
+    head.rotation.z = 0.7;
+    this.group.add(head);
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.15, 16), M.lamp);
+    lens.position.set(wx + 0.47, wy - 0.28, z);
+    lens.rotation.set(0, Math.PI / 2, 0);
+    lens.rotateX(0.85);
+    this.group.add(lens);
+    for (const a of [-0.08, 0, 0.08]) this.add(M.darkSteel, box(0.02, 0.02, 0.32, wx + 0.5 + a * 0.5, wy - 0.32 + a, z));
+    const spot = new THREE.SpotLight(0xfff0d6, 60, 10, 0.2, 0.45, 1.4);
+    spot.position.set(wx + 0.45, wy - 0.28, z);
+    spot.target.position.set(x, y + 0.62, z);
+    this.group.add(spot, spot.target);
+    // And a little warm fill right on it
+    const fill = new THREE.PointLight(0xffd9a0, 7, 2.2, 1.6);
+    fill.position.set(x, y + 1.05, z - 0.2);
+    this.group.add(fill);
     return { gun: q.group, pump: q.pump, setPressure: q.setPressure, stand: V(x, y, z - 0.8), yaw: Math.PI };
   }
 

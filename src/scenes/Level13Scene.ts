@@ -5,7 +5,7 @@ import { Events } from '../core/EventBus';
 import { Level13Builder, type Level13Data, type Ladder, type TurretSite, CH_Y, SEW_Y, SLUDGE_Y, H1, H2, H3, H4, Y6, OFFICE_Y, FALL_Y, HALL, GRIND, VAT_Y } from '../environment/Level13Builder';
 import type { Collider as Col } from '../environment/OfficeLevelBuilder';
 import { FirstPersonArms, mixGrip } from '../entities/RaviVisual';
-import { GRENADE_HOLD, GRENADE_OPEN, GRENADE_PIN } from '../entities/Grenades';
+import { GRENADE_HOLD, GRENADE_OPEN, GRENADE_PIN, GrenadeThrow, Grenades } from '../entities/Grenades';
 import { grenade as grenadeModel } from '../environment/VanProps';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -317,6 +317,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private arsenal!: Arsenal;
   private knife!: KnifeTwirlViewmodel;
   private drink!: DrinkViewmodel;
+  /** T: a grenade thrown, the way it is in the lot; and the ones in the air. The door's charge is its own. */
+  private nadeVm!: GrenadeThrow;
+  private grenades!: Grenades;
   /** The quad-barrel out of its crate: kept across restarts of the level, lost by starting it again from the top. */
   private static quadTaken = false;
   private pickArms!: FirstPersonArms;
@@ -443,6 +446,17 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.knife.onSlash = () => this.knifeSlash();
     this.knife.onCatch = () => audio.pocket();
     this.drink = new DrinkViewmodel(this.player.camera);
+    this.nadeVm = new GrenadeThrow(this.player.camera);
+    this.nadeVm.onPin = () => this.ctx.audio.grenadePin();
+    this.nadeVm.onRelease = (from) => {
+      const v = this.player.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(15.5).add(new THREE.Vector3(0, 3.8, 0)).add(this.player.velocity);
+      this.grenades.throw(from, v);
+      this.ctx.audio.punchSwish();
+    };
+    this.grenades = new Grenades(this.scene, () => this.level.colliders);
+    this.grenades.onExplode = (at) => this.nadeBlast(at);
+    this.grenades.onBounce = (at) => this.ctx.audio.grenadeBounce(at.distanceTo(this.player.position));
+    this.grenades.warm().forEach((o) => this.scene.add(o));
     this.drink.onEvent = (e, i) => {
       if (e === 'crack') audio.canCrack();
       else if (e === 'gulp') audio.gulp(i);
@@ -518,8 +532,9 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
     this.hud.setCounter(null);
-    this.hud.setGrenades(1);
-    this.arsenal.grenades = 1;
+    // Three to throw (T); the charge for the door at the end is separate, so none of them is wasted on it
+    this.arsenal.grenades = 3;
+    this.hud.setGrenades(3);
     this.buildUI();
 
     this.unsubs.push(
@@ -705,7 +720,14 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const free = this.playable && input.pointerLocked && !this.climbing;
     if (input.wasPressed('KeyG') && free && !this.arsenal.reloading && !this.knife.busy) this.drink.start();
     if (!p.alive || this.falling) this.drink.abort();
-    const busy = !!this.climbing || this.phase !== 'play' || this.drink.engaged;
+    // T: a grenade, if he's got one left
+    if (input.wasPressed('KeyT') && free && this.phase === 'play' && !this.arsenal.reloading && !this.drink.engaged && !this.knife.busy && !this.nadeVm.busy) {
+      if (this.arsenal.takeGrenade()) {
+        this.nadeVm.start();
+        this.hud.setGrenades(this.arsenal.grenades);
+      } else this.ctx.audio.dryFire();
+    }
+    const busy = !!this.climbing || this.phase !== 'play' || this.drink.engaged || this.nadeVm.busy;
     this.arsenal.preUpdate(dt, input, { canSwitch: free && !this.knife.busy, busy, hold: this.phase === 'pickup' });
     const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !this.arsenal.reloading && !this.arsenal.switching && !this.arsenal.pressureArmed;
     p.aiming = aiming;
@@ -726,6 +748,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.knife.update(dt, p);
     a.updateViewmodels(dt, aiming);
     a.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
+    this.nadeVm.update(dt);
+    this.grenades.update(dt);
     this.hud.setAmmoShown(!a.knifeActive && !a.knifeWanted);
     this.hud.setPressure(a.pressureArmed ? a.pressure : null);
     this.drink.update(dt, p);
@@ -1546,7 +1570,6 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.player.cinematic = true;
     this.player.aiming = false;
     this.hud.setPrompt(null);
-    this.hud.setGrenades(0);
     this.cinema(true);
     this.setObjective('');
     this.ctx.audio.grenadePin();
@@ -2189,6 +2212,21 @@ export class Level13Scene extends CombatScene<Level13Data> {
   // ------------------------------------------------------------ CombatScene
 
   /** Nobody to kill in here. */
+  /** A thrown grenade going off: the bang, the shake, and Ravi hurt if he's stood too close to it. */
+  private nadeBlast(at: THREE.Vector3): void {
+    const d = at.distanceTo(this.player.position);
+    this.particles.explosion(at, 4);
+    this.particles.fire(at, 1.2, 1);
+    this.ctx.audio.explosion(d);
+    this.shake = Math.max(this.shake, Math.max(0.15, 1.3 - d / 14));
+    if (d < 4.6 && this.player.alive) {
+      const per = this.player.damagePerHit;
+      this.player.damagePerHit = d < 2.5 ? 3 : 1;
+      this.player.hit('YOUR OWN GRENADE');
+      this.player.damagePerHit = per;
+    }
+  }
+
   protected killEnemy(_enemy: Enemy, _point: THREE.Vector3, _dir: THREE.Vector3, _byPlayer: boolean, _headshot: boolean): void {}
 
   // ------------------------------------------------------------ input

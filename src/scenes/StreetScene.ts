@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -9,7 +10,7 @@ import { civic, bossCar, WHEEL_RIM } from '../environment/VehicleProps';
 import { policeCruiser, copRig, privateJet } from '../environment/StreetProps';
 import { dataDrive } from '../environment/OfficeProps';
 import { RoadNet } from '../entities/RoadNet';
-import { DriveCar, CIVIC_TUNE, resolveCollisions } from '../entities/DriveCar';
+import { DriveCar, CIVIC_TUNE, COP_TUNE, resolveCollisions } from '../entities/DriveCar';
 import { Traffic } from '../entities/Traffic';
 import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
@@ -258,6 +259,13 @@ export class StreetScene implements GameScene {
   /** How far out of the window he is for the finger (or hanging dead out of it), and how far up his arms are. */
   private manLean = 0;
   private manArms = 0;
+  /** Shot dead at his window: thrown out of it and down the road, a ragdoll in a little world of its own (the road as a floor). */
+  private manRag: { world: CANNON.World; t: number } | null = null;
+  // ---- The cop's chase: mostly on Ravi's tail, now and then up alongside
+  private copSurgeT = 18;
+  private copSurging = 0;
+  /** The speed Ravi's held at while the cop's cutscene has the wheel. */
+  private copRaviSpeed = COP_RAVI_SPEED;
   private manDead = false;
   /** The passenger window's glass: its top corners, where they were, and the sill they roll down to. */
   private bossWindow: { attr: THREE.BufferAttribute; tops: { i: number; x: number; y: number }[]; sillX: number; sillY: number } | null = null;
@@ -1072,7 +1080,7 @@ export class StreetScene implements GameScene {
         input = this.readInput();
         break;
       case 'cop':
-        input = this.autopilot(COP_RAVI_SPEED);
+        input = this.autopilot(this.copRaviSpeed);
         break;
       case 'failed':
         input = { throttle: this.failWhy === 'BUSTED' || this.damage >= 100 || this.burning ? -1 : 0, steer: 0, handbrake: false };
@@ -1239,10 +1247,38 @@ export class StreetScene implements GameScene {
     const p = this.player;
     const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
 
-    // ---- The cop, as they come up on him
-    if (!this.copDone && this.boss.car.at.road === 'highway' && this.boss.car.at.s > L.cop.s - COP_LEAD) {
-      this.startCop();
-      return;
+    // ---- The cop, sat on the shoulder with his feet up and a doughnut: the boss goes by
+    // (his radar goes off), and once Ravi's gone by too, he's after them
+    if (!this.copDone) {
+      this.copMan.pose('bite', Math.max(0, Math.sin(this.lightT * 0.8)) ** 2);
+      if (!this.radarBossShown && this.boss.car.at.road === 'highway' && this.boss.car.at.s > L.cop.s - 12) {
+        this.radarBossShown = true;
+        this.police.radar.show(Math.round(this.boss.car.speed * MPH), true);
+        this.ctx.audio.radarBeep();
+      }
+      if (p.at.road === 'highway' && p.at.s > L.cop.s + 4) {
+        this.startCop();
+        return;
+      }
+    }
+    // ---- The cop in the chase: on Ravi's tail most of the time, and every so often up alongside him for a few seconds
+    // He's got the legs to keep up: well behind (off the shoulder from a standstill, or held back by
+    // traffic) he's flat out and then some, until he's back on Ravi's tail
+    if (this.copChasing) {
+      const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
+      const t = this.cop.car.tune;
+      t.topSpeed = behind > 80 ? 72 : behind > 40 ? 64 : COP_TUNE.topSpeed + 4;
+      t.accel = behind > 80 ? 14 : behind > 40 ? 10 : COP_TUNE.accel + 1.5;
+    }
+    if (this.copChasing && !this.heliUp) {
+      this.copSurgeT -= dt;
+      if (this.copSurgeT <= 0) {
+        this.copSurging = 6;
+        this.copSurgeT = 15 + Math.random() * 10;
+      }
+      this.copSurging = Math.max(0, this.copSurging - dt);
+      this.cop.gapMin = this.copSurging > 0 ? -8 : 7;
+      this.cop.gapMax = this.copSurging > 0 ? 0 : 22;
     }
     // ---- The exit
     if (!this.exitTold && this.boss.car.at.road === 'highway' && this.boss.car.at.s > L.exitS - 260) {
@@ -1393,6 +1429,12 @@ export class StreetScene implements GameScene {
    * doughnut goes flying, and the cruiser comes off the shoulder after
    * them, lights and siren.
    */
+  /**
+   * Ravi's just gone by him: in the cruiser, the radar going off a second
+   * time, the doughnut in the air; then out on the road ahead of it as it
+   * comes off the shoulder after them, lights and siren. Ravi holds his
+   * speed through it.
+   */
   private startCop(): void {
     const L = this.level;
     this.phase = 'cop';
@@ -1400,20 +1442,13 @@ export class StreetScene implements GameScene {
     this.copDone = true;
     this.cinematic(true);
     this.hintEl.classList.remove('show');
-    // Lined up for the shot: the boss COP_LEAD short of the cop, Ravi on his tail (hidden by the cut)
-    const bossS = L.cop.s - COP_LEAD;
-    const lane = this.boss.car.at.d;
-    this.boss.place({ road: 'highway', s: bossS, d: lane }, COP_BOSS_SPEED);
-    this.boss.mode = 'hold';
-    const rLane = this.nearestLane('highway', this.player.at.road === 'highway' ? this.player.at.d : lane);
-    this.player.place({ road: 'highway', s: bossS - COP_RAVI_GAP, d: rLane }, COP_RAVI_SPEED);
-    this.player.tune.topSpeed = CIVIC_TUNE.topSpeed;
-    // Room to get by, and for him to pull out
-    this.traffic.clear('highway', bossS - COP_RAVI_GAP - 60, L.cop.s + 300);
-    this.copMan.pose('feetUp');
-    this.police.radar.show(null, false);
-    this.radarBossShown = false;
-    this.radarRaviShown = false;
+    this.copRaviSpeed = THREE.MathUtils.clamp(this.player.speed, 30, COP_RAVI_SPEED);
+    // Room for him to pull out
+    this.traffic.clear('highway', L.cop.s - 30, L.cop.s + 300);
+    this.police.radar.show(Math.round(this.player.speed * MPH), true);
+    this.radarRaviShown = true;
+    this.ctx.audio.radarBeep();
+    this.ctx.audio.carWhoosh(3);
     this.engine?.setGain(0.3);
   }
 
@@ -1435,32 +1470,15 @@ export class StreetScene implements GameScene {
     const t = this.phaseT;
     const { audio } = this.ctx;
     const L = this.level;
-    const bossPast = this.boss.car.at.s - L.cop.s;
-    const raviPast = this.player.at.s - L.cop.s;
-    // Shots: in the cruiser with him; the radar as the boss goes by; behind the cruiser as Ravi does; the doughnut; the launch
-    if (t < 2.9) this.shot = 'cabin';
-    else if (t < 3.95) this.shot = 'radar';
-    else if (t < 5.05) this.shot = 'behindCop';
-    else if (t < 6.2) this.shot = 'cabin';
+    void L;
+    // Shots: the radar with Ravi's speed on it; in the cruiser with him as he jumps; out front as it comes off the shoulder
+    if (t < 0.7) this.shot = 'radar';
+    else if (t < 1.45) this.shot = 'cabin';
     else this.shot = 'launch';
-
-    // He eats
-    if (t < 5.05) this.copMan.pose('bite', track([[0.5, 0], [1.1, 1], [1.9, 1], [2.4, 0]], t));
-    // The radar locks on
-    if (!this.radarBossShown && bossPast > -12) {
-      this.radarBossShown = true;
-      this.police.radar.show(Math.round(this.boss.car.speed * MPH), true);
-      audio.radarBeep();
-      audio.carWhoosh(4);
-    }
-    if (!this.radarRaviShown && raviPast > -10) {
-      this.radarRaviShown = true;
-      this.police.radar.show(Math.round(this.player.speed * MPH), true);
-      audio.radarBeep();
-      audio.carWhoosh(3);
-    }
+    const SEES = 0.75;
+    const GOES = 1.4;
     // He sees it
-    if (t >= 5.05 && !this.doughnutFlying && t < 5.2) {
+    if (t >= SEES && !this.doughnutFlying && t < SEES + 0.15) {
       this.copMan.pose('startled');
       const d = this.copMan.doughnut;
       this.scene.attach(d);
@@ -1475,13 +1493,13 @@ export class StreetScene implements GameScene {
       d.position.addScaledVector(this.doughnutVel, dt);
       d.rotation.x += dt * 9;
       d.rotation.z += dt * 5;
-      if (t > 7) {
+      if (t > SEES + 1.9) {
         d.visible = false;
         this.doughnutFlying = false;
       }
     }
     // After them
-    if (t >= 6.2 && this.cop.mode === 'parked') {
+    if (t >= GOES && this.cop.mode === 'parked') {
       this.copMan.pose('driving');
       this.cop.mode = 'launch';
       this.copChasing = true;
@@ -1489,8 +1507,7 @@ export class StreetScene implements GameScene {
       audio.tyreSqueal(1.6, 8);
       this.police.radar.show(null, false);
     }
-    if (t > 8.4) {
-      this.boss.mode = 'drive';
+    if (t > GOES + 2.3) {
       this.phase = 'drive';
       this.phaseT = 0;
       this.shot = 'chase';
@@ -2148,9 +2165,25 @@ export class StreetScene implements GameScene {
     this.volleyLeft = 0;
     this.volleyCd = Infinity;
     this.particles.bloodSpray(at, dir, true, at.y - 1.5);
-    man.flinch(1);
     man.setMiddleFingers(false, false);
     this.launcher.visible = false;
+    // Out of the window with the round, limp, and down the road behind the car at its speed
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -14, 0) });
+    world.allowSleep = true;
+    world.defaultContactMaterial.friction = 0.55;
+    world.defaultContactMaterial.restitution = 0.1;
+    const road = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+    road.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    road.position.set(0, this.boss.car.position.y, 0);
+    world.addBody(road);
+    man.pose = null;
+    this.scene.attach(man.root);
+    man.root.visible = true;
+    man.die(at, dir, world, 'torso', 1.3);
+    const bv = this.boss.car.velocity;
+    const outward = StreetScene.tmpB.set(Math.cos(this.boss.car.yaw), 0, -Math.sin(this.boss.car.yaw));
+    man.launch(StreetScene.tmpC.set(bv.x * 0.85, 2.2, bv.z * 0.85).addScaledVector(outward, 3.5));
+    this.manRag = { world, t: 0 };
     this.hitMark = 1;
     audio.killConfirm();
     audio.tyreSqueal(1.1, this.camera.position.distanceTo(this.boss.car.position));
@@ -2161,6 +2194,19 @@ export class StreetScene implements GameScene {
   /** Where the passenger leans out of the window: in (0) or right out (1), placed on the car. */
   private placePassenger(dt: number): void {
     const e = this.passenger;
+    // Thrown out dead: his little world stepped, him going down the road in it, gone once he's well behind
+    if (this.manRag) {
+      const R = this.manRag;
+      R.t += dt;
+      if (R.t < 12) {
+        R.world.step(1 / 60, dt, 4);
+        e.update(dt);
+      } else if (e.root.visible) {
+        e.removeCorpse();
+        e.root.visible = false;
+      }
+      return;
+    }
     const f = this.manFlipT;
     const flipping = !this.manDead && f >= 0;
     // The launcher's pose, the finger, or dead: hands where they go, the tube with him or not
@@ -2473,8 +2519,9 @@ export class StreetScene implements GameScene {
     this.setObjective('HELICOPTER — LEAN OUT AND SHOOT IT DOWN');
     this.combatHint.classList.add('show');
     this.heliBar.classList.add('on');
-    this.cop.gapMin = 55;
-    this.cop.gapMax = 90;
+    // (back a little while the helicopter's up, out of its line of fire)
+    this.cop.gapMin = 30;
+    this.cop.gapMax = 55;
   }
 
   /**
@@ -3171,8 +3218,7 @@ export class StreetScene implements GameScene {
       }, 7000);
     } else this.setObjective('HELICOPTER DOWN — STAY ON THE BOSS');
     this.heliBar.classList.remove('on');
-    this.cop.gapMin = 25;
-    this.cop.gapMax = 60;
+    // (back on Ravi's tail: updateDrive keeps his gap from here)
     this.ctx.audio.killConfirm();
   }
 

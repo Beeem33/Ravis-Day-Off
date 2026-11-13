@@ -654,8 +654,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     } else {
       const mid = (this.gapMin + this.gapMax) / 2;
       if (behind > 90) v = top;
-      else if (behind < 0) {
-        // Somehow ahead of him: ease off and out of his line, let him by
+      else if (behind < -6) {
+        // Well ahead of him (alongside is allowed: the scene has him up there now and then): ease off and out of his line, let him by
         v = Math.max(5, rv * 0.75);
         const n = this.candidates(this.cands2);
         let far = this.wantD;

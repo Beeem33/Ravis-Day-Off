@@ -475,6 +475,16 @@ export class BossDriver extends RouteDriver implements IBossDriver {
   private holdSpeed = -1;
   /** The speed he's aiming for this frame (debug/HUD). */
   vWant = 0;
+  /** A swerve (his man shot dead beside him): seconds left of it, and which way it threw him. */
+  private swerveT = 0;
+  private swerveSide = 0;
+  static readonly SWERVE_T = 5;
+
+  /** Thrown off line to `side` (+1 his right), then he cuts across in front of Ravi and sits there a while, close. */
+  swerve(side: number): void {
+    this.swerveT = BossDriver.SWERVE_T;
+    this.swerveSide = side;
+  }
 
   constructor(net: RoadNet, tune: CarTune = BOSS_TUNE) {
     super(net, tune, 'boss', BOSS_STYLE);
@@ -500,23 +510,40 @@ export class BossDriver extends RouteDriver implements IBossDriver {
 
     const road = me.at.road;
     const gap = this.routeGap(me, ravi);
+    // Swerving: in close in front of Ravi for the length of it, not out at his usual distance
+    this.swerveT = Math.max(0, this.swerveT - dt);
+    const cutting = this.swerveT > 0;
+    if (cutting) {
+      this.gapMin = 16;
+      this.gapMax = 28;
+    } else if (this.gapMin === 16) {
+      this.gapMin = 55;
+      this.gapMax = 105;
+    }
     const rv = Math.max(0, ravi.speed);
     const top = me.tune.topSpeed;
     const mid = (this.gapMin + this.gapMax) / 2;
     let v: number;
-    // Ravi on his tail (or, somehow, past him): flat out, always
-    if (gap < 35) v = top;
+    // Ravi on his tail (or, somehow, past him): flat out, always — unless he's cutting in
+    // front of him on purpose, his man dead beside him, and means to sit there
+    if (gap < 35 && !cutting) v = top;
     // Well ahead: he lets up — and right out ahead (Ravi's crashed), he all but waits
     else if (gap > 210) v = BOSS_FLOOR[road] * 0.65;
     else if (gap > 150) v = Math.max(BOSS_FLOOR[road], Math.min(BOSS_CRUISE[road], rv * 0.95));
     else {
       v = rv + (mid - gap) * 0.32;
-      v = clamp(v, BOSS_FLOOR[road], top);
+      v = clamp(v, cutting ? BOSS_FLOOR[road] * 0.7 : BOSS_FLOOR[road], top);
     }
     v = Math.min(v, this.cornerLimit());
     // His lane choice is judged against the speed he wants, then he follows whatever's still in his way
     this.vRef = v;
     this.pickLine(dt, this.exitPull());
+    if (cutting) {
+      // First the jerk off line, then across into Ravi's lane, right in front of him
+      const t = BossDriver.SWERVE_T - this.swerveT;
+      if (t < 0.7) this.wantD = me.at.d + this.swerveSide * 3.5;
+      else if (ravi.at.road === road) this.wantD = ravi.at.d;
+    }
     // Ravi alongside or ahead: he stops waiting for anyone and goes through what's in his way
     v = gap < 6 ? Math.max(this.followOrShove(dt, v), Math.min(v, rv + 6)) : this.followOrShove(dt, v);
     // The end of the line: pull up before the airport road runs out

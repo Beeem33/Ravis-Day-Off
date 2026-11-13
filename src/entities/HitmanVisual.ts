@@ -3624,11 +3624,27 @@ export class HitmanVisual {
 
   private curl(left: boolean, c: number): void {
     const k = THREE.MathUtils.clamp(c, 0, 1);
-    if (Math.abs(k - (left ? this.curlL : this.curlR)) < 0.004) return;
-    if (left) this.curlL = k;
-    else this.curlR = k;
-    for (const f of this.fingers) if (f.left === left) f.bone.quaternion.slerpQuaternions(f.relax, f.grip, k);
+    const up = left ? this.middleUp.L : this.middleUp.R;
+    if (Math.abs(k - (left ? this.curlL : this.curlR)) < 0.004 && up === (left ? this.middleWasL : this.middleWasR)) return;
+    if (left) {
+      this.curlL = k;
+      this.middleWasL = up;
+    } else {
+      this.curlR = k;
+      this.middleWasR = up;
+    }
+    for (const f of this.fingers) {
+      if (f.left !== left) continue;
+      // The finger: the middle one left out straight of the fist
+      if (up && f.bone.name.startsWith('Middle')) f.bone.quaternion.copy(f.relax);
+      else f.bone.quaternion.slerpQuaternions(f.relax, f.grip, k);
+    }
   }
+
+  /** Each hand's middle finger out straight from whatever the rest of the hand is doing (the finger). */
+  readonly middleUp = { L: false, R: false };
+  private middleWasL = false;
+  private middleWasR = false;
 
   // --------------------------------------------------------------- reach
 

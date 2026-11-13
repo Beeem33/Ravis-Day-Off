@@ -124,8 +124,13 @@ export class Helicopter {
   readonly group: THREE.Group;
   readonly gunner: Enemy;
   hp = HELI_HP;
-  /** 'in': coming in to station; 'fight'; 'down': falling whole; 'gone' (hidden, or blown apart). */
-  state: 'in' | 'fight' | 'down' | 'gone' = 'in';
+  /** 'in': coming in to station; 'fight'; 'down': falling whole; 'spin': shot in the tail and spinning down onto the road; 'gone' (hidden, or blown apart). */
+  state: 'in' | 'fight' | 'down' | 'spin' | 'gone' = 'in';
+  /** The spin down: where from, where it comes down, how long it takes; and whether it's got there. */
+  private readonly spinFrom = new THREE.Vector3();
+  private readonly crashAt = new THREE.Vector3();
+  private spinTau = 4;
+  spinDone = false;
   /** Where the scene wants it this frame (world), and where it flies from. */
   readonly want = new THREE.Vector3();
   readonly velocity = new THREE.Vector3();
@@ -193,9 +198,32 @@ export class Helicopter {
     this.t += dt;
     const g = this.group;
     this.rotor.rotation.y += dt * 32;
-    this.tailRotor.rotation.x += dt * 60;
+    // (shot out, the tail rotor's only windmilling)
+    this.tailRotor.rotation.x += dt * (this.state === 'spin' ? 6 : 60);
     this.beacon.emissiveIntensity = this.t % 1 < 0.12 ? 4 : 0.3;
     if (this.state === 'gone') return;
+    if (this.state === 'spin') {
+      // Round and round with nothing at the tail to stop it, faster and faster — the pilot
+      // clawing some of it back now and then — sagging down onto the road where it'll hit
+      this.downT += dt;
+      const u = Math.min(1, this.downT / this.spinTau);
+      const fight = 0.6 + 0.4 * Math.abs(Math.sin(this.downT * 1.7 + 0.4));
+      this.spin = Math.min(7.5, this.spin + dt * 2.4);
+      this.yaw += this.spin * fight * dt;
+      const prev = this.tmp.copy(g.position);
+      g.position.x = THREE.MathUtils.lerp(this.spinFrom.x, this.crashAt.x, u);
+      g.position.z = THREE.MathUtils.lerp(this.spinFrom.z, this.crashAt.z, u);
+      // Height: held up for a moment as he fights it, then down hard; a lurch or two on the way
+      const drop = Math.pow(u, 1.8);
+      g.position.y = this.spinFrom.y + (this.crashAt.y - this.spinFrom.y) * drop + Math.sin(u * Math.PI) * 2.2 + Math.sin(this.downT * 3.1) * 0.5 * (1 - u);
+      if (dt > 0) this.velocity.subVectors(g.position, prev).divideScalar(dt);
+      this.bank = 0.38 * Math.sin(this.downT * 2.6) + 0.22 * u;
+      this.pitch = 0.16 * Math.sin(this.downT * 1.9 + 1) + 0.28 * u;
+      g.rotation.set(this.pitch, this.yaw, this.bank, 'YXZ');
+      if (u >= 1) this.spinDone = true;
+      this.gunner.update(dt);
+      return;
+    }
     if (this.state === 'down') {
       // Over, spinning, smoking, and down off the road
       this.downT += dt;
@@ -242,6 +270,24 @@ export class Helicopter {
     this.pitch += (THREE.MathUtils.clamp(-vFwd * 0.008, -0.25, 0.25) - this.pitch) * Math.min(1, dt * 2);
     g.rotation.set(this.pitch, this.yaw, this.bank, 'YXZ');
     this.gunner.update(dt);
+  }
+
+  /** Shot in the tail: it spins down out of control onto `at` (world, skids on the road) over `tau` seconds. */
+  spinOut(at: THREE.Vector3, tau: number): void {
+    if (this.state === 'spin' || this.state === 'gone') return;
+    this.state = 'spin';
+    this.spinFrom.copy(this.group.position);
+    this.crashAt.copy(at);
+    this.spinTau = tau;
+    this.downT = 0;
+    this.spin = 1.2;
+    this.spinDone = false;
+  }
+
+  /** The end of the tail boom, in the world: where the smoke pours out of it. */
+  tailPoint(out: THREE.Vector3): THREE.Vector3 {
+    this.group.updateMatrixWorld(true);
+    return out.set(0, 2.2, 6.2).applyMatrix4(this.group.matrixWorld);
   }
 
   /** Shot down: it goes over, drifting off the side it is on — still carried on up the road ahead of him. */
@@ -307,6 +353,7 @@ export class Helicopter {
     this.bank = 0;
     this.pitch = 0;
     this.downT = 0;
+    this.spinDone = false;
     this.t = 0;
     this.group.position.copy(at);
     this.group.visible = true;

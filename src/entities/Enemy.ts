@@ -2558,6 +2558,13 @@ export class Enemy {
   private flinchK = 0;
 
   /** Hit, but not hard enough to drop him: a pained face for a moment. */
+  /** Middle fingers up out of his fists (left, right): the finger, one hand or both. */
+  setMiddleFingers(left: boolean, right: boolean): void {
+    if (!this.hitman) return;
+    this.hitman.middleUp.L = left;
+    this.hitman.middleUp.R = right;
+  }
+
   flinch(strength = 1): void {
     this.flinchT = 0.4;
     this.flinchK = THREE.MathUtils.clamp(strength, 0, 1);

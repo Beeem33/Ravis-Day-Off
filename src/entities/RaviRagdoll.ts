@@ -580,6 +580,9 @@ export class RaviRagdoll implements DeathHandler {
     return true;
   }
 
+  /** Set by the scene for a slow drift of the death camera round him, once it has risen (radians a second). */
+  orbit = 0;
+
   update(dt: number): void {
     if (!this.active) return;
     this.time += dt;
@@ -813,6 +816,8 @@ export class RaviRagdoll implements DeathHandler {
   private updateCamera(dt: number): void {
     const cam = this.o.player.camera;
     const len = this.camLen();
+    // Once it's up, a slow drift round him (radians a second; 0, it holds still)
+    if (this.orbit && this.time > CAM_BLEND) this.camDir.applyAxisAngle(Y, this.orbit * dt);
     // Follow the body, smoothly: the chest jerks about as he lands
     const t = this.torso(RaviRagdoll._v);
     this.focus.lerp(t, 1 - Math.exp(-dt * 7));

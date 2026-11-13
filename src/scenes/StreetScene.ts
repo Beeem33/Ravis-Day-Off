@@ -28,6 +28,7 @@ import { rocketLauncher } from '../entities/General';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CarMirrors } from '../fx/CarMirrors';
 import { CivicInterior } from '../environment/CivicInterior';
+import { AimSway } from '../entities/AimSway';
 import { highwayRamp, type Ramp } from '../environment/HighwayRamp';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
@@ -199,6 +200,8 @@ export class StreetScene implements GameScene {
   private trafficHits = new Map<number, number>();
   private mirrors: CarMirrors | null = null;
   private mirrorFrame = 0;
+  /** The drift and the odd twitch while he's got a gun up (out of the window, or the rifle). */
+  private readonly sway = new AimSway();
   /** The inside of the Civic: the dash and its live dials, the doors, the roof, the seats. */
   private interior: CivicInterior | null = null;
   // ---- The ramp short of a hole, and the jump off it
@@ -2362,6 +2365,7 @@ export class StreetScene implements GameScene {
   private updateHands(dt: number): void {
     const { input, audio } = this.ctx;
     const drive = this.phase === 'drive' && !this.fall;
+    this.sway.update(dt, drive && (this.leanK > 0.9 || (this.combat && this.rifle.stow < 0.3)));
     // The rifle's arms have to be his again before he can lean out (they're hidden while it's up)
     const want = drive && input.rightHeld && input.pointerLocked && !this.armsAway;
     this.leanK = THREE.MathUtils.clamp(this.leanK + (want ? dt / 0.5 : -dt / 0.4), 0, 1);
@@ -2783,7 +2787,7 @@ export class StreetScene implements GameScene {
         // Steering turns the view with the car; spun right round, he goes with it entirely
         const want = THREE.MathUtils.clamp(-off * 0.2 * clamp01((1.1 - Math.abs(off)) / 0.4), -0.15, 0.15);
         this.headSteady += (want - this.headSteady) * Math.min(1, dt * 10);
-        this.lookSteady(this.headSteady + this.headYaw, this.headPitch, this.lookAt);
+        this.lookSteady(this.headSteady + this.headYaw + this.sway.yaw, this.headPitch + this.sway.pitch, this.lookAt);
         // Leaning out with the pistol: his eyes go where his head's gone, out of the window, looking the same way
         const lean = smooth(this.leanK);
         const head = this.driverRig?.bones.get('head');

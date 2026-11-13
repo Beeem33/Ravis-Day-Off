@@ -3831,7 +3831,7 @@ export class AudioManager {
    * into the jump is what played into that point the first time. Calling
    * it while the same song's going does nothing.
    */
-  startTrackMusic(url: string, loopStart: number, loopEnd: number, level = 0.6): void {
+  startTrackMusic(url: string, loopStart: number, loopEnd: number, level = 0.6, fadeIn = 0): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     if (ctx.state === 'suspended') void ctx.resume();
@@ -3852,7 +3852,8 @@ export class AudioManager {
           const sr = buf.sampleRate;
           const ls = Math.round(loopStart * sr);
           const le = Math.round(loopEnd * sr);
-          const F = Math.min(Math.round(0.03 * sr), ls);
+          // (a file that loops whole, loopEnd 0, was made seamless before it got here)
+          const F = loopEnd > loopStart ? Math.min(Math.round(0.03 * sr), ls) : 0;
           for (let c = 0; c < buf.numberOfChannels; c++) {
             const d = buf.getChannelData(c);
             for (let i = 0; i < F; i++) {
@@ -3874,8 +3875,13 @@ export class AudioManager {
         src.buffer = buf;
         src.loop = true;
         src.loopStart = loopStart;
-        src.loopEnd = loopEnd;
+        src.loopEnd = loopEnd > 0 ? loopEnd : buf.duration;
         src.connect(out);
+        if (fadeIn > 0) {
+          const now = ctx.currentTime;
+          out.gain.setValueAtTime(0.0001, now);
+          out.gain.exponentialRampToValueAtTime(level, now + fadeIn);
+        }
         src.start();
         t.src = src;
       })

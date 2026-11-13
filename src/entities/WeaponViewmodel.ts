@@ -20,6 +20,16 @@ const GRIP_R = grip([0.0128, -0.0058, 0.0717], [0.172, 0.077, -0.982], [-0.912, 
   thumb: [0.2, -0.09, 0.1],
   spread: 3.4
 });
+/**
+ * The shooting hand aimed one-handed: the same hold on the grip, but the
+ * forearm running straight back to his right shoulder along the arm, the
+ * elbow all but locked.
+ */
+const GRIP_R_AIM = grip([0.0128, -0.0058, 0.0717], [0.172, 0.077, -0.982], [-0.912, -0.003, -0.411], [0.34, -0.3, 0.9], {
+  fingers: [[-5, 39, 63], [72, 57, 35], [73, 57, 35], [70, 57, 35]],
+  thumb: [0.2, -0.09, 0.1],
+  spread: 3.4
+});
 const GRIP_L = grip([-0.057, -0.012, 0.074], [0.458, 0.186, -0.87], [0.958, 0.083, 0.2], [-0.2, -0.2, 0.26], {
   fingers: [[45, 60, 30], [50, 62, 30], [55, 64, 32], [60, 66, 34]],
   thumb: [0.2, 0.15, 0.1]
@@ -60,8 +70,17 @@ export class WeaponViewmodel {
   private flashTimer = 0;
 
   private basePos = new THREE.Vector3(0.23, -0.21, -0.42);
-  /** Aim-down-sights pose: gun centered so the sights line up with the crosshair. */
-  private aimPos = new THREE.Vector3(0, -0.073, -0.3);
+  /**
+   * Aim-down-sights pose: one arm, out at its full length, the gun dead
+   * centre so the rear sight and the front post line up on the crosshair
+   * (the sight plane is +0.073 up the gun, so −0.073 puts it on the eye
+   * line at any distance out). The arm comes in to it from his right
+   * shoulder, not out of his chest.
+   */
+  private aimPos = new THREE.Vector3(0, -0.073, -0.47);
+  /** Where the left hand goes when he lets go to shoot one-handed: down and out of frame. */
+  private static readonly HAND_AWAY = new THREE.Vector3(-0.3, -0.4, 0.12);
+  private gripHand!: THREE.Mesh;
   /** Sprint pose: gun dropped and canted diagonally across the body. */
   private sprintPos = new THREE.Vector3(0.1, -0.27, -0.36);
   private sprintRot = new THREE.Euler(-0.45, 0.75, 0.55); // muzzle down, swung left, canted IN toward the body
@@ -287,6 +306,7 @@ export class WeaponViewmodel {
     hand.position.set(0, -0.055, 0.058);
     hand.rotation.x = 0.22;
     this.gun.add(hand);
+    this.gripHand = hand;
     this.supportHand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), skin);
     this.supportHand.position.copy(this.handHome);
     this.supportHand.rotation.z = 0.4;
@@ -411,6 +431,9 @@ export class WeaponViewmodel {
     this.sprintBlend += ((sprinting ? 1 : 0) - this.sprintBlend) * Math.min(1, dt * 8);
     const a = this.aimBlend;
     const sp = this.sprintBlend;
+    // Aimed one-handed: the left hand lets go and drops away, the right arm straightens
+    if (!this.reloading) this.supportHand.position.lerpVectors(this.handHome, WeaponViewmodel.HAND_AWAY, a * a * (3 - 2 * a));
+    if (a > 0.8) this.supportHand.visible = false;
 
     // ---- Sway follows inverse mouse motion, spring back (tighter when aiming)
     const swayScale = 1 - 0.75 * a;
@@ -471,6 +494,7 @@ export class WeaponViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
+    this.arms.set('r', this.gripHand, a > 0.001 ? mixGrip(GRIP_R, GRIP_R_AIM, a) : GRIP_R);
     this.arms.set('l', this.supportHand, this.leftGrip());
     this.arms.update();
 

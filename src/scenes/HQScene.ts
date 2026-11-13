@@ -82,8 +82,24 @@ const DROP_CHANCE = 0.34;
 /** How many of the Collective come at them in each phase, all of whom have to go down before they can move on. */
 const TOWER_QUOTA = 24;
 const ADVANCE_QUOTA = 22;
-/** The first wave at the van: this many down and the crew move up the lot. */
-const FIRST_WAVE = 8;
+/**
+ * The crew go up the lot a section at a time, as the Collective's men go
+ * down: this many of them down in the towers phase and they move up to the
+ * near cover, this many and on to the second row (the near towers down
+ * sends them too). In the advance: this many down and on from the cover
+ * past the second row to the far rows, this many and up to the stairs.
+ * Each move waits for Ravi to be up with them.
+ */
+const TOWER_STEPS = [4, 10];
+const ADVANCE_STEPS = [4, 9];
+/** How far behind the crew's line Ravi can be and still count as with them. */
+const WITH_CREW = 10;
+/** The cover the in-between sections are made of: how far down the lot (z). */
+const SECTION_A_Z = -50;
+const SECTION_B_Z = -96;
+/** Ravi's death: the song, and how long before a click can take him back (ms). */
+const DEATH_SONG = 'audio/death.wav';
+const DEATH_HOLD = 2500;
 /** How far out in front of the fight's front line the Collective's men come in. */
 const SPAWN_AHEAD = 18;
 /** Ravi's flashlight, on (candela). */
@@ -201,8 +217,19 @@ export class HQScene extends CombatScene<HQData> {
   private torchOn = false;
   /** Where the Collective's men take cover in the lot. */
   private coverSpots: CoverSpot[] = [];
-  /** The Collective's men down in the towers phase (the first wave's what moves the crew up). */
+  /** The Collective's men down in the towers phase (what moves the crew up). */
   private towerKills = 0;
+  /** The crew's section in each phase (towers: 0 the van, 1 the near cover, 2 the second row; advance: 0 the second row, 1 the cover past it, 2 the far rows, 3 the stairs). */
+  private towerSec = 0;
+  private advSec = 0;
+  /** The in-between sections' posts, picked out of the lot's cover; and which cover spot each post is. */
+  private secA: Post[] = [];
+  private secB: Post[] = [];
+  private postSpot = new Map<Post, CoverSpot>();
+  /** Seconds till Sanjay next calls Ravi up, when he's hanging back. */
+  private nagT = 0;
+  /** When he died (performance.now()), for the hold before a click restarts. */
+  private deadAt = 0;
 
   // ---- Third-person Ravi for the cutscenes
   private ravi: RaviRig | null = null;
@@ -315,6 +342,8 @@ export class HQScene extends CombatScene<HQData> {
     for (const s of L.parked) this.cars.addParked(s);
     this.cars.settle();
     this.buildCoverSpots();
+    this.secA = this.sectionPosts(SECTION_A_Z);
+    this.secB = this.sectionPosts(SECTION_B_Z);
     // A few already burnt out from the fighting before they got here, three of them still alight
     {
       let seed = 4242;
@@ -414,6 +443,7 @@ export class HQScene extends CombatScene<HQData> {
       }),
       bus.on(Events.PlayerDied, () => {
         this.dead = true;
+        this.deathScene();
       })
     );
     document.addEventListener('click', this.clickHandler);
@@ -436,6 +466,10 @@ export class HQScene extends CombatScene<HQData> {
     this.rain?.stop();
     this.klaxon?.stop();
     this.ctx.audio.stopBossMusic(1);
+    this.ctx.audio.stopTrackMusic(0.4);
+    const canvas = this.ctx.engine.renderer.domElement;
+    canvas.style.transition = '';
+    canvas.style.filter = '';
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);
     this.hud.destroy();
@@ -1168,17 +1202,24 @@ export class HQScene extends CombatScene<HQData> {
       this.spawnAgent(this.pickSpawn(pool));
       this.phaseSpawned++;
     }
-    // The crew move up once the first wave's down (or the near pair of towers, if that's first),
-    // and from then on the Collective come in from up the lot, not back down it at the van
+    // The crew go up the lot a section at a time as the Collective thin out (the near
+    // pair of towers down sends them on to the second row), never more than one step
+    // at once and never without Ravi; the Collective come in from up the lot ahead of them
     const nearDown = !this.towers[0].alive && !this.towers[1].alive;
-    if (!this.movedMid && (nearDown || this.towerKills >= FIRST_WAVE)) {
-      this.movedMid = true;
-      this.crewAI.forEach((c, i) => c.goTo(this.level.posts.mid[i], 0.4 + (i % 3) * 1.2));
-      this.say([
-        nearDown
-          ? { who: 'SANJAY', text: 'Two down! Move up — next row!', dur: 2.6 }
-          : { who: 'SANJAY', text: 'That’s the first lot! Off the van — up to the next row, Ravi!', dur: 3 }
-      ]);
+    const want = nearDown || this.towerKills >= TOWER_STEPS[1] ? 2 : this.towerKills >= TOWER_STEPS[0] ? 1 : 0;
+    if (want > this.towerSec) {
+      if (this.raviWithCrew()) {
+        this.towerSec++;
+        this.moveCrew(this.towerSec === 1 ? this.secA : this.level.posts.mid, 0.3);
+        this.movedMid = this.towerSec === 2;
+        this.say([
+          this.towerSec === 1
+            ? { who: 'SANJAY', text: 'Off the van! Up to that cover — together!', dur: 2.6 }
+            : nearDown
+              ? { who: 'SANJAY', text: 'Two down! Move up — next row!', dur: 2.6 }
+              : { who: 'SANJAY', text: 'Next row! Move up with us, Ravi!', dur: 2.6 }
+        ]);
+      } else this.callRaviUp(dt);
     }
     // All four down isn't enough: every one of the Collective's men out here has to be dealt with too
     if (this.towersDown() >= 4 && this.phaseT > 0.5) {
@@ -1247,7 +1288,8 @@ export class HQScene extends CombatScene<HQData> {
         e.setSitting(false);
         e.setRestCarry(false);
         this.cs.get(e)!.out = true;
-        this.crewAI[i].placeAt(L.posts.far[i]);
+        this.crewAI[i].placeAt(this.secB[i]);
+        this.advSec = 1;
       });
       this.sanjay.slingWeapon(false);
       this.movedMid = true;
@@ -1259,8 +1301,15 @@ export class HQScene extends CombatScene<HQData> {
         { who: 'SANJAY', text: "That's all four! Drop the tube — we're going for the building!", dur: 3.2 },
         { who: 'DEV', text: 'Move, move! Cover to cover!', dur: 2.4 }
       ]);
-      // Bounding up: half go, then the other half
-      this.crewAI.forEach((c, i) => c.goTo(L.posts.far[i], i % 2 ? 2.6 : 0.3));
+      // Up one section, not the length of the lot: the cover past the second row
+      // (or the second row itself, if they never got that far)
+      if (this.towerSec < 2) {
+        this.advSec = 0;
+        this.moveCrew(L.posts.mid, 0.3);
+      } else {
+        this.advSec = 1;
+        this.moveCrew(this.secB, 0.3);
+      }
       this.klaxon?.set(0.5);
     }
     // The launcher's done: he lets it drop
@@ -1306,11 +1355,19 @@ export class HQScene extends CombatScene<HQData> {
       this.advanceSpawned++;
       this.spawnAgent(this.pickSpawn(L.spawns.podium));
     }
-    // Up to the stairs with him
-    if (!this.stairsMoved && (p.z < -112 || this.phaseT > 30)) {
-      this.stairsMoved = true;
-      this.crewAI.forEach((c, i) => c.goTo(L.posts.stairs[i], i % 2 ? 2 : 0.2));
-      this.say([{ who: 'MARCUS', text: 'Stairs ahead! Get to the columns!', dur: 2.4 }]);
+    // On up the lot a section at a time with him: the cover past the second row, the far rows, the stairs
+    const want = this.advKills >= ADVANCE_STEPS[1] || p.z < -112 ? 3 : this.advKills >= ADVANCE_STEPS[0] ? 2 : 1;
+    if (want > this.advSec) {
+      // (a long while held up waiting for him, and they go anyway)
+      if (this.raviWithCrew() || this.phaseT > 60) {
+        this.advSec++;
+        const posts = [L.posts.mid, this.secB, L.posts.far, L.posts.stairs][this.advSec];
+        this.moveCrew(posts, 0.2);
+        if (this.advSec === 3) {
+          this.stairsMoved = true;
+          this.say([{ who: 'MARCUS', text: 'Stairs ahead! Get to the columns!', dur: 2.4 }]);
+        } else this.say([{ who: this.advSec === 2 ? 'DEV' : 'SANJAY', text: this.advSec === 2 ? 'Moving up! Cover me!' : 'Next cover! Go, go!', dur: 2.2 }]);
+      } else this.callRaviUp(dt);
     }
     // Fight through most of them and the crew blow a way in; how many more, on the HUD
     const need = Math.max(0, BREACH_KILLS - this.advKills);
@@ -1696,6 +1753,114 @@ export class HQScene extends CombatScene<HQData> {
   }
 
   // ================================================================ the fight
+
+  /** The crew's line: the mean z of the posts they've been sent to. */
+  private crewLineZ(): number {
+    let sum = 0;
+    let n = 0;
+    for (const c of this.crewAI) {
+      if (!c.post) continue;
+      sum += c.post.pos.z;
+      n++;
+    }
+    return n ? sum / n : this.player.position.z;
+  }
+
+  /** Is Ravi up with the crew (not hanging back down the lot behind them)? */
+  private raviWithCrew(): boolean {
+    return this.player.position.z < this.crewLineZ() + WITH_CREW;
+  }
+
+  /** Ravi's hanging back and they want to move: now and then, somebody tells him so. */
+  private callRaviUp(dt: number): void {
+    this.nagT -= dt;
+    if (this.nagT > 0) return;
+    this.nagT = 11;
+    const lines: Line[] = [
+      { who: 'SANJAY', text: 'Ravi! Up here with us — we move together!', dur: 2.6 },
+      { who: 'DEV', text: 'Ravi, catch up! We can\u2019t push without you!', dur: 2.6 },
+      { who: 'MARCUS', text: 'On me, Ravi! Get up here!', dur: 2.2 }
+    ];
+    this.say([lines[Math.floor(Math.random() * lines.length)]]);
+  }
+
+  /**
+   * The crew to a new section, staggered so they don't all break cover at
+   * once; each takes his cover spot, so none of the Collective goes for it.
+   */
+  private moveCrew(posts: Post[], delay: number): void {
+    for (const sp of this.postSpot.values()) if (this.crew.includes(sp.taken as Enemy)) sp.taken = null;
+    this.crewAI.forEach((c, i) => {
+      const post = posts[i % posts.length];
+      c.goTo(post, delay + (i % 2) * 1.6 + Math.floor(i / 2) * 0.35);
+      const sp = this.postSpot.get(post);
+      if (sp) sp.taken = c.e;
+    });
+  }
+
+  /**
+   * A section of the crew's line out of the lot's own cover, about `z` down
+   * it: for each of the seven, the nearest free spot to his place across the
+   * lot that's on the gate side of its cover (so the cover's between him and
+   * the building), spread a couple of metres apart. Somewhere with nothing
+   * near, he gets the bare place.
+   */
+  private sectionPosts(z: number): Post[] {
+    const across = [-15, 15, -21, 21, -6, 6, 27];
+    const used: CoverSpot[] = [];
+    return across.map((x) => {
+      let best: CoverSpot | null = null;
+      let bd = Infinity;
+      for (const sp of this.coverSpots) {
+        if (sp.pos.z < sp.box.max.z || Math.abs(sp.pos.z - z) > 7 || Math.abs(sp.pos.x) > 40) continue;
+        if (used.some((u) => u.pos.distanceTo(sp.pos) < 2.2)) continue;
+        const d = Math.abs(sp.pos.x - x) + Math.abs(sp.pos.z - z) * 0.6;
+        if (d < bd) {
+          bd = d;
+          best = sp;
+        }
+      }
+      if (!best || bd > 9) return { pos: V(x, 0, z), face: V(x * 0.6, 1.2, z - 40), low: true };
+      used.push(best);
+      const post: Post = { pos: best.pos.clone(), face: V(best.pos.x * 0.6, 1.2, best.pos.z - 40), low: best.box.max.y < 1.7 };
+      this.postSpot.set(post, best);
+      return post;
+    });
+  }
+
+  /**
+   * Ravi's down: the HUD goes, the colour drains out of the picture, the
+   * world slows, the camera drifts round him where he lies, and the song
+   * comes up. The restart prompt fades in after a few seconds, over the
+   * bottom of the shot, not across it.
+   */
+  private deathScene(): void {
+    const { audio } = this.ctx;
+    this.deadAt = performance.now();
+    this.slowT = 4.5;
+    const canvas = this.ctx.engine.renderer.domElement;
+    canvas.style.transition = 'filter 1.8s ease-out';
+    canvas.style.filter = 'grayscale(1) contrast(1.12) brightness(0.82)';
+    this.ui.style.transition = 'opacity 0.5s';
+    this.ui.style.opacity = '0';
+    const over = document.getElementById('death-overlay');
+    const hudRoot = over?.parentElement;
+    if (hudRoot) for (const c of Array.from(hudRoot.children)) if (c !== over) (c as HTMLElement).style.visibility = 'hidden';
+    this.hud.setCinematic(false);
+    this.hud.setPrompt(null);
+    if (over) {
+      over.style.transition = 'opacity 2.5s';
+      over.style.opacity = '0';
+      over.style.background = 'linear-gradient(to bottom, rgba(0,0,0,0) 45%, rgba(0,0,0,0.78) 100%)';
+      over.style.justifyContent = 'flex-end';
+      over.style.paddingBottom = '10vh';
+      window.setTimeout(() => (over.style.opacity = '1'), 5000);
+    }
+    if (this.raviRagdoll) this.raviRagdoll.orbit = 0.16;
+    this.klaxon?.set(0.12);
+    audio.stopBossMusic(1.2);
+    audio.startTrackMusic(DEATH_SONG, 0, 0, 0.85, 2.5);
+  }
 
   /**
    * The fight's front line, as a z down the lot (it runs from the gate to
@@ -2503,6 +2668,12 @@ export class HQScene extends CombatScene<HQData> {
         this.ctx.audio.dryFire();
       }
     }
+    // The wheel, round the guns he's got and the launcher, whatever's in his hands now
+    // (the launcher too: it used to take a number key to get off it before the wheel did anything)
+    if (this.launcherOwned && free && !this.inTakedown && !this.drink.engaged && !this.dropKick.engaged && !this.nadeVm.busy && !this.arsenal.reloading && !this.launcher.reloading) {
+      const w = input.consumeWheel();
+      if (w) this.cycleWeapon(Math.sign(w));
+    }
     // 4 the launcher, 1-3 the guns
     if (this.launcherOwned && free) {
       if (input.wasPressed('Digit4') && !this.launcherUp) this.launcherUp = true;
@@ -2609,6 +2780,20 @@ export class HQScene extends CombatScene<HQData> {
     this.cars.update(dt, this.player, this.player.camera);
     this.applyShake(dt);
     input.endFrame();
+  }
+
+  /** One notch of the wheel: on to the next gun he has, or the launcher, round and round. */
+  private cycleWeapon(dir: number): void {
+    const slots: (Gun | 'launcher')[] = [...(['pistol', 'shotgun', 'rifle'] as Gun[]).filter((g) => this.arsenal.owns(g)), 'launcher'];
+    const cur = this.launcherUp ? 'launcher' : this.arsenal.wanted;
+    const i = Math.max(0, slots.indexOf(cur));
+    const next = slots[(i + dir + slots.length) % slots.length];
+    if (next === 'launcher') this.launcherUp = true;
+    else {
+      this.launcherUp = false;
+      this.arsenal.wanted = next;
+    }
+    this.arsenal.showInventory();
   }
 
   private physicsAwake(): boolean {
@@ -2843,13 +3028,14 @@ export class HQScene extends CombatScene<HQData> {
   // ================================================================== input
 
   private onClick(): void {
-    if (this.dead) this.restart();
+    // (a few seconds of it first: he was likely still firing when he went down)
+    if (this.dead && performance.now() - this.deadAt > DEATH_HOLD) this.restart();
   }
 
   private onKey(e: KeyboardEvent): void {
     if (this.dead) {
       if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
-      else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') this.restart();
+      else if ((e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') && performance.now() - this.deadAt > DEATH_HOLD) this.restart();
       return;
     }
     // Skip the arrival: straight to the towers

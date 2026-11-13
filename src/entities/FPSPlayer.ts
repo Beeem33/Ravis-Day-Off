@@ -3,6 +3,7 @@ import type { InputManager } from '../core/InputManager';
 import type { AudioManager } from '../core/AudioManager';
 import { EventBus, Events } from '../core/EventBus';
 import type { Collider } from '../environment/OfficeLevelBuilder';
+import { AimSway } from './AimSway';
 
 const GRAVITY = 18;
 const WALK_SPEED = 4.3;
@@ -66,6 +67,8 @@ export class FPSPlayer {
   sprinting = false;
   /** Aiming down sights (set by the scene from right-mouse). */
   aiming = false;
+  /** The drift and the odd twitch in a held aim, on top of where he's looking. */
+  readonly sway = new AimSway();
   /**
    * Cutscene mode: input is ignored and the scene drives position/yaw/pitch
    * directly. The camera is the same object either way, so handing control
@@ -216,6 +219,8 @@ export class FPSPlayer {
       return;
     }
     const input = this.input;
+    // The aim's own small life (none in a cutscene: the scene has the camera then)
+    this.sway.update(dt, this.aiming && !this.cinematic);
 
     if (this.cinematic) {
       // Drop any buffered look so control doesn't jerk on handover
@@ -385,7 +390,7 @@ export class FPSPlayer {
       this.position.y + this.eyeHeight + bobY,
       this.position.z - Math.sin(this.yaw) * bobX
     );
-    this.camera.rotation.set(this.pitch, this.yaw, roll);
+    this.camera.rotation.set(this.pitch + this.sway.pitch, this.yaw + this.sway.yaw, roll);
   }
 
   /** Bob phase shared with the weapon viewmodel. */

@@ -355,7 +355,7 @@
   <div id="app"></div>
   <div id="ui-root"></div>
 
-  <!-- Boot splash: "Bendable Pipe Studio", then the menu -->
+  <!-- Boot splash: "Bendable Pipe Studio", then the music credit, then the menu -->
   <style>
     #boot-splash {
       position: fixed; inset: 0; background: #000; z-index: 10000;
@@ -376,15 +376,23 @@
       <div class="by">made by:</div>
       <div class="studio">BENDABLE PIPE STUDIO</div>
     </div>
+    <div class="card" id="splash-music">
+      <div class="by">music by:</div>
+      <div class="studio">FUZZEKE</div>
+    </div>
   </div>
   <script>
     (() => {
       const splash = document.getElementById('boot-splash');
       const b = document.getElementById('splash-studio');
+      const m = document.getElementById('splash-music');
       setTimeout(() => b.classList.add('show'), 150);
       setTimeout(() => b.classList.remove('show'), 3000);
-      setTimeout(() => { splash.style.opacity = '0'; }, 3300); // reveal the menu underneath
-      setTimeout(() => splash.remove(), 4200);
+      // The studio fades out, then the music credit fades in on the black
+      setTimeout(() => m.classList.add('show'), 3900);
+      setTimeout(() => m.classList.remove('show'), 6400);
+      setTimeout(() => { splash.style.opacity = '0'; }, 7200); // reveal the menu underneath
+      setTimeout(() => splash.remove(), 8100);
     })();
   </script>
   <script type="module" src="/src/main.ts"></script>

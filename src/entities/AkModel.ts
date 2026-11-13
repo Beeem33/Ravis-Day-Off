@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Enemy } from './Enemy';
+import { foldProp } from '../environment/foldProp';
 
 /**
  * The AK-47 model, loaded and parsed once for the whole game.
@@ -184,18 +185,51 @@ function withTemplate(fn: (t: THREE.Group) => void): void {
 }
 
 /**
+ * The issue rifle as the racks show it — the whole textured model, none of
+ * Ravi's own touches — folded down from seventy-three meshes to one per
+ * material: the same parts, textures and look, for a tenth of the draws.
+ * A van's rack holds eight. Baked once from the template, shared by every
+ * copy: each part's geometry, material, and where it sits in the gun.
+ */
+let issue: { geo: THREE.BufferGeometry; mat: THREE.Material; at: THREE.Matrix4 }[] | null = null;
+
+function issueParts(t: THREE.Group): { geo: THREE.BufferGeometry; mat: THREE.Material; at: THREE.Matrix4 }[] {
+  if (issue) return issue;
+  const copy = t.clone(true);
+  // A plain issue rifle: none of Ravi's own touches (the bandage wraps, the charm on its chain)
+  copy.traverse((o) => {
+    if (/^(Wrap|Charm|Chain)/.test(o.name)) o.visible = false;
+  });
+  const gun = fullAK(copy);
+  foldProp(gun);
+  gun.updateMatrixWorld(true);
+  const toGun = gun.matrixWorld.clone().invert();
+  const parts: { geo: THREE.BufferGeometry; mat: THREE.Material; at: THREE.Matrix4 }[] = [];
+  const shown = (o: THREE.Object3D): boolean => {
+    for (let q: THREE.Object3D | null = o; q && q !== gun; q = q.parent) if (!q.visible) return false;
+    return true;
+  };
+  gun.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && shown(m)) parts.push({ geo: m.geometry, mat: m.material as THREE.Material, at: toGun.clone().multiply(m.matrixWorld) });
+  });
+  issue = parts;
+  return parts;
+}
+
+/**
  * An AK hung on a wall rack: the whole textured model at an agent's scale,
  * upright, barrel down −Z, so it reads properly from a metre away. The group
  * comes back at once; the gun goes into it as soon as the model is there.
  */
 export function rackAK(): THREE.Group {
   const g = new THREE.Group();
-  withAK((copy) => {
-    // A plain issue rifle: none of Ravi's own touches (the bandage wraps, the charm on its chain)
-    copy.traverse((o) => {
-      if (/^(Wrap|Charm|Chain)/.test(o.name)) o.visible = false;
-    });
-    g.add(fullAK(copy));
+  withTemplate((t) => {
+    for (const p of issueParts(t)) {
+      const mesh = new THREE.Mesh(p.geo, p.mat);
+      p.at.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      g.add(mesh);
+    }
   });
   return g;
 }

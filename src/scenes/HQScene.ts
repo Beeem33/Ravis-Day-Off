@@ -644,6 +644,8 @@ export class HQScene extends CombatScene<HQData> {
   private setPhase(p: Phase): void {
     this.phase = p;
     this.phaseT = 0;
+    // A wave still coming out belongs to the phase that called it
+    this.waveQueue.length = 0;
   }
 
   private get cutscene(): boolean {
@@ -1101,7 +1103,7 @@ export class HQScene extends CombatScene<HQData> {
     this.ctx.audio.startBossMusic();
     this.ctx.input.requestPointerLock();
     // The Collective come out to meet them
-    for (let i = 0; i < 8; i++) this.spawnAgent(L.spawns.near[i % L.spawns.near.length]);
+    for (let i = 0; i < 8; i++) this.waveQueue.push(L.spawns.near[i % L.spawns.near.length]);
     this.phaseSpawned = 8;
     this.spawnT = 4;
     this.barkT = 5;
@@ -1168,7 +1170,7 @@ export class HQScene extends CombatScene<HQData> {
 
   private updateTowersPhase(dt: number): void {
     // Reinforcements: keep a few coming, from further up once the near pair's down
-    const alive = this.agents.filter((a) => a.e.alive).length;
+    const alive = this.agentsUp();
     this.spawnT -= dt;
     if (this.spawnT <= 0 && alive < 9 && this.phaseSpawned < TOWER_QUOTA) {
       this.spawnT = this.towersDown() >= 4 ? 0.7 : 2.4 + Math.random() * 2.4;
@@ -1196,7 +1198,7 @@ export class HQScene extends CombatScene<HQData> {
     const towers = this.phase === 'towers';
     const quota = towers ? TOWER_QUOTA : ADVANCE_QUOTA;
     const spawned = towers ? this.phaseSpawned : this.advanceSpawned;
-    return Math.max(0, quota - spawned) + this.agents.filter((a) => a.e.alive).length;
+    return Math.max(0, quota - spawned) + this.agentsUp();
   }
 
   private leftShown = -1;
@@ -1269,7 +1271,7 @@ export class HQScene extends CombatScene<HQData> {
     this.dropLauncher(!restart);
     this.hud.setCounter(null);
     this.setObjective('OBJECTIVE: ADVANCE TO THE EC HEADQUARTERS');
-    for (let i = 0; i < 7; i++) this.spawnAgent(this.pickSpawn(L.spawns.podium));
+    for (let i = 0; i < 7; i++) this.waveQueue.push(this.pickSpawn(L.spawns.podium));
     this.spawnT = 4;
     this.advanceSpawned = 7;
     this.stairsMoved = false;
@@ -1301,7 +1303,7 @@ export class HQScene extends CombatScene<HQData> {
   private updateAdvance(dt: number): void {
     const L = this.level;
     const p = this.player.position;
-    const alive = this.agents.filter((a) => a.e.alive).length;
+    const alive = this.agentsUp();
     this.spawnT -= dt;
     if (this.spawnT <= 0 && alive < 9 && this.advanceSpawned < ADVANCE_QUOTA) {
       this.spawnT = p.z < -138 ? 0.7 : 2.8 + Math.random() * 2.5;
@@ -1317,7 +1319,7 @@ export class HQScene extends CombatScene<HQData> {
     // Fight through most of them and the crew blow a way in; how many more, on the HUD
     const need = Math.max(0, BREACH_KILLS - this.advKills);
     this.showLeft(need, 'FIGHT YOUR WAY TO THE EC HEADQUARTERS');
-    this.mopUp(dt, this.agents.filter((a) => a.e.alive).length, ADVANCE_QUOTA - this.advanceSpawned);
+    this.mopUp(dt, this.agentsUp(), ADVANCE_QUOTA - this.advanceSpawned);
     if (need === 0 && this.player.alive) this.startBreach();
   }
 
@@ -1736,7 +1738,22 @@ export class HQScene extends CombatScene<HQData> {
     this.spawned++;
   }
 
+  /**
+   * A wave comes out one man a frame, not all in one: each is a whole
+   * hitman built and uploaded (several ms), and eight at once was a 40 ms
+   * hitch as the fight began. Queued, they count as up already, so every
+   * count and the HUD read as they always did.
+   */
+  private waveQueue: HQSpawn[] = [];
+
+  /** The Collective's men up and fighting, with any of a wave still coming out. */
+  private agentsUp(): number {
+    return this.agents.filter((a) => a.e.alive).length + this.waveQueue.length;
+  }
+
   private updateAgents(dt: number): void {
+    const next = this.waveQueue.shift();
+    if (next) this.spawnAgent(next);
     for (const a of this.agents) {
       const e = a.e;
       // Pressing in: every few seconds, those out of sight of him are told where he is now

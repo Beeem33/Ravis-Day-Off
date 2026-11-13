@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { rackAK } from '../entities/AkModel';
+import { foldProp } from './foldProp';
 
 /**
  * The coworkers' van and what's in it: a big high-roofed panel van in plain
@@ -689,6 +690,16 @@ export function crewVan(): VanRig {
     const helm = new THREE.SphereGeometry(0.12, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2);
     put(helm, plastic, sx, 2.67, BAY1 - 0.14, -Math.PI / 2);
   }
+
+  // Hundreds of fittings, drawn as one mesh per material: everything on the body except what moves
+  // (the door) or is taken down (the rack's rifles); each wheel the same, in its own spinning frame
+  const moving = new Set<THREE.Object3D>([door, ...rack]);
+  foldProp(body, (o) => moving.has(o));
+  for (const w of wheels) foldProp(w);
+  meshes.length = 0;
+  body.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+  });
 
   // Right under each place's hips, along the benches; the two sides facing each other across the aisle
   const seats = {

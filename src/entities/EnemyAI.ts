@@ -13,6 +13,16 @@ const PATROL_SPEED = 1.7;
 const INVESTIGATE_SPEED = 2.9;
 const REACTION_TIME = 0.5; // seconds between acquiring and the first shot
 
+/**
+ * Somewhere to fight from out in the open: crouched behind `box` (a parked
+ * car, a barrier, sandbags), on the side `pos` is on. One man to a spot.
+ */
+export interface CoverSpot {
+  pos: THREE.Vector3;
+  box: THREE.Box3;
+  taken: Enemy | null;
+}
+
 export interface AIDeps {
   player: FPSPlayer;
   waypoints: Waypoint[];
@@ -23,6 +33,12 @@ export interface AIDeps {
   audio: AudioManager;
   /** Scene-level ballistics: the enemy pulls the trigger. */
   enemyFire: (enemy: Enemy) => void;
+  /**
+   * Cover out in the open (Level 12's lot). With it, the cover fighters run
+   * from one spot to the next one nearer the player, get down behind it and
+   * come up over it to shoot; without it, cover is whatever's a step away.
+   */
+  coverSpots?: CoverSpot[];
 }
 
 /**
@@ -83,6 +99,7 @@ export class EnemyAI {
 
   dispose(): void {
     this.unsub();
+    this.releaseSpot();
   }
 
   /**
@@ -188,7 +205,16 @@ export class EnemyAI {
   update(dt: number): void {
     const enemy = this.enemy;
     // Dead, or in Ravi's arms with a knife coming
-    if (!enemy.alive || enemy.beingExecuted) return;
+    if (!enemy.alive || enemy.beingExecuted) {
+      // Grabbed while down behind something: up out of the crouch for the knife
+      if (enemy.alive && this.posed) {
+        this.posed = false;
+        this.crouch = 0;
+        enemy.pose = null;
+      }
+      this.releaseSpot();
+      return;
+    }
     const player = this.deps.player;
 
     const seen = this.canSeePlayer();
@@ -381,6 +407,10 @@ export class EnemyAI {
       return;
     }
 
+    // Out in the open with real cover about: from spot to spot, up to shoot, down again
+    if (this.usesCover && this.deps.coverSpots && this.updateSpotFight(dt)) return;
+    this.crouchTo(0, dt);
+
     if (seen || this.coverPhase === 'inCover' || this.coverPhase === 'toCover') {
       if (seen) this.lostSightTimer = 0;
 
@@ -525,6 +555,178 @@ export class EnemyAI {
         }
         break;
     }
+  }
+
+  // ------------------------------------------------- cover in the open
+
+  private spot: CoverSpot | null = null;
+  private spotPhase: 'toCover' | 'down' | 'up' = 'toCover';
+  private spotT = 0;
+  /** Seconds since he set off for the spot he's running to. */
+  private runT = 0;
+  /** How many more times he comes up from this spot before moving on. */
+  private pops = 0;
+  private crouch = 0;
+  private posed = false;
+  private spotRay = new THREE.Ray();
+  private static tmpE = new THREE.Vector3();
+
+  /** Down into a crouch (or back up out of one), eased. */
+  private crouchTo(want: number, dt: number): void {
+    if (!this.posed && want === 0) return;
+    this.crouch += (want - this.crouch) * Math.min(1, dt * 8);
+    if (this.crouch > 0.02) {
+      this.enemy.pose = { crouch: this.crouch };
+      this.posed = true;
+    } else {
+      this.crouch = 0;
+      this.enemy.pose = null;
+      this.posed = false;
+    }
+  }
+
+  private releaseSpot(): void {
+    if (this.spot && this.spot.taken === this.enemy) this.spot.taken = null;
+    this.spot = null;
+  }
+
+  /** Is `spot`'s cover between it and the player: a crouched man's chest behind it, the player's past it? */
+  private spotCovers(spot: CoverSpot): boolean {
+    const player = this.deps.player;
+    const from = EnemyAI.tmpE.set(spot.pos.x, 0.7, spot.pos.z);
+    const to = player.eyePosition(EnemyAI.tmpB);
+    to.y -= 0.45;
+    const d = to.sub(from);
+    const len = d.length();
+    if (len < 0.5) return false;
+    this.spotRay.set(from, d.divideScalar(len));
+    const hit = this.spotRay.intersectBox(spot.box, EnemyAI.tmpC);
+    return hit !== null && hit.distanceTo(from) < len - 0.5;
+  }
+
+  /**
+   * The best free spot to go to next: a short run, ending up nearer the
+   * player than he is now (but not on top of him), with its cover between
+   * them. Null if there's nowhere worth it.
+   */
+  private pickSpot(): CoverSpot | null {
+    const spots = this.deps.coverSpots!;
+    const me = this.enemy.position;
+    const pp = this.deps.player.position;
+    const now = me.distanceTo(pp);
+    // A bound of ten metres or so toward him, settling at 12 to 30 out
+    const want = THREE.MathUtils.clamp(now - 10, 12, 30);
+    let best: CoverSpot | null = null;
+    let bestScore = Infinity;
+    for (const s of spots) {
+      if (s === this.spot) continue;
+      if (s.taken && s.taken !== this.enemy && s.taken.alive) continue;
+      const run = s.pos.distanceTo(me);
+      if (run > 24) continue;
+      const toP = s.pos.distanceTo(pp);
+      if (toP < 9 || toP > 45) continue;
+      // Only ever toward him: never a spot further off than where he is
+      if (toP > now + 2) continue;
+      const score = Math.abs(toP - want) + run * 0.35 + Math.random() * 3;
+      if (score >= bestScore) continue;
+      if (!this.spotCovers(s)) continue;
+      best = s;
+      bestScore = score;
+    }
+    return best;
+  }
+
+  /** Off to a new spot, if there is one; true if he's going. */
+  private moveOn(): boolean {
+    const next = this.pickSpot();
+    if (!next) return false;
+    this.releaseSpot();
+    this.spot = next;
+    next.taken = this.enemy;
+    this.spotPhase = 'toCover';
+    this.runT = 0;
+    return true;
+  }
+
+  /**
+   * One fight from cover in the open. Returns false when he has no spot and
+   * found none either: the ordinary fight has him for now, and every couple
+   * of seconds he looks again.
+   */
+  private updateSpotFight(dt: number): boolean {
+    const enemy = this.enemy;
+    const player = this.deps.player;
+    this.spotT -= dt;
+    if (!this.spot) {
+      if (this.spotT > 0 || !this.moveOn()) {
+        if (this.spotT <= 0) this.spotT = 1.6 + Math.random() * 1.4;
+        return false;
+      }
+    }
+    const spot = this.spot!;
+    const dist = this.playerDistance();
+    switch (this.spotPhase) {
+      case 'toCover': {
+        this.crouchTo(0, dt);
+        enemy.setRun(true);
+        this.runT += dt;
+        if (this.moveToward(spot.pos, INVESTIGATE_SPEED * 1.45, dt, 0.45)) {
+          enemy.setRun(false);
+          this.spotPhase = 'down';
+          this.spotT = 0.5 + Math.random() * 1.0;
+          this.pops = 1 + Math.floor(Math.random() * 3);
+        } else if (this.runT > 7 + spot.pos.distanceTo(enemy.position) * 0.5) {
+          // Not getting there (boxed in somewhere): give it up, fight where he is a while
+          enemy.setRun(false);
+          this.releaseSpot();
+          this.spotT = 2.5;
+          return false;
+        }
+        return true;
+      }
+      case 'down': {
+        this.crouchTo(0.85, dt);
+        enemy.setWalk(0);
+        enemy.faceToward(player.position, dt, 6);
+        // Round the side of it, or right on top of him: this one's no good any more
+        if (dist < 7 || !this.spotCovers(spot)) {
+          if (this.moveOn()) return true;
+          if (dist < 7) {
+            // Nowhere to go: stand and fight it out
+            this.releaseSpot();
+            this.spotT = 3;
+            return false;
+          }
+        }
+        if (this.spotT <= 0) {
+          this.spotPhase = 'up';
+          this.spotT = 1.4 + Math.random() * 1.3;
+          this.fireTimer = 0.3 + Math.random() * 0.3;
+        }
+        return true;
+      }
+      case 'up': {
+        this.crouchTo(0, dt);
+        enemy.setWalk(0);
+        enemy.faceToward(player.position, dt, 9);
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0) {
+          this.fireTimer = 0.5 + Math.random() * 0.45;
+          if (dist < 50 && this.visibleFrom(enemy.position)) this.deps.enemyFire(enemy);
+        }
+        if (this.spotT <= 0) {
+          this.pops--;
+          // Done here: on to the next one nearer him, or back down if there isn't one
+          if (this.pops > 0 || !this.moveOn()) {
+            this.spotPhase = 'down';
+            this.spotT = 1 + Math.random() * 1.6;
+            if (this.pops <= 0) this.pops = 2;
+          }
+        }
+        return true;
+      }
+    }
+    return true;
   }
 
   /**

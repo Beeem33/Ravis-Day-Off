@@ -15,7 +15,7 @@ import { Arsenal, loadoutFor, type Gun } from '../entities/Arsenal';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { DropKickViewmodel } from '../entities/DropKickViewmodel';
 import { Enemy } from '../entities/Enemy';
-import { EnemyAI } from '../entities/EnemyAI';
+import { EnemyAI, type CoverSpot } from '../entities/EnemyAI';
 import { armWithAK, rackAK } from '../entities/AkModel';
 import { CarSystem } from '../entities/CarSystem';
 import { Rockets } from '../entities/Rockets';
@@ -34,8 +34,7 @@ import { track, smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
  * headquarters, at night, in a storm.
  *
  *  1. Arrival. The van comes up the road and through the security gates —
- *     one leaf thrown open, the other torn off and skidding across the lot —
- *     and slides to a stop. The towers' guns open up on it. From his seat
+ *     both leaves smashed open on their hinges — and slides to a stop. The towers' guns open up on it. From his seat
  *     Ravi watches the door go back and the crew pile out; then he follows.
  *  2. The towers. Sanjay hands him the rocket launcher. Four outpost towers,
  *     an automated turret on each; one rocket brings one down. The crew take
@@ -83,6 +82,12 @@ const DROP_CHANCE = 0.34;
 /** How many of the Collective come at them in each phase, all of whom have to go down before they can move on. */
 const TOWER_QUOTA = 24;
 const ADVANCE_QUOTA = 22;
+/** The first wave at the van: this many down and the crew move up the lot. */
+const FIRST_WAVE = 8;
+/** How far out in front of the fight's front line the Collective's men come in. */
+const SPAWN_AHEAD = 18;
+/** Ravi's flashlight, on (candela). */
+const TORCH_ON = 28;
 /** The arrival's beats (seconds). */
 const T = {
   klaxon: 1.1,
@@ -187,8 +192,17 @@ export class HQScene extends CombatScene<HQData> {
   private readonly moonCol = new THREE.Color(0x8ea4d0);
 
   // ---- The gate
+  /** Each leaf's swing open on its hinge (radians) and how fast it's going. */
   private gateL = { a: 0, w: 0 };
-  private gateR: { pos: THREE.Vector3; vel: THREE.Vector3; rot: THREE.Euler; spin: THREE.Vector3; landed: boolean } | null = null;
+  private gateR = { a: 0, w: 0 };
+
+  // ---- Ravi's flashlight: F, when there's nobody in reach to grab
+  private torch!: THREE.SpotLight;
+  private torchOn = false;
+  /** Where the Collective's men take cover in the lot. */
+  private coverSpots: CoverSpot[] = [];
+  /** The Collective's men down in the towers phase (the first wave's what moves the crew up). */
+  private towerKills = 0;
 
   // ---- Third-person Ravi for the cutscenes
   private ravi: RaviRig | null = null;
@@ -250,6 +264,15 @@ export class HQScene extends CombatScene<HQData> {
     this.player.camera.far = 3200;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
+    // His flashlight. Made now, at nothing, and driven by intensity only: a
+    // light added or hidden later changes the count every material's shader
+    // is built for, and the whole lot would recompile mid-fight. Out past the
+    // muzzle, so the gun isn't the brightest thing in it.
+    this.torch = new THREE.SpotLight(0xffe6c0, 0, 48, Math.PI / 9, 0.45, 1.0);
+    this.torch.position.set(0.06, -0.1, -0.7);
+    this.torch.target.position.set(0.06, -0.18, -1.7);
+    this.player.camera.add(this.torch);
+    this.player.camera.add(this.torch.target);
 
     this.particles = new ParticleManager(this.scene, { smoke: 1000 });
     this.flashPool = new MuzzleFlashPool(this.scene, 3);
@@ -291,6 +314,7 @@ export class HQScene extends CombatScene<HQData> {
     this.cars = new CarSystem({ scene: this.scene, world: this.world, level: L, particles: this.particles, audio });
     for (const s of L.parked) this.cars.addParked(s);
     this.cars.settle();
+    this.buildCoverSpots();
     // A few already burnt out from the fighting before they got here, three of them still alight
     {
       let seed = 4242;
@@ -787,16 +811,13 @@ export class HQScene extends CombatScene<HQData> {
 
   private dtLast = 0;
 
-  /** The gate takes the van: the left leaf flung open on its hinges, the right torn off and sent skidding. */
+  /** The gate takes the van: both leaves flung open on their hinges, never quite the same twice. */
   private crashGate(): void {
     const L = this.level;
     const g = L.gate;
     g.collider.disabled = true;
-    this.gateL.w = 7.5;
-    const r = g.right;
-    const p = new THREE.Vector3();
-    r.getWorldPosition(p);
-    this.gateR = { pos: p, vel: V(-9.5, 4.6, -8.5), rot: new THREE.Euler(0, 0, 0), spin: V(-3.2, 2.0, 1.2), landed: false };
+    this.gateL.w = 6.6 + Math.random() * 2;
+    this.gateR.w = 6.6 + Math.random() * 2;
     const at = V(0, 1.4, 0);
     this.particles.sparks(at, V(0, 0.4, -1), 60);
     this.particles.concreteChips(at, V(0, 0, -1), 0x5a5e64);
@@ -807,61 +828,30 @@ export class HQScene extends CombatScene<HQData> {
 
   private updateGate(dt: number): void {
     const L = this.level;
-    // Left leaf: a hard swing open, a bounce off the wall, a wobble to rest
-    if (this.gateL.w !== 0 || this.gateL.a !== 0) {
+    // Each leaf: a hard swing open, a bounce off the wall, a wobble to rest.
+    // The left one swings one way about its hinge, the right the other.
+    for (const [s, leaf, side] of [[this.gateL, L.gate.left, 1], [this.gateR, L.gate.right, -1]] as [{ a: number; w: number }, THREE.Group, number][]) {
+      if (s.w === 0 && s.a === 0) continue;
       const target = 1.42;
-      const acc = (target - this.gateL.a) * 22 - this.gateL.w * 2.6;
-      this.gateL.w += acc * dt;
-      this.gateL.a += this.gateL.w * dt;
-      if (this.gateL.a > 1.72) {
-        this.gateL.a = 1.72;
-        this.gateL.w = -Math.abs(this.gateL.w) * 0.35;
+      const acc = (target - s.a) * 22 - s.w * 2.6;
+      s.w += acc * dt;
+      s.a += s.w * dt;
+      if (s.a > 1.72) {
+        s.a = 1.72;
+        s.w = -Math.abs(s.w) * 0.35;
       }
-      L.gate.left.rotation.set(0, this.gateL.a, -0.05 * Math.min(1, this.gateL.a));
+      leaf.rotation.set(0, side * s.a, -side * 0.05 * Math.min(1, s.a));
     }
-    // Right leaf: through the air, down flat, sliding along the wet in sparks
-    const r = this.gateR;
-    if (!r) return;
-    const leaf = L.gate.right;
-    if (!r.landed) {
-      r.vel.y -= 9.8 * dt;
-      r.pos.addScaledVector(r.vel, dt);
-      r.rot.x += r.spin.x * dt;
-      r.rot.y += r.spin.y * dt;
-      r.rot.z += r.spin.z * dt;
-      if (r.pos.y < 0.15 && r.vel.y < 0) {
-        r.landed = true;
-        r.pos.y = 0.12;
-        r.vel.y = 0;
-        this.particles.sparks(r.pos.clone().add(V(-3, 0.2, 0)), V(0, 1, 0), 40);
-        this.particles.dust(r.pos, 3, 1);
-        this.ctx.audio.carCrash(this.player.camera.position.distanceTo(r.pos), false);
-      }
-    } else {
-      const sp = Math.hypot(r.vel.x, r.vel.z);
-      if (sp > 0.05) {
-        r.vel.multiplyScalar(Math.max(0, 1 - dt * 1.6));
-        r.pos.addScaledVector(r.vel, dt);
-        if (Math.random() < 0.6) this.particles.sparks(r.pos.clone().add(V(-3.5 + Math.random() * 7, 0.1, 0)), V(-r.vel.x, 0.5, -r.vel.z).normalize(), 3);
-      }
-      // Settling flat, face down
-      r.rot.x += (-Math.PI / 2 - r.rot.x) * Math.min(1, dt * 6);
-      r.rot.z += (0 - r.rot.z) * Math.min(1, dt * 6);
-    }
-    leaf.position.copy(r.pos);
-    leaf.rotation.copy(r.rot);
   }
 
-  /** The gate as it was left, for a restart: one leaf hanging open, the other lying in the lot. */
+  /** The gate as it was left, for a restart: both leaves hanging open. */
   private gateWrecked(): void {
     const g = this.level.gate;
     g.collider.disabled = true;
-    this.gateL.a = 1.42;
-    this.gateL.w = 0;
+    this.gateL.a = this.gateR.a = 1.42;
+    this.gateL.w = this.gateR.w = 0;
     g.left.rotation.set(0, 1.42, -0.05);
-    g.right.position.set(-5.5, 0.12, -13.5);
-    g.right.rotation.set(-Math.PI / 2, 1.9, 0);
-    this.gateR = null;
+    g.right.rotation.set(0, -1.42, 0.05);
   }
 
   /** Off the bench, up the aisle, out of the door and down the step. */
@@ -1178,11 +1168,17 @@ export class HQScene extends CombatScene<HQData> {
       this.spawnAgent(this.pickSpawn(pool));
       this.phaseSpawned++;
     }
-    // The crew move up as the near towers fall
-    if (!this.towers[0].alive && !this.towers[1].alive && !this.movedMid) {
+    // The crew move up once the first wave's down (or the near pair of towers, if that's first),
+    // and from then on the Collective come in from up the lot, not back down it at the van
+    const nearDown = !this.towers[0].alive && !this.towers[1].alive;
+    if (!this.movedMid && (nearDown || this.towerKills >= FIRST_WAVE)) {
       this.movedMid = true;
       this.crewAI.forEach((c, i) => c.goTo(this.level.posts.mid[i], 0.4 + (i % 3) * 1.2));
-      this.say([{ who: 'SANJAY', text: 'Two down! Move up — next row!', dur: 2.6 }]);
+      this.say([
+        nearDown
+          ? { who: 'SANJAY', text: 'Two down! Move up — next row!', dur: 2.6 }
+          : { who: 'SANJAY', text: 'That’s the first lot! Off the van — up to the next row, Ravi!', dur: 3 }
+      ]);
     }
     // All four down isn't enough: every one of the Collective's men out here has to be dealt with too
     if (this.towersDown() >= 4 && this.phaseT > 0.5) {
@@ -1701,15 +1697,97 @@ export class HQScene extends CombatScene<HQData> {
 
   // ================================================================ the fight
 
+  /**
+   * The fight's front line, as a z down the lot (it runs from the gate to
+   * −Z, so further up is smaller): where the crew have been sent to, or
+   * Ravi, if he's out ahead of them.
+   */
+  private frontZ(): number {
+    let sum = 0;
+    let n = 0;
+    for (const c of this.crewAI) {
+      if (!c.post) continue;
+      sum += c.post.pos.z;
+      n++;
+    }
+    const p = this.player.position.z;
+    return n ? Math.min(sum / n, p) : p;
+  }
+
+  /**
+   * Where the next man comes from: out in front of the front line — never
+   * back down the lot behind Ravi or the crew, at the van they've left —
+   * not right on top of him, and not too far either. From `pool` if it
+   * has anywhere that'll do, else the next spawns up the lot.
+   */
   private pickSpawn(pool: HQSpawn[]): HQSpawn {
     const p = this.player.position;
-    // Somewhere not right on top of him, and not too far either
-    const ok = pool.filter((s) => {
-      const d = s.pos.distanceTo(p);
-      return d > 22 && d < 85;
+    const S = this.level.spawns;
+    const front = this.frontZ() - SPAWN_AHEAD;
+    for (const list of [pool, S.near, S.far, S.podium]) {
+      const ok = list.filter((s) => {
+        const d = s.pos.distanceTo(p);
+        return s.pos.z < front && d > 22 && d < 95;
+      });
+      if (ok.length) return ok[Math.floor(Math.random() * ok.length)];
+    }
+    // Nowhere in reach up ahead (he's right up at the podium): the doors, whatever the distance
+    return S.podium[Math.floor(Math.random() * S.podium.length)];
+  }
+
+  /**
+   * Where the Collective's men can get down out of the line of fire: round
+   * everything about chest high in the lot (the parked cars, the barriers,
+   * the sandbags, the vans), a step out from each side. Boxes that touch
+   * (a car is several, cut along its length) are one piece of cover.
+   */
+  private buildCoverSpots(): void {
+    const all = this.level.colliders.filter((c) => !c.disabled).map((c) => c.box);
+    const cand = all.filter((b) => {
+      const h = b.max.y;
+      return b.min.y < 0.3 && h > 0.8 && h < 3.2 && b.max.x - b.min.x < 16 && b.max.z - b.min.z < 16;
     });
-    const list = ok.length ? ok : pool;
-    return list[Math.floor(Math.random() * list.length)];
+    // Touching boxes into one
+    const parent = cand.map((_, i) => i);
+    const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+    const grown = cand.map((b) => b.clone().expandByScalar(0.06));
+    for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) if (grown[i].intersectsBox(grown[j])) parent[root(i)] = root(j);
+    const groups = new Map<number, THREE.Box3>();
+    cand.forEach((b, i) => {
+      const r = root(i);
+      const g = groups.get(r);
+      if (g) g.union(b);
+      else groups.set(r, b.clone());
+    });
+    const blocked = (x: number, z: number): boolean => {
+      // (not the ground: it's a collider too, a slab under the whole lot)
+      for (const b of all) if (b.max.y > 0.1 && x > b.min.x - 0.45 && x < b.max.x + 0.45 && z > b.min.z - 0.45 && z < b.max.z + 0.45 && b.min.y < 1.6) return true;
+      return false;
+    };
+    const OUT = 0.75;
+    for (const box of groups.values()) {
+      const sx = box.max.x - box.min.x;
+      const sz = box.max.z - box.min.z;
+      if (sx > 18 || sz > 18) continue;
+      const add = (x: number, z: number): void => {
+        if (Math.abs(x) > 68 || z > -8 || z < -178) return;
+        if (blocked(x, z)) return;
+        this.coverSpots.push({ pos: V(x, 0, z), box, taken: null });
+      };
+      // Along each face, a spot every couple of metres or so
+      const nx = Math.max(1, Math.round(sx / 2.4));
+      for (let k = 0; k < nx; k++) {
+        const x = box.min.x + ((k + 0.5) / nx) * sx;
+        add(x, box.min.z - OUT);
+        add(x, box.max.z + OUT);
+      }
+      const nz = Math.max(1, Math.round(sz / 2.4));
+      for (let k = 0; k < nz; k++) {
+        const z = box.min.z + ((k + 0.5) / nz) * sz;
+        add(box.min.x - OUT, z);
+        add(box.max.x + OUT, z);
+      }
+    }
   }
 
   private spawnAgent(at: HQSpawn): void {
@@ -1729,7 +1807,8 @@ export class HQScene extends CombatScene<HQData> {
       colliders: L.colliders,
       bus: this.ctx.bus,
       audio: this.ctx.audio,
-      enemyFire: (x) => this.enemyFire(x)
+      enemyFire: (x) => this.enemyFire(x),
+      coverSpots: this.coverSpots
     });
     ai.alert(this.player.position);
     const a: Agent = { e, hp: armour ? ARMOURED_HP : AGENT_HP, armour, ai, pooled: false, push: 2 + Math.random() * 3 };
@@ -1796,7 +1875,8 @@ export class HQScene extends CombatScene<HQData> {
   private spawnJet(): void {
     const L = this.level;
     const p = this.player.position;
-    const from = V((Math.random() - 0.5) * 80, 24 + Math.random() * 8, Math.max(-175, p.z - 70 - Math.random() * 20));
+    // Out ahead of the front line, like the men on foot: never in over the van once the crew have left it
+    const from = V((Math.random() - 0.5) * 80, 24 + Math.random() * 8, Math.max(-175, Math.min(p.z - 70, this.frontZ() - SPAWN_AHEAD - 40) - Math.random() * 20));
     const e = new Enemy(from, 0, 360 + this.jetsSpawned, { name: 'EC JETPACK' });
     armWithAK(e);
     e.setAiming(true);
@@ -2390,7 +2470,12 @@ export class HQScene extends CombatScene<HQData> {
     const cut = this.cutscene;
     const free = this.playable && input.pointerLocked;
     const tdTarget = this.stepTakedown(dt, this.agents.filter((a) => a.e.alive && !this.jetOf.has(a.e)).map((a) => a.e), !cut && this.player.alive && !this.arsenal.reloading && !this.drink.engaged && !this.dropKick.engaged && !this.nadeVm.busy && !this.launcherUp, (on) => this.hud.setTakedownHint(on));
-    void tdTarget;
+    // F: the flashlight, when there's nobody in reach to grab (then F's the knife). Off in the cutscenes.
+    if (input.wasPressed('KeyF') && free && !tdTarget && !this.inTakedown && this.player.alive) {
+      this.torchOn = !this.torchOn;
+      this.ctx.audio.uiBeep(this.torchOn);
+    }
+    this.torch.intensity = this.torchOn && !cut ? TORCH_ON : 0;
     if (input.wasPressed('KeyG') && !this.inTakedown && free && !this.arsenal.reloading && !this.dropKick.engaged && !this.nadeVm.busy) this.drink.start();
     if (!this.player.alive) this.drink.abort();
     if (input.wasPressed('KeyQ') && !this.inTakedown && free && !this.arsenal.reloading && !this.drink.engaged && this.player.grounded && !this.nadeVm.busy) {
@@ -2734,6 +2819,7 @@ export class HQScene extends CombatScene<HQData> {
     if (!enemy.alive || this.crew.includes(enemy)) return;
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
     if (this.phase === 'advance') this.advKills++;
+    else if (this.phase === 'towers') this.towerKills++;
     const a = this.agentOf.get(enemy);
     if (a) {
       a.ai?.dispose();

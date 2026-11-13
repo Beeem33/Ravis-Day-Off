@@ -575,6 +575,17 @@ export class CopDriver extends RouteDriver implements ICopDriver {
   vWant = 0;
   private bumpCd = 0;
   private bumping = false;
+  /** Seconds left of going for Ravi's back bumper at speed (the scene calls ram()). */
+  private ramT = 0;
+
+  /** Go for Ravi: up behind him and into his bumper, for up to `seconds` or until he's hit him. */
+  ram(seconds: number): void {
+    if (this.bumpCd <= 0) this.ramT = seconds;
+  }
+
+  get ramming(): boolean {
+    return this.ramT > 0;
+  }
 
   constructor(net: RoadNet, tune: CarTune = COP_TUNE) {
     super(net, tune, 'cop', COP_STYLE);
@@ -593,6 +604,7 @@ export class CopDriver extends RouteDriver implements ICopDriver {
   bumped(): void {
     this.bumpCd = 2.2;
     this.bumping = false;
+    this.ramT = 0;
   }
 
   update(dt: number, ravi: ICar, traffic: ITraffic, boss?: ICar | null): void {
@@ -638,16 +650,21 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       return;
     }
 
+    this.ramT = Math.max(0, this.ramT - dt);
     this.gather(traffic, [this.bumping ? null : ravi, boss ?? null]);
     const behind = this.routeGap(ravi, me);
     const rv = Math.max(0, ravi.speed);
     const top = me.tune.topSpeed;
-    // Ravi's crawling: go and give him a nudge
-    this.bumping = this.bumpCd <= 0 && rv < 7 && behind < 40 && behind > 0;
+    // Ravi's crawling: go and give him a nudge. Or he's been told to go for him: into his bumper at speed
+    this.bumping = this.bumpCd <= 0 && ((rv < 7 && behind < 40 && behind > 0) || (this.ramT > 0 && behind > 0 && behind < 45));
     let v: number;
     if (this.bumping) {
       this.wantD = ravi.at.d;
-      v = rv + 5;
+      if (this.ramT > 0) {
+        // Into Ravi's lane first (dropping back if he's come up beside him), then floor it into his bumper
+        const lat = Math.abs(ravi.at.d - me.at.d);
+        v = lat > 1.2 ? (behind < 9 ? rv - 5 : rv + 2) : rv + 10;
+      } else v = rv + 5;
       // Touched his bumper: back off a moment, then (if he's still crawling) again
       const rh = (ravi as { halfLength?: number }).halfLength ?? 2.2;
       if (behind < me.halfLength + rh + 0.4 && Math.abs(ravi.at.d - me.at.d) < 1.6) this.bumped();

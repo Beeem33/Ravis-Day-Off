@@ -416,7 +416,7 @@ export function finish(g: THREE.BufferGeometry, colour: number): THREE.BufferGeo
 /** Which material a part takes: on the parked cars paint, trim, glass and lamps; the rigs split lamps by job. */
 export type Layer = 'paint' | 'primer' | 'trim' | 'glass' | 'head' | 'tail' | 'ind';
 /** Which moving piece of a rig it belongs to. ('sunroof': the Civic's sliding glass panel, in its own frame; 'wheel': the steering wheel, in its own frame — centred on the hub, its face toward the driver along +Z.) */
-export type Node = 'body' | 'door' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap' | 'sunroof' | 'wheel';
+export type Node = 'body' | 'door' | 'doorR' | 'fl' | 'fr' | 'rl' | 'rr' | 'hubcap' | 'sunroof' | 'wheel';
 type WheelName = 'fl' | 'fr' | 'rl' | 'rr';
 export type WheelStyle = 'alloy' | 'exec' | 'steel' | 'steelBlack' | 'stub';
 
@@ -440,6 +440,8 @@ export class Kit {
 export interface Look {
   /** A hand-animated car: an open cabin with seats in it, and the driver's door its own piece. */
   rig?: boolean;
+  /** A rig whose front passenger door is its own piece too (the boss's car: his men go in and out of it). */
+  passengerDoor?: boolean;
   wreck?: boolean;
   exec?: boolean;
   civic?: boolean;
@@ -607,6 +609,9 @@ export function buildCar(m: Model, look: Look): Part[] {
   const nU = m.L / 2 - 0.07;
   const tU = m.tailU ?? -nU;
   const rig = !!look.rig;
+  /** Is this side's front door its own piece: the driver's (left) on any rig, the passenger's (right) where asked for. */
+  const ownDoor = (s: number): boolean => rig && (s < 0 || !!look.passengerDoor);
+  const doorNode = (s: number): Node => (s < 0 ? 'door' : 'doorR');
   const wreck = !!look.wreck;
   const exec = !!look.exec;
   const civic = !!look.civic;
@@ -655,8 +660,19 @@ export function buildCar(m: Model, look: Look): Part[] {
     const card = (u0: number, u1: number, s: number): THREE.BufferGeometry =>
       box(0.02, y1 - y0 - 0.18, Math.abs(u0 - u1) - 0.1, s * (hw - 0.066), (y0 + y1) / 2 + 0.03, -(u0 + u1) / 2);
     const cardCol = exec ? C.leather : C.cloth;
-    k.put(panel(m.skinRear, m.doorFront, 1), 'paint');
-    k.trim(card(m.skinRear, m.doorFront, 1), cardCol);
+    if (look.passengerDoor) {
+      // The passenger's side as the driver's: the rear panel on the body, the front door its own
+      k.put(panel(m.skinRear, m.doorRear - 0.006, 1), 'paint');
+      k.trim(card(m.skinRear, m.doorRear - 0.006, 1), cardCol);
+      k.node = 'doorR';
+      k.put(panel(m.doorRear, m.doorFront, 1), 'paint');
+      k.trim(card(m.doorRear, m.doorFront, 1), cardCol);
+      k.trim(box(0.05, 0.05, 0.3, hw - 0.09, m.belt - 0.28, -(m.doorRear + 0.35)), C.black);
+      k.node = 'body';
+    } else {
+      k.put(panel(m.skinRear, m.doorFront, 1), 'paint');
+      k.trim(card(m.skinRear, m.doorFront, 1), cardCol);
+    }
     k.put(panel(m.skinRear, m.doorRear - 0.006, -1), 'paint');
     k.trim(card(m.skinRear, m.doorRear - 0.006, -1), cardCol);
     k.node = 'door';
@@ -730,7 +746,7 @@ export function buildCar(m: Model, look: Look): Part[] {
       const fwd = uA(yb) - 0.1;
       const runs: [number, number][] = [[m.bPillar, fwd], [m.dloRear[1] - 0.02, m.bPillar]];
       runs.forEach(([u0, u1], i) => {
-        if (rig && s < 0 && i === 0) k.node = 'door';
+        if (ownDoor(s) && i === 0) k.node = doorNode(s);
         k.trim(box(0.012, 0.022, u1 - u0, xc, yc, -(u0 + u1) / 2), C.chrome);
         k.node = 'body';
       });
@@ -908,12 +924,12 @@ export function buildCar(m: Model, look: Look): Part[] {
     for (const u of m.doors) {
       // The rig's driver's door is a real panel with real seams; lines on the
       // body there would be left hanging in the air when it opens
-      if (rig && s < 0 && (u === m.doorFront || u === m.doorRear)) continue;
+      if (ownDoor(s) && (u === m.doorFront || u === m.doorRear)) continue;
       k.trim(strip(V(s * lineX, footAt(u), -u), V(s * lineX, m.belt - BS - 0.015, -u), 0.009, V(s, 0, 0)), C.hole);
     }
     for (let i = 0; i < m.doors.length - 1; i++) {
       const u = m.doors[i + 1] + 0.14;
-      if (rig && s < 0 && i === 0) k.node = 'door';
+      if (ownDoor(s) && i === 0) k.node = doorNode(s);
       k.trim(box(0.022, 0.026, 0.15, s * (lineX + 0.008), m.belt - BS - 0.06, -u), exec ? C.chrome : C.black);
       k.node = 'body';
     }
@@ -1460,7 +1476,7 @@ export function bakedCar(kind: CarKind, wrecked = false): BakedCar {
   const by: Record<keyof BakedCar, THREE.BufferGeometry[]> = { paint: [], trim: [], glass: [], lamps: [] };
   for (const part of parts) {
     if (part.node === 'hubcap' || part.node === 'sunroof' || part.node === 'wheel') continue;
-    if (part.node !== 'body' && part.node !== 'door') part.g.applyMatrix4(wheelMatrix(m, part.node));
+    if (part.node !== 'body' && part.node !== 'door' && part.node !== 'doorR') part.g.applyMatrix4(wheelMatrix(m, part.node));
     const slot: keyof BakedCar =
       part.layer === 'paint' || part.layer === 'primer'
         ? 'paint'
@@ -1544,6 +1560,11 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const door = new THREE.Group();
   door.position.copy(hinge).sub(body.position);
   body.add(door);
+  // The passenger's, the mirror of it (only filled on a rig that asks for it)
+  const hingeR = V(halfBody(m) + 0.006, m.belt, -m.doorFront);
+  const doorR = new THREE.Group();
+  doorR.position.copy(hingeR).sub(body.position);
+  body.add(doorR);
 
   const holder = (name: WheelName): { pivot: THREE.Object3D; spin: THREE.Object3D } => {
     const at = new THREE.Vector3().setFromMatrixPosition(wheelMatrix(m, name));
@@ -1569,6 +1590,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const parentOf = (node: Node): THREE.Object3D => {
     if (node === 'body') return body;
     if (node === 'door') return door;
+    if (node === 'doorR') return doorR;
     if (node === 'wheel') {
       if (!steeringWheel) {
         // On its column: +Z out of its face toward the driver, rotation.z turns it
@@ -1608,6 +1630,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
   const toNode = (node: Node): THREE.Matrix4 => {
     if (node === 'body') return new THREE.Matrix4().makeTranslation(0, -m.R, 0);
     if (node === 'door') return new THREE.Matrix4().makeTranslation(-hinge.x, -hinge.y, -hinge.z);
+    if (node === 'doorR') return new THREE.Matrix4().makeTranslation(-hingeR.x, -hingeR.y, -hingeR.z);
     if (node === 'sunroof' || node === 'wheel') return new THREE.Matrix4();
     if (node === 'fr' || node === 'rr') return new THREE.Matrix4().makeRotationY(Math.PI);
     return new THREE.Matrix4();
@@ -1661,6 +1684,9 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
     setDoor(k: number): void {
       door.rotation.y = -clamp01(k) * DOOR_OPEN;
     },
+    setPassengerDoor(k: number): void {
+      doorR.rotation.y = clamp01(k) * DOOR_OPEN;
+    },
     headlights: mats.headlights,
     brakelights: mats.brakelights,
     indicators: mats.indicators,
@@ -1680,7 +1706,7 @@ export function assemble(m: Model, parts: Part[], mats: RigMats, exhaustAt: THRE
  */
 export function bossCar(): CarRig {
   const m = MODELS.exec;
-  const parts = buildCar(m, { rig: true, exec: true, wheels: { fl: 'exec', fr: 'exec', rl: 'exec', rr: 'exec' } });
+  const parts = buildCar(m, { rig: true, exec: true, passengerDoor: true, wheels: { fl: 'exec', fr: 'exec', rl: 'exec', rr: 'exec' } });
   const paint = new THREE.MeshStandardMaterial({ color: 0x0b0c0f, roughness: 0.28, metalness: 0.22 });
   const rig = assemble(
     m,

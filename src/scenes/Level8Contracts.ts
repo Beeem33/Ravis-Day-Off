@@ -75,6 +75,8 @@ export interface CarRig {
   steer: { l: THREE.Object3D; r: THREE.Object3D };
   /** Driver's door: 0 shut .. 1 swung wide open (about 70°, out to the left). */
   setDoor(k: number): void;
+  /** The front passenger door, where the rig has one of its own: 0 shut .. 1 open (out to the right). */
+  setPassengerDoor?(k: number): void;
   /** Emissive materials the scene drives (intensity 0 = off). Never toggle visibility. */
   headlights: THREE.MeshStandardMaterial;
   brakelights: THREE.MeshStandardMaterial;

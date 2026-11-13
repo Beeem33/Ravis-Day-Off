@@ -102,7 +102,14 @@ const MAN_FLIP = { down: 0.9, outA: 0.5, outB: 1.6, armsA: 1.3, armsB: 1.75, hol
 const MAN_FLIP_CLOSE = 35;
 /** How many of the boss's men there are for the passenger seat, one after another; and how long before the next climbs into it. */
 const PASSENGERS = 3;
-const REPLACE_AFTER = 3.5;
+/**
+ * The changeover (seconds after the shot): the dead man hangs out of the
+ * window; the next one comes over from the back seat behind him (arrive);
+ * the door swings open, he shoves the body out of it (push), the door
+ * shuts, and he's into the seat (settle), and straight back at the window
+ * giving Ravi the finger (end).
+ */
+const SWAP = { arrive: 1.0, doorOpen: 2.3, push: 2.6, doorShut: 3.1, settle: 3.3, end: 4.6 };
 /** Into another car faster than this (m/s) and he goes out through the windscreen; slower, his head into the wheel. */
 const EJECT_SPEED = 20;
 /** Half a hole's length along the road (HighwayCollapse's HALF). */
@@ -269,8 +276,12 @@ export class StreetScene implements GameScene {
   private corpses: { e: Enemy; world: CANNON.World; t: number }[] = [];
   /** How many more are left to climb into the seat, when the next one does, and how far through climbing in he is (1, in). */
   private spareMen = PASSENGERS - 1;
-  private replaceT = -1;
   private manClimb = 1;
+  /** The dead one, hanging limp out of the window till he's shoved out; and the changeover's clock (−1, none going). */
+  private hanging: Enemy | null = null;
+  private swapT = -1;
+  /** Seconds till the cop next goes for Ravi's bumper. */
+  private copRamT = 8;
   /** Ravi out through the windscreen: his ragdoll (the same as on foot) and its little world with the road for a floor. DeathFx finds it here. */
   private raviRagdoll: RaviRagdoll | null = null;
   private ejectWorld: CANNON.World | null = null;
@@ -1297,8 +1308,8 @@ export class StreetScene implements GameScene {
     if (this.copChasing) {
       const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
       const t = this.cop.car.tune;
-      t.topSpeed = behind > 80 ? 72 : behind > 40 ? 64 : COP_TUNE.topSpeed + 4;
-      t.accel = behind > 80 ? 14 : behind > 40 ? 10 : COP_TUNE.accel + 1.5;
+      t.topSpeed = behind > 80 ? 78 : behind > 40 ? 68 : COP_TUNE.topSpeed + 9;
+      t.accel = behind > 80 ? 15 : behind > 40 ? 11 : COP_TUNE.accel + 3;
     }
     if (this.copChasing && !this.heliUp) {
       this.copSurgeT -= dt;
@@ -1307,8 +1318,14 @@ export class StreetScene implements GameScene {
         this.copSurgeT = 15 + Math.random() * 10;
       }
       this.copSurging = Math.max(0, this.copSurging - dt);
-      this.cop.gapMin = this.copSurging > 0 ? -8 : 7;
-      this.cop.gapMax = this.copSurging > 0 ? 0 : 22;
+      // And every several seconds he goes for Ravi's back bumper
+      this.copRamT -= dt;
+      if (this.copRamT <= 0 && this.copSurging <= 0) {
+        this.cop.ram(6);
+        this.copRamT = 6 + Math.random() * 5;
+      }
+      this.cop.gapMin = this.copSurging > 0 ? -8 : 4;
+      this.cop.gapMax = this.copSurging > 0 ? 0 : 14;
     }
     // ---- The exit
     if (!this.exitTold && this.boss.car.at.road === 'highway' && this.boss.car.at.s > L.exitS - 260) {
@@ -1395,7 +1412,7 @@ export class StreetScene implements GameScene {
       }
       this.particles.sparks(point, StreetScene.tmpA.set(0, 0.6, 0), Math.min(26, 6 + speed * 1.2));
     } else {
-      dmg = Math.max(0, speed - 3) * (other === 'traffic' ? 1.7 : other === 'boss' ? 0.75 : 1.2);
+      dmg = Math.max(0, speed - 3) * (other === 'traffic' ? 1.7 : other === 'boss' ? 0.75 : other === 'cop' ? 0.55 : 1.2);
       if (this.crashCd <= 0) {
         this.crashCd = 0.2;
         audio.carCrash(0, speed > 10);
@@ -2204,29 +2221,47 @@ export class StreetScene implements GameScene {
    * launcher too. Dead, he hangs out of it.
    */
   private updateBossMan(dt: number, gap: number, missileSoon: boolean): void {
-    // The next man, over from the back seat into the dead one's place: the tube, the window, the finger, all his now
-    if (this.manDead && this.replaceT >= 0) {
-      this.replaceT -= dt;
-      if (this.replaceT < 0) {
+    // The changeover: the next man over from the back seat behind the dead one; the door open, the
+    // body shoved out of it, the door shut, him into the seat — and the tube, the window, the finger, all his now
+    if (this.swapT >= 0) {
+      const t0 = this.swapT;
+      this.swapT += dt;
+      const t = this.swapT;
+      if (t0 < SWAP.arrive && t >= SWAP.arrive && this.spareMen > 0) {
         this.spareMen--;
         this.buildPassenger();
         this.manDead = false;
         this.manClimb = 0;
         this.launcherPose = null;
         this.manFlipT = -1;
-        this.manFlipCd = 9 + Math.random() * 6;
-        this.volleyCd = 7;
+        this.volleyCd = 12;
         this.volleyLeft = 0;
         this.lean = 0;
       }
+      const door = t < SWAP.doorOpen ? 0 : t < SWAP.doorOpen + 0.45 ? smooth((t - SWAP.doorOpen) / 0.45) : t < SWAP.doorShut ? 1 : t < SWAP.doorShut + 0.5 ? 1 - smooth((t - SWAP.doorShut) / 0.5) : 0;
+      this.bossRig.setPassengerDoor?.(door);
+      if (t0 < SWAP.push && t >= SWAP.push && this.hanging) {
+        this.pushOut(this.hanging);
+        this.hanging = null;
+        this.ctx.audio.carScrape(this.camera.position.distanceTo(this.boss.car.position));
+      }
+      if (t >= SWAP.end) {
+        this.swapT = -1;
+        // Straight back at the window to give Ravi the finger: there's no missing him
+        this.manFlipT = 0;
+        this.manFlipCd = 12 + Math.random() * 10;
+      }
     }
-    if (this.manClimb < 1) this.manClimb = Math.min(1, this.manClimb + dt / 1.6);
+    if (this.manClimb < 1) {
+      const cap = this.swapT >= 0 && this.swapT < SWAP.settle ? 0.55 : 1;
+      this.manClimb = Math.min(cap, this.manClimb + dt / 1.2);
+    }
     if (!this.manDead) {
       if (this.manFlipT < 0) {
         // Ravi right on his bumper winds him up a lot faster
         const close = gap > 6 && gap < MAN_FLIP_CLOSE;
         this.manFlipCd -= dt * (close ? 4 : 1);
-        const quiet = this.phase === 'drive' && !this.heliUp && this.volleyLeft === 0 && this.lean < 0.05 && this.volleyCd > 3 && gap > 6 && gap < 140;
+        const quiet = this.phase === 'drive' && this.swapT < 0 && !this.heliUp && this.volleyLeft === 0 && this.lean < 0.05 && this.volleyCd > 3 && gap > 6 && gap < 140;
         if (this.manFlipCd <= 0 && quiet) {
           this.manFlipT = 0;
           this.manFlipCd = 12 + Math.random() * 10;
@@ -2238,7 +2273,7 @@ export class StreetScene implements GameScene {
       }
     }
     const f = this.manFlipT;
-    const winWant = this.manDead || this.manClimb < 1 || this.lean > 0.02 || missileSoon || (f >= 0 && f < MAN_FLIP.winUp) ? 1 : 0;
+    const winWant = this.manDead || this.hanging !== null || this.swapT >= 0 || this.manClimb < 1 || this.lean > 0.02 || missileSoon || (f >= 0 && f < MAN_FLIP.winUp) ? 1 : 0;
     this.winK = THREE.MathUtils.clamp(this.winK + (winWant ? 1 : -1) * (dt / MAN_FLIP.down), 0, 1);
     this.setBossWindow(smooth(this.winK));
     if (this.manDead) {
@@ -2275,31 +2310,55 @@ export class StreetScene implements GameScene {
     this.volleyCd = Infinity;
     this.particles.bloodSpray(at, dir, true, at.y - 1.5);
     man.setMiddleFingers(false, false);
+    man.setHeadLook(null);
     this.launcher.visible = false;
-    // Out of the window with the round, limp, and down the road behind the car at its speed
-    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -14, 0) });
-    world.allowSleep = true;
-    world.defaultContactMaterial.friction = 0.55;
-    world.defaultContactMaterial.restitution = 0.1;
-    const road = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
-    road.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-    road.position.set(0, this.boss.car.position.y, 0);
-    world.addBody(road);
-    man.pose = null;
-    this.scene.attach(man.root);
-    man.root.visible = true;
-    man.die(at, dir, world, 'torso', 1.3);
-    const bv = this.boss.car.velocity;
-    const outward = StreetScene.tmpB.set(Math.cos(this.boss.car.yaw), 0, -Math.sin(this.boss.car.yaw));
-    man.launch(StreetScene.tmpC.set(bv.x * 0.85, 2.2, bv.z * 0.85).addScaledVector(outward, 3.5));
-    this.corpses.push({ e: man, world, t: 0 });
-    // Another of them in the back, if there's one left, to climb into his seat
-    if (this.spareMen > 0) this.replaceT = REPLACE_AFTER;
+    // Limp, hanging out of the window where he was; the next of them, if there's one left, gets rid of him
+    man.pose = this.deadPose;
+    this.hanging = man;
+    if (this.spareMen > 0) this.swapT = 0;
     this.hitMark = 1;
     audio.killConfirm();
     audio.tyreSqueal(1.1, this.camera.position.distanceTo(this.boss.car.position));
     this.boss.swerve(Math.random() < 0.5 ? -1 : 1);
     this.setObjective(this.spareMen > 0 ? "HIS MAN'S DOWN — ANOTHER'S CLIMBING INTO THE SEAT" : "THAT'S THE LAST OF HIS MEN — NO MORE MISSILES");
+  }
+
+  /** Shoved out of the open door, dead: limp, out sideways and down the road behind the car at its speed. */
+  private pushOut(man: Enemy): void {
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -14, 0) });
+    world.allowSleep = true;
+    world.defaultContactMaterial.friction = 0.45;
+    world.defaultContactMaterial.restitution = 0.12;
+    const road = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+    road.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    road.position.set(0, this.boss.car.position.y, 0);
+    world.addBody(road);
+    const outward = new THREE.Vector3(Math.cos(this.boss.car.yaw), 0, -Math.sin(this.boss.car.yaw));
+    man.pose = null;
+    this.scene.attach(man.root);
+    man.root.visible = true;
+    const at = man.chest.getWorldPosition(new THREE.Vector3());
+    man.die(at, outward, world, 'torso', 0.6);
+    const bv = this.boss.car.velocity;
+    man.launch(new THREE.Vector3(bv.x * 0.85, 1.6, bv.z * 0.85).addScaledVector(outward, 5));
+    this.corpses.push({ e: man, world, t: 0 });
+    this.particles.dust(at.clone().setY(this.boss.car.position.y), 1.5, 0.8);
+  }
+
+  /** One of the boss's men on the passenger seat: knelt facing back at Ravi, out of the window by `k`, `climb` of the way over from the back seat. */
+  private seatMan(e: Enemy, k: number, climb: number, dt: number): void {
+    const seat = this.bossRig.seat.hip;
+    const axle = this.bossRig.body.position.y;
+    e.position.set(-seat.x + 0.28 * k, seat.y + 0.28 * k - axle, seat.z - 0.3);
+    if (climb < 1) {
+      const c = smooth(climb);
+      e.position.z += (1 - c) * 0.95;
+      e.position.x -= (1 - c) * 0.3;
+      e.position.y -= Math.sin(c * Math.PI) * 0.12 + (1 - c) * 0.1;
+    }
+    e.yaw = Math.PI;
+    e.update(dt);
+    e.root.rotation.set(0, Math.PI, 0.12 + 0.68 * k, 'YXZ');
   }
 
   /** Where the passenger leans out of the window: in (0) or right out (1), placed on the car. */
@@ -2316,7 +2375,12 @@ export class StreetScene implements GameScene {
         c.e.root.visible = false;
       }
     }
-    // Nobody in the seat yet (the last one's out on the road)
+    // The dead one, hanging limp out of the window until he's shoved out
+    if (this.hanging) {
+      this.hanging.root.visible = true;
+      this.seatMan(this.hanging, 0.5, 1, dt);
+    }
+    // Nobody alive in the seat yet
     if (this.manDead) return;
     const f = this.manFlipT;
     const flipping = !this.manDead && f >= 0;
@@ -2346,19 +2410,8 @@ export class StreetScene implements GameScene {
     // Knees on the passenger seat, facing back down the road at Ravi; he
     // gets up on them and leans out from there, hips in the window, until
     // his whole top half is out past the roof and his launcher is out over the road
-    const seat = this.bossRig.seat.hip;
-    const axle = this.bossRig.body.position.y;
-    e.position.set(-seat.x + 0.28 * k, seat.y + 0.28 * k - axle, seat.z - 0.3);
     // Climbing over from the back seat: hunched low between the seats, then up into his place
-    if (this.manClimb < 1) {
-      const c = smooth(this.manClimb);
-      e.position.z += (1 - c) * 0.95;
-      e.position.x -= (1 - c) * 0.3;
-      e.position.y -= Math.sin(c * Math.PI) * 0.12 + (1 - c) * 0.1;
-    }
-    e.yaw = Math.PI;
-    e.update(dt);
-    e.root.rotation.set(0, Math.PI, 0.12 + 0.68 * k, 'YXZ');
+    this.seatMan(e, k, this.manClimb, dt);
   }
 
   /** Is this where the missiles fly? Ravi on the avenue, or on the highway between the helicopters. */
@@ -2386,7 +2439,7 @@ export class StreetScene implements GameScene {
     const p = this.player;
     const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
     // (not at a man in the air off the ramp: he couldn't do a thing about it)
-    const can = this.phase === 'drive' && !this.manDead && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 30 && gap < 170;
+    const can = this.phase === 'drive' && !this.manDead && this.swapT < 0 && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 30 && gap < 170;
     if (can) {
       this.volleyCd -= dt;
       if (this.volleyCd <= 0 && this.volleyLeft === 0 && this.lean > 0.92) {
@@ -3091,7 +3144,7 @@ export class StreetScene implements GameScene {
     const man = this.passenger;
     let manT: number | null = null;
     // (only with his window down: it's armoured glass)
-    if (!this.manDead && man.root.visible && this.winK > 0.5) {
+    if (!this.manDead && this.swapT < 0 && man.root.visible && this.winK > 0.5) {
       const chest = man.chest.getWorldPosition(new THREE.Vector3());
       if (ray.intersectSphere(new THREE.Sphere(chest, 0.55), tmp) && tmp.distanceTo(o) < best) {
         best = tmp.distanceTo(o);

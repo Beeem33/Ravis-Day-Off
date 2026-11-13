@@ -44,6 +44,14 @@ const CAM_BACK = 2.0;
 
 const X = new THREE.Vector3(1, 0, 0);
 const Y = new THREE.Vector3(0, 1, 0);
+const _hq = new THREE.Quaternion();
+const _hw = new THREE.Quaternion();
+const _hp = new THREE.Vector3();
+const _hl = new THREE.Quaternion();
+/** Lying on his side: the view rolled most of the way over. */
+const _lying = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.15);
+/** Half a turn about up: a head's +Z (where the face points) onto a camera's -Z. */
+const _turn = new THREE.Quaternion().setFromAxisAngle(Y, Math.PI);
 const Z = new THREE.Vector3(0, 0, 1);
 const I = new THREE.Quaternion();
 
@@ -584,6 +592,11 @@ export class RaviRagdoll implements DeathHandler {
   orbit = 0;
   /** The cap on any part's speed (an arm tunnelling into a wall, otherwise); fling() lifts it. */
   private maxSpeed = MAX_SPEED;
+  /** Set by the scene: the camera stays in his eyes, going wherever his head goes, rather than coming up out of him. */
+  firstPerson = false;
+  /** First person, once he's come to rest: what his eyes settle on (the scene keeps it up to date), lying there. */
+  eyeTarget: THREE.Vector3 | null = null;
+  private eyeRest = 0;
 
   update(dt: number): void {
     if (!this.active) return;
@@ -839,6 +852,10 @@ export class RaviRagdoll implements DeathHandler {
 
   private updateCamera(dt: number): void {
     const cam = this.o.player.camera;
+    if (this.firstPerson) {
+      this.eyeCamera(dt);
+      return;
+    }
     const len = this.camLen();
     // Once it's up, a slow drift round him (radians a second; 0, it holds still)
     if (this.orbit && this.time > CAM_BLEND) this.camDir.applyAxisAngle(Y, this.orbit * dt);
@@ -866,6 +883,35 @@ export class RaviRagdoll implements DeathHandler {
     const h = this.parts.get('head')!.body.position;
     const near = cam.position.distanceTo(RaviRagdoll._v.set(h.x, h.y, h.z)) < 0.55;
     this.rig!.bones.get('neck_01')!.scale.setScalar(near ? 1e-4 : 1);
+  }
+
+  /**
+   * His own eyes, still: the camera rides his head as it tumbles (a touch
+   * smoothed, so the world turns rather than strobes), his head and neck
+   * folded away so it's his body and the road he sees, not the inside of his skull.
+   */
+  private eyeCamera(dt: number): void {
+    const cam = this.o.player.camera;
+    const hb = this.parts.get('head')!.body;
+    const hq = _hq.set(hb.quaternion.x, hb.quaternion.y, hb.quaternion.z, hb.quaternion.w);
+    // The head's +Z is the way his face points; the camera looks down its own -Z
+    cam.position.set(0, 0.01, 0.1).applyQuaternion(hq).add(_hp.set(hb.position.x, hb.position.y, hb.position.z));
+    const want = _hw.copy(hq).multiply(_turn);
+    // Come to rest: his cheek on the road, eyes on what the scene's given him to look at, the world on its side
+    this.eyeRest = this.settled && this.eyeTarget ? Math.min(1, this.eyeRest + dt / 1.8) : 0;
+    if (this.eyeRest > 0 && this.eyeTarget) {
+      const k = this.eyeRest * this.eyeRest * (3 - 2 * this.eyeRest);
+      // Just off his head toward what he's looking at, and (lying in his own way otherwise) the top half of him out of his eyes
+      const T = this.eyeTarget;
+      const to = _hp.set(T.x - hb.position.x, 0, T.z - hb.position.z).normalize();
+      cam.position.lerp(to.set(hb.position.x + to.x * 0.18, hb.position.y + 0.13, hb.position.z + to.z * 0.18), k);
+      this.rig!.bones.get('spine_03')!.scale.setScalar(k > 0.15 ? 1e-4 : 1);
+      const look = _hl.setFromRotationMatrix(RaviRagdoll._m.lookAt(cam.position, this.eyeTarget, Y)).multiply(_lying);
+      want.slerp(look, k);
+    }
+    cam.quaternion.slerp(want, 1 - Math.exp(-dt * 16));
+    cam.updateMatrixWorld();
+    this.rig!.bones.get('neck_01')!.scale.setScalar(1e-4);
   }
 
   /**

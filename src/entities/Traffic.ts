@@ -175,6 +175,8 @@ export class Traffic implements ITraffic {
   /** The cars on the road now (lane cars and wrecks). Rebuilt each update; ids index the pool and stay valid while a car lives. */
   readonly cars: TrafficCarState[] = [];
   enabled = true;
+  /** Everyone's seen something terrible up ahead: every car brakes to a stop where it is, and stays stopped. */
+  halt = false;
   onHorn: ((pos: THREE.Vector3) => void) | null = null;
 
   private pool: TCar[] = [];
@@ -549,6 +551,11 @@ export class Traffic implements ITraffic {
     c.speed = Math.max(0, v + acc * dt);
     // Whatever the model says, never drive into the car in front
     if (gap < 1.5) c.speed = Math.min(c.speed, Math.max(0, vLead) * Math.max(0, gap / 1.5));
+    // Halted: on the brakes (some harder than others), down to a stop, and no lane changes
+    if (this.halt) {
+      c.speed = Math.max(0, Math.min(c.speed, v - (5 + c.trait * 4) * dt));
+      c.laneTimer = 99;
+    }
 
     // ---- lane changes: now and then on multi-lane roads, or to get round something stopped
     if (L.siblings.length > 1 && c.laneTimer <= 0) {

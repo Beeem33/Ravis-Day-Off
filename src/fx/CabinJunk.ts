@@ -38,7 +38,11 @@ export class CabinJunk {
   private readonly group = new THREE.Group();
   private loose = false;
   private readonly prevVel = new THREE.Vector3();
+  private readonly prevQ = new THREE.Quaternion();
   private hasPrev = false;
+  /** His head, in the cabin: kept clear, so nothing ends up filling his eyes (keepClear()). */
+  private readonly head = new THREE.Vector3(-0.36, 1.1, 0.35);
+  private headR = 0;
 
   constructor(private readonly rig: CarRig) {
     this.group.position.y = -rig.body.position.y;
@@ -95,7 +99,40 @@ export class CabinJunk {
     add(box(0.22, 0.09, 0.12, M(0x6fa0c8, 0.8)), -0.32, 0.54, 1.25, 0.3, 0.12);
     add(box(0.48, 0.24, 0.26, M(0x22252b, 0.9)), 0.25, 0.62, 1.28, -0.2, 0.26);
     add(box(0.36, 0.06, 0.3, M(0x7a2f2f, 1)), -0.05, 0.52, 1.35, 0.5, 0.2);
+    // And the rest of it, everywhere: a coffee cup, receipts and napkins, a pen, his keys, a CD, a cassette, a lighter, more fries
+    const cup = new THREE.Group();
+    const cupBody = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.032, 0.13, 12), M(0xf3efe6, 0.8));
+    const lid = cyl(0.044, 0.014, M(0x2a2a2a, 0.5));
+    lid.position.y = 0.07;
+    const sleeve = cyl(0.04, 0.05, M(0x8a5a33, 0.9));
+    cup.add(cupBody, lid, sleeve);
+    add(cup, 0.12, 0.6, 0.15, 0, 0.08);
+    const papers = [0xe9e6dc, 0xf7f3e8, 0xfafafa, 0xf4ee9a, 0xffffff, 0xdfe8f0];
+    for (let i = 0; i < 9; i++) {
+      const w = 0.07 + (i % 3) * 0.04;
+      add(box(w, 0.003, w * (1.3 + (i % 2) * 0.6), M(papers[i % papers.length], 0.95)), -0.5 + (i % 5) * 0.25, 0.3 + (i % 3) * 0.25, -0.2 + i * 0.17, i * 0.7, 0.06);
+    }
+    add(cyl(0.005, 0.14, M(0x1d3fa8, 0.4)), 0.15, 0.97, -0.3, 1.2, 0.06);
+    const keys = new THREE.Group();
+    keys.add(new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.003, 6, 14), M(0xbfc3c8, 0.3, 0.9)));
+    for (let i = 0; i < 3; i++) {
+      const k = box(0.012, 0.05, 0.003, M(0xc9b27a, 0.3, 0.9));
+      k.position.set(-0.012 + i * 0.012, -0.035, 0);
+      k.rotation.z = (i - 1) * 0.35;
+      keys.add(k);
+    }
+    add(keys, 0.02, 0.58, 0.3, 0, 0.04);
+    add(box(0.12, 0.01, 0.12, M(0x9fd0ff, 0.2, 0.4)), 0.3, 0.52, 0.2, 0.3, 0.08);
+    add(box(0.1, 0.016, 0.064, M(0x222222, 0.5)), 0.4, 0.3, 0.3, 0.9, 0.06);
+    add(box(0.022, 0.07, 0.012, M(0xd0262d, 0.4)), 0.2, 0.3, -0.05, 0.2, 0.04);
+    for (let i = 0; i < 7; i++) add(box(0.01, 0.065, 0.01, M(0xf2c14e, 0.8)), 0.25 + (i % 3) * 0.05, 0.5, 0.25 + i * 0.03, i, 0.03);
     for (const it of this.items) this.place(it);
+  }
+
+  /** Nothing comes within `r` of `center` (the cabin's frame): where the driver's head is. */
+  keepClear(center: THREE.Vector3, r: number): void {
+    this.head.copy(center);
+    this.headR = r;
   }
 
   /** Blown loose: everything comes free with a kick of its own. */
@@ -104,7 +141,12 @@ export class CabinJunk {
     this.loose = true;
     this.hasPrev = false;
     for (const it of this.items) {
-      it.vel.set((Math.random() - 0.5) * 3, 1.5 + Math.random() * 2.5, (Math.random() - 0.5) * 3);
+      // Thrown up out of where it lay, and most of it in toward the front of the cabin, past his face
+      const tx = -0.45 + Math.random() * 0.9;
+      const ty = 0.75 + Math.random() * 0.5;
+      const tz = -0.35 + Math.random() * 0.75;
+      const T = 0.35 + Math.random() * 0.4;
+      it.vel.set((tx - it.pos.x) / T + (Math.random() - 0.5) * 1.5, (ty - it.pos.y) / T + 1 + Math.random() * 1.5, (tz - it.pos.z) / T + (Math.random() - 0.5) * 1.5);
       it.spin.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14);
     }
   }
@@ -131,13 +173,20 @@ export class CabinJunk {
     // The car's acceleration (world): it's what everything inside it is left behind by
     if (!this.hasPrev) {
       this.prevVel.copy(carVel);
+      this.prevQ.copy(q);
       this.hasPrev = true;
     }
+    // The car turning round it: what's loose stays going the way it was going, so as the car
+    // rolls the cabin turns past everything in it (and its walls come round into it)
+    const turn = _t.copy(inv).multiply(this.prevQ);
+    this.prevQ.copy(q);
     const acc = _a.subVectors(carVel, this.prevVel).divideScalar(dt);
     this.prevVel.copy(carVel);
     acc.clampLength(0, 60);
     const g = _g.set(0, -9.8, 0).sub(acc).applyQuaternion(inv);
     for (const it of this.items) {
+      it.pos.sub(_c).applyQuaternion(turn).add(_c);
+      it.vel.applyQuaternion(turn);
       it.vel.addScaledVector(g, dt);
       it.pos.addScaledVector(it.vel, dt);
       // Off the cabin's sides, floor and roof: a dull bounce, and it scrubs speed off along them
@@ -149,6 +198,19 @@ export class CabinJunk {
           it.vel[ax] *= -0.32;
           for (const o of ['x', 'y', 'z'] as const) if (o !== ax) it.vel[o] *= 0.82;
           it.spin.multiplyScalar(0.7);
+        }
+      }
+      // Off his head, the same
+      if (this.headR > 0) {
+        const off = _a.subVectors(it.pos, this.head);
+        const min = this.headR + it.r * 0.6;
+        const dd = off.length();
+        if (dd < min) {
+          if (dd < 1e-4) off.set(1, 0, 0);
+          off.normalize();
+          it.pos.copy(this.head).addScaledVector(off, min);
+          const vn = it.vel.dot(off);
+          if (vn < 0) it.vel.addScaledVector(off, -1.4 * vn);
         }
       }
       it.mesh.rotation.x += it.spin.x * dt;
@@ -169,5 +231,8 @@ export class CabinJunk {
 }
 
 const _q = new THREE.Quaternion();
+const _t = new THREE.Quaternion();
+/** The middle of the cabin: what it turns about as the car rolls. */
+const _c = new THREE.Vector3(0, 0.8, 0.6);
 const _a = new THREE.Vector3();
 const _g = new THREE.Vector3();

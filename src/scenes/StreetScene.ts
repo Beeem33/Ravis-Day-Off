@@ -296,6 +296,11 @@ export class StreetScene implements GameScene {
     forwardDir: (): THREE.Vector3 => new THREE.Vector3(-Math.sin(this.ejectAs.yaw), 0, -Math.cos(this.ejectAs.yaw))
   };
   private ejected = false;
+  private readonly ejectLook = new THREE.Vector3();
+  /** The cars round him when he went through the glass, as boxes in his ragdoll's world (he goes over them, not through them). */
+  private ejectCars: { car: { position: THREE.Vector3; yaw: number }; body: CANNON.Body }[] = [];
+  /** On its roof and come to rest: how far round his eyes have come onto the boss going away (0..1). */
+  private wreckLookK = 0;
   // ---- The cop's chase: mostly on Ravi's tail, now and then up alongside
   private copSurgeT = 18;
   private copSurging = 0;
@@ -459,6 +464,8 @@ export class StreetScene implements GameScene {
     const hip = this.civicRig.seat.hip;
     this.interior = new CivicInterior(this.civicRig);
     this.junk = new CabinJunk(this.civicRig);
+    // Whatever flies about, out of his face (the cabin's frame: where his eyes are in the seat)
+    this.junk.keepClear(new THREE.Vector3(hip.x, hip.y + 0.68, hip.z + 0.06), 0.34);
     this.buildEject();
     this.mirrors = new CarMirrors(this.civicRig, { x: hip.x, y: hip.y + 0.68, z: hip.z + 0.06 }, CivicInterior.MIRROR_AT);
     this.buildPistol();
@@ -654,7 +661,17 @@ export class StreetScene implements GameScene {
       // window arm falls a little back of straight down (the seat back's there), out of the window he's looking through
       const want = StreetScene.tmpB.copy(down);
       if (this.wreck && side === 'l') want.add(StreetScene.tmpC.set(0, 0, -1.1)).normalize();
-      st.v.addScaledVector(StreetScene.tmpA.copy(want).sub(st.d), 34 * dt).multiplyScalar(Math.exp(-dt * 2.6));
+      // Going over (in the air, weightless, and tumbling down the road on the roof): flung about
+      // in front of him, up past his face and out to the sides, the two of them never together
+      const fl = this.wreckFlail();
+      if (fl > 0) {
+        const t = this.wreck!.t;
+        const sg = side === 'l' ? 1 : -1;
+        const ph = side === 'l' ? 0 : 2.1;
+        const fling = StreetScene.tmpC.set(sg * (0.3 + 0.5 * Math.sin(t * 9.3 + ph)), 0.3 + 0.75 * Math.sin(t * 7.1 + ph * 1.7), 0.6 + 0.4 * Math.sin(t * 11.3 + ph * 0.6)).normalize();
+        want.lerp(fling, fl).normalize();
+      }
+      st.v.addScaledVector(StreetScene.tmpA.copy(want).sub(st.d), (34 + 60 * fl) * dt).multiplyScalar(Math.exp(-dt * (2.6 + 3 * fl)));
       st.d.addScaledVector(st.v, dt).normalize();
       const wrist = S.clone().addScaledVector(st.d, 0.54);
       const along = st.d.clone();
@@ -666,6 +683,14 @@ export class StreetScene implements GameScene {
       r.reach(side, wrist, along, palm, toward, S, 0.5, false).hand(side, HAND.relaxed);
     }
     r.apply();
+  }
+
+  /** How hard his arms are being thrown about in the wreck: all the way through the air, easing off as it slides to a stop. */
+  private wreckFlail(): number {
+    const w = this.wreck;
+    if (!w) return 0;
+    if (!w.down) return 1;
+    return clamp01((Math.hypot(w.vel.x, w.vel.z) - 3) / 5);
   }
 
   /** How far up the finger is (0 on the wheel, 1 up). */
@@ -1214,6 +1239,14 @@ export class StreetScene implements GameScene {
     }
     // Out through the windscreen: his body down the road, the death camera with it
     if (this.ejected && this.ejectWorld && this.raviRagdoll) {
+      // Where he'll end up looking, lying there: the boss, going
+      const b = this.boss.car.position;
+      this.ejectLook.set(b.x, b.y + 0.7, b.z);
+      this.raviRagdoll.eyeTarget = this.ejectLook;
+      for (const { car, body } of this.ejectCars) {
+        body.position.set(car.position.x, car.position.y + 0.72, car.position.z);
+        body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), car.yaw);
+      }
       this.ejectWorld.step(1 / 60, dt, 4);
       this.raviRagdoll.update(dt);
     }
@@ -1468,7 +1501,7 @@ export class StreetScene implements GameScene {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -16, 0) });
     world.allowSleep = true;
     // Slick enough that he bounces and tumbles on down the road rather than stopping where he lands
-    world.defaultContactMaterial.friction = 0.2;
+    world.defaultContactMaterial.friction = 0.32;
     world.defaultContactMaterial.restitution = 0.22;
     const road = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
     road.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
@@ -1506,9 +1539,25 @@ export class StreetScene implements GameScene {
     const A = this.ejectAs;
     A.yaw = p.yaw;
     A.position.copy(start);
-    A.velocity.copy(fwd).multiplyScalar(Math.max(16, speed * 0.85)).setY(4.5);
+    A.velocity.copy(fwd).multiplyScalar(Math.max(16, Math.min(30, speed * 0.7))).setY(4.5);
+    // The cars about him, solid to him: the one he hit, and anything he comes down on
+    type Boxy = { position: THREE.Vector3; yaw: number; halfLength?: number; halfWidth?: number };
+    const near: Boxy[] = [this.boss.car, this.cop.car, ...this.traffic.cars].filter((c) => c.position.distanceToSquared(p.position) < 90 * 90);
+    for (const c of near as Boxy[]) {
+      const body = new CANNON.Body({ type: CANNON.Body.KINEMATIC, shape: new CANNON.Box(new CANNON.Vec3(c.halfWidth ?? 0.9, 0.72, c.halfLength ?? 2.3)) });
+      body.position.set(c.position.x, c.position.y + 0.72, c.position.z);
+      body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), c.yaw);
+      this.ejectWorld!.addBody(body);
+      this.ejectCars.push({ car: c, body });
+    }
+    // Everyone on the brakes
+    this.traffic.halt = true;
+    this.traffic.enabled = false;
+    // Still behind his own eyes, all the way out and down the road
+    this.raviRagdoll.firstPerson = true;
     this.raviRagdoll.begin(null);
-    this.raviRagdoll.fling(new THREE.Quaternion().setFromAxisAngle(right, -1.35), start.clone().setY(start.y + 0.9), A.velocity, right.clone().multiplyScalar(-5));
+    // (pitched over far enough to go out head first, his face still to the road ahead; turning over slowly enough to see it)
+    this.raviRagdoll.fling(new THREE.Quaternion().setFromAxisAngle(right, -0.75), start.clone().setY(start.y + 0.9), A.velocity, right.clone().multiplyScalar(-3.5));
     this.ejected = true;
     if (this.driverRig) this.driverRig.root.visible = false;
     this.shot = 'eject';
@@ -2585,7 +2634,7 @@ export class StreetScene implements GameScene {
     if (why === 'HIT BY A MISSILE') {
       this.startWreck();
       this.fail(why, 'later');
-      this.die({ slow: 0.5, slowFor: 3.4 });
+      this.die({ slow: 0.35, slowFor: 4.6 });
     } else this.fail(why, 'now');
   }
 
@@ -2607,8 +2656,12 @@ export class StreetScene implements GameScene {
     this.wreck = { t: 0, vel: new THREE.Vector3(p.velocity.x * 0.7, 8.1, p.velocity.z * 0.7), yaw0: p.yaw, yaw1, roll: 0, deckY: p.position.y, down: false, stillT: 0, dead: false };
     this.leanK = 0;
     this.flipT = -1;
+    this.wreckLookK = 0;
     // Everything in the car comes loose, his arms with it
     this.junk?.loosen();
+    // And the road stops: everyone round him on the brakes, and no one else coming
+    this.traffic.halt = true;
+    this.traffic.enabled = false;
     // The boss lifts off: in close enough to watch from where Ravi ends up, and away down the road at his leisure
     const b = this.boss;
     const gap = this.net.routeS(b.car.at) - this.net.routeS(p.at);
@@ -2974,9 +3027,12 @@ export class StreetScene implements GameScene {
       const t = w.t;
       const nYaw = (Math.sin(t * 13.1) * 0.13 + Math.sin(t * 7.3 + 1) * 0.08) * knock;
       const nPitch = (Math.sin(t * 11.7 + 2) * 0.1 + Math.sin(t * 5.1) * 0.07) * knock;
+      // (eyes a little down while it rolls: the cabin, his arms, everything in it going round)
       const rate = rolling ? 7 : 1.6;
-      this.headYaw += ((rolling ? 0 : Math.PI / 2) + nYaw - this.headYaw) * Math.min(1, dt * rate);
-      this.headPitch += ((rolling ? -0.12 : -0.08) + nPitch - this.headPitch) * Math.min(1, dt * rate);
+      this.headYaw += (nYaw - this.headYaw) * Math.min(1, dt * rate);
+      this.headPitch += ((rolling ? -0.3 : -0.08) + nPitch - this.headPitch) * Math.min(1, dt * rate);
+      // Then round onto the boss (the camera puts his eyes on him: see updateCamera)
+      this.wreckLookK = rolling ? 0 : Math.min(1, this.wreckLookK + dt * 0.8);
     } else {
       this.headYaw *= Math.max(0, 1 - dt * 3);
       this.headPitch *= Math.max(0, 1 - dt * 3);
@@ -3539,9 +3595,17 @@ export class StreetScene implements GameScene {
           const a = this.wreck.down ? 0.02 : 0.05;
           cam.position.add(StreetScene.tmpA.set(Math.sin(t * 17.3) * a, Math.sin(t * 13.9 + 1) * a, Math.sin(t * 11.1 + 2) * a * 0.6));
         }
+        if (this.wreck) {
+          // Wide while it rolls, the whole cabin in view; then his eyes come round onto the boss going away, the view closing in on him
+          const lk = smooth(this.wreckLookK);
+          fov = 92 - 40 * lk;
+          if (lk > 0) {
+            const b = this.boss.car.position;
+            this.lookAt.lerp(StreetScene.tmpB.set(b.x, b.y + 0.8, b.z), lk);
+          }
+        }
         if (this.wreck?.down) {
           const settle = Math.min(1, this.wreck.stillT / 1.2);
-          fov = 74 - 20 * settle;
           const off = StreetScene.tmpA.set(-0.12 * settle, 0, 0).applyQuaternion(this.civicRig.group.quaternion);
           cam.position.add(off);
           this.lookAt.add(off);

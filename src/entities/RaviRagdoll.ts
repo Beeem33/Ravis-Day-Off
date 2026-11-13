@@ -582,6 +582,8 @@ export class RaviRagdoll implements DeathHandler {
 
   /** Set by the scene for a slow drift of the death camera round him, once it has risen (radians a second). */
   orbit = 0;
+  /** The cap on any part's speed (an arm tunnelling into a wall, otherwise); fling() lifts it. */
+  private maxSpeed = MAX_SPEED;
 
   update(dt: number): void {
     if (!this.active) return;
@@ -594,7 +596,7 @@ export class RaviRagdoll implements DeathHandler {
       for (const { body } of this.parts.values()) {
         // As Enemy: cap limb speed, or an arm can tunnel into a wall and jam
         const v = body.velocity.length();
-        if (v > MAX_SPEED) body.velocity.scale(MAX_SPEED / v, body.velocity);
+        if (v > this.maxSpeed) body.velocity.scale(this.maxSpeed / v, body.velocity);
         speed += v + body.angularVelocity.length() * 0.5;
       }
       this.sync();
@@ -619,6 +621,28 @@ export class RaviRagdoll implements DeathHandler {
   // ------------------------------------------------------------------ the rig
 
   /** Bodies → bones. The rig's root rides the pelvis; every other bone takes its body's turn from rest. */
+  /**
+   * Thrown rather than dropped (out through a windscreen): the whole of him
+   * turned by `q` about `pivot`, every part sent off at `vel` with a tumble
+   * of `spin`. Call straight after begin().
+   */
+  fling(q: THREE.Quaternion, pivot: THREE.Vector3, vel: THREE.Vector3, spin: THREE.Vector3): void {
+    // Thrown on an open road there's no wall to tunnel through: let him go at the speed he was thrown
+    this.maxSpeed = Math.max(MAX_SPEED, vel.length() + 6);
+    const p = new THREE.Vector3();
+    const bq = new THREE.Quaternion();
+    for (const { body } of this.parts.values()) {
+      p.set(body.position.x, body.position.y, body.position.z).sub(pivot).applyQuaternion(q).add(pivot);
+      body.position.set(p.x, p.y, p.z);
+      bq.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w).premultiply(q);
+      body.quaternion.set(bq.x, bq.y, bq.z, bq.w);
+      body.velocity.set(vel.x + (Math.random() - 0.5) * 1.5, vel.y + (Math.random() - 0.5), vel.z + (Math.random() - 0.5) * 1.5);
+      body.angularVelocity.set(spin.x, spin.y, spin.z);
+      body.wakeUp();
+    }
+    this.sync();
+  }
+
   private sync(): void {
     const rig = this.rig!;
     const { _q: q, _p: P, _v: v } = RaviRagdoll;

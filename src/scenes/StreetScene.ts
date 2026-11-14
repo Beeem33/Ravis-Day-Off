@@ -54,8 +54,8 @@ const CHECKPOINT_AHEAD = 140;
 const AIRPORT_CUT = 130;
 /** The passenger's missiles: seconds from the tube to the ring; seconds between volleys, and between missiles in one. */
 const MISSILE_T = 1.45;
-const VOLLEY_EVERY: [number, number] = [4.2, 6.2];
-const VOLLEY_GAP = 1.0;
+const VOLLEY_EVERY: [number, number] = [2.2, 3.6];
+const VOLLEY_GAP = 0.8;
 /** A missile going off this near the middle of the Civic is the end of it: the ring's own radius. */
 const BLAST_KILL = 2.3;
 /** Ravi's own blood (the helicopter's gunner): what he has, and what a round that finds him costs. */
@@ -189,7 +189,7 @@ export class StreetScene implements GameScene {
   private passenger!: Enemy;
   private launcher!: THREE.Object3D;
   private lean = 0;
-  private volleyCd = 5;
+  private volleyCd = 3;
   private volleyLeft = 0;
   private volleyGap = 0;
   private missiles!: StreetMissiles;
@@ -1373,8 +1373,9 @@ export class StreetScene implements GameScene {
     if (this.copChasing) {
       const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
       const t = this.cop.car.tune;
-      t.topSpeed = behind > 80 ? 78 : behind > 40 ? 68 : COP_TUNE.topSpeed + 9;
-      t.accel = behind > 80 ? 15 : behind > 40 ? 11 : COP_TUNE.accel + 3;
+      // (well beyond anything the Civic can do: Ravi can't simply outrun him)
+      t.topSpeed = behind > 80 ? 92 : behind > 40 ? 80 : 72;
+      t.accel = behind > 80 ? 20 : behind > 40 ? 16 : 13;
       if (this.cop.ramming || this.cop.swiping) this.copAttackT = 0.7;
       this.copAttackT = Math.max(0, this.copAttackT - dt);
       this.copShoveCd = Math.max(0, this.copShoveCd - dt);
@@ -2387,7 +2388,7 @@ export class StreetScene implements GameScene {
         this.manClimb = 0;
         this.launcherPose = null;
         this.manFlipT = -1;
-        this.volleyCd = 12;
+        this.volleyCd = 7;
         this.volleyLeft = 0;
         this.lean = 0;
       }
@@ -2418,7 +2419,7 @@ export class StreetScene implements GameScene {
         if (this.manFlipCd <= 0 && quiet) {
           this.manFlipT = 0;
           this.manFlipCd = 12 + Math.random() * 10;
-          this.volleyCd = Math.max(this.volleyCd, MAN_FLIP.end + 2);
+          this.volleyCd = Math.max(this.volleyCd, MAN_FLIP.end + 0.8);
         }
       } else {
         this.manFlipT += dt;
@@ -2592,11 +2593,11 @@ export class StreetScene implements GameScene {
     const p = this.player;
     const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
     // (not at a man in the air off the ramp: he couldn't do a thing about it)
-    const can = this.phase === 'drive' && !this.manDead && this.swapT < 0 && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 30 && gap < 170;
+    const can = this.phase === 'drive' && !this.manDead && this.swapT < 0 && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 16 && gap < 190;
     if (can) {
       this.volleyCd -= dt;
       if (this.volleyCd <= 0 && this.volleyLeft === 0 && this.lean > 0.92) {
-        this.volleyLeft = this.heliIndex >= 2 ? 3 : 2;
+        this.volleyLeft = this.heliIndex >= 2 ? 4 : 3;
         this.volleyGap = 0.25;
         this.ctx.audio.lockBeep();
       }
@@ -2613,7 +2614,7 @@ export class StreetScene implements GameScene {
       }
     } else {
       this.volleyLeft = 0;
-      this.volleyCd = Math.max(this.volleyCd, 2.2);
+      this.volleyCd = Math.max(this.volleyCd, 1.4);
     }
     const out = can && (this.volleyLeft > 0 || this.volleyCd < 0.9);
     this.lean += ((out ? 1 : 0) - this.lean) * Math.min(1, dt * (out ? 5 : 3));

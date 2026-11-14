@@ -49,7 +49,7 @@ interface Style {
 }
 
 const BOSS_STYLE: Style = { trigger: 34, triggerT: 1.35, lateral: 5.6, oncoming: true, shoulder: true, clearance: 0.55, cornerGrip: 0.88 };
-const COP_STYLE: Style = { trigger: 30, triggerT: 1.25, lateral: 3.0, oncoming: false, shoulder: true, clearance: 0.6, cornerGrip: 0.78 };
+const COP_STYLE: Style = { trigger: 30, triggerT: 1.25, lateral: 3.4, oncoming: false, shoulder: false, clearance: 0.8, cornerGrip: 0.9 };
 
 class RouteDriver {
   readonly car: DriveCar;
@@ -640,10 +640,49 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     for (let i = 0; i < n; i++) {
       const c = this.cands2[i];
       const off = Math.abs(c.d - d);
-      if (c.pen >= 20 || off < 2.4 || off > 6) continue;
-      const score = Math.abs(c.d - this.car.at.d) + off * 0.3;
+      if (c.pen > 0 || off < 2.4 || off > 6) continue;
+      const score = Math.abs(c.d - this.car.at.d) + off * 0.3 + (this.laneFree(c.d) ? 0 : 20);
       if (score < bd) {
         bd = score;
+        best = c.d;
+      }
+    }
+    return bd === Infinity ? NaN : best;
+  }
+
+  /**
+   * Room to be in lane `d` here: nothing in it from just behind him to a
+   * little way ahead (a look over the shoulder before he moves across).
+   */
+  private laneFree(d: number): boolean {
+    const me = this.car;
+    const myR = this.net.routeS(me.at);
+    for (let i = 0; i < this.nObsPublic(); i++) {
+      const o = this.obstacles[i];
+      if (Math.abs(o.d - d) > me.halfWidth + o.hw + 0.5) continue;
+      const ahead = o.R - myR;
+      const len = me.halfLength + o.hl;
+      // Something coming up that lane faster than him wants more room behind
+      const back = len + 3 + Math.max(0, o.v - me.speed) * 1.5;
+      if (ahead > -back && ahead < len + 6 + Math.max(0, me.speed - o.v) * 0.8) return false;
+    }
+    return true;
+  }
+
+  /** `want`, if he can get across to it now; otherwise stay in the lane he's in. */
+  private safeLine(want: number): number {
+    const me = this.car;
+    if (Math.abs(want - me.at.d) < 1.2 || this.laneFree(want)) return want;
+    // Half-way over already and it's filled up: back to where he came from, the nearest real lane
+    const n = this.candidates(this.cands2);
+    let best = me.at.d;
+    let bd = Infinity;
+    for (let i = 0; i < n; i++) {
+      const c = this.cands2[i];
+      if (c.pen > 0) continue;
+      const dd = Math.abs(c.d - me.at.d) + (this.laneFree(c.d) ? 0 : 10);
+      if (dd < bd) {
+        bd = dd;
         best = c.d;
       }
     }
@@ -672,11 +711,12 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     if (this.frontT > 0) {
       if (behind > -6) {
         // Not past him yet: by him in the next lane, flat out, and over into his once he's most of a length clear
-        this.wantD = behind < -4 ? ravi.at.d : this.besideLane(ravi.at.d);
-        v = Math.min(top, rv + 14);
+        const by = this.besideLane(ravi.at.d);
+        this.wantD = this.safeLine(behind < -4 || Number.isNaN(by) ? ravi.at.d : by);
+        v = Math.min(top, rv + 16);
       } else {
         // In front of him, a couple of lengths up, matching him
-        this.wantD = ravi.at.d;
+        this.wantD = this.safeLine(ravi.at.d);
         v = rv + clamp((behind + 9) * 0.7, -9, 8);
         this.inFront = Math.abs(lat) < 1.5;
       }
@@ -684,10 +724,24 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     } else {
       // Alongside in the next lane, then into his side
       // The side he comes at him from: the one he's on, or (in his lane) whichever has a lane to come up in
-      if (!this.swipeSide) this.swipeSide = Math.abs(me.at.d - ravi.at.d) > 1.5 ? Math.sign(me.at.d - ravi.at.d) : Math.sign(this.besideLane(ravi.at.d) - ravi.at.d) || 1;
+      if (!this.swipeSide) {
+        const by = this.besideLane(ravi.at.d);
+        if (Math.abs(me.at.d - ravi.at.d) > 1.5) this.swipeSide = Math.sign(me.at.d - ravi.at.d);
+        else if (!Number.isNaN(by)) this.swipeSide = Math.sign(by - ravi.at.d) || 1;
+        else {
+          // No lane beside him to come up in: up his tail instead
+          this.swipeT = 0;
+          this.ramT = 6;
+          this.driveTo(dt, Math.min(top, rv));
+          return;
+        }
+      }
       const side = this.swipeSide;
       if (Math.abs(behind) > 2.2) {
-        this.wantD = ravi.at.d + side * 3.4;
+        // The lane beside him on that side (a real one: not the shoulder, not into the barrier)
+        const by = this.besideLane(ravi.at.d);
+        const lane = !Number.isNaN(by) && Math.sign(by - ravi.at.d) === side ? by : ravi.at.d + side * 3.4;
+        this.wantD = this.safeLine(lane);
         v = rv + clamp(behind * 0.9, -8, 12);
         // Out in front of him in his lane still: over into the next one at his speed first, not back into his bonnet
         if (behind < 0 && Math.abs(lat) < 2.6) v = rv + 1.5;
@@ -695,6 +749,7 @@ export class CopDriver extends RouteDriver implements ICopDriver {
         this.wantD = ravi.at.d + side * 0.3;
         v = rv + behind * 0.8;
       }
+      v = this.followLimit(Math.max(0, v));
     }
     this.vWant = v;
     this.driveTo(dt, clamp(v, 0, top));
@@ -782,7 +837,7 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     this.bumping = this.bumpCd <= 0 && ((rv < 7 && behind < 40 && behind > 0) || (this.ramT > 0 && behind > 0 && behind < 45));
     let v: number;
     if (this.bumping) {
-      this.wantD = ravi.at.d;
+      this.wantD = this.safeLine(ravi.at.d);
       if (this.ramT > 0) {
         // Into Ravi's lane first (dropping back if he's come up beside him), then floor it into his bumper
         const lat = Math.abs(ravi.at.d - me.at.d);
@@ -791,6 +846,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       // Touched his bumper: back off a moment, then (if he's still crawling) again
       const rh = (ravi as { halfLength?: number }).halfLength ?? 2.2;
       if (behind < me.halfLength + rh + 0.4 && Math.abs(ravi.at.d - me.at.d) < 1.6) this.bumped();
+      // (whatever's between him and Ravi, he doesn't go through it)
+      v = this.followLimit(Math.max(0, v));
     } else {
       const mid = (this.gapMin + this.gapMax) / 2;
       if (behind > 90) v = top;
@@ -802,19 +859,20 @@ export class CopDriver extends RouteDriver implements ICopDriver {
         let fd = -1;
         for (let i = 0; i < n; i++) {
           const dd = Math.abs(this.cands2[i].d - ravi.at.d);
-          if (this.cands2[i].pen < 20 && dd > fd) {
+          if (this.cands2[i].pen === 0 && dd > fd) {
             fd = dd;
             far = this.cands2[i].d;
           }
         }
-        this.wantD = far;
+        this.wantD = this.safeLine(far);
       }
-      else v = clamp(rv + (behind - mid) * 0.3, 6, top);
+      else v = clamp(rv + (behind - mid) * 0.5, 6, top);
       if (behind < this.gapMin) v = Math.min(v, rv - 2);
       v = Math.min(v, this.cornerLimit());
       this.vRef = v;
       this.pickLine(dt, this.exitPull());
-      v = this.followOrShove(dt, v);
+      // A policeman: he waits for a gap rather than shoving traffic out of his way
+      v = this.followLimit(v);
     }
     this.vWant = v;
     this.driveTo(dt, Math.max(0, v));

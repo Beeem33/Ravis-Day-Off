@@ -90,22 +90,22 @@ export const BOSS_TUNE: CarTune = {
   steerRate: 14
 };
 
-/** The highway patrol cruiser: a big sedan with the pursuit package. */
+/** The highway patrol cruiser: a big sedan with the pursuit package — quicker than the Civic, and it sticks. */
 export const COP_TUNE: CarTune = {
-  topSpeed: 52,
-  accel: 6.4,
+  topSpeed: 62,
+  accel: 9,
   brake: 13,
   steerLow: 0.58,
   steerHigh: 0.012,
-  grip: 9,
+  grip: 10.5,
   mass: 1700,
   length: 5.1,
   width: 1.95,
   wheelRadius: 0.34,
   wheelbase: 2.95,
-  latMax: 11,
+  latMax: 17,
   reverseSpeed: 9,
-  steerRate: 10
+  steerRate: 13
 };
 
 /** Physics substep: 50 m/s is 0.42 m a step, a tenth of a car. */

@@ -168,6 +168,8 @@ class RouteDriver {
 
   /** The speed he'd like to be doing (set each frame before picking a line): room is judged against it. */
   protected vRef = 20;
+  /** How hard he'll count on braking for what's ahead (m/s²): the higher, the later he slows for it. */
+  protected planDecel = 7;
   /** The nearest thing in the last line measured: its raw gap (bumper to bumper) and speed along the route. */
   protected leadGap = Infinity;
   protected leadV = 0;
@@ -410,9 +412,9 @@ class RouteDriver {
       }
     }
     if (g === Infinity) return vWant;
-    // v² = vl² + 2·a·(gap − margin): brake in time, at a hard but sane 7 m/s²
+    // v² = vl² + 2·a·(gap − margin): brake in time, at a hard but sane rate
     const margin = 3 + Math.max(0, vl) * 0.25;
-    const v = Math.sqrt(Math.max(0, Math.max(0, vl) ** 2 + 2 * 7 * Math.max(0, g - margin)));
+    const v = Math.sqrt(Math.max(0, Math.max(0, vl) ** 2 + 2 * this.planDecel * Math.max(0, g - margin)));
     return Math.min(vWant, v);
   }
 
@@ -613,6 +615,11 @@ export class CopDriver extends RouteDriver implements ICopDriver {
     return this.brakeT > 0;
   }
 
+  /** Out to get in front of Ravi and hold him up (cutIn). */
+  get blocking(): boolean {
+    return this.frontT > 0;
+  }
+
   /** On his way into Ravi's side (the scene ends it when they touch: bumped()). */
   get swiping(): boolean {
     return this.swipeT > 0;
@@ -648,6 +655,24 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       }
     }
     return bd === Infinity ? NaN : best;
+  }
+
+  /** The lane to get past Ravi in: not his, the one with the most open road ahead (a little against moving far across). */
+  private passLane(d: number): number {
+    const n = this.candidates(this.cands2);
+    let best = NaN;
+    let bs = -Infinity;
+    const lanes: number[] = [];
+    for (let i = 0; i < n; i++) if (this.cands2[i].pen === 0 && Math.abs(this.cands2[i].d - d) >= 2.4) lanes.push(this.cands2[i].d);
+    for (const ld of lanes) {
+      const room = this.roomIn(ld, 90);
+      const score = Math.min(room, 90) - Math.abs(ld - this.car.at.d) * 2.5 + (this.laneFree(ld) ? 0 : -40) + (Math.abs(ld - this.wantD) < 0.5 ? 8 : 0);
+      if (score > bs) {
+        bs = score;
+        best = ld;
+      }
+    }
+    return best;
   }
 
   /**
@@ -708,16 +733,33 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       this.driveTo(dt, 0, true);
       return;
     }
+    // Ravi's stopped (stuck, crashed): nothing to hold up; he'll go and shove him instead
+    if (this.frontT > 0 && rv < 6 && this.swipeT <= 0) {
+      this.frontT = 0;
+      this.driveTo(dt, Math.min(me.speed, 10));
+      return;
+    }
     if (this.frontT > 0) {
       if (behind > -6) {
         // Not past him yet: by him in the next lane, flat out, and over into his once he's most of a length clear
-        const by = this.besideLane(ravi.at.d);
-        this.wantD = this.safeLine(behind < -4 || Number.isNaN(by) ? ravi.at.d : by);
-        v = Math.min(top, rv + 16);
+        v = Math.min(top, rv + 18);
+        if (behind > 16) {
+          // Still a way back: whichever lane's moving, round the traffic, to get up to him
+          this.vRef = v;
+          this.pickLine(dt, 0);
+        } else if (behind < -4) {
+          // Most of a length clear of him: over in front of him
+          this.wantD = this.safeLine(ravi.at.d);
+        } else {
+          // Up to him and by him: whichever lane beside his has the most road open ahead
+          const by = this.passLane(ravi.at.d);
+          this.wantD = this.safeLine(Number.isNaN(by) ? ravi.at.d : by);
+        }
       } else {
-        // In front of him, a couple of lengths up, matching him
+        // In front of him, a length or two up, in whatever lane he's in, a touch slower than him: holding him up.
+        // He brakes or he goes round (and then he's got him to deal with)
         this.wantD = this.safeLine(ravi.at.d);
-        v = rv + clamp((behind + 9) * 0.7, -9, 8);
+        v = Math.max(Math.min(rv, 12), rv + clamp((behind + 7) * 0.6, -8, 6) - 3.5);
         this.inFront = Math.abs(lat) < 1.5;
       }
       v = this.followLimit(Math.max(0, v));
@@ -758,6 +800,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
   constructor(net: RoadNet, tune: CarTune = COP_TUNE) {
     super(net, tune, 'cop', COP_STYLE);
     this.car.onImpact = null;
+    // Pursuit brakes, and a pursuit driver: he leaves it late
+    this.planDecel = 12;
   }
 
   /** Park him (the scene: StreetData.cop.pos / yaw). */

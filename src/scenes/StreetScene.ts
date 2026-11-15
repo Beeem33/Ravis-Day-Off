@@ -294,6 +294,9 @@ export class StreetScene implements GameScene {
   private copAttackT = 0;
   private copPose: 'driving' | 'flip' = 'driving';
   private copShoveCd = 0;
+  /** How long Ravi's been past him while he was out to hold him up. */
+  private copPassedT = 0;
+  private copWasAhead = false;
   /** Ravi out through the windscreen: his ragdoll (the same as on foot) and its little world with the road for a floor. DeathFx finds it here. */
   private raviRagdoll: RaviRagdoll | null = null;
   private ejectWorld: CANNON.World | null = null;
@@ -442,7 +445,8 @@ export class StreetScene implements GameScene {
     // Light: a car to get round now and then, not a jam to thread
     this.traffic = new Traffic(this.net, {
       seed: (Math.random() * 1e6) | 0,
-      density: { city: 0.2, onramp: 0.15, highway: 0.2, exit: 0, airport: 0 }
+      density: { city: 0.3, onramp: 0.24, highway: 0.36, exit: 0, airport: 0 },
+      maxCars: 110
     });
     this.scene.add(this.traffic.object);
 
@@ -1367,9 +1371,10 @@ export class StreetScene implements GameScene {
         return;
       }
     }
-    // ---- The cop in the chase: on Ravi's tail most of the time, and every so often up alongside him for a few seconds
-    // He's got the legs to keep up: well behind (off the shoulder from a standstill, or held back by
-    // traffic) he's flat out and then some, until he's back on Ravi's tail
+    // ---- The cop in the chase: in front of Ravi most of the time, in his lane, holding him up (the finger out of
+    // the window, the brakes now and then), and the moment Ravi gets by him, into his bumper or his side.
+    // He's got the legs for it: well behind (off the shoulder from a standstill, or held back by
+    // traffic) he's flat out and then some
     if (this.copChasing) {
       const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
       const t = this.cop.car.tune;
@@ -1385,36 +1390,49 @@ export class StreetScene implements GameScene {
         this.copMan.pose(pose);
       }
     }
-    if (this.copChasing && !this.heliUp) {
-      this.copSurgeT -= dt;
-      if (this.copSurgeT <= 0 && !this.cop.busy) {
-        this.copSurging = 6;
-        this.copSurgeT = 15 + Math.random() * 10;
-      }
-      this.copSurging = Math.max(0, this.copSurging - dt);
-      // And every few seconds he tries something: past him and in front of him (the finger, and as
-      // often as not the brakes), up alongside and into his side, or up his tail into his bumper
+    if (this.copChasing) {
+      this.copSurging = 0;
+      // Hardly a moment between one thing and the next: mostly out in front of him holding him up,
+      // otherwise up his tail into his bumper, or alongside and into his side
       if (!this.cop.busy) this.copRamT -= dt;
-      if (this.copRamT <= 0 && this.copSurging <= 0 && !this.cop.busy) {
+      if (this.copRamT <= 0 && !this.cop.busy) {
         const r = Math.random();
-        if (r < 0.42) {
-          this.cop.cutIn(9 + Math.random() * 4);
+        if (r < 0.62) {
+          this.cop.cutIn(16 + Math.random() * 8);
           this.copFrontT = 0;
-          this.copBrakeAt = Math.random() < 0.85 ? 1.4 + Math.random() * 2.6 : -1;
-        } else if (r < 0.75) this.cop.swipe(7);
-        else this.cop.ram(6);
-        this.copRamT = 3 + Math.random() * 4;
+          this.copWasAhead = false;
+          this.copBrakeAt = 1.2 + Math.random() * 2.5;
+        } else if (r < 0.85) this.cop.ram(6);
+        else this.cop.swipe(7);
+        this.copRamT = 0.6 + Math.random() * 1.6;
       }
-      // In front of him: the finger out of the window; then, maybe, the brakes
+      // In front of him: the finger out of the window, and every few seconds the brakes
       if (this.cop.inFront && !this.cop.braking) {
         this.copFrontT += dt;
-        if (this.copBrakeAt > 0 && this.copFrontT > this.copBrakeAt && this.cop.brakeCheck()) {
-          this.copBrakeAt = -1;
+        if (this.copFrontT > this.copBrakeAt && this.cop.brakeCheck()) {
+          this.copBrakeAt = this.copFrontT + 2.5 + Math.random() * 3.5;
           this.ctx.audio.tyreSqueal(1.1, this.cop.car.position.distanceTo(p.position));
         }
       }
-      this.cop.gapMin = this.copSurging > 0 ? -8 : 4;
-      this.cop.gapMax = this.copSurging > 0 ? 0 : 14;
+      // Ravi's got by him while he was holding him up: he goes for him (his bumper, or his side)
+      if (this.cop.inFront) this.copWasAhead = true;
+      const cutting = this.cop.blocking && this.copWasAhead;
+      const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
+      this.copPassedT = cutting && behind > 3 ? this.copPassedT + dt : 0;
+      // Lost him going for his side (traffic in the way): back to getting out in front of him
+      if ((this.cop.swiping || this.cop.ramming) && behind > 40) {
+        this.cop.cutIn(16 + Math.random() * 8);
+        this.copFrontT = 0;
+        this.copWasAhead = false;
+      }
+      if (this.copPassedT > 1.2) {
+        this.copPassedT = 0;
+        this.cop.cutIn(0);
+        if (Math.random() < 0.6) this.cop.ram(6);
+        else this.cop.swipe(7);
+      }
+      this.cop.gapMin = 4;
+      this.cop.gapMax = 12;
     }
     // ---- The exit
     if (!this.exitTold && this.boss.car.at.road === 'highway' && this.boss.car.at.s > L.exitS - 260) {
@@ -2573,11 +2591,7 @@ export class StreetScene implements GameScene {
     const p = this.player.at;
     if (p.road === 'city') return p.s > 160;
     if (p.road !== 'highway') return false;
-    if (p.s < 60 || p.s > this.level.exitS - 150) return false;
-    // Not up to the first helicopter's stretch, nor the second's, until each is down
-    if (this.heliIndex === 0) return p.s < HELI_AT[0];
-    if (this.heliIndex === 1) return p.s < HELI_AT[1];
-    return true;
+    return p.s >= 60 && p.s <= this.level.exitS - 150;
   }
 
   private get heliUp(): boolean {
@@ -2593,7 +2607,8 @@ export class StreetScene implements GameScene {
     const p = this.player;
     const gap = this.net.routeS(this.boss.car.at) - this.net.routeS(p.at);
     // (not at a man in the air off the ramp: he couldn't do a thing about it)
-    const can = this.phase === 'drive' && !this.manDead && this.swapT < 0 && !this.heliUp && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 16 && gap < 190;
+    // (a helicopter up or not: the boss's man keeps on at him either way)
+    const can = this.phase === 'drive' && !this.manDead && this.swapT < 0 && !this.jump && this.slowmo <= 0 && this.missileZone() && gap > 16 && gap < 190;
     if (can) {
       this.volleyCd -= dt;
       if (this.volleyCd <= 0 && this.volleyLeft === 0 && this.lean > 0.92) {
@@ -2832,12 +2847,17 @@ export class StreetScene implements GameScene {
 
   private startHeli(): void {
     const p = this.player;
-    const at = this.net.point(this.net.advance(p.at, 260, false, { road: p.at.road, s: 0, d: 0 }), new THREE.Vector3());
-    at.y += 55;
+    // From behind, low over the road: it's been after him all along and has just caught him up (it goes over
+    // him and round to its station in front)
+    const back = { road: p.at.road, s: Math.max(0, p.at.s - 170), d: p.at.d - 6 };
+    const at = this.net.point(back, new THREE.Vector3());
+    at.y += 22;
     // The same machine as last time, put back together: let go of its old wreckage
     this.debris.clear();
     this.crash = null;
     this.heliCraft.reset(at);
+    // Already going faster than him
+    this.heliCraft.velocity.set(-Math.sin(p.yaw), 0, -Math.cos(p.yaw)).multiplyScalar(Math.max(20, p.speed) * 1.45);
     this.heli = this.heliCraft;
     this.heliT = 0;
     this.heliFireCd = 3.2;

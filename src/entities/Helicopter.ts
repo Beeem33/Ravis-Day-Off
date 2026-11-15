@@ -253,10 +253,13 @@ export class Helicopter {
     if (this.velocity.length() > vmax) this.velocity.setLength(vmax);
     g.position.addScaledVector(this.velocity, dt);
     if (this.state === 'in' && g.position.distanceTo(this.want) < 6) this.state = 'fight';
-    // Its right side, the open door, turned on Ravi
+    // Its right side, the open door, turned on Ravi; coming in from a way off, nose first the way it's going
     const dx = target.x - g.position.x;
     const dz = target.z - g.position.z;
-    const wantYaw = Math.atan2(-dx, -dz) + Math.PI / 2;
+    let wantYaw = Math.atan2(-dx, -dz) + Math.PI / 2;
+    if (this.state === 'in' && g.position.distanceTo(this.want) > 30 && Math.hypot(this.velocity.x, this.velocity.z) > 15) {
+      wantYaw = Math.atan2(-this.velocity.x, -this.velocity.z);
+    }
     let d = wantYaw - this.yaw;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;

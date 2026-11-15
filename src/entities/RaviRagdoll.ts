@@ -47,6 +47,9 @@ const Y = new THREE.Vector3(0, 1, 0);
 const _hq = new THREE.Quaternion();
 const _hw = new THREE.Quaternion();
 const _hp = new THREE.Vector3();
+const _ao = new THREE.Vector3();
+const _he = new THREE.Vector3();
+const _ad = new THREE.Vector3();
 const _hl = new THREE.Quaternion();
 /** Lying on his side: the view rolled most of the way over. */
 const _lying = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.15);
@@ -596,6 +599,9 @@ export class RaviRagdoll implements DeathHandler {
   firstPerson = false;
   /** First person, once he's come to rest: what his eyes settle on (the scene keeps it up to date), lying there. */
   eyeTarget: THREE.Vector3 | null = null;
+  /** First person, in the air: the way he's going, and how much his eyes are on it rather than wherever his head's turned (0..1). */
+  eyeLead: THREE.Vector3 | null = null;
+  eyeLeadK = 0;
   private eyeRest = 0;
 
   update(dt: number): void {
@@ -639,6 +645,41 @@ export class RaviRagdoll implements DeathHandler {
    * turned by `q` about `pivot`, every part sent off at `vel` with a tumble
    * of `spin`. Call straight after begin().
    */
+  /**
+   * His arms thrown out in front of him (out through a windscreen, say):
+   * each forearm pulled toward a point ahead of his face along `dir`, a
+   * shoulder's width apart, the upper arms after them — for as long as the
+   * scene keeps calling it. `k` (0..1) how hard.
+   */
+  armsOut(dir: THREE.Vector3, dt: number, k = 1): void {
+    if (!this.active || !(dt > 0) || k <= 0) return;
+    const P = (n: PartName): CANNON.Body => this.parts.get(n)!.body;
+    const head = P('head');
+    const l = P('upperarm_l').position;
+    const r = P('upperarm_r').position;
+    // His left, as his shoulders lie now
+    const side = _ao.set(l.x - r.x, l.y - r.y, l.z - r.z);
+    if (side.lengthSq() < 1e-6) return;
+    side.normalize();
+    const d = _ad.copy(dir).normalize();
+    const hv = head.velocity;
+    for (const [s, sg] of [['l', 1], ['r', -1]] as const) {
+      for (const [part, reach] of [[`lowerarm_${s}`, 0.62], [`upperarm_${s}`, 0.3]] as const) {
+        const b = P(part as PartName);
+        // Out ahead of his face, a little apart and a little up, hands spread
+        const tx = head.position.x + d.x * reach + side.x * sg * (0.2 + reach * 0.15);
+        const ty = head.position.y + d.y * reach + side.y * sg * (0.2 + reach * 0.15) - 0.08;
+        const tz = head.position.z + d.z * reach + side.z * sg * (0.2 + reach * 0.15);
+        const kk = (part.startsWith('lower') ? 70 : 40) * k;
+        const c = 9 * k;
+        b.velocity.x += ((tx - b.position.x) * kk - (b.velocity.x - hv.x) * c) * dt;
+        b.velocity.y += ((ty - b.position.y) * kk - (b.velocity.y - hv.y) * c) * dt;
+        b.velocity.z += ((tz - b.position.z) * kk - (b.velocity.z - hv.z) * c) * dt;
+        b.wakeUp();
+      }
+    }
+  }
+
   fling(q: THREE.Quaternion, pivot: THREE.Vector3, vel: THREE.Vector3, spin: THREE.Vector3): void {
     // Thrown on an open road there's no wall to tunnel through: let him go at the speed he was thrown
     this.maxSpeed = Math.max(MAX_SPEED, vel.length() + 6);
@@ -897,6 +938,11 @@ export class RaviRagdoll implements DeathHandler {
     // The head's +Z is the way his face points; the camera looks down its own -Z
     cam.position.set(0, 0.01, 0.1).applyQuaternion(hq).add(_hp.set(hb.position.x, hb.position.y, hb.position.z));
     const want = _hw.copy(hq).multiply(_turn);
+    // Flying: his eyes on where he's going (his arms out in front of him in it), the tumble only part of it
+    if (this.eyeLead && this.eyeLeadK > 0) {
+      const look = _hl.setFromRotationMatrix(RaviRagdoll._m.lookAt(cam.position, _he.copy(cam.position).add(this.eyeLead), Y));
+      want.slerp(look, this.eyeLeadK);
+    }
     // Come to rest: his cheek on the road, eyes on what the scene's given him to look at, the world on its side
     this.eyeRest = this.settled && this.eyeTarget ? Math.min(1, this.eyeRest + dt / 1.8) : 0;
     if (this.eyeRest > 0 && this.eyeTarget) {

@@ -312,6 +312,9 @@ export class StreetScene implements GameScene {
   };
   private ejected = false;
   private readonly ejectLook = new THREE.Vector3();
+  /** Since he went through the glass, and the way he went (forward, a little down: where his arms go). */
+  private ejectT = 0;
+  private readonly ejectDir = new THREE.Vector3();
   /** The cars round him when he went through the glass, as boxes in his ragdoll's world (he goes over them, not through them). */
   private ejectCars: { car: { position: THREE.Vector3; yaw: number }; body: CANNON.Body }[] = [];
   /** On its roof and come to rest: how far round his eyes have come onto the boss going away (0..1). */
@@ -1283,6 +1286,12 @@ export class StreetScene implements GameScene {
         body.position.set(car.position.x, car.position.y + 0.72, car.position.z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), car.yaw);
       }
+      // Through the air his arms go out in front of him, as anyone's would; letting go as he hits the road
+      this.ejectT += dt;
+      const out = this.ejectT < 0.9 ? 1 : Math.max(0, 1 - (this.ejectT - 0.9) / 0.5);
+      if (out > 0) this.raviRagdoll.armsOut(this.ejectDir, dt, out);
+      this.raviRagdoll.eyeLead = this.ejectDir;
+      this.raviRagdoll.eyeLeadK = 0.75 * out;
       this.ejectWorld.step(1 / 60, dt, 4);
       this.raviRagdoll.update(dt);
     }
@@ -1646,6 +1655,8 @@ export class StreetScene implements GameScene {
     // Everyone on the brakes
     this.traffic.halt = true;
     this.traffic.enabled = false;
+    this.ejectT = 0;
+    this.ejectDir.copy(fwd).setY(-0.25).normalize();
     // Still behind his own eyes, all the way out and down the road
     this.raviRagdoll.firstPerson = true;
     this.raviRagdoll.begin(null);

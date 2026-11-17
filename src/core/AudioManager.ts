@@ -1203,6 +1203,25 @@ export class AudioManager {
     this.tone('square', high ? 1150 : 740, high ? 1150 : 740, 0.06, 0.06);
   }
 
+  /** A mouse button: a tiny plastic tick. */
+  mouseClick(): void {
+    this.noise(0.025, 'highpass', 3800, 0.1, true, 0.7);
+    this.tone('square', 2400, 1800, 0.012, 0.012);
+  }
+
+  /** The desktop's "you can't do that": a soft two-note chime. */
+  osDing(): void {
+    this.tone('sine', 880, 880, 0.35, 0.07);
+    setTimeout(() => this.tone('sine', 660, 660, 0.45, 0.07), 90);
+  }
+
+  /** A cologne found: a bright sparkling run up, and a spritz. */
+  cologneGet(): void {
+    [784, 988, 1175, 1568].forEach((f, i) => setTimeout(() => this.tone('sine', f, f, 0.4, 0.07), i * 70));
+    setTimeout(() => this.tone('triangle', 3136, 3136, 0.5, 0.02), 280);
+    setTimeout(() => this.noise(0.35, 'highpass', 5000, 0.09, true, 0.5), 60);
+  }
+
   bodyThud(distance: number): void {
     const a = this.atten(distance, 25) * 0.8 + 0.1;
     this.noise(0.12, 'lowpass', 180, 0.35 * a);

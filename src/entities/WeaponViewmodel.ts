@@ -30,6 +30,12 @@ const GRIP_R_AIM = grip([0.0128, -0.0058, 0.0717], [0.172, 0.077, -0.982], [-0.9
   thumb: [0.2, -0.09, 0.1],
   spread: 3.4
 });
+/** The shooting hand open, reaching for the pistol on the desk: same wrist, fingers out. */
+const GRIP_R_OPEN = grip([0.0128, -0.0058, 0.0717], [0.172, 0.077, -0.982], [-0.912, -0.003, -0.411], [0.16, -0.22, 0.34], {
+  fingers: [[2, 8, 6], [4, 9, 6], [6, 10, 8], [8, 12, 9]],
+  thumb: [-0.25, -0.35, 0],
+  spread: 7
+});
 const GRIP_L = grip([-0.057, -0.012, 0.074], [0.458, 0.186, -0.87], [0.958, 0.083, 0.2], [-0.2, -0.2, 0.26], {
   fingers: [[45, 60, 30], [50, 62, 30], [55, 64, 32], [60, 66, 34]],
   thumb: [0.2, 0.15, 0.1]
@@ -97,6 +103,18 @@ export class WeaponViewmodel {
    * blends this down as Ravi closes his shooting hand round it and lifts.
    */
   reach = 0;
+  /**
+   * The pistol lying on the desk, as a world pose of the gun's own frame:
+   * when set, `reach` blends the gun onto exactly where that one lies.
+   */
+  reachWorld: THREE.Matrix4 | null = null;
+  /** Reaching in from out of frame, low and right, instead of from the hold. */
+  reachFromLow = false;
+  /** 0 = the shooting hand open, 1 = closed round the grip. */
+  handClose = 1;
+  /** The gun itself not drawn: his hand going for the real one on the desk. */
+  gunHidden = false;
+  private wasHidden = false;
   private sprintBlend = 0;
 
   // ---- Reload (John Wick style: flick the empty mag out left, slam a new one in)
@@ -476,7 +494,22 @@ export class WeaponViewmodel {
     // frame, low and across the desktop, and the gun comes up out of the
     // sweep. Holding it out at arm's length instead just looked like the
     // pistol drifting in on its own.
-    if (this.reach > 0.0001) {
+    if (this.reachWorld && (this.reach > 0.0001 || this.reachFromLow)) {
+      const r = this.reach;
+      if (this.reachFromLow) {
+        // Out of frame, low on the right: where the hand comes in from
+        this.root.position.set(0.5, -0.78, -0.12);
+        this.root.rotation.set(-0.9, 0.5, 0.6);
+      }
+      const cam = this.flashCam;
+      cam.updateMatrixWorld();
+      const m = WeaponViewmodel._m.copy(cam.matrixWorld).invert().multiply(this.reachWorld);
+      const p = new THREE.Vector3();
+      const s = new THREE.Vector3();
+      m.decompose(p, WeaponViewmodel._q, s);
+      this.root.position.lerp(p, r);
+      this.root.quaternion.slerp(WeaponViewmodel._q, r);
+    } else if (this.reach > 0.0001) {
       const r = this.reach;
       this.root.position.x = THREE.MathUtils.lerp(this.root.position.x, 0.62, r); // off to the right
       this.root.position.y = THREE.MathUtils.lerp(this.root.position.y, -0.52, r); // down at desk height
@@ -494,7 +527,15 @@ export class WeaponViewmodel {
       this.root.rotation.x -= s * 1.1;
     }
     this.root.visible = this.stow < 0.995;
-    this.arms.set('r', this.gripHand, a > 0.001 ? mixGrip(GRIP_R, GRIP_R_AIM, a) : GRIP_R);
+    if (this.gunHidden !== this.wasHidden) {
+      this.wasHidden = this.gunHidden;
+      this.model.visible = this.slide.visible = this.magazine.visible = !this.gunHidden;
+    }
+    this.arms.set(
+      'r',
+      this.gripHand,
+      a > 0.001 ? mixGrip(GRIP_R, GRIP_R_AIM, a) : this.handClose < 0.999 ? mixGrip(GRIP_R_OPEN, GRIP_R, Math.max(0, this.handClose)) : GRIP_R
+    );
     this.arms.set('l', this.supportHand, this.leftGrip());
     this.arms.update();
 

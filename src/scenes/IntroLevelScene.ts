@@ -31,10 +31,14 @@ const T_BURST = 6.55; // the door goes in
 const T_WALK0 = 6.6; // the agent comes through it, rifle already up
 const T_WALK1 = 8.3; // ...and stops, two metres off her
 const T_EXEC = 9.4; // he fires; she goes down
-const T_DRAW0 = 11.0; // Ravi looks down at the pistol on his desk
-const T_GRAB = 11.9; // his hand sweeps across and takes it
-const T_DRAW1 = 12.4; // ...and it is up in the normal hold
-const T_END = 13.0; // control passes to the player
+const T_DRAW0 = 11.0; // Ravi looks down at the pistol on his desk, and steps to it
+const T_REACH = 11.35; // his open hand comes in from the right, over the desk
+const T_GRAB = 12.05; // ...the fingers close round the grip
+const T_LIFT = 12.25; // he lifts it off the desk
+const T_DRAW1 = 12.9; // ...and it is up in the normal hold, the other hand on it
+const T_END = 13.35; // control passes to the player
+/** Where he steps to, at the end of the desk the pistol is lying on. */
+const GRAB_STAND = new THREE.Vector3(-4.38, 0, -1.5);
 
 /** Smoothstepped keyframe track: [time, value] pairs. */
 function track(keys: readonly (readonly [number, number])[], t: number): number {
@@ -97,6 +101,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private doorSwing = 0;
   /** The chair's built-in yaw, so the swivel is relative to it. */
   private chairYaw = 0;
+  /** Looking down at the pistol on the desk, from where he leans in over it. */
+  private gunYaw = 0;
+  private gunPitch = 0;
 
   private ui!: HTMLElement;
   private objective!: HTMLElement;
@@ -262,6 +269,18 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
       -(mid.z - this.level.playerSpawn.z)
     );
 
+    // The pistol on the desk: the gun's own frame where it lies (the prop is
+    // built upright and tipped onto its flank; the viewmodel's frame sits
+    // 7cm above the prop's), for the hand to reach to and lift it out of
+    const dg = this.level.deskGun;
+    dg.updateWorldMatrix(true, true);
+    const lying = dg.children[0];
+    this.weapon.reachWorld = lying.matrixWorld.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0.07, 0));
+    const gunAt = dg.getWorldPosition(new THREE.Vector3());
+    const eye = this.leanEye(1);
+    this.gunYaw = Math.atan2(-(gunAt.x - eye.x), -(gunAt.z - eye.z));
+    this.gunPitch = Math.atan2(gunAt.y - eye.y, Math.hypot(gunAt.x - eye.x, gunAt.z - eye.z)) + 0.12;
+
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 1, this.player.maxHealth);
     this.buildUI();
     if (this.withTerms) this.startTerms();
@@ -331,7 +350,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.ui.querySelector('.intro-skip')!.classList.add('gone');
     const hint = document.createElement('div');
     hint.className = 'intro-terms-hint';
-    hint.innerHTML = '<b>MOUSE WHEEL</b> SCROLL &nbsp;·&nbsp; <b>CLICK</b> WITH THE CURRY';
+    hint.innerHTML = '<b>MOUSE</b> MOVE THE CURRY &nbsp;·&nbsp; <b>DOUBLE-CLICK</b> TO OPEN &nbsp;·&nbsp; <b>WHEEL</b> SCROLL';
     this.ui.appendChild(hint);
     this.termsHint = hint;
     this.ctx.input.exitPointerLock();
@@ -390,10 +409,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   }
 
   private endTerms(): void {
-    // The news goes back up on his screen
-    this.level.ravisScreen.material = this.screenMat!;
-    this.terms?.dispose();
-    this.terms = null;
+    // The signed agreement stays up on his screen; the PC just stops listening
+    this.terms?.release();
     this.termsHint?.remove();
     this.termsHint = null;
     this.letterbox.classList.remove('open');
@@ -427,7 +444,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.player.yaw = track(
       [
         [0, 0], [T_TURN0, 0], [T_TURN1, this.lookYaw],
-        [T_DRAW0, this.lookYaw], [T_DRAW1, this.lookYaw * 0.5], [T_END, this.lookYaw * 0.85]
+        [T_DRAW0, this.lookYaw], [T_REACH + 0.2, this.gunYaw], [T_LIFT, this.gunYaw], [T_END, this.lookYaw * 0.85]
       ],
       this.t
     );
@@ -435,14 +452,25 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.player.pitch = track(
       [
         [0, p0], [T_TURN0, p0], [T_TURN1, -0.02],
-        [T_DRAW0, -0.02], [T_DRAW1, -0.62], [T_END, -0.04]
+        [T_DRAW0, -0.02], [T_REACH + 0.2, this.gunPitch], [T_LIFT, this.gunPitch], [T_DRAW1, -0.12], [T_END, -0.04]
       ],
       this.t
     );
     // The pistol is a real object on the desk until T_GRAB; after that the
     // viewmodel takes over, starting out at arm's length where it was lying.
-    this.weapon.stow = this.t < T_GRAB ? 1 : 0;
-    this.weapon.reach = track([[T_GRAB, 1], [T_DRAW1, 0]], this.t);
+    // His open hand comes in low from the right and over the desk to it, the
+    // fingers close round the grip, and he lifts it into the hold; the left
+    // hand joins it on the way up.
+    const t = this.t;
+    this.weapon.stow = t < T_REACH ? 1 : 0;
+    this.weapon.gunHidden = t < T_GRAB;
+    this.weapon.reachFromLow = t < T_GRAB;
+    this.weapon.reach = t < T_GRAB ? track([[T_REACH, 0], [T_GRAB, 1]], t) : track([[T_LIFT, 1], [T_DRAW1, 0]], t);
+    this.weapon.handClose = track([[T_GRAB - 0.12, 0], [T_GRAB + 0.1, 1]], t);
+    this.weapon.hideSupportHand = t < T_LIFT + 0.3;
+    // A step along to the end of the desk where it's lying
+    const step = track([[T_DRAW0, 0], [T_GRAB - 0.1, 1]], t);
+    this.player.position.lerpVectors(this.level.playerSpawn, GRAB_STAND, step);
 
     // Beats
     // Three knocks on the side door — the only warning anyone gets
@@ -461,8 +489,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.beat('exec', T_EXEC, () => this.executeCoworker());
     this.beat('grab', T_GRAB, () => {
       this.level.deskGun.visible = false; // the viewmodel is holding it now
-      audio.magIn();
+      audio.scuff();
     });
+    this.beat('lift', T_LIFT, () => audio.magIn());
     this.beat('rack', T_DRAW1 - 0.1, () => audio.slideRack());
 
     // The door slams open, then rebounds a little and stays wide
@@ -502,6 +531,28 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     if (this.t >= T_END) this.beginPlay();
   }
 
+  /** How far he's leaning in over the desk for the pistol, 0..1. */
+  private leanAmount(): number {
+    return track([[T_DRAW0 + 0.15, 0], [T_GRAB, 1], [T_LIFT, 1], [T_DRAW1, 0]], this.t);
+  }
+
+  /** Where his eye is when leaning `k` of the way in over the desk at the pistol. */
+  private leanEye(k: number): THREE.Vector3 {
+    const eye = GRAB_STAND.clone().setY(1.63);
+    const gun = this.level.deskGun.getWorldPosition(new THREE.Vector3());
+    const fwd = new THREE.Vector3(gun.x - eye.x, 0, gun.z - eye.z).normalize();
+    return eye.addScaledVector(fwd, 0.24 * k).add(new THREE.Vector3(0, -0.24 * k, 0));
+  }
+
+  /** The lean on top of the player's own camera placement (cutscene only). */
+  private applyLean(): void {
+    const k = this.leanAmount();
+    if (k <= 0) return;
+    const cam = this.player.camera;
+    const off = this.leanEye(k).sub(this.leanEye(0));
+    cam.position.add(off);
+  }
+
   private executeCoworker(): void {
     const { audio } = this.ctx;
     this.agent.flashMuzzle();
@@ -533,6 +584,10 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     // A skip can land before the cutscene's reach track finished — without
     // this the pistol stays frozen in the "lying on the desk" pose, invisible.
     this.weapon.reach = 0;
+    this.weapon.reachWorld = null;
+    this.weapon.reachFromLow = false;
+    this.weapon.gunHidden = false;
+    this.weapon.handClose = 1;
     this.player.cinematic = false;
     this.letterbox.classList.add('open');
     this.ui.querySelector('.intro-skip')!.classList.add('gone');
@@ -573,6 +628,11 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.coworker.setHandsUp(true);
     this.coworker.position.copy(this.level.coworkerStandPos);
     this.level.deskGun.visible = false;
+    this.player.position.copy(GRAB_STAND);
+    this.weapon.gunHidden = false;
+    this.weapon.reachFromLow = false;
+    this.weapon.handClose = 1;
+    this.weapon.hideSupportHand = false;
     if (!this.beats.has('exec')) {
       this.beats.add('exec');
       this.executeCoworker();
@@ -606,13 +666,14 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   update(dt: number, _time: number): void {
     const { input } = this.ctx;
 
-    if (this.phase === 'terms') {
+    if (this.phase === 'terms' && this.terms) {
       this.updateTerms(dt);
       return;
     }
     if (this.phase === 'cutscene') {
       this.updateCutscene(dt);
       this.player.update(dt, this.level.colliders);
+      this.applyLean();
       this.weapon.update(dt, this.player, 0, 0, false);
       // These have to run during the cutscene too, or the agent's rifle never
       // leaves his hip and her ragdoll never falls — the pose only caught up

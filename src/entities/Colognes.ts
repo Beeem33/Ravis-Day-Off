@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { FirstPersonArms, HAND, RaviVisual, grip, type Grip } from './RaviVisual';
+import { Controls } from '../core/Controls';
 
 /**
  * The fourteen ultra-niche colognes: one hidden somewhere in each of fourteen
@@ -210,7 +211,7 @@ class CologneHunt {
   } | null = null;
 
   private onKey = (e: KeyboardEvent): void => {
-    if (e.code !== 'KeyE' || e.repeat || this.held || !this.near) return;
+    if (Controls.translate(e.code) !== 'KeyE' || e.repeat || this.held || !this.near) return;
     const p = this.near;
     this.near = null;
     this.placed.splice(this.placed.indexOf(p), 1);
@@ -283,7 +284,7 @@ class CologneHunt {
     if (!this.prompt.isConnected) this.uiRoot.appendChild(this.prompt);
     if (p) {
       const name = COLOGNES.find((c) => c.id === p.id)!.name;
-      const html = `<span class="key">E</span> TAKE THE COLOGNE  <b>${name.toUpperCase()}</b>`;
+      const html = `<span class="key">${Controls.label('E')}</span> TAKE THE COLOGNE  <b>${name.toUpperCase()}</b>`;
       if (this.prompt.innerHTML !== html) this.prompt.innerHTML = html;
     }
     this.prompt.classList.toggle('show', !!p);

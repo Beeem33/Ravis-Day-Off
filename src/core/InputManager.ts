@@ -1,3 +1,5 @@
+import { Controls } from './Controls';
+
 /**
  * InputManager — keyboard state, pointer-lock mouse look deltas and
  * click edge detection. All consumers poll; deltas are consumed per frame.
@@ -28,8 +30,12 @@ export class InputManager {
     if (new URLSearchParams(location.search).has('nolock')) this.pointerLocked = true;
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
-      this.keysDown.add(e.code);
-      this.keysPressed.add(e.code);
+      // Through the player's bindings: a rebound key comes out as the key the game expects
+      const code = Controls.translate(e.code);
+      if (code) {
+        this.keysDown.add(code);
+        this.keysPressed.add(code);
+      }
       // Keep browser shortcuts from stealing game keys while locked: crouching
       // on Ctrl while pressing D / S / R / A etc. would otherwise bookmark,
       // save, reload or select-all. (Ctrl+W / Ctrl+T can't be blocked by a page;
@@ -38,7 +44,7 @@ export class InputManager {
         e.preventDefault();
       }
     });
-    window.addEventListener('keyup', (e) => this.keysDown.delete(e.code));
+    window.addEventListener('keyup', (e) => this.keysDown.delete(Controls.translate(e.code)));
     window.addEventListener('blur', () => {
       this.keysDown.clear();
       this.mouseHeld = false;

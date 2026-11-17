@@ -1,4 +1,5 @@
 import { EventBus, Events } from '../core/EventBus';
+import { Controls, keyName } from '../core/Controls';
 
 /**
  * FPSHUD — crosshair, hit markers, intruder counter, damage
@@ -65,7 +66,7 @@ export class FPSHUD {
       </div>
       <div class="alert-banner">! CONTACT !</div>
       <div class="hud-bottom">
-        WASD move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; SHIFT sprint &nbsp;·&nbsp; C crouch &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; LMB fire
+        ${['forward', 'left', 'back', 'right'].map((a) => keyName(Controls.key(a))).join('')} move &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; ${keyName(Controls.key('sprint'))} sprint &nbsp;·&nbsp; ${keyName(Controls.key('crouch'))} crouch &nbsp;·&nbsp; ${keyName(Controls.key('jump'))} jump &nbsp;·&nbsp; LMB fire
       </div>
       <div id="death-overlay" class="fullscreen-overlay">
         <h2>YOU DIED</h2>
@@ -480,7 +481,7 @@ export class FPSHUD {
     if (m) {
       const key = document.createElement('span');
       key.className = 'key';
-      key.textContent = m[1];
+      key.textContent = Controls.label(m[1]); // as the player has it bound
       el.append(key);
       if (m[2]) el.append(document.createTextNode(m[2]));
     } else {

@@ -28,6 +28,7 @@ import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
 import { DeathFx } from './fx/DeathFx';
+import { ACTIONS, Controls, FIXED, keyName } from './core/Controls';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -233,7 +234,17 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
         <label>EFFECTS <span data-out="sfx"></span><input type="range" min="0" max="100" step="1" data-set="sfx"></label>
         <label>MOUSE SENSITIVITY <span data-out="look"></span><input type="range" min="20" max="300" step="5" data-set="look"></label>
         <label class="pm-check"><input type="checkbox" data-set="invert"> INVERT MOUSE Y</label>
+        <button data-act="controls">CONTROLS</button>
         <button data-act="back">BACK</button>
+        <div class="pm-hint">[ ESC ] BACK</div>
+      </div>
+      <div class="pm-page pm-controls">
+        <div class="pm-sub">CLICK AN ACTION, THEN PRESS THE KEY YOU WANT FOR IT</div>
+        <div class="pm-binds"></div>
+        <div class="pm-row">
+          <button data-act="resetkeys">RESET TO DEFAULTS</button>
+          <button data-act="settingsback">BACK</button>
+        </div>
         <div class="pm-hint">[ ESC ] BACK</div>
       </div>
     </div>`;
@@ -278,7 +289,35 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
       /* not kept: fine for this visit */
     }
   });
+  // ---- Controls: every action and its key; click one, press a key
+  let capturing: string | null = null;
+  const binds = el.querySelector<HTMLElement>('.pm-binds')!;
+  const renderBinds = (): void => {
+    const groups = ['MOVEMENT', 'COMBAT', 'OTHER'] as const;
+    binds.innerHTML =
+      groups
+        .map(
+          (gr) =>
+            `<div class="pm-group">${gr}</div>` +
+            ACTIONS.filter((a) => a.group === gr)
+              .map(
+                (a) =>
+                  `<div class="pm-bind${capturing === a.id ? ' wait' : ''}"><span>${a.label.toUpperCase()}</span><button data-bind="${a.id}">${capturing === a.id ? 'PRESS A KEY…' : keyName(Controls.key(a.id))}</button></div>`
+              )
+              .join('')
+        )
+        .join('') +
+      `<div class="pm-group">FIXED</div>` +
+      FIXED.map(([l, k]) => `<div class="pm-bind fixed"><span>${l.toUpperCase()}</span><button disabled>${k}</button></div>`).join('');
+  };
+  const showControls = (on: boolean): void => {
+    capturing = null;
+    el.classList.toggle('controls', on);
+    if (on) renderBinds();
+  };
   const showSettings = (on: boolean): void => {
+    el.classList.remove('controls');
+    capturing = null;
     el.classList.toggle('settings', on);
     if (!on) return;
     // The main menu's audio page sets the volumes too: start from where they are
@@ -305,13 +344,21 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
     audio.setPaused(on);
     el.classList.toggle('on', on);
     el.classList.remove('settings');
+    el.classList.remove('controls');
+    capturing = null;
     if (on) {
       pausedAt = performance.now();
       input.exitPointerLock();
     }
   };
   const act = (a: string | undefined): void => {
-    if (a === 'settings') showSettings(true);
+    if (a === 'controls') showControls(true);
+    else if (a === 'settingsback') showControls(false);
+    else if (a === 'resetkeys') {
+      Controls.reset();
+      capturing = null;
+      renderBinds();
+    } else if (a === 'settings') showSettings(true);
     else if (a === 'back') showSettings(false);
     else if (a === 'resume') {
       setPaused(false);
@@ -336,7 +383,16 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
     (e) => {
       if (!paused) return;
       e.stopPropagation();
-      if (e.code === 'Escape' && !e.repeat && el.classList.contains('settings')) showSettings(false);
+      // Waiting for a key for an action: this one's it (Esc cancels)
+      if (capturing) {
+        e.preventDefault();
+        if (e.code !== 'Escape' && Controls.allowed(e.code)) Controls.bind(capturing, e.code);
+        capturing = null;
+        renderBinds();
+        return;
+      }
+      if (e.code === 'Escape' && !e.repeat && el.classList.contains('controls')) showControls(false);
+      else if (e.code === 'Escape' && !e.repeat && el.classList.contains('settings')) showSettings(false);
       else if (e.code === 'Escape' && !e.repeat && performance.now() - pausedAt > 250) setPaused(false);
       else if (e.code === 'Enter' && !el.classList.contains('settings')) act('resume');
     },
@@ -349,6 +405,12 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
         if (!paused) return;
         e.stopPropagation();
         if (type !== 'click') return;
+        const bind = (e.target as HTMLElement | null)?.closest?.('[data-bind]') as HTMLElement | null;
+        if (bind) {
+          capturing = capturing === bind.dataset.bind ? null : bind.dataset.bind!;
+          renderBinds();
+          return;
+        }
         const b = (e.target as HTMLElement | null)?.closest?.('[data-act]') as HTMLElement | null;
         act(b?.dataset.act);
       },

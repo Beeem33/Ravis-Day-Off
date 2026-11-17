@@ -1,6 +1,7 @@
 import { EventBus, Events, LEVELS, LevelId } from '../core/EventBus';
 import type { AudioManager } from '../core/AudioManager';
 import { Colognes, COLOGNES } from '../entities/Colognes';
+import { ACTIONS, Controls, FIXED, keyName } from '../core/Controls';
 
 type Panel = 'main' | 'audio' | 'controls' | 'colognes' | 'admin' | 'credits' | 'quit';
 
@@ -92,21 +93,12 @@ export class MenuUI {
         ${this.header()}
         <div class="menu-panel">
           <table>
-            <tr><td>MOVE</td><td>W / A / S / D</td></tr>
             <tr><td>LOOK</td><td>MOUSE</td></tr>
-            <tr><td>FIRE</td><td>LEFT CLICK</td></tr>
-            <tr><td>AIM</td><td>RIGHT CLICK (HOLD)</td></tr>
-            <tr><td>RELOAD</td><td>R (10-ROUND MAG)</td></tr>
-            <tr><td>WEAPONS</td><td>1 PISTOL · 2 SHOTGUN · 3 AK-47</td></tr>
-            <tr><td>SPRINT</td><td>SHIFT</td></tr>
-            <tr><td>CROUCH</td><td>C (or CTRL — but CTRL+W closes the tab)</td></tr>
-            <tr><td>JUMP</td><td>SPACE</td></tr>
-            <tr><td>FLIP THEM OFF</td><td>T (STAYS UP UNTIL T OR A RELOAD)</td></tr>
-            <tr><td>DEADBULL</td><td>G (DRINK IT — BACK TO FULL HEALTH)</td></tr>
-            <tr><td>DROP KICK</td><td>Q (KILLS WHOEVER IS IN FRONT OF YOU)</td></tr>
-            <tr><td>MENU</td><td>ESC</td></tr>
-            <tr><td>DRIVING</td><td>W GAS · S BRAKE / REVERSE · A / D STEER · SPACE HANDBRAKE</td></tr>
+            ${FIXED.map(([l, k]) => `<tr><td>${l.toUpperCase()}</td><td>${k}</td></tr>`).join('')}
+            ${ACTIONS.map((a) => `<tr><td>${a.label.toUpperCase()}</td><td>${keyName(Controls.key(a.id))}</td></tr>`).join('')}
+            <tr><td>DRIVING</td><td>${keyName(Controls.key('forward'))} GAS · ${keyName(Controls.key('back'))} BRAKE / REVERSE · ${keyName(Controls.key('left'))} / ${keyName(Controls.key('right'))} STEER · ${keyName(Controls.key('jump'))} HANDBRAKE</td></tr>
           </table>
+          <div class="dim">To change these, press ESC in a level: SETTINGS → CONTROLS.</div>
           <div class="divider"></div>
           <div>ONE SHOT KILLS THEM. YOU HAVE 5 HP<br/>AND HEAL 1 EVERY 30s.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>
         </div>

@@ -3,6 +3,7 @@ import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas, tiling } from './Level8Builder';
 import { mergeStatic } from './mergeStatic';
+import { suitModel } from '../entities/FieldSuit';
 
 /**
  * Level15Builder — the portal room.
@@ -1731,112 +1732,4 @@ export class Level15Builder {
     this.group.add(entry);
     return { center, ring, entry };
   }
-}
-
-// ================================================================ the suit
-
-/**
- * The field suit: round and polished — a white shell with a deep clear-coat
- * shine, chrome rings at every joint, a big round bubble helmet on a chrome
- * collar, a compact pack on its back with two hoses round to the chest
- * unit. Built standing, feet at the origin, facing +z.
- */
-export function suitModel(mats: THREE.MeshStandardMaterial[]): THREE.Group {
-  const shell = new THREE.MeshPhysicalMaterial({ color: 0xf2f3f0, roughness: 0.18, metalness: 0.05, clearcoat: 1, clearcoatRoughness: 0.08 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xe8eef2, roughness: 0.08, metalness: 1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1c2024, roughness: 0.35, metalness: 0.6 });
-  const visor = new THREE.MeshPhysicalMaterial({ color: 0xbfd8e8, roughness: 0.02, metalness: 0.1, transmission: 0, transparent: true, opacity: 0.32, clearcoat: 1, depthWrite: false });
-  const glowA = new THREE.MeshStandardMaterial({ color: 0x0a1820, emissive: 0x58c8ff, emissiveIntensity: 1.4 });
-  mats.push(shell, chrome, dark);
-  const g = new THREE.Group();
-  const cap = (r: number, len: number, m: THREE.Material): THREE.Mesh => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 18), m);
-  const ring = (r: number, t: number, m: THREE.Material = chrome): THREE.Mesh => new THREE.Mesh(new THREE.TorusGeometry(r, t, 10, 28), m);
-  // Torso: a rounded barrel, a chest unit, a belt
-  const torso = cap(0.25, 0.3, shell);
-  torso.position.y = 1.22;
-  torso.scale.set(1.12, 1, 0.86);
-  g.add(torso);
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.06), dark);
-  chest.position.set(0, 1.32, 0.2);
-  g.add(chest);
-  for (let k = 0; k < 4; k++) {
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.013, 8, 6), k === 0 ? glowA : chrome);
-    b.position.set(-0.08 + k * 0.05, 1.32, 0.235);
-    g.add(b);
-  }
-  const belt = ring(0.235, 0.03);
-  belt.rotation.x = Math.PI / 2;
-  belt.position.y = 0.98;
-  belt.scale.set(1, 0.8, 1);
-  g.add(belt);
-  // Helmet: chrome collar, the bubble, a light either side
-  const collar = ring(0.17, 0.045);
-  collar.rotation.x = Math.PI / 2;
-  collar.position.y = 1.56;
-  g.add(collar);
-  const bubble = new THREE.Mesh(new THREE.SphereGeometry(0.2, 32, 24), visor);
-  bubble.position.y = 1.74;
-  bubble.renderOrder = 3;
-  g.add(bubble);
-  // The back half of the helmet: white shell behind the clear front
-  const backShell = new THREE.Mesh(new THREE.SphereGeometry(0.205, 32, 24, Math.PI, Math.PI, 0, Math.PI), shell);
-  backShell.position.y = 1.74;
-  g.add(backShell);
-  for (const s of [-1, 1]) {
-    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.04, 12), glowA);
-    lamp.rotation.z = Math.PI / 2;
-    lamp.position.set(s * 0.2, 1.74, 0.02);
-    g.add(lamp);
-  }
-  // Pack and hoses
-  const pack = cap(0.15, 0.25, shell);
-  pack.position.set(0, 1.25, -0.26);
-  pack.scale.set(1.4, 1, 0.7);
-  g.add(pack);
-  for (const s of [-1, 1]) {
-    const hose = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(s * 0.12, 1.4, -0.3), V(s * 0.3, 1.35, -0.05), V(s * 0.15, 1.3, 0.2)]), 12, 0.022, 6, false), dark);
-    g.add(hose);
-  }
-  // Arms and legs: capsules, a chrome ring at each joint, round gloves and boots
-  const limb = (a: THREE.Vector3, b: THREE.Vector3, r: number): void => {
-    const len = a.distanceTo(b);
-    const m = cap(r, Math.max(0.01, len - r * 2), shell);
-    m.position.copy(a).lerp(b, 0.5);
-    m.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize());
-    g.add(m);
-  };
-  for (const s of [-1, 1]) {
-    const sh = V(s * 0.3, 1.42, 0);
-    const el = V(s * 0.38, 1.12, 0.03);
-    const wr = V(s * 0.4, 0.84, 0.08);
-    limb(sh, el, 0.075);
-    limb(el, wr, 0.065);
-    for (const [p, r] of [[sh, 0.09], [el, 0.08], [wr, 0.07]] as const) {
-      const rr = ring(r, 0.016);
-      rr.position.copy(p);
-      rr.rotation.x = Math.PI / 2;
-      g.add(rr);
-    }
-    const glove = new THREE.Mesh(new THREE.SphereGeometry(0.065, 16, 12), shell);
-    glove.position.copy(wr).add(V(0, -0.09, 0.01));
-    glove.scale.set(0.8, 1.3, 0.6);
-    g.add(glove);
-    const hip = V(s * 0.12, 0.92, 0);
-    const kn = V(s * 0.14, 0.5, 0.03);
-    const an = V(s * 0.14, 0.1, 0);
-    limb(hip, kn, 0.095);
-    limb(kn, an, 0.085);
-    const kr = ring(0.1, 0.018);
-    kr.position.copy(kn);
-    kr.rotation.x = Math.PI / 2;
-    g.add(kr);
-    const boot = cap(0.085, 0.14, shell);
-    boot.rotation.x = Math.PI / 2;
-    boot.position.set(s * 0.14, 0.08, 0.06);
-    g.add(boot);
-    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.03, 0.3), dark);
-    sole.position.set(s * 0.14, 0.015, 0.06);
-    g.add(sole);
-  }
-  return g;
 }

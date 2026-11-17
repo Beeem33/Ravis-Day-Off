@@ -11,6 +11,7 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { FPSHUD } from '../ui/FPSHUD';
 import { smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
+import { suitMaterials, suitArmPieces, type SuitMats } from '../entities/FieldSuit';
 
 /**
  * Level15Scene — the portal room.
@@ -59,17 +60,18 @@ function frameQ(f: THREE.Vector3, p: THREE.Vector3): THREE.Quaternion {
 }
 
 /**
- * Ravi's arms in the field suit, hung off the camera: white shell with a
- * deep clear-coat shine, chrome rings at the elbow and wrist and two round
- * the forearm, round gloves with jointed fingers. Each arm is a two-bone
- * reach from a shoulder just behind and below the camera to a wrist placed
- * in camera space.
+ * Ravi's arms in the field suit, hung off the camera, made of the same
+ * pieces as the suit on the rack: the black undersuit sleeve with a band of
+ * plate on the upper arm, a ribbed rubber elbow under a cap, the white bracer
+ * right round the forearm with its seams and lights, a black glove with a
+ * plated back and jointed fingers. Each arm is a two-bone reach from a
+ * shoulder just behind and below the camera to a wrist placed in camera space.
  */
 class SuitArms {
   readonly root = new THREE.Group();
   private arms: Record<Side, {
-    upper: THREE.Mesh;
-    fore: THREE.Mesh;
+    upper: THREE.Object3D;
+    fore: THREE.Object3D;
     elbow: THREE.Object3D;
     rings: THREE.Object3D[];
     glove: THREE.Group;
@@ -79,37 +81,27 @@ class SuitArms {
   private static readonly A = 0.33;
   private static readonly B = 0.32;
 
-  constructor(camera: THREE.Camera, shell: THREE.Material, chrome: THREE.Material, dark: THREE.Material) {
+  constructor(camera: THREE.Camera, M: SuitMats) {
     camera.add(this.root);
+    const P = suitArmPieces(M);
     const make = (side: Side): SuitArms['arms']['r'] => {
       const sx = side === 'r' ? 1 : -1;
-      const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.072, SuitArms.A - 0.1, 6, 16), shell);
-      const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, SuitArms.B - 0.1, 6, 16), shell);
-      const elbow = new THREE.Group();
-      elbow.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), shell));
-      const er = new THREE.Mesh(new THREE.TorusGeometry(0.074, 0.013, 8, 24), chrome);
-      elbow.add(er);
+      // Each piece is built from 0 to its length up +Y; the reach lays it by its middle
+      const centred = (piece: THREE.Group, len: number): THREE.Group => {
+        const h = new THREE.Group();
+        piece.position.y = -len / 2;
+        h.add(piece);
+        return h;
+      };
+      const upper = centred(P.upper(SuitArms.A), SuitArms.A);
+      const fore = centred(P.fore(SuitArms.B), SuitArms.B);
+      const elbow = P.elbow();
       const rings: THREE.Object3D[] = [];
-      for (const r of [0.066, 0.064, 0.07]) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.011, 8, 24), chrome);
-        rings.push(ring);
-        this.root.add(ring);
-      }
       this.root.add(upper, fore, elbow);
-      // The glove: a round palm, a cuff, four fingers of three joints, a thumb of two
+      // The glove: the lofted palm with its plates, four fingers of three joints, a thumb of two
       const glove = new THREE.Group();
       this.root.add(glove);
-      const palm = new THREE.Mesh(new THREE.SphereGeometry(0.05, 18, 12), shell);
-      palm.scale.set(1.0, 0.5, 1.15);
-      palm.position.z = -0.055;
-      glove.add(palm);
-      const knuckles = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.065, 4, 10), shell);
-      knuckles.rotation.z = Math.PI / 2;
-      knuckles.position.set(0, 0.004, -0.098);
-      glove.add(knuckles);
-      const cuffBand = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.012, 8, 20), dark);
-      cuffBand.position.z = -0.005;
-      glove.add(cuffBand);
+      glove.add(P.palm());
       const fingers: THREE.Object3D[][] = [];
       [-0.032, -0.011, 0.011, 0.031].forEach((x, i) => {
         const segs: THREE.Object3D[] = [];
@@ -118,12 +110,16 @@ class SuitArms {
         let z = -0.104;
         lens.forEach((len, k) => {
           const pivot = new THREE.Group();
-          pivot.position.set(k === 0 ? x * sx : 0, k === 0 ? 0 : 0, k === 0 ? z : -lens[k - 1]);
+          pivot.position.set(k === 0 ? x * sx : 0, 0, k === 0 ? z : -lens[k - 1]);
           parent.add(pivot);
-          const seg = new THREE.Mesh(new THREE.CapsuleGeometry(0.0115 - k * 0.0012, Math.max(0.002, len - 0.02), 4, 10), shell);
+          const seg = new THREE.Mesh(new THREE.CapsuleGeometry(0.0115 - k * 0.0012, Math.max(0.002, len - 0.02), 4, 10), M.rubber);
           seg.rotation.x = Math.PI / 2;
           seg.position.z = -len / 2;
           pivot.add(seg);
+          // A pad of plate on the back of each joint
+          const pad = new THREE.Mesh(new THREE.BoxGeometry(0.016 - k * 0.002, 0.004, Math.max(0.006, len - 0.014)), k === 0 ? M.trim : M.gun);
+          pad.position.set(0, 0.0105 - k * 0.001, -len / 2);
+          pivot.add(pad);
           segs.push(pivot);
           parent = pivot;
           z = 0;
@@ -136,14 +132,14 @@ class SuitArms {
       t0.position.set(-0.042 * sx, -0.006, -0.035);
       t0.rotation.y = 0.75 * sx;
       glove.add(t0);
-      const ts0 = new THREE.Mesh(new THREE.CapsuleGeometry(0.013, 0.02, 4, 10), shell);
+      const ts0 = new THREE.Mesh(new THREE.CapsuleGeometry(0.013, 0.02, 4, 10), M.rubber);
       ts0.rotation.x = Math.PI / 2;
       ts0.position.z = -0.02;
       t0.add(ts0);
       const t1 = new THREE.Group();
       t1.position.z = -0.04;
       t0.add(t1);
-      const ts1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.012, 4, 10), shell);
+      const ts1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.012, 4, 10), M.rubber);
       ts1.rotation.x = Math.PI / 2;
       ts1.position.z = -0.016;
       t1.add(ts1);
@@ -187,7 +183,14 @@ class SuitArms {
       m.quaternion.setFromUnitVectors(Y, p1.clone().sub(p0).normalize());
     };
     segment(a.upper, S, E);
-    segment(a.fore, E, Wc);
+    // The forearm keeps its back turned the way the back of his hand faces, so the bracer's top stays on top
+    const fy = Wc.clone().sub(E).normalize();
+    const fz = k.p.clone().negate();
+    fz.addScaledVector(fy, -fz.dot(fy));
+    if (fz.lengthSq() < 1e-6) fz.set(0, 1, 0).addScaledVector(fy, -fy.y);
+    fz.normalize();
+    a.fore.position.copy(E).lerp(Wc, 0.5);
+    a.fore.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(fy, fz).normalize(), fy, fz));
     a.elbow.position.copy(E);
     a.elbow.quaternion.setFromUnitVectors(V(0, 0, 1), Wc.clone().sub(E).normalize());
     const fd = Wc.clone().sub(E).normalize();
@@ -313,15 +316,18 @@ export class Level15Scene extends CombatScene<Level15Data> {
     const pmrem = new THREE.PMREMGenerator(renderer);
     const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
-    const shell = new THREE.MeshPhysicalMaterial({ color: 0xf4f5f2, roughness: 0.16, metalness: 0.05, clearcoat: 1, clearcoatRoughness: 0.06, envMap: env, envMapIntensity: 0.9 });
-    const chrome = new THREE.MeshStandardMaterial({ color: 0xeef2f5, roughness: 0.06, metalness: 1, envMap: env, envMapIntensity: 1.2 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x1c2024, roughness: 0.35, metalness: 0.6, envMap: env, envMapIntensity: 0.6 });
     for (const m of L.suitMats) {
       m.envMap = env;
       m.envMapIntensity = 1;
       m.needsUpdate = true;
     }
-    this.arms = new SuitArms(this.player.camera, shell, chrome, dark);
+    // His own arms in it: the same materials as the suit on the rack, lit the same way
+    const armMats = suitMaterials();
+    for (const m of Object.values(armMats)) {
+      m.envMap = env;
+      m.envMapIntensity = 1;
+    }
+    this.arms = new SuitArms(this.player.camera, armMats);
     this.arms.visible = false;
 
     const hemi = new THREE.HemisphereLight(0x9ab2c4, 0x1a2026, 1.0);

@@ -5455,24 +5455,42 @@ export class AudioManager {
     for (let i = 0; i < 14; i++) this.burst(out, { at: 0.2 + Math.random() * 0.9, D: 0.05, type: 'bandpass', f: 800 + Math.random() * 1600, q: 3, gain: 0.12 + Math.random() * 0.1, attack: 0.002 });
   }
 
-  /** An alien hound: a wet, gargling shriek out of a mouth with no face round it. */
+  /**
+   * An alien hound: a low, wet, gargling snarl out of a mouth with no face
+   * round it — deep, rattling in its throat, nothing shrill about it.
+   */
   houndScreech(dist = 0): void {
     if (!this.ctx) return;
-    const out = this.place(this.ctx, dist, 0.5, 0.35);
-    const f = 700 + Math.random() * 300;
-    this.partial(out, { D: 0.55, type: 'sawtooth', f, f1: f * 0.45, gain: 0.35, attack: 0.02 });
-    this.partial(out, { D: 0.5, type: 'square', f: f * 1.48, f1: f * 0.7, gain: 0.08, attack: 0.02 });
-    this.burst(out, { D: 0.5, type: 'bandpass', f: 1400, f1: 500, q: 2, gain: 0.45, attack: 0.01 });
-    for (let i = 0; i < 6; i++) this.burst(out, { at: 0.05 + i * 0.07, D: 0.05, type: 'lowpass', f: 600, gain: 0.25, attack: 0.002 });
+    const out = this.place(this.ctx, dist, 0.42, 0.4);
+    const f = 72 + Math.random() * 22;
+    const D = 0.7 + Math.random() * 0.35;
+    // The growl itself: two rough low tones, a throat-rattle of bursts on top
+    this.partial(out, { D, type: 'sawtooth', f, f1: f * 0.8, gain: 0.32, attack: 0.08 });
+    this.partial(out, { D, type: 'square', f: f * 1.5, f1: f * 1.15, gain: 0.07, attack: 0.1 });
+    const n = Math.floor(D / 0.045);
+    for (let i = 0; i < n; i++) this.burst(out, { at: i * 0.045 + Math.random() * 0.01, D: 0.035, type: 'lowpass', f: 380 + Math.random() * 160, gain: 0.28, attack: 0.003 });
+    // Wet: a slop of noise low down, a gurgle
+    this.burst(out, { D: D * 0.9, type: 'bandpass', f: 260, f1: 180, q: 1.2, gain: 0.3, attack: 0.06 });
+    for (let i = 0; i < 4; i++) this.partial(out, { at: 0.1 + Math.random() * D * 0.7, D: 0.05, type: 'sine', f: 160 + Math.random() * 90, f1: 260 + Math.random() * 80, gain: 0.08, attack: 0.004 });
   }
 
-  /** Its jaws snapping shut. */
+  /** Its jaws snapping shut: a heavy wet crunch. */
   houndBite(dist = 0): void {
     if (!this.ctx) return;
     const out = this.place(this.ctx, dist, 0.6, 0.2);
-    this.burst(out, { D: 0.08, type: 'bandpass', f: 2200, q: 1.5, gain: 0.7, attack: 0.001 });
-    this.partial(out, { D: 0.12, type: 'sine', f: 180, f1: 70, gain: 0.6, attack: 0.002 });
-    this.burst(out, { at: 0.05, D: 0.18, type: 'lowpass', f: 1200, f1: 300, gain: 0.4, attack: 0.004 });
+    this.burst(out, { D: 0.07, type: 'bandpass', f: 900, q: 1.2, gain: 0.6, attack: 0.001 });
+    this.partial(out, { D: 0.16, type: 'sine', f: 110, f1: 45, gain: 0.7, attack: 0.002 });
+    this.burst(out, { at: 0.04, D: 0.2, type: 'lowpass', f: 700, f1: 200, gain: 0.45, attack: 0.004 });
+  }
+
+  /** The ground-maw snapping shut on him: a deep slam of wet flesh and a crunch. */
+  mawSnap(): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.7, 0.25);
+    this.partial(out, { D: 0.22, type: 'sine', f: 90, f1: 38, gain: 0.85, attack: 0.002 });
+    this.burst(out, { D: 0.12, type: 'bandpass', f: 1100, q: 1, gain: 0.55, attack: 0.001 });
+    this.burst(out, { at: 0.03, D: 0.35, type: 'lowpass', f: 900, f1: 180, gain: 0.5, attack: 0.004 });
+    for (let i = 0; i < 6; i++) this.burst(out, { at: 0.08 + i * 0.05, D: 0.04, type: 'bandpass', f: 600 + Math.random() * 600, q: 3, gain: 0.15, attack: 0.002 });
   }
 
   /** A bolt out of one of the big one's arms: a crackling electric spit. */

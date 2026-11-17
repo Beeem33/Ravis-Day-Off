@@ -125,6 +125,13 @@ export class RaviVisual {
   /** Each hand's axes at rest (model space). */
   static handRest: Record<Side, { along: THREE.Vector3; palm: THREE.Vector3; thumb: THREE.Vector3 }> | null = null;
 
+  /**
+   * What he's wearing on his arms in first person: null is his own shirt
+   * sleeves; a level where he's in something else sets a function that
+   * dresses each new arms rig (see SuitDress).
+   */
+  static dressArms: ((rig: RaviRig) => void) | null = null;
+
   static get ready(): boolean {
     return RaviVisual.ok;
   }
@@ -836,6 +843,10 @@ export class FirstPersonArms extends FirstPersonLimbs {
 
   constructor(parent: THREE.Object3D, camera: THREE.Object3D | null) {
     super(parent, camera, 'arms');
+  }
+
+  protected built(rig: RaviRig): void {
+    RaviVisual.dressArms?.(rig);
   }
 
   /** Drive one arm from `anchor` held by `grip`; null takes the arm away. */

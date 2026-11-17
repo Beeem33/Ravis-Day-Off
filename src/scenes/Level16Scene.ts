@@ -8,11 +8,15 @@ import {
   type TreeTrunk,
   groundY,
   inLake,
+  inCave,
+  outside,
+  valleyX,
   WATER_Y,
   CLIFF_Z,
   MASSIF,
   ARENA,
-  MEADOW
+  MEADOW,
+  CAVE_MOUTH_Z
 } from '../environment/Level16Builder';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { CombatScene } from './CombatScene';
@@ -25,8 +29,9 @@ import { Arsenal, loadoutFor } from '../entities/Arsenal';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { hideInventory } from '../ui/InventoryUI';
 import { FPSHUD } from '../ui/FPSHUD';
-import { FirstPersonArms, grip, mixGrip } from '../entities/RaviVisual';
-import { Hound, SpiderBoss, GlowShots, Droplets, glowSprite, type GlowShot } from '../entities/AlienCreatures';
+import { FirstPersonArms, RaviVisual, grip, mixGrip } from '../entities/RaviVisual';
+import { dressSuit } from '../entities/SuitDress';
+import { Hound, SpiderBoss, MawTrap, GlowShots, Droplets, type GlowShot } from '../entities/AlienCreatures';
 import { AlienBlaster } from '../entities/AlienBlaster';
 import { TrackerTablet } from '../entities/TrackerTablet';
 import type { Enemy } from '../entities/Enemy';
@@ -34,16 +39,17 @@ import type { Enemy } from '../entities/Enemy';
 /**
  * Level16Scene — the far side.
  *
- *  1. The station: he comes to in a little survey station. A button by the
- *     door lifts it, and there's the planet.
- *  2. The meadow: a crashed drone, smoke going up, its beacon blinking; the
- *     tracker in the sponge beside it. Hounds come out of the trees on the
- *     way. The tracker (hold M) shows the exit portal's coordinates.
- *  3. North: the forest, then a cliff across the valley — over it with the
- *     pressure shotgun; the massif, and under it through the lake, with a
- *     torch, round the turns, up on the other side.
- *  4. The big one in its clearing. Kill it, take its arm (E), wear it.
- *  5. The portal.
+ *  1. The station: he comes to in a little survey station, in the suit. A
+ *     button by the door lifts it, and there's the planet.
+ *  2. The canyon: a crashed drone in a meadow, smoke going up, its beacon
+ *     blinking; the tracker in the sponge beside it. Hounds come out of the
+ *     trees on the way; maws lie open in the ground. The tracker (hold M)
+ *     shows the exit portal's coordinates.
+ *  3. A cliff across the canyon — over it with the pressure shotgun; the
+ *     massif, and under it through the lake, the suit's lamp on, round the
+ *     turns, up the other side.
+ *  4. The big one in its clearing. Kill it, take its cannon (E), wear it.
+ *  5. The cave in the canyon's end wall, and the portal at the back of it.
  */
 
 type Phase = 'play' | 'harvest' | 'end';
@@ -53,7 +59,6 @@ const smooth = (x: number): number => {
   const k = Math.min(1, Math.max(0, x));
   return k * k * (3 - 2 * k);
 };
-/** Feet this far under the surface and he's swimming. */
 const SWIM_DEPTH = 1.25;
 const HOUND_SPEED = 6.9;
 const BOSS_NAME = 'THE MAW';
@@ -65,27 +70,25 @@ interface Hit {
   dist: number;
   point: THREE.Vector3;
   normal: THREE.Vector3;
-  kind: 'terrain' | 'world' | 'trunk' | 'hound' | 'boss';
+  kind: 'terrain' | 'world' | 'trunk' | 'hound' | 'boss' | 'trap';
   hound?: Hound;
+  trap?: MawTrap;
   head?: boolean;
 }
 
-/** A pack of hounds, and where they come out. */
 interface Pack {
-  /** He goes past this (z less than it) and they come. */
   trigger: number;
   at: { x: number; z: number }[];
   spawned: boolean;
-  /** Only once he has the tracker (the first lot), or once the arm's his (the last). */
   needs?: 'tablet' | 'harvest';
 }
 
 // ================================================================ the harvest
 
-/** Left fist round a handle running up the anchor's +Y. */
+/** Left hand closed round something thick (the cannon's barrel). */
 const L_HOLD = grip([-0.024, -0.004, 0.07], [-0.08, 0.04, -1], [1, 0, -0.1], [-0.3, -0.4, 0.86], {
-  fingers: [[70, 90, 56], [74, 92, 58], [76, 94, 58], [78, 94, 58]],
-  thumb: [0.5, 0.7, 0.55]
+  fingers: [[52, 66, 40], [56, 70, 42], [58, 72, 42], [60, 72, 42]],
+  thumb: [0.4, 0.55, 0.45]
 });
 const L_OPEN = grip([-0.03, -0.004, 0.075], [-0.06, 0.12, -1], [0.9, 0.42, -0.1], [-0.3, -0.4, 0.86], {
   fingers: [[10, 14, 8], [10, 14, 8], [12, 16, 10], [16, 20, 12]],
@@ -94,9 +97,10 @@ const L_OPEN = grip([-0.03, -0.004, 0.075], [-0.06, 0.12, -1], [0.9, 0.42, -0.1]
 });
 
 /**
- * His hands for taking the arm: the karambit in his right for the cuts,
- * his left to pick the thing up and bring it to his right forearm. The
- * blaster (his right fist, the arm going on it) is its own viewmodel.
+ * His hands for taking the cannon: the karambit in his right for the
+ * sawing, his left to hold the thing while he cuts and then to bring it to
+ * his right forearm. (His right fist with the cannon going on it is the
+ * blaster's own viewmodel.)
  */
 class HarvestHands {
   readonly knifeRoot = new THREE.Group();
@@ -131,57 +135,6 @@ class HarvestHands {
   }
 }
 
-/** A torch for under the water, in his left hand, low. */
-class WaterTorch {
-  readonly root = new THREE.Group();
-  readonly hand = new THREE.Group();
-  readonly light: THREE.SpotLight;
-  private arms: FirstPersonArms;
-  /** 0 away .. 1 out. */
-  out = 0;
-
-  constructor(camera: THREE.Camera) {
-    camera.add(this.root);
-    this.root.add(this.hand);
-    const body = new THREE.MeshStandardMaterial({ color: 0xe0b020, roughness: 0.5 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x1a1c1e, roughness: 0.6 });
-    const torch = new THREE.Group();
-    torch.rotation.x = -Math.PI / 2;
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.16, 14), body);
-    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.02, 0.05, 16), body);
-    head.position.y = 0.1;
-    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.024, 16), new THREE.MeshBasicMaterial({ color: 0xf8fbff, toneMapped: false }));
-    lens.position.y = 0.126;
-    lens.rotation.x = -Math.PI / 2;
-    const grip1 = new THREE.Mesh(new THREE.CylinderGeometry(0.0195, 0.0195, 0.07, 14), dark);
-    grip1.position.y = -0.03;
-    const strap = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 6, 16), dark);
-    strap.position.y = -0.08;
-    torch.add(barrel, head, lens, grip1, strap);
-    this.hand.add(torch);
-    const glow = glowSprite(0xe8f4ff, 0.18, 0.9);
-    glow.position.z = -0.13;
-    this.hand.add(glow);
-    this.light = new THREE.SpotLight(0xe8f4ff, 0, 34, 0.5, 0.45, 1.2);
-    this.light.position.set(-0.15, -0.15, -0.3);
-    this.light.target.position.set(-0.05, -0.1, -8);
-    camera.add(this.light, this.light.target);
-    this.arms = new FirstPersonArms(this.root, camera).set('l', this.hand, L_HOLD);
-    this.root.visible = false;
-  }
-
-  update(dt: number, want: boolean, t: number): void {
-    this.out = Math.max(0, Math.min(1, this.out + (want ? dt * 3 : -dt * 3)));
-    const k = smooth(this.out);
-    this.root.visible = this.out > 0.01;
-    this.light.intensity = 60 * k;
-    if (!this.root.visible) return;
-    this.hand.position.set(-0.2, -0.24 - 0.4 * (1 - k) + Math.sin(t * 1.7) * 0.008, -0.38);
-    this.hand.rotation.set(0.05 + Math.sin(t * 1.3) * 0.02, -0.12, 0.15);
-    this.arms.update();
-  }
-}
-
 // ================================================================ scene
 
 export class Level16Scene extends CombatScene<Level16Data> {
@@ -190,7 +143,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private drink!: DrinkViewmodel;
   private blaster!: AlienBlaster;
   private tablet!: TrackerTablet;
-  private torch!: WaterTorch;
   private hands!: HarvestHands;
   private hud!: FPSHUD;
   private phase: Phase = 'play';
@@ -201,6 +153,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private hounds: Hound[] = [];
   private houndHits: THREE.Mesh[] = [];
   private packs: Pack[] = [];
+  private traps: MawTrap[] = [];
+  private trapHits: THREE.Mesh[] = [];
+  private heldBy: MawTrap | null = null;
+  private heldBite = 0;
   private boss!: SpiderBoss;
   private bossAwake = false;
   private bossVel = new THREE.Vector3();
@@ -210,25 +166,34 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private bossSideT = 0;
   private bossArm = 0;
   private bossShots = 0;
+  private lastStomp = 0;
+  private lastGrowl = -10;
   private bolts!: GlowShots;
   private goo!: GlowShots;
   private drops!: Droplets;
   private gooLight!: THREE.PointLight;
   private portalLight!: THREE.PointLight;
+  private lamp!: THREE.SpotLight;
+  private lampOn = 0;
   private hasTablet = false;
   private harvested = false;
   private doorT = -1;
   private underwater = false;
   private swimHinted = false;
   private cliffHinted = false;
+  private trapHinted = false;
   private tabletHinted = 0;
+  private caveHinted = false;
   private smokeT = 0;
   private bubbleT = 0;
   private shake = 0;
+  private flashT = 9;
+  private flash = 0;
   private harvestArm = 0;
   private harvestFrom = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
-  private severedArm: THREE.Group | null = null;
-  /** The trunks (and boulders) near enough to bump into, as boxes, refreshed as he moves. */
+  private slideFrom = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
+  private severed: THREE.Group | null = null;
+  private lastInside = new THREE.Vector3();
   private nearCols: Collider[] = [];
   private nearPool: Collider[] = [];
   private nearAt = new THREE.Vector3(1e9, 0, 0);
@@ -236,20 +201,24 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private allCols: Collider[] = [];
   private floorBody!: CANNON.Body;
   private hemi!: THREE.HemisphereLight;
-  private sun!: THREE.DirectionalLight;
+  private moon!: THREE.DirectionalLight;
   private ui!: HTMLElement;
   private banner!: HTMLElement;
   private fadeEl!: HTMLElement;
   private letterbox!: HTMLElement;
   private murk!: HTMLElement;
+  private vignette!: HTMLElement;
   private card!: HTMLElement;
   private hintEl!: HTMLElement;
   private unsubs: (() => void)[] = [];
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private clickHandler = (): void => this.onClick();
   private underLoop: { set(k: number): void; stop(): void } | null = null;
-  private static readonly FOG_AIR = new THREE.Color(0x1c0e2a);
-  private static readonly FOG_WATER = new THREE.Color(0x0b3a14);
+  private static readonly FOG_AIR = new THREE.Color(0x0d0716);
+  private static readonly FOG_CAVE = new THREE.Color(0x020204);
+  private static readonly FOG_WATER = new THREE.Color(0x082a0e);
+  private static readonly HEMI = 1.35;
+  private static readonly MOON = 2.6;
 
   constructor(ctx: GameContext, private from = 0) {
     super(ctx);
@@ -259,13 +228,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   enter(): void {
     const { bus, input, audio } = this.ctx;
+    // He's in the field suit: every first-person arm made from here on wears it
+    RaviVisual.dressArms = dressSuit;
     this.scene.background = new THREE.Color(0x000000);
-    this.scene.fog = new THREE.FogExp2(Level16Scene.FOG_AIR.getHex(), 0.011);
+    this.scene.fog = new THREE.FogExp2(Level16Scene.FOG_AIR.getHex(), 0.022);
     this.level = new Level16Builder().build();
     const L = this.level;
     this.scene.add(L.group);
     this.world = this.createPhysicsWorld(L.colliders);
-    // The ground for anything physical (his body, if it comes to that; dropped mags): a plane kept under him
     this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
     this.floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     this.world.addBody(this.floorBody);
@@ -275,7 +245,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (!a) this.trunkGrid.set(k, (a = []));
       a.push(t);
     }
-    for (let i = 0; i < 24; i++) this.nearPool.push({ box: new THREE.Box3() });
+    for (let i = 0; i < 32; i++) this.nearPool.push({ box: new THREE.Box3() });
 
     this.checkpoint = Math.min(this.from, 4);
     const start = this.checkpointPose(this.checkpoint);
@@ -284,6 +254,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.player.camera.far = 1300;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
+    this.lastInside.copy(start.pos);
     this.ragdollOnDeath(() => (!this.arsenal.knifeActive && this.arsenal.held.stow < 0.5 ? this.arsenal.active : null));
 
     this.particles = new ParticleManager(this.scene);
@@ -325,48 +296,60 @@ export class Level16Scene extends CombatScene<Level16Data> {
     };
     this.blaster = new AlienBlaster(this.player.camera);
     this.tablet = new TrackerTablet(this.player.camera, L.mapCanvas, L.mapBounds);
-    this.torch = new WaterTorch(this.player.camera);
     this.hands = new HarvestHands(this.player.camera);
 
-    // ---- Light: a dim purple sky overhead, a pale light off the big planet, the ground bouncing green
-    this.hemi = new THREE.HemisphereLight(0xa898d8, 0x7a8a50, 2.4);
-    this.sun = new THREE.DirectionalLight(0xe8dcff, 2.6);
-    this.sun.position.set(180, 320, 240);
-    this.scene.add(this.hemi, this.sun, this.sun.target);
+    // ---- Light: dark and cold. A dim purple sky, a hard cold light off the big planet raking
+    //      across the canyon from the north-west; the glowing water, bulbs and crystals the only warmth.
+    this.hemi = new THREE.HemisphereLight(0x5a4c86, 0x1c1a14, Level16Scene.HEMI);
+    this.moon = new THREE.DirectionalLight(0xa8b0e8, Level16Scene.MOON);
+    this.moon.position.set(280, 210, 40);
+    this.scene.add(this.hemi, this.moon, this.moon.target);
+    // The suit's lamp: on its shoulder, on whenever it's dark (in the water, in the cave)
+    this.lamp = new THREE.SpotLight(0xe8f4ff, 0, 40, 0.55, 0.5, 1.2);
+    this.lamp.position.set(0.18, -0.12, 0.05);
+    this.lamp.target.position.set(0.05, -0.15, -8);
+    this.player.camera.add(this.lamp, this.lamp.target);
     this.gooLight = new THREE.PointLight(0x46b8ff, 0, 9, 1.6);
     this.scene.add(this.gooLight);
-    this.portalLight = new THREE.PointLight(0x6ae0ff, 4, 22, 1.4);
-    this.portalLight.position.copy(L.portal.at).add(V(0, 2.6, 0));
+    this.portalLight = new THREE.PointLight(0x6ae0ff, 6, 30, 1.3);
+    this.portalLight.position.copy(L.portal.at).add(V(0, 2.6, 1.5));
     this.scene.add(this.portalLight);
 
-    // ---- Shots, splashes
     this.bolts = new GlowShots(0x4ac8ff, 0.12, 0, 0, 40);
     this.goo = new GlowShots(GOO, 0.075, 5, 0.25, 40);
     this.drops = new Droplets(700);
     this.scene.add(this.bolts.group, this.goo.group, this.drops.points);
 
-    // ---- The big one, waiting in its clearing; the packs
+    // ---- The big one, waiting in its clearing; the packs; the maws
     this.boss = new SpiderBoss(groundY);
     this.scene.add(this.boss.group);
     this.boss.place(ARENA.x, ARENA.z - 8, 0);
+    const at = (z: number, dx: number): { x: number; z: number } => ({ x: valleyX(z) + dx, z });
     this.packs = [
-      { trigger: 121, at: [{ x: 6, z: 104 }, { x: 22, z: 110 }, { x: -6, z: 98 }], spawned: false },
-      { trigger: 26, at: [{ x: -14, z: 8 }, { x: 14, z: 6 }, { x: -6, z: 2 }, { x: 18, z: 14 }], spawned: false, needs: 'tablet' },
-      { trigger: -58, at: [{ x: -16, z: -70 }, { x: 14, z: -72 }, { x: 0, z: -78 }, { x: 22, z: -66 }], spawned: false },
-      { trigger: 999, at: [{ x: -18, z: -134 }, { x: 16, z: -136 }, { x: -6, z: -140 }, { x: 8, z: -142 }, { x: 24, z: -130 }, { x: -24, z: -128 }], spawned: false, needs: 'harvest' }
+      { trigger: 121, at: [at(104, -4), at(110, 10), at(98, 4)], spawned: false },
+      { trigger: 26, at: [at(8, -12), at(6, 12), at(2, -4), at(14, 16)], spawned: false, needs: 'tablet' },
+      { trigger: -60, at: [at(-72, -12), at(-74, 6), at(-80, -2), at(-68, 14)], spawned: false },
+      { trigger: 999, at: [at(-134, -14), at(-136, 12), at(-140, -4), at(-142, 6), at(-130, 18), at(-128, -18)], spawned: false, needs: 'harvest' }
     ];
+    // Packs behind where he starts are done with; the one he was fighting when he died comes again
+    const done = [this.checkpoint >= 1, this.checkpoint >= 3, this.checkpoint >= 4];
+    done.forEach((d, i) => (this.packs[i].spawned = d));
+    for (const s of L.trapSpots) {
+      const m = new MawTrap();
+      m.group.position.copy(s);
+      m.group.rotation.y = Math.random() * 6.28;
+      this.scene.add(m.group);
+      this.traps.push(m);
+      this.trapHits.push(m.hitbox);
+    }
+
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
     this.hud.setCounter(null);
     this.hud.setAmmo(...a.ammoReadout());
     this.buildUI();
-    // Where he starts from: what's already done
     if (this.checkpoint >= 1) {
       this.openDoor(true);
       this.takeTablet(true);
-    }
-    for (let i = 0; i < this.packs.length; i++) {
-      // Packs behind the checkpoint are done with
-      if ((this.checkpoint >= 1 && i === 0) || (this.checkpoint >= 2 && i === 1) || (this.checkpoint >= 3 && i === 2)) this.packs[i].spawned = true;
     }
 
     this.unsubs.push(
@@ -377,22 +360,24 @@ export class Level16Scene extends CombatScene<Level16Data> {
       bus.on(Events.PlayerDied, () => {
         this.dead = true;
         this.hud.setBoss(null, 0);
+        this.release();
       })
     );
     document.addEventListener('keydown', this.keyHandler);
     document.addEventListener('click', this.clickHandler);
     this.underLoop = audio.underwaterLoop();
-    audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.45, 4);
+    audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.5, 4);
 
     this.player.camera.fov = 74;
     this.player.camera.updateProjectionMatrix();
     this.fadeEl.style.transition = 'opacity 1.6s';
     this.later(0.05, () => (this.fadeEl.style.opacity = '0'));
-    this.setObjective(['RELEASE THE STATION DOOR', 'FOLLOW THE TRACKER — HOLD [M]', 'FOLLOW THE TRACKER — HOLD [M]', 'FOLLOW THE TRACKER — HOLD [M]', 'FOLLOW THE TRACKER — HOLD [M]'][this.checkpoint]);
+    this.setObjective(this.checkpoint === 0 ? 'RELEASE THE STATION DOOR' : 'FOLLOW THE TRACKER — HOLD [M]');
     input.requestPointerLock();
   }
 
   exit(): void {
+    RaviVisual.dressArms = null;
     this.ctx.audio.stopTrackMusic(0.8);
     this.ctx.audio.stopBossMusic(0.5);
     this.underLoop?.stop();
@@ -411,11 +396,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
       case 1:
         return at(MEADOW.x - 2, MEADOW.z - 2, 0.2);
       case 2:
-        return at(0, CLIFF_Z - 4, 0);
+        return at(valleyX(CLIFF_Z - 4), CLIFF_Z - 4, 0);
       case 3:
         return at(0, -60, 0);
       case 4:
-        return at(0, -82, 0);
+        return at(valleyX(-80), -80, 0);
       default:
         return this.level.start;
     }
@@ -425,8 +410,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const el = document.createElement('div');
     el.id = 'intro-ui';
     el.innerHTML = `
+      <div class="l16-vig" style="position:absolute;inset:0;pointer-events:none;
+        background:radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(4,0,10,0.62) 100%)"></div>
+      <div class="l16-hurt" style="position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .15s;
+        background:radial-gradient(ellipse at center, rgba(120,0,10,0) 40%, rgba(120,0,10,0.55) 100%)"></div>
       <div class="l16-murk" style="position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s;
-        background:radial-gradient(ellipse at center, rgba(40,140,50,0.25) 0%, rgba(8,50,14,0.85) 100%)"></div>
+        background:radial-gradient(ellipse at center, rgba(40,140,50,0.22) 0%, rgba(6,40,10,0.88) 100%)"></div>
       <div class="intro-letterbox open"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="l16-hint" style="position:absolute;left:50%;bottom:17%;transform:translateX(-50%);color:#e8f0ea;font:bold 15px 'Courier New',monospace;
@@ -441,6 +430,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.uiRoot.appendChild(el);
     this.ui = el;
     this.murk = el.querySelector('.l16-murk')!;
+    this.vignette = el.querySelector('.l16-hurt')!;
     this.letterbox = el.querySelector('.intro-letterbox')!;
     this.banner = el.querySelector('.intro-objective')!;
     this.hintEl = el.querySelector('.l16-hint')!;
@@ -493,7 +483,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     // ---- Water: deep enough and he swims
     const pos = p.position;
     const lake = inLake(pos.x, pos.z);
-    p.swimming = p.alive && this.phase === 'play' && lake && pos.y < WATER_Y - SWIM_DEPTH;
+    p.swimming = p.alive && this.phase === 'play' && lake && pos.y < WATER_Y - SWIM_DEPTH && !this.heldBy;
     p.swimTop = WATER_Y - 1.45;
     const camY = p.camera.position.y;
     this.underwater = inLake(p.camera.position.x, p.camera.position.z) && camY < WATER_Y - 0.02;
@@ -501,7 +491,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.swimHinted = true;
       this.ctx.audio.splash(true);
       this.splash(V(pos.x, WATER_Y, pos.z), 30);
-      this.hint('UNDERWATER: [W] SWIM WHERE YOU LOOK · [SPACE] UP · [C] DOWN', 7);
+      this.hint('SUIT LAMP ON — [W] SWIM WHERE YOU LOOK · [SPACE] UP · [C] DOWN', 7);
     }
 
     // ---- His hands: the tracker on M; a can on G
@@ -514,11 +504,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !a.reloading && !a.switching && !a.pressureArmed;
     p.aiming = aiming;
 
-    // ---- Moving: the boxes and the trees near him
+    // ---- Moving: the boxes and the trees near him; a maw holds him where he is
     if (this.phase === 'play' || this.dead) {
       this.refreshNear();
       p.update(dt, this.allCols);
+      this.keepInside();
     }
+    this.updateTraps(dt);
     this.floorBody.position.set(0, groundY(pos.x, pos.z), 0);
 
     // ---- Weapons
@@ -539,7 +531,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.setPressure(a.pressureArmed ? a.pressure : null);
     this.drink.update(dt, p);
     this.tablet.update(dt, wantTablet, pos, p.yaw, L.portal.at, p.bob);
-    this.torch.update(dt, this.underwater && p.alive, this.t);
     if (this.phase === 'play') {
       const targetFov = 74 - a.zoomFov;
       if (Math.abs(p.camera.fov - targetFov) > 0.01) {
@@ -576,7 +567,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     input.endFrame();
   }
 
-  /** The level's boxes, and boxes for the trunks and boulders within a few metres of him. */
+  /** The level's boxes, and boxes for the trunks and rocks within a few metres of him. */
   private refreshNear(): void {
     const p = this.player.position;
     if (this.nearAt.distanceToSquared(p) > 1 || this.allCols.length === 0) {
@@ -589,7 +580,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         for (let j = cz - 1; j <= cz + 1; j++) {
           for (const t of this.trunkGrid.get(`${i},${j}`) ?? []) {
             if (n >= this.nearPool.length) break;
-            if (Math.hypot(t.x - p.x, t.z - p.z) > 6) continue;
+            if (Math.hypot(t.x - p.x, t.z - p.z) > 6 + t.r) continue;
             const c = this.nearPool[n++];
             const r = t.r * 0.85;
             const y = groundY(t.x, t.z);
@@ -600,6 +591,22 @@ export class Level16Scene extends CombatScene<Level16Data> {
         }
       this.allCols = this.level.colliders.concat(this.nearCols);
     }
+  }
+
+  /** Not up the canyon walls (a pressure shot can throw him a long way): back to the last place he was in it. */
+  private keepInside(): void {
+    const p = this.player;
+    if (!p.alive) return;
+    const pos = p.position;
+    if (inCave(pos.x, pos.z) || outside(pos.x, pos.z) < 2.5) {
+      this.lastInside.copy(pos);
+      return;
+    }
+    pos.x = this.lastInside.x;
+    pos.z = this.lastInside.z;
+    p.velocity.x = 0;
+    p.velocity.z = 0;
+    p.boost.set(0, 0, 0);
   }
 
   // ============================================================ the station
@@ -645,7 +652,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.later(1.0, () => this.ctx.audio.elevatorDoors(1.8));
     this.later(2.6, () => {
       this.setObjective('INVESTIGATE THE CRASHED DRONE');
-      this.hint('SMOKE, AND A RED BEACON — OFF TO THE RIGHT', 6);
+      this.hint('SMOKE, AND A RED BEACON — DOWN THE CANYON', 6);
     });
   }
 
@@ -653,7 +660,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   private updateTabletPickup(dt: number): void {
     const L = this.level;
-    // The drone smokes and its beacon blinks till he's been to it
     L.tablet.beacon.emissiveIntensity = Math.sin(this.t * 6) > 0.3 ? 3 : 0.2;
     this.smokeT -= dt;
     if (this.smokeT <= 0) {
@@ -665,7 +671,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (d < 2.2) {
       this.hud.setPrompt('[ E ] PICK UP THE TRACKER');
       if (this.ctx.input.wasPressed('KeyE')) this.takeTablet(false);
-    } else if (this.doorT >= 0) this.hud.setPrompt(null);
+    } else if (this.doorT >= 0 && !this.heldBy) this.hud.setPrompt(null);
   }
 
   private takeTablet(silent: boolean): void {
@@ -678,6 +684,84 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.setObjective('FOLLOW THE TRACKER — HOLD [M]');
     this.hint('HOLD [M] TO LOOK AT THE TRACKER — IT HAS A FIX ON AN EXIT PORTAL', 7);
     this.tabletHinted = 1;
+  }
+
+  // ============================================================ maws
+
+  /**
+   * The maws: lying open; one he walks onto snaps shut round his legs and
+   * has him — he can't move or jump, it bites, and bites again; he can
+   * shoot it (it dies and lets go) or wait for it to spit him out.
+   */
+  private updateTraps(dt: number): void {
+    const p = this.player;
+    const pos = p.position;
+    for (const m of this.traps) {
+      m.update(dt);
+      if (m.state === 'shut' && m.stateT > 6) {
+        m.state = 'open';
+        m.stateT = 0;
+      }
+      if (m.state !== 'open' || this.heldBy || !p.alive || this.phase !== 'play' || p.swimming) continue;
+      const g = m.group.position;
+      if (Math.hypot(pos.x - g.x, pos.z - g.z) < MawTrap.REACH && pos.y - g.y < 0.6) {
+        m.snap();
+        this.heldBy = m;
+        this.heldBite = 0;
+        this.ctx.audio.mawSnap();
+        this.shake = Math.max(this.shake, 0.8);
+        this.drops.burst(pos.clone().add(V(0, 0.4, 0)), V(0, 1, 0), 20, 3, 0xa01010);
+        p.hit('A MAW IN THE GROUND', g.clone());
+        if (!this.trapHinted) {
+          this.trapHinted = true;
+          this.hint('IT HAS YOU — LOOK DOWN AND SHOOT IT', 5);
+        }
+      }
+    }
+    const m = this.heldBy;
+    if (!m) {
+      p.stunned = false;
+      this.vignette.style.opacity = '0';
+      return;
+    }
+    const g = m.group.position;
+    p.stunned = true;
+    pos.x += (g.x - pos.x) * Math.min(1, dt * 10);
+    pos.z += (g.z - pos.z) * Math.min(1, dt * 10);
+    p.velocity.set(0, Math.min(0, p.velocity.y), 0);
+    p.boost.set(0, 0, 0);
+    this.vignette.style.opacity = String(0.6 + 0.3 * Math.sin(this.t * 9));
+    this.heldBite += dt;
+    if (this.heldBite > 1.4 && p.alive) {
+      this.heldBite = 0;
+      this.ctx.audio.houndBite(0);
+      this.shake = Math.max(this.shake, 0.5);
+      p.hit('A MAW IN THE GROUND', g.clone());
+    }
+    if (m.stateT > 3.2) {
+      m.state = 'shut';
+      m.stateT = 0;
+      this.release();
+    }
+  }
+
+  private release(): void {
+    this.heldBy = null;
+    this.player.stunned = false;
+  }
+
+  private hurtTrap(m: MawTrap, dmg: number, point: THREE.Vector3, dir: THREE.Vector3): void {
+    this.drops.burst(point, dir.clone().negate().setY(0.5), 10, 2.5, 0xa01828);
+    this.ctx.audio.fleshHit();
+    if (m.state === 'dead') return;
+    m.hp -= dmg;
+    this.ctx.bus.emit(Events.HitMarker, { lethal: m.hp <= 0 });
+    if (m.hp > 0) return;
+    m.state = 'dead';
+    m.stateT = 0;
+    const i = this.trapHits.indexOf(m.hitbox);
+    if (i >= 0) this.trapHits.splice(i, 1);
+    if (this.heldBy === m) this.release();
   }
 
   // ============================================================ hounds
@@ -696,8 +780,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     pk.spawned = true;
     pk.at.forEach((s, i) => {
       const h = new Hound();
-      const y = groundY(s.x, s.z);
-      h.group.position.set(s.x, y, s.z);
+      h.group.position.set(s.x, groundY(s.x, s.z), s.z);
       h.yaw = Math.atan2(this.player.position.x - s.x, this.player.position.z - s.z);
       h.group.rotation.y = h.yaw;
       h.state = 'lurk';
@@ -706,7 +789,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.hounds.push(h);
       this.houndHits.push(...h.hitboxes);
     });
-    this.later(0.3, () => this.ctx.audio.houndScreech(this.player.position.distanceTo(V(pk.at[0].x, 0, pk.at[0].z)) * 0.5));
+    // One snarl for the lot of them as they come
+    this.later(0.4, () => this.ctx.audio.houndScreech(this.player.position.distanceTo(V(pk.at[0].x, 0, pk.at[0].z)) * 0.6));
   }
 
   private updateHounds(dt: number): void {
@@ -731,12 +815,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const want = Math.atan2(dx, dz);
       let target = 0;
       if (h.state === 'lurk') {
-        // Crouched, mouth working, then off
-        target = 0;
         if (h.stateT > 0.6) {
           h.state = 'run';
           h.stateT = 0;
-          this.ctx.audio.houndScreech(dist * 0.6);
         }
       } else if (h.state === 'run') {
         target = p.alive && this.phase === 'play' ? HOUND_SPEED : 0;
@@ -746,12 +827,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.bit = false;
           h.airV = 3.6;
           h.vel.set(Math.sin(h.yaw), 0, Math.cos(h.yaw)).multiplyScalar(9);
-          this.ctx.audio.houndScreech(dist);
         }
-        h.screechT -= dt;
-        if (h.screechT <= 0) {
-          h.screechT = 2 + Math.random() * 3;
-          this.ctx.audio.houndScreech(dist);
+        // Now and then a growl, never all of them at once
+        h.growlT -= dt;
+        if (h.growlT <= 0) {
+          h.growlT = 6 + Math.random() * 6;
+          if (this.t - this.lastGrowl > 2.5) {
+            this.lastGrowl = this.t;
+            this.ctx.audio.houndScreech(dist);
+          }
         }
       } else if (h.state === 'lunge') {
         if (!h.bit && dist < 1.5 && Math.abs(h.air + g.y - pp.y) < 1.4) {
@@ -766,14 +850,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.stateT = 0;
         }
       } else if (h.state === 'recover') {
-        // Backs off a step after a go at him, before the next
         target = h.bit ? -3 : -1.5;
         if (h.stateT > (h.bit ? 1.1 : 0.5)) {
           h.state = 'run';
           h.stateT = 0;
         }
       }
-      // Turn toward him (not mid-lunge)
       if (h.state !== 'lunge') {
         const d = Math.atan2(Math.sin(want - h.yaw), Math.cos(want - h.yaw));
         h.yaw += THREE.MathUtils.clamp(d, -dt * 6, dt * 6);
@@ -782,7 +864,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       } else {
         h.speed = 9;
       }
-      // Keep off each other and out of the trees
       for (const o of this.hounds) {
         if (o === h || !o.alive) continue;
         tmp.subVectors(g, o.group.position).setY(0);
@@ -798,14 +879,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
           g.z += (tmp.z / l) * (r - l);
         }
       }
-      // Not through him
       if (dist < 0.9 && dist > 1e-3) {
         g.x -= (dx / dist) * (0.9 - dist);
         g.z -= (dz / dist) * (0.9 - dist);
       }
       g.x += h.vel.x * dt;
       g.z += h.vel.z * dt;
-      // In the air on a lunge
       if (h.airV !== 0 || h.air > 0) {
         h.air += h.airV * dt;
         h.airV -= 16 * dt;
@@ -829,7 +908,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     h.hp -= dmg;
     this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
     if (h.hp > 0) {
-      // Staggered
       h.speed *= 0.4;
       return;
     }
@@ -840,14 +918,16 @@ export class Level16Scene extends CombatScene<Level16Data> {
     h.airV = 0;
     h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(3 + dmg);
     this.drops.burst(point, V(0, 1, 0), 30, 4, ALIEN_BLOOD);
-    this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
+    if (this.t - this.lastGrowl > 1) {
+      this.lastGrowl = this.t;
+      this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
+    }
     for (const hb of h.hitboxes) {
       const i = this.houndHits.indexOf(hb);
       if (i >= 0) this.houndHits.splice(i, 1);
     }
   }
 
-  /** The karambit's slash: a hound in reach in front of him gets it. */
   private knifeSlash(): void {
     const p = this.player.position;
     const f = this.player.forwardDir();
@@ -863,6 +943,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.ctx.audio.knifeStab();
       return;
     }
+    // Or the maw that has him
+    if (this.heldBy) {
+      this.hurtTrap(this.heldBy, 2, this.heldBy.group.position.clone().add(V(0, 0.4, 0)), V(0, -1, 0));
+      this.ctx.audio.knifeStab();
+    }
   }
 
   // ============================================================ the big one
@@ -872,7 +957,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     if (!b.alive) {
       b.update(dt, this.bossVel.set(0, 0, 0), [null, null]);
-      if (this.severedArm && this.phase !== 'harvest') this.severedArm.visible = false;
       return;
     }
     if (!this.bossAwake) {
@@ -884,18 +968,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const to = V(pp.x - b.at.x, 0, pp.z - b.at.z);
     const dist = to.length();
     to.normalize();
-    // Circle him at a distance, switching direction now and then; back off if he's close
     this.bossSideT -= dt;
     if (this.bossSideT <= 0) {
       this.bossSideT = 4 + Math.random() * 4;
       this.bossSide = Math.random() < 0.5 ? -1 : 1;
     }
     const enraged = b.hp < b.maxHp * 0.5;
-    const ideal = 15;
-    const radial = THREE.MathUtils.clamp((dist - ideal) * 0.5, -3.5, 2.5);
+    const radial = THREE.MathUtils.clamp((dist - 15) * 0.5, -3.5, 2.5);
     const tang = V(-to.z, 0, to.x).multiplyScalar(this.bossSide * (enraged ? 3.2 : 2.2));
     const want = to.clone().multiplyScalar(radial).add(tang);
-    // Stay in the clearing
     const off = V(b.at.x - ARENA.x, 0, b.at.z - ARENA.z);
     if (off.length() > 22) want.addScaledVector(off.normalize(), -3);
     if (!p.alive || this.phase !== 'play') want.set(0, 0, 0);
@@ -908,8 +989,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     b.yaw += THREE.MathUtils.clamp(dy, -dt * 1.6, dt * 1.6);
     const aim = p.camera.position.clone().add(V(0, -0.3, 0));
     b.update(dt, this.bossVel, [aim, aim]);
-    // He's in its way: it shoves him off
-    if (dist < 3.2 && p.alive) {
+    if (dist < 3.4 && p.alive) {
       p.launch(V(to.x, 0.35, to.z).normalize(), 7);
       if (this.t - this.lastStomp > 1.2) {
         this.lastStomp = this.t;
@@ -918,7 +998,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
         this.shake = Math.max(this.shake, 0.7);
       }
     }
-    // ---- Shooting: volleys from one arm then the other; enraged, longer and quicker
     if (!p.alive || this.phase !== 'play') return;
     this.bossFireT -= dt;
     if (this.bossFireT <= 0) {
@@ -930,7 +1009,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       } else {
         this.bossVolley++;
         if (this.bossVolley % 4 === 0) {
-          // A spray: both arms, a fan of them
           this.ctx.audio.giantRoar(0.7, dist);
           for (let k = -3; k <= 3; k++) this.later(0.5 + Math.abs(k) * 0.03, () => this.boltFan(k));
           this.bossFireT = 2.2;
@@ -942,7 +1020,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     this.hud.setBoss(BOSS_NAME, b.hp / b.maxHp);
   }
-  private lastStomp = 0;
 
   private wakeBoss(): void {
     this.bossAwake = true;
@@ -953,9 +1030,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.audio.startBossMusic();
     this.setObjective('KILL IT');
     this.bossFireT = 2.0;
+    this.lightning(1);
   }
 
-  /** One bolt from arm i at him, a little ahead of where he's going. */
   private boltFrom(i: number, spread: number): void {
     const b = this.boss;
     const p = this.player;
@@ -972,7 +1049,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.audio.alienBolt(from.distanceTo(p.position));
   }
 
-  /** The spray: bolts fanned out either side of him. */
   private boltFan(k: number): void {
     const b = this.boss;
     if (!b.alive) return;
@@ -1002,19 +1078,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.later(0.9, () => this.ctx.audio.giantFall());
     this.later(1.1, () => (this.shake = Math.max(this.shake, 0.9)));
     this.ctx.audio.stopBossMusic(3);
-    // Its body, down on the ground, is something to walk round, not through
     this.later(1.2, () => {
       const c = Math.abs(Math.cos(b.yaw));
       const s = Math.abs(Math.sin(b.yaw));
-      const hx = c * 1.4 + s * 2.2;
-      const hz = s * 1.4 + c * 2.2;
+      const hx = c * 1.5 + s * 2.4;
+      const hz = s * 1.5 + c * 2.4;
       const y = b.at.y;
-      this.level.colliders.push({ box: new THREE.Box3(V(b.at.x - hx, y, b.at.z - hz), V(b.at.x + hx, y + 2.3, b.at.z + hz)) });
+      this.level.colliders.push({ box: new THREE.Box3(V(b.at.x - hx, y, b.at.z - hz), V(b.at.x + hx, y + 2.4, b.at.z + hz)) });
       this.allCols = [];
     });
     this.later(2.5, () => {
-      this.setObjective('HARVEST ITS ARM');
-      this.hint('GO UP TO ONE OF ITS ARMS', 5);
+      this.setObjective('TAKE ITS CANNON');
+      this.hint('GO TO THE END OF ONE OF ITS ARMS', 5);
     });
   }
 
@@ -1024,7 +1099,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     const from = this.blaster.muzzleWorld();
     const dir = p.camera.getWorldDirection(new THREE.Vector3());
-    // Aim at what the crosshair is on, from the muzzle
     const hit = this.trace(p.camera.position, dir, 120, true);
     const aimAt = hit ? hit.point : p.camera.position.clone().addScaledVector(dir, 120);
     const v = aimAt.sub(from).normalize();
@@ -1042,13 +1116,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private updateShots(dt: number): void {
     const p = this.player;
     const seg = new THREE.Vector3();
-    // Its bolts: him, or the ground, or something in the way
-    this.bolts.update(dt, this.t, (s, a, b) => {
+    this.bolts.update(dt, this.t, (_s, a, b) => {
       seg.subVectors(b, a);
       const len = seg.length();
       if (len < 1e-5) return false;
       seg.divideScalar(len);
-      // Him: the nearest the bolt came to the middle of him
       if (p.alive) {
         const c = p.position.clone().add(V(0, 0.95, 0));
         const t = THREE.MathUtils.clamp(c.clone().sub(a).dot(seg), 0, len);
@@ -1068,7 +1140,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
       return false;
     });
-    // His goo: whatever's in front of it
     this.goo.update(dt, this.t, (s, a, b) => {
       seg.subVectors(b, a);
       const len = seg.length();
@@ -1086,6 +1157,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.audio.gooSplat(h.point.distanceTo(this.player.position));
     if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, s.damage, h.point, dir);
     else if (h.kind === 'boss') this.hurtBoss(s.damage * 0.9, h.point, dir, !!h.head);
+    else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage, h.point, dir);
     else this.decals.place('blood', h.point, h.normal, 0.35);
   }
 
@@ -1098,12 +1170,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   /**
    * What's first along a ray, within `far`: the ground (marched, the
-   * terrain's too big to raycast), a tree trunk or boulder, the level's
-   * meshes, and (with `creatures`) the hounds and the big one.
+   * terrain's too big to raycast), a tree trunk or rock, the level's meshes,
+   * and (with `creatures`) the hounds, the maws and the big one.
    */
   private trace(o: THREE.Vector3, dir: THREE.Vector3, far: number, creatures: boolean): Hit | null {
     let best: Hit | null = null;
-    // ---- The ground: step along it till under, then halve back to the surface
     {
       const step = 0.6;
       let prev = 0;
@@ -1130,7 +1201,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
         if (tt >= far) break;
       }
     }
-    // ---- Trunks and boulders: upright cylinders
     const lim = best ? best.dist : far;
     const hd = Math.hypot(dir.x, dir.z);
     if (hd > 1e-4) {
@@ -1158,7 +1228,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
         best = { dist: bestT, point: pt, normal: V(pt.x - bt.x, 0, pt.z - bt.z).normalize(), kind: 'trunk' };
       }
     }
-    // ---- Meshes
     this.raycaster.set(o, dir);
     this.raycaster.far = best ? best.dist : far;
     const w = this.raycaster.intersectObjects(this.level.shootables, false).find((h) => h.distance > 0.02);
@@ -1168,16 +1237,19 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     if (creatures) {
       this.raycaster.far = best ? best.dist : far;
-      const targets: THREE.Object3D[] = this.boss.alive ? this.houndHits.concat(this.boss.hitMeshes as THREE.Mesh[]) : this.houndHits;
+      const targets: THREE.Object3D[] = (this.houndHits as THREE.Object3D[]).concat(this.trapHits);
+      if (this.boss.alive) targets.push(...this.boss.hitMeshes);
       const c = this.raycaster.intersectObjects(targets, false)[0];
       if (c) {
         const hound = c.object.userData.hound as Hound | undefined;
+        const trap = c.object.userData.trap as MawTrap | undefined;
         best = {
           dist: c.distance,
           point: c.point.clone(),
           normal: dir.clone().negate(),
-          kind: hound ? 'hound' : 'boss',
+          kind: hound ? 'hound' : trap ? 'trap' : 'boss',
           hound,
+          trap,
           head: !!c.object.userData.head
         };
       }
@@ -1185,7 +1257,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     return best;
   }
 
-  /** Every round of his: what it hits, and what that does. */
   protected castBullet(origin: THREE.Vector3, dir: THREE.Vector3, shooter: Enemy | null): THREE.Vector3 {
     const h = this.trace(origin, dir, 120, shooter === null);
     if (!h) return origin.clone().addScaledVector(dir, 120);
@@ -1193,6 +1264,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const dmg = gun === 'shotgun' ? 0.5 : gun === 'pistol' ? 1.5 : 1;
     if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, dmg * (h.head ? 1.6 : 1), h.point, dir);
     else if (h.kind === 'boss') this.hurtBoss(dmg, h.point, dir, !!h.head);
+    else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, dmg, h.point, dir);
     else {
       const tint = h.kind === 'terrain' ? 0xc8c49a : h.kind === 'trunk' ? 0x5a4a40 : 0xa8a49a;
       this.particles.concreteChips(h.point, h.normal, tint);
@@ -1211,9 +1283,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (this.boss.deadT < 2) return;
     const pp = this.player.position;
     let best = -1;
-    let bd = 3.6;
+    let bd = 3.2;
     for (const i of [0, 1]) {
-      const s = this.boss.shoulder(i);
+      const s = this.boss.wrist(i);
       const d = Math.hypot(s.x - pp.x, s.z - pp.z);
       if (d < bd) {
         bd = d;
@@ -1221,10 +1293,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
     }
     if (best < 0) {
-      this.hud.setPrompt(null);
+      if (!this.heldBy) this.hud.setPrompt(null);
       return;
     }
-    this.hud.setPrompt('[ E ] HARVEST THE ARM');
+    this.hud.setPrompt('[ E ] TAKE THE CANNON');
     if (this.ctx.input.wasPressed('KeyE')) this.startHarvest(best);
   }
 
@@ -1243,16 +1315,22 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.knife.stow = 1;
     this.harvestFrom.p.copy(this.player.camera.position);
     this.harvestFrom.q.copy(this.player.camera.quaternion);
+    // His right hand comes up open, the blaster's cannon not on it yet (the real one goes on)
     this.blaster.stow = 1;
     this.blaster.grip = 0;
-    this.severedArm = null;
+    this.blaster.open = 1;
+    this.blaster.gun.root.visible = false;
+    this.blaster.pose = { p: V(0.17, -0.27, -0.44), r: new THREE.Euler(0.18, 0.08, -0.12) };
+    this.severed = null;
   }
 
   /**
-   * Down beside the arm. Three cuts at the joint with the karambit and it
-   * comes away; it writhes and draws itself in, smaller; his left hand
-   * takes it, brings it to his right forearm and lets it slide on, and its
-   * feelers close round his arm.
+   * Down on one knee by the end of its arm. His left hand takes hold of the
+   * cannon-head; his right saws through the wrist with the karambit, and it
+   * comes away in his hand. Up on his feet; his right hand up, open; the
+   * left lines the cannon up and slides it back onto his forearm, over his
+   * hand, and lets go; the feelers close round his arm, it shudders, his
+   * fingers close inside it, the light in its mouth comes up.
    */
   private updateHarvest(dt: number): void {
     const t = this.phaseT;
@@ -1260,147 +1338,130 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const i = this.harvestArm;
     const cam = this.player.camera;
     const H = this.hands;
-    const sh = b.shoulder(i);
-    // ---- The camera: in close, down over the joint; then up again, looking at his arm
+    const head = b.arms[i].head.root;
+    const wrist = b.wrist(i);
     const pp = this.player.position;
-    const away = V(pp.x - sh.x, 0, pp.z - sh.z).normalize();
-    // (close enough for his arm to reach the joint; off to the side so the shoulder doesn't fill the view)
+    // ---- The camera: down beside the wrist, then up again looking at his arm
+    const away = V(pp.x - wrist.x, 0, pp.z - wrist.z).normalize();
     const side = V(-away.z, 0, away.x);
-    const kneel = sh.clone().addScaledVector(away, 0.95).addScaledVector(side, 0.25).add(V(0, 0.6, 0));
-    const look = sh.clone().add(V(0, -0.12, 0)).addScaledVector(side, -0.05);
+    const kneel = wrist.clone().addScaledVector(away, 0.85).addScaledVector(side, 0.2).add(V(0, 0.65, 0));
+    kneel.y = Math.max(kneel.y, groundY(kneel.x, kneel.z) + 0.75);
+    const lookAt = this.severed ? wrist.clone() : head.localToWorld(V(0, 0, 0.2));
     const kIn = smooth(t / 1.0);
-    const kOut = smooth((t - 3.9) / 0.8);
+    const kOut = smooth((t - 2.7) / 0.8);
     const stand = pp.clone().add(V(0, 1.63, 0));
     cam.position.lerpVectors(this.harvestFrom.p, kneel, kIn).lerp(stand, kOut);
-    const m = new THREE.Matrix4().lookAt(cam.position, look, V(0, 1, 0));
-    const qLook = new THREE.Quaternion().setFromRotationMatrix(m);
-    // Standing again: looking ahead and down at his own arm
+    const qLook = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, lookAt, V(0, 1, 0)));
     const yaw = Math.atan2(-away.x, -away.z);
-    const qArm = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, yaw, 0, 'YXZ'));
+    const qArm = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.32, yaw, 0, 'YXZ'));
     cam.quaternion.copy(this.harvestFrom.q).slerp(qLook, kIn).slerp(qArm, kOut);
     cam.updateMatrixWorld(true);
-    // ---- The knife: up, three cuts across the joint, away
-    // Where the cuts go: just down the arm from the joint (lower in his view, so his arm stays out of it)
-    const cutAt = this.severedArm ? sh.clone() : b.arms[i].root.localToWorld(V(0, 0, 0.45));
-    const shC = cam.worldToLocal(cutAt.clone());
-    const kUp = smooth((t - 0.5) / 0.4) * (1 - smooth((t - 3.0) / 0.4));
+    // ---- The left hand: in to the cannon and holding it
+    H.leftRoot.visible = t > 0.45 && t < 5.1;
+    let closed = smooth((t - 0.85) / 0.2);
+    const restL = V(-0.24, -0.5, -0.3);
+    if (t < 2.55) {
+      const grabAt = cam.worldToLocal(head.localToWorld(V(0.0, -0.04, 0.3)));
+      H.leftHand.position.lerpVectors(restL, grabAt, smooth((t - 0.45) / 0.45));
+      H.leftHand.rotation.set(-0.7, 0.5, -0.9);
+      if (t > 1.1) H.leftHand.position.x += Math.sin(t * 9) * 0.004;
+    }
+    // ---- The knife: up, sawing at the wrist (1.1–2.5), away
+    const kUp = smooth((t - 0.8) / 0.35) * (1 - smooth((t - 2.55) / 0.35));
     H.knifeRoot.visible = kUp > 0.01;
-    const cuts = [1.05, 1.6, 2.2];
-    let swing = -1;
-    for (const c of cuts) if (t >= c && t < c + 0.42) swing = (t - c) / 0.42;
-    const rest = V(0.22, -0.3, -0.42);
+    const wC = cam.worldToLocal(wrist.clone());
+    const k = 0.46 / Math.max(0.3, -wC.z);
+    const cx = wC.x * k;
+    const cy = wC.y * k;
+    const saw = t > 1.1 && t < 2.5 ? Math.sin((t - 1.1) * 11) : 0;
     const hand = H.knifeHand;
-    if (swing >= 0) {
-      const s = smooth(swing / 0.45);
-      const back = smooth((swing - 0.55) / 0.45);
-      // At arm's length, across the line to the joint: on screen the blade goes through it
-      const k = 0.47 / Math.max(0.3, -shC.z);
-      const cx = shC.x * k;
-      const cy = shC.y * k;
-      const a0 = V(cx + 0.2, cy + 0.11, -0.42);
-      const a1 = V(cx - 0.02, cy - 0.12, -0.47);
-      hand.position.lerpVectors(a0, a1, s).lerp(rest, back);
-      hand.rotation.set(-0.3 - 0.9 * s, 0.3, 0.9 - 1.6 * s);
-    } else {
-      hand.position.copy(rest).add(V(0, -0.5 * (1 - kUp), 0));
-      hand.rotation.set(-0.4, 0.2, 0.3);
+    hand.position.set(cx + 0.09 + saw * 0.07, cy + 0.02 + saw * 0.025, -0.46).lerp(V(0.25, -0.55, -0.3), 1 - kUp);
+    hand.rotation.set(-0.5 + saw * 0.12, 0.35, 0.9 + saw * 0.3);
+    if (t > 1.1 && t < 2.5 && Math.floor((t - dt - 1.1) / 0.28) !== Math.floor((t - 1.1) / 0.28)) {
+      this.drops.burst(wrist, away.clone().setY(0.7), 14, 2.6, BOSS_BLOOD);
+      this.ctx.audio.fleshHit();
+      this.shake = Math.max(this.shake, 0.2);
     }
-    for (const [k, c] of cuts.entries()) {
-      if (t - dt < c + 0.15 && t >= c + 0.15) {
-        this.drops.burst(cutAt, away.clone().setY(0.6), 26, 3.2, BOSS_BLOOD);
-        this.ctx.audio.knifeStab();
-        this.ctx.audio.fleshHit();
-        this.shake = Math.max(this.shake, 0.35);
-        if (k === cuts.length - 1) {
-          this.severedArm = b.sever(i, this.scene);
-          this.armS0 = this.severedArm.scale.x;
-          this.ctx.audio.squelchPop();
-        }
-      }
+    // ---- 2.55: through. It comes away in his left hand
+    if (t >= 2.55 && !this.severed) {
+      this.severed = b.sever(i, this.scene);
+      H.leftHand.attach(this.severed);
+      this.drops.burst(wrist, away.clone().setY(1), 40, 4, BOSS_BLOOD);
+      this.ctx.audio.squelchPop();
+      this.ctx.audio.knifeStab();
+      this.shake = Math.max(this.shake, 0.6);
     }
-    // ---- The arm, off: it writhes and draws itself in to the size of his forearm
-    const arm = this.severedArm;
-    if (arm && t < 3.85) {
-      const k = smooth((t - 2.4) / 1.1);
-      // (to the blaster's size: its arm is the same shape, 0.62 m to the boss's 2.4)
-      arm.scale.setScalar(this.armS0 + (0.62 / 2.4 - this.armS0) * k);
-      arm.rotation.z += Math.sin(t * 17) * 0.04;
-      arm.rotation.x += Math.sin(t * 11) * 0.02;
-      // Falling away from the joint, toward him, where he can reach it
-      const near = cam.position.clone().addScaledVector(cam.getWorldDirection(new THREE.Vector3()), 0.75);
-      near.y = Math.max(groundY(near.x, near.z) + 0.2, cam.position.y - 0.65);
-      arm.position.lerp(near, Math.min(1, dt * 2.2) * k);
+    const piece = this.severed;
+    if (piece && t < 3.5) {
+      // Lifted up into view, twitching
+      H.leftHand.position.lerp(V(-0.05, -0.24, -0.52), Math.min(1, dt * 3.5));
+      H.leftHand.rotation.x += (-0.3 - H.leftHand.rotation.x) * Math.min(1, dt * 3);
+      H.leftHand.rotation.y += (Math.PI * 0.5 + 0.2 - H.leftHand.rotation.y) * Math.min(1, dt * 3);
+      H.leftHand.rotation.z += (-0.2 - H.leftHand.rotation.z) * Math.min(1, dt * 3);
+      piece.rotation.z += Math.sin(t * 23) * 0.01;
     }
-    // ---- The left hand: out to it, takes it, brings it in
-    const piece = this.blaster.arm.root;
-    const lIn = smooth((t - 3.1) / 0.5);
-    H.leftRoot.visible = t > 3.0 && t < 6.2;
-    let closed = 0;
-    if (H.leftRoot.visible) {
-      const restL = V(-0.25, -0.45, -0.3);
-      if (t < 3.65 && arm) {
-        const target = cam.worldToLocal(arm.localToWorld(V(0, 0, 1.2)));
-        H.leftHand.position.lerpVectors(restL, target, lIn);
-        H.leftHand.rotation.set(-0.6, 0.3, -0.4);
-      } else {
-        if (arm && arm.visible) {
-          // Taken: the arm in the world gone, the blaster's own piece in his hand instead
-          arm.visible = false;
-          H.leftHand.add(piece);
-          // Held round its middle, running up out of his fist
-          piece.rotation.set(-Math.PI / 2, 0, 0);
-          piece.position.set(0, -0.3, 0);
-          this.ctx.audio.squelchPop();
-        }
-        closed = 1;
-        // Up in front of him (as the camera rises), then over to his right forearm
-        // Low and forward: not across his face
-        const carry = V(0.0, -0.3, -0.52);
-        const kC = smooth((t - 3.7) / 0.9);
-        H.leftHand.position.lerp(carry, Math.min(1, dt * 6) * (0.4 + kC));
-        H.leftHand.rotation.set(-0.35, 0.6 * kC, -0.2 - 0.8 * kC);
-        if (t > 4.7 && piece.parent === H.leftHand) {
-          // Slide it on
-          this.blaster.hand.attach(piece);
-          this.harvestFrom2.p.copy(piece.position);
-          this.harvestFrom2.q.copy(piece.quaternion);
-          this.ctx.audio.squelchPop();
-        }
-        if (t > 4.7) {
-          const kS = smooth((t - 4.7) / 0.7);
-          const seat = new THREE.Object3D();
-          this.blaster.seat(seat);
-          piece.position.lerpVectors(this.harvestFrom2.p, seat.position, kS);
-          piece.quaternion.copy(this.harvestFrom2.q).slerp(seat.quaternion, kS);
-          H.leftHand.position.add(V(-0.6, -0.4, 0.2).multiplyScalar(dt * smooth((t - 5.3) / 0.4) * 1.5));
-          closed = 1 - smooth((t - 5.2) / 0.2);
-        }
-      }
+    // ---- His right hand up, open
+    if (t > 2.9) this.blaster.stow = Math.max(0, 1 - smooth((t - 2.9) / 0.6));
+    // ---- 3.5–4.6: lined up in front of his hand, then pushed back over it onto the forearm
+    if (piece && t >= 3.5 && piece.parent === H.leftHand) {
+      cam.attach(piece);
+      this.slideFrom.p.copy(piece.position);
+      this.slideFrom.q.copy(piece.quaternion);
+      this.slideFrom.s.copy(piece.scale);
     }
-    // ---- His right fist: up, out, waiting for it
-    if (t > 3.8) {
-      this.blaster.stow = Math.max(0, 1 - smooth((t - 3.8) / 0.7));
-      this.blaster.grip = smooth((t - 5.3) / 1.0);
-      this.blaster.update(dt, this.player);
-      if (t > 5.3 && t - dt <= 5.3) {
-        this.ctx.audio.groan(0.6);
+    if (piece && t >= 3.5 && t < 4.6) {
+      const kS = smooth((t - 3.5) / 1.0);
+      this.blaster.hand.updateMatrix();
+      const seat = new THREE.Object3D();
+      this.blaster.seat(seat);
+      seat.updateMatrix();
+      const m = this.blaster.hand.matrix.clone().multiply(seat.matrix);
+      const tp = new THREE.Vector3();
+      const tq = new THREE.Quaternion();
+      const ts = new THREE.Vector3();
+      m.decompose(tp, tq, ts);
+      const line = smooth(kS / 0.5);
+      const push = smooth((kS - 0.4) / 0.6);
+      const ahead = tp.clone().add(V(0, 0, 0.3).applyQuaternion(tq));
+      piece.position.lerpVectors(this.slideFrom.p, ahead, line).lerp(tp, push);
+      piece.quaternion.copy(this.slideFrom.q).slerp(tq, line);
+      piece.scale.lerpVectors(this.slideFrom.s, ts, kS);
+      // The left hand with it, on the barrel
+      H.leftHand.position.copy(piece.position).add(V(0, -0.07, 0.35).applyQuaternion(piece.quaternion));
+      closed = 1 - smooth((kS - 0.85) / 0.15);
+    }
+    if (piece && t >= 4.6 && piece.visible) {
+      // On: the blaster's own (the same thing, in its place) takes over
+      piece.visible = false;
+      this.blaster.gun.root.visible = true;
+      this.ctx.audio.squelchPop();
+      this.ctx.audio.groan(0.6);
+      this.ctx.audio.electricCrackle(0);
+      this.shake = Math.max(this.shake, 0.6);
+    }
+    if (t >= 4.6 && t < 5.1) H.leftHand.position.lerp(V(-0.3, -0.7, -0.2), Math.min(1, dt * 6));
+    // ---- It takes hold
+    if (t > 2.9) {
+      this.blaster.grip = smooth((t - 4.6) / 1.0);
+      this.blaster.open = 1 - smooth((t - 4.9) / 0.4);
+      this.blaster.tremor = t > 4.6 ? Math.max(0, 1 - (t - 4.6) / 1.4) : 0;
+      if (t > 5.8 && t - dt <= 5.8) {
+        this.blaster.stow = 0;
+        this.blaster.fire();
         this.ctx.audio.electricCrackle(0);
-        this.shake = Math.max(this.shake, 0.6);
       }
-      if (t > 5.4 && t < 6.4 && Math.random() < 0.3) this.drops.burst(this.blaster.muzzleWorld(), V(0, 0.5, 0), 2, 1, GOO);
+      if (t > 4.7 && t < 5.6 && Math.random() < 0.3) this.drops.burst(this.blaster.muzzleWorld(), V(0, 0.5, 0), 2, 1, GOO);
+      this.blaster.update(dt, this.player);
     }
     H.update(closed);
-    if (t > 6.6) this.endHarvest();
+    if (t > 6.5) this.endHarvest();
   }
-  private harvestFrom2 = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
-  private armS0 = 1;
 
   private endHarvest(): void {
     this.harvested = true;
     this.phase = 'play';
     this.phaseT = 0;
     const p = this.player;
-    // Back in his own head where the camera's looking
     const e = new THREE.Euler().setFromQuaternion(p.camera.quaternion, 'YXZ');
     p.yaw = e.y;
     p.pitch = e.x;
@@ -1409,10 +1470,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hands.knifeRoot.visible = false;
     this.hands.leftRoot.visible = false;
     this.blaster.grip = 1;
-    // Make sure the piece is seated
-    const piece = this.blaster.arm.root;
-    if (piece.parent !== this.blaster.hand) this.blaster.hand.add(piece);
-    this.blaster.seat(piece);
+    this.blaster.open = 0;
+    this.blaster.tremor = 0;
+    this.blaster.pose = null;
+    this.blaster.gun.root.visible = true;
+    if (this.severed) this.severed.visible = false;
     const a = this.arsenal;
     a.hasBlaster = true;
     a.knifeWanted = true;
@@ -1422,12 +1484,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     a.knifeStow = 0;
     a.showInventory();
     this.ctx.audio.itemGet();
-    this.setObjective('REACH THE EXIT PORTAL');
+    this.setObjective('FIND THE EXIT PORTAL — THE CAVE');
     this.hint('ALIEN BLASTER — HOLD [LMB] · [5] TO SWITCH TO IT', 6);
     this.ctx.audio.portalHum();
-    this.ctx.audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.45, 3);
-    // And more of them, between him and the way out
+    this.ctx.audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.5, 3);
     this.later(2.5, () => this.spawnPack(this.packs[3]));
+    this.lightning(1);
   }
 
   // ============================================================ the portal
@@ -1438,7 +1500,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const u = P.disc.uniforms;
     u.uT.value = this.t;
     u.uK.value += ((on ? 1 : 0.2) - u.uK.value) * Math.min(1, dt * 1.5);
-    this.portalLight.intensity = 3 + 22 * u.uK.value + Math.sin(this.t * 3) * 2;
+    this.portalLight.intensity = 4 + 30 * u.uK.value + Math.sin(this.t * 3) * 3;
+    if (!this.caveHinted && this.player.position.z < CAVE_MOUTH_Z + 4 && this.phase === 'play') {
+      this.caveHinted = true;
+      this.hint(on ? 'THE SIGNAL IS COMING FROM INSIDE' : 'THE PORTAL IS DEAD — SOMETHING HAS TO WAKE IT', 6);
+    }
     if (!on || this.phase !== 'play' || !this.player.alive) return;
     const d = Math.hypot(this.player.position.x - P.at.x, this.player.position.z - P.at.z);
     if (d < 2.3) this.finish();
@@ -1482,45 +1548,75 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     if (this.tabletHinted === 1 && p.z < 18 && p.z > 6 && p.y > 3.5) {
       this.tabletHinted = 2;
-      this.hint('THE ROCK BLOCKS THE VALLEY — THE WAY ON IS UNDER IT, THROUGH THE WATER', 7);
+      this.hint('THE ROCK BLOCKS THE CANYON — THE WAY ON IS UNDER IT, THROUGH THE WATER', 7);
     }
+  }
+
+  // ============================================================ the atmosphere
+
+  /** A lightning flash somewhere off in the clouds; thunder after it. */
+  private lightning(strength = 0.7): void {
+    this.flash = strength;
+    const a = Math.random() * Math.PI * 2;
+    this.level.sky.uniforms.uFlashDir.value.set(Math.cos(a), Math.sin(a));
+    this.later(0.12, () => (this.flash = Math.max(this.flash, strength * 0.4)));
+    this.later(0.22, () => (this.flash = Math.max(this.flash, strength * 0.9)));
+    this.later(1.2 + Math.random() * 1.8, () => this.ctx.audio.thunder(400 + Math.random() * 600));
   }
 
   private updateAtmosphere(dt: number): void {
     const L = this.level;
+    const p = this.player;
     const fog = this.scene.fog as THREE.FogExp2;
     const uw = this.underwater;
-    fog.color.lerp(uw ? Level16Scene.FOG_WATER : Level16Scene.FOG_AIR, uw ? 1 : Math.min(1, dt * 6));
-    fog.density = uw ? 0.13 : fog.density + (0.011 - fog.density) * Math.min(1, dt * 6);
-    this.murk.style.opacity = uw ? '1' : '0';
-    this.hemi.intensity = uw ? 0.5 : 2.4;
-    this.sun.intensity = uw ? 0.4 : 2.6;
-    // The forest lost in the haze isn't drawn
-    const pz = this.player.camera.position.z;
-    const px = this.player.camera.position.x;
-    for (const c of L.chunks) {
-      const s = c.boundingSphere;
-      if (s) c.visible = Math.hypot(s.center.x - px, s.center.z - pz) - s.radius < 190;
+    const cave = inCave(p.camera.position.x, p.camera.position.z);
+    this.flashT -= dt;
+    if (this.flashT <= 0) {
+      this.flashT = 9 + Math.random() * 14;
+      if (!cave && !uw) this.lightning(0.5 + Math.random() * 0.5);
     }
+    this.flash = Math.max(0, this.flash - dt * 4.5);
+    const fl = cave || uw ? 0 : this.flash;
+    const want = uw ? Level16Scene.FOG_WATER : cave ? Level16Scene.FOG_CAVE : Level16Scene.FOG_AIR;
+    fog.color.lerp(want, uw ? 1 : Math.min(1, dt * 3));
+    const dens = uw ? 0.13 : cave ? 0.05 : 0.022;
+    fog.density = uw ? dens : fog.density + (dens - fog.density) * Math.min(1, dt * 3);
+    this.murk.style.opacity = uw ? '1' : '0';
+    const dark = uw ? 0.5 : cave ? 0.18 : 1;
+    this.hemi.intensity += (Level16Scene.HEMI * dark + fl * 2.5 - this.hemi.intensity) * Math.min(1, dt * 8 + fl);
+    this.moon.intensity += (Level16Scene.MOON * (cave ? 0 : uw ? 0.3 : 1) + fl * 4 - this.moon.intensity) * Math.min(1, dt * 8 + fl);
+    L.sky.uniforms.uFlash.value = fl;
+    // The suit's lamp: on in the water and in the cave
+    const lampWant = (uw || cave) && p.alive ? 1 : 0;
+    this.lampOn += (lampWant - this.lampOn) * Math.min(1, dt * 4);
+    this.lamp.intensity = 70 * this.lampOn;
     this.underLoop?.set(uw ? 1 : 0);
     L.water.uniforms.uT.value = this.t;
     L.water.uniforms.fogColor.value.copy(fog.color);
     L.water.uniforms.fogDensity.value = fog.density;
     L.sky.uniforms.uT.value = this.t;
     for (const [i, s] of L.specimens.entries()) s.rotation.y = Math.sin(this.t * 0.4 + i) * 0.4;
-    // Bubbles breaking the surface here and there near him
+    L.glowMats.forEach((m, i) => (m.emissiveIntensity = (m.userData.base ??= m.emissiveIntensity) * (0.75 + 0.25 * Math.sin(this.t * (0.8 + i * 0.3) + i))));
+    // The forest: near versions close by, far ones further off, nothing lost in the haze
+    const px = p.camera.position.x;
+    const pz = p.camera.position.z;
+    for (const c of L.chunks) {
+      const s = c.mesh.boundingSphere;
+      if (!s) continue;
+      const d = Math.hypot(s.center.x - px, s.center.z - pz) - s.radius;
+      c.mesh.visible = d < 150 && (c.lod === 'any' || (c.lod === 'near' ? d < 26 : d >= 26));
+    }
+    L.cave.visible = pz < -100;
     this.bubbleT -= dt;
     if (this.bubbleT <= 0) {
       this.bubbleT = 0.12;
-      const pp = this.player.position;
       const spot = L.bubbleSpots[Math.floor(Math.random() * L.bubbleSpots.length)];
-      if (Math.hypot(spot.x - pp.x, spot.z - pp.z) < 60) {
+      if (Math.hypot(spot.x - px, spot.z - pz) < 60) {
         const a = Math.random() * Math.PI * 2;
         const r = Math.random() * spot.r;
         this.drops.burst(V(spot.x + Math.cos(a) * r, spot.y + 0.02, spot.z + Math.sin(a) * r), V(0, 1, 0), 3, 0.9, 0x9aff6a);
       }
     }
-    // The planets turn, very slowly
     L.planets.forEach((pl, i) => (pl.rotation.y = this.t * 0.004 * (i + 1)));
   }
 

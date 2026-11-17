@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas } from './Level8Builder';
@@ -7,20 +7,20 @@ import { makeCanvas } from './Level8Builder';
 /**
  * Level16Builder — the far side of the Atom Warper.
  *
- * A long valley running north between mountains, under a black sky with
- * planets in it. The ground is a pale, porous sponge; the water is a
- * glowing green, bubbling; the trees are purple and green.
+ * A canyon winding north between jagged, terraced walls of rock, under a
+ * black sky with planets in it. The ground is a pale, porous sponge rolling
+ * in hills, outcrops of rock standing up out of it; the water is a glowing
+ * green, bubbling; the trees are purple and green.
  *
- *  - South end (z ≈ 135): a small survey station, where he arrives. A button
- *    lifts its door.
- *  - A meadow (18, 92) with a crashed survey drone and its tracker tablet.
- *  - Forest north to a cliff (z ≈ 30) five metres high across the valley:
- *    over it with the pressure shotgun.
- *  - A plateau to a rock massif (z −12 … −44) blocking the valley to the
- *    sky; a green lake at its foot, and a passage under it, underwater, round
- *    turns, up into the lake on the far side.
- *  - The north valley, a clearing where the big one lives, and the exit
- *    portal on a mound at the end (0, −150).
+ *  - South end (z ≈ 135): a small survey station, where he arrives.
+ *  - The canyon swings west: a meadow with a crashed survey drone and its
+ *    tracker tablet; forest; it swings back east to a cliff (z ≈ 30) across
+ *    it, five metres high: over it with the pressure shotgun.
+ *  - A plateau to a rock massif blocking the canyon; a green lake at its
+ *    foot and a flooded passage under it, round turns, up the other side.
+ *  - North, the canyon winds again: a clearing where the big one lives; then
+ *    a cave in the end wall, and in the cavern at the back of it, the exit
+ *    portal.
  *
  * The ground's height is a function (groundY), shared with the scene: the
  * player walks on it directly, not on boxes.
@@ -36,11 +36,7 @@ export const CEIL_Y = WATER_Y - 0.45;
 export const POOL_A = { x0: -10, x1: 10, z0: -12, z1: -1 };
 export const POOL_B = { x0: -11, x1: 11, z0: -57, z1: -44 };
 export const BUILDING = { x0: -4, x1: 4, z0: 131, z1: 138, h: 3.2 };
-export const MEADOW = new THREE.Vector3(18, 0, 92);
-export const ARENA = new THREE.Vector3(0, 0, -105);
-export const PORTAL = new THREE.Vector3(0, 0, -150);
 export const CLIFF_Z = 30;
-/** The passage under the massif, as a polyline (x, z) and its half-width. */
 const PATH: [number, number][] = [[0, -10.5], [0, -19], [9, -19], [9, -28], [-8, -28], [-8, -37], [0, -37], [0, -45.5]];
 const PATH_HALF = 1.6;
 
@@ -72,26 +68,63 @@ export function fbm(x: number, y: number, oct = 4): number {
   }
   return s;
 }
+/** Ridged: sharp crests, for broken rock. 0..1. */
+function ridged(x: number, y: number): number {
+  let s = 0;
+  let amp = 0.5;
+  let f = 1;
+  for (let i = 0; i < 4; i++) {
+    const n = 1 - Math.abs(noise(x * f, y * f));
+    s += n * n * amp;
+    f *= 2.1;
+    amp *= 0.5;
+  }
+  return s;
+}
 const smoothstep = (a: number, b: number, x: number): number => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
 
-/** The valley's half-width at z (mountains beyond it), and where its middle is. */
-function valley(z: number): { hw: number; cx: number } {
-  // Narrow where the massif plugs it, wide in the forests
-  const narrow = 1 - smoothstep(-70, -56, z) * (1 - smoothstep(-2, 8, z));
-  const hw = 52 - 24 * (1 - narrow);
-  const cx = Math.sin(z * 0.012) * 8 * narrow;
-  return { hw, cx };
+/** The canyon's middle at z: it swings west and back east south of the massif, and again north of it. */
+export function valleyX(z: number): number {
+  const south = smoothstep(4, 18, z) * (1 - smoothstep(112, 126, z));
+  const north = 1 - smoothstep(-72, -60, z);
+  return south * 20 * Math.sin((z - 4) * 0.045) + north * 18 * Math.sin((z + 66) * 0.05);
 }
 
-/** Distance from (x, z) to the passage's polyline. */
-function pathDist(x: number, z: number): number {
+export const ARENA = new THREE.Vector3(valleyX(-105), 0, -105);
+export const MEADOW = new THREE.Vector3(valleyX(92) + 6, 0, 92);
+/** The cave in the north wall, its floor, and the way in to the cavern at the back. */
+const CAVE_X = valleyX(-152);
+export const CAVE_Y = 6.2;
+const CAVE_PATH: [number, number][] = [[CAVE_X, -150], [CAVE_X, -168], [CAVE_X - 7, -176], [CAVE_X - 7, -186], [CAVE_X - 3, -192]];
+const CAVE_HALF = 3.1;
+export const CAVERN = { x: CAVE_X - 3, z: -201, r: 10 };
+export const PORTAL = new THREE.Vector3(CAVERN.x, CAVE_Y, CAVERN.z - 3);
+/** Where the cave's roof starts (the canyon's end wall). */
+export const CAVE_MOUTH_Z = -161;
+
+/** The canyon's half-width at z: wide where there's somewhere to be, narrow between. */
+function halfWidth(z: number): number {
+  let hw = 22 + 8 * Math.sin(z * 0.037 + 0.8) + 4 * fbm(z * 0.05, 7);
+  hw = Math.max(hw, 34 * (1 - smoothstep(26, 38, Math.abs(z - ARENA.z))));
+  hw = Math.max(hw, 30 * (1 - smoothstep(16, 24, Math.abs(z + 28))));
+  hw = Math.max(hw, 27 * (1 - smoothstep(16, 26, Math.abs(z - 92))));
+  return Math.max(hw, 16);
+}
+
+/** How far outside the canyon floor (x, z) is: > 0 up the walls. */
+export function outside(x: number, z: number): number {
+  const d = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4;
+  return Math.max(d, -160 - z, z - 150);
+}
+
+function pathDist(x: number, z: number, path: [number, number][] = PATH): number {
   let best = Infinity;
-  for (let i = 0; i < PATH.length - 1; i++) {
-    const [ax, az] = PATH[i];
-    const [bx, bz] = PATH[i + 1];
+  for (let i = 0; i < path.length - 1; i++) {
+    const [ax, az] = path[i];
+    const [bx, bz] = path[i + 1];
     const dx = bx - ax;
     const dz = bz - az;
     const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
@@ -100,39 +133,83 @@ function pathDist(x: number, z: number): number {
   return best;
 }
 
-/** In the passage under the massif (its footprint). */
 export function inPassage(x: number, z: number): boolean {
   return z < MASSIF.z1 + 0.6 && z > MASSIF.z0 - 0.6 && pathDist(x, z) < PATH_HALF;
 }
 
-/** In the lake (either pool or the passage between them), anywhere below its surface. */
 export function inLake(x: number, z: number): boolean {
   const inA = x > POOL_A.x0 && x < POOL_A.x1 && z > POOL_A.z0 - 0.5 && z < POOL_A.z1;
   const inB = x > POOL_B.x0 && x < POOL_B.x1 && z > POOL_B.z0 && z < POOL_B.z1 + 0.5;
   return inA || inB || inPassage(x, z);
 }
 
-/** Decorative ponds: shallow, glowing, bubbling. */
-export const PONDS: { x: number; z: number; r: number }[] = [
-  { x: -30, z: 62, r: 7 },
-  { x: 34, z: 44, r: 5.5 },
-  { x: -18, z: 110, r: 4.5 },
-  { x: 26, z: -82, r: 6.5 },
-  { x: -27, z: -126, r: 8 }
-];
+/** In the cave (its way in, or the cavern), and how far in from its wall. */
+export function caveDepth(x: number, z: number): number {
+  if (z > -146) return -1;
+  const d = Math.min(pathDist(x, z, CAVE_PATH) - CAVE_HALF, Math.hypot(x - CAVERN.x, z - CAVERN.z) - CAVERN.r);
+  return -d;
+}
+export function inCave(x: number, z: number): boolean {
+  return z < CAVE_MOUTH_Z + 1 && caveDepth(x, z) > 0;
+}
 
-/** Ground height before the ponds are let in. */
+/** Decorative ponds: shallow, glowing, bubbling (placed along the canyon's middle). */
+export const PONDS: { x: number; z: number; r: number }[] = [
+  [62, -8, 6],
+  [44, 8, 5],
+  [108, 6, 4.5],
+  [-84, -9, 6],
+  [-128, 10, 6.5]
+].map(([z, dx, r]) => ({ x: valleyX(z) + dx, z, r }));
+
+/** Outcrops: steep humps of broken rock standing up from the floor, to go round. */
+export const OUTCROPS: { x: number; z: number; r: number; h: number }[] = [
+  [114, 9, 6, 8],
+  [76, -11, 7.5, 10],
+  [52, 12, 6.5, 8],
+  [12, -16, 6, 7],
+  [-70, 13, 7, 9],
+  [-142, -10, 7, 10],
+  [-128, -18, 5, 7]
+].map(([z, dx, r, h]) => ({ x: valleyX(z) + dx, z, r, h }));
+
+/** The ground with no cave cut into it: the canyon, its walls, the hills, the outcrops, the flats. */
 function baseY(x: number, z: number): number {
   let h = fbm(x * 0.018, z * 0.018) * 2.6 + fbm(x * 0.07 + 30, z * 0.07) * 0.55;
   // North of the cliff, five metres up
   h += 5 * smoothstep(CLIFF_Z + 0.6, CLIFF_Z - 0.6, z + fbm(x * 0.08, 3) * 1.2);
-  // Mountains either side, and at both ends
-  const { hw, cx } = valley(z);
-  const d = Math.abs(x - cx) - hw;
-  if (d > 0) h += Math.min(70, d * d * 0.22 + d * 3) * (0.85 + 0.3 * fbm(x * 0.05, z * 0.05));
-  const ends = Math.max(0, z - 150) + Math.max(0, -172 - z);
-  if (ends > 0) h += Math.min(70, ends * ends * 0.25 + ends * 3);
-  // Flattened: the station's pad, the meadow, the arena; the portal's mound
+  // Hills: rolling, walkable, kept off the places that need to be level
+  const keep =
+    Math.max(
+      1 - smoothstep(14, 22, Math.hypot(x, z - 134.5)),
+      1 - smoothstep(20, 28, Math.hypot(x - MEADOW.x, z - MEADOW.z)),
+      1 - smoothstep(30, 40, Math.hypot(x - ARENA.x, z - ARENA.z)),
+      1 - smoothstep(6, 12, Math.abs(z - CLIFF_Z)),
+      z < 6 && z > -64 && Math.abs(x) < 36 ? 1 : 0,
+      1 - smoothstep(10, 18, Math.hypot(x - CAVE_X, z + 152))
+    );
+  h += Math.max(0, fbm(x * 0.022 + 7, z * 0.022 - 3)) * 9 * (1 - keep);
+  // Outcrops: steep, their tops broken
+  for (const o of OUTCROPS) {
+    const d = Math.hypot(x - o.x, z - o.z);
+    if (d > o.r * 1.15) continue;
+    const k = smoothstep(o.r * 1.1, o.r * 0.45, d + fbm(x * 0.3, z * 0.3) * 1.5);
+    h += o.h * k * (0.75 + 0.5 * ridged(x * 0.25, z * 0.25));
+  }
+  // The canyon walls: terraced, ledges and sheer steps, broken along their crests
+  const d = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4;
+  const ends = Math.max(0, z - 150) + Math.max(0, -160 - z);
+  const w = Math.max(d, ends);
+  if (w > 0) {
+    let r = w * 2.6 + w * w * 0.12;
+    const step = 3.6;
+    const t = r / step;
+    const f = t - Math.floor(t);
+    r = (Math.floor(t) + smoothstep(0.5, 0.88, f)) * step;
+    r += ridged(x * 0.08, z * 0.08) * 4 * smoothstep(0, 5, w);
+    h += Math.min(80, r);
+  }
+  // Flattened: the station's pad, the meadow, the clearing, the cave's mouth
   const flat = (cx2: number, cz: number, r: number, y: number): void => {
     const k = 1 - smoothstep(r * 0.6, r, Math.hypot(x - cx2, z - cz));
     h = h + (y - h) * k;
@@ -140,15 +217,14 @@ function baseY(x: number, z: number): number {
   flat(0, 134.5, 12, 0.6);
   flat(MEADOW.x, MEADOW.z, 20, 0.4);
   flat(ARENA.x, ARENA.z, 30, 5.3);
-  const pm = Math.hypot(x - PORTAL.x, z - PORTAL.z);
-  h += 1.6 * (1 - smoothstep(4, 14, pm));
+  flat(CAVE_X, -152, 9, CAVE_Y);
   return h;
 }
 
 /** The ground's height at (x, z). */
 export function groundY(x: number, z: number): number {
+  if (inCave(x, z)) return CAVE_Y + fbm(x * 0.4, z * 0.4) * 0.12;
   let h = baseY(x, z);
-  // The lake: two basins and the bed under the massif between them
   const lakeEdge = (x0: number, x1: number, z0: number, z1: number, ramp: number): number => {
     const dx = Math.max(x0 - x, 0, x - x1);
     const dz = Math.max(z0 - z, 0, z - z1);
@@ -165,7 +241,6 @@ export function groundY(x: number, z: number): number {
   const under = z < MASSIF.z1 && z > MASSIF.z0 && Math.abs(x) < 30 ? 1 : 0;
   const kk = Math.max(k, under);
   h = h + (LAKE_BED + fbm(x * 0.2, z * 0.2) * 0.25 - h) * kk;
-  // Ponds: the ground levelled round each, and a shallow bowl in the middle
   for (const p of PONDS) {
     const d = Math.hypot(x - p.x, z - p.z);
     if (d > p.r + 4) continue;
@@ -176,6 +251,11 @@ export function groundY(x: number, z: number): number {
   return h;
 }
 
+/** The surface over the cave (what the rock above it comes up to). */
+export function roofY(x: number, z: number): number {
+  return baseY(x, z);
+}
+
 const pondY = new Map<object, number>();
 function pondBase(p: { x: number; z: number; r: number }): number {
   let y = pondY.get(p);
@@ -183,9 +263,74 @@ function pondBase(p: { x: number; z: number; r: number }): number {
   return y;
 }
 
-/** The water level of a pond (what it was filled to). */
 export function pondLevel(p: { x: number; z: number; r: number }): number {
   return pondBase(p) - 0.3;
+}
+
+// ================================================================ triplanar
+
+/**
+ * Texture by world position, not UVs: three projections blended by the
+ * surface's facing, so a cliff gets the texture at its proper scale instead
+ * of stretched down it, and nothing needs UVs. Its bump map too.
+ */
+export function triplanar<M extends THREE.MeshStandardMaterial>(mat: M, scale: number, bumpScale = 1): M {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tpScale = { value: scale };
+    sh.uniforms.tpBump = { value: bumpScale };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTpPos;\nvarying vec3 vTpNrm;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vTpPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+          vTpNrm = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal);
+        #else
+          vTpPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          vTpNrm = normalize(mat3(modelMatrix) * objectNormal);
+        #endif`
+      );
+    sh.fragmentShader = sh.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vTpPos;
+        varying vec3 vTpNrm;
+        uniform float tpScale;
+        uniform float tpBump;
+        vec4 tpSample(sampler2D t, float s) {
+          vec3 w = pow(abs(normalize(vTpNrm)), vec3(4.0));
+          w /= (w.x + w.y + w.z);
+          vec3 p = vTpPos * s;
+          return texture2D(t, p.zy) * w.x + texture2D(t, p.xz) * w.y + texture2D(t, p.xy) * w.z;
+        }`
+      )
+      .replace('#include <map_fragment>', '#ifdef USE_MAP\n diffuseColor *= tpSample(map, tpScale);\n#endif')
+      .replace(
+        '#include <bumpmap_pars_fragment>',
+        `#ifdef USE_BUMPMAP
+          uniform sampler2D bumpMap;
+          uniform float bumpScale;
+          vec2 dHdxy_fwd() {
+            float h = bumpScale * tpSample(bumpMap, tpScale * tpBump).x;
+            return vec2(dFdx(h), dFdy(h));
+          }
+          vec3 perturbNormalArb( vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection ) {
+            vec3 vSigmaX = normalize( dFdx( surf_pos.xyz ) );
+            vec3 vSigmaY = normalize( dFdy( surf_pos.xyz ) );
+            vec3 vN = surf_norm;
+            vec3 R1 = cross( vSigmaY, vN );
+            vec3 R2 = cross( vN, vSigmaX );
+            float fDet = dot( vSigmaX, R1 ) * faceDirection;
+            vec3 vGrad = sign( fDet ) * ( dHdxy.x * R1 + dHdxy.y * R2 );
+            return normalize( abs( fDet ) * surf_norm - vGrad );
+          }
+        #endif`
+      );
+  };
+  mat.customProgramCacheKey = () => `tp${scale}_${bumpScale}`;
+  return mat;
 }
 
 // ================================================================ textures
@@ -288,21 +433,23 @@ export interface Level16Data extends CombatLevel {
   door: { slab: THREE.Object3D; collider: Collider; button: THREE.Vector3; buttonMat: THREE.MeshStandardMaterial; light: THREE.PointLight };
   tablet: { obj: THREE.Object3D; at: THREE.Vector3; beacon: THREE.MeshStandardMaterial };
   portal: { group: THREE.Group; disc: THREE.ShaderMaterial; at: THREE.Vector3 };
-  /** Tree trunks, for collision near the player. */
   trunks: TreeTrunk[];
   water: THREE.ShaderMaterial;
-  /** Where bubbles can come up: water surface spots. */
   bubbleSpots: { x: number; z: number; y: number; r: number }[];
   sky: THREE.ShaderMaterial;
   planets: THREE.Object3D[];
-  /** The ground as one mesh, for bullets and goo to stop on. */
   terrain: THREE.Mesh;
-  /** A top-down picture of the valley for the tracker. */
   mapCanvas: HTMLCanvasElement;
   mapBounds: { x0: number; x1: number; z0: number; z1: number };
   specimens: THREE.Object3D[];
-  /** The forest's instanced chunks, for hiding by distance. */
-  chunks: THREE.InstancedMesh[];
+  /** The forest's instanced chunks: near and far versions, for showing by distance. */
+  chunks: { mesh: THREE.InstancedMesh; lod: 'near' | 'far' | 'any' }[];
+  /** Where the maws lie in wait. */
+  trapSpots: THREE.Vector3[];
+  /** The cave's rock: only drawn once he's near the north end. */
+  cave: THREE.Mesh;
+  /** Glowing things (fungus, bulbs, crystals) whose light pulses. */
+  glowMats: THREE.MeshStandardMaterial[];
 }
 
 interface Inst {
@@ -320,20 +467,24 @@ export class Level16Builder {
   private bubbleSpots: Level16Data['bubbleSpots'] = [];
   private specimens: THREE.Object3D[] = [];
   private rockMat!: THREE.MeshStandardMaterial;
-  private chunks: THREE.InstancedMesh[] = [];
+  private chunks: Level16Data['chunks'] = [];
+  private glowMats: THREE.MeshStandardMaterial[] = [];
+  private traps: THREE.Vector3[] = [];
+  private caveMesh: THREE.Mesh | null = null;
 
   build(): Level16Data {
     const rt = rockTexture();
-    rt.repeat.set(0.25, 0.25);
-    this.rockMat = new THREE.MeshStandardMaterial({ map: rt, color: 0xe8e0d0, roughness: 0.92 });
+    this.rockMat = triplanar(new THREE.MeshStandardMaterial({ map: rt, bumpMap: rockBump(), bumpScale: 2.5, color: 0xb8b0a4, roughness: 0.9 }), 0.22, 1.0);
+    this.traps = this.trapSpots();
     const terrain = this.buildTerrain();
     const water = this.buildWater();
     this.buildMassif();
+    this.buildRocks();
     this.buildForest();
     const sky = this.buildSky();
     const door = this.buildStation();
     const tablet = this.buildDrone();
-    const portal = this.buildPortal();
+    const portal = this.buildCave();
     const map = this.buildMap();
     return {
       group: this.group,
@@ -351,22 +502,25 @@ export class Level16Builder {
       planets: sky.planets,
       terrain,
       mapCanvas: map,
-      mapBounds: { x0: -70, x1: 70, z0: -165, z1: 150 },
+      mapBounds: { x0: -70, x1: 70, z0: -212, z1: 150 },
       specimens: this.specimens,
-      chunks: this.chunks
+      chunks: this.chunks,
+      trapSpots: this.traps,
+      cave: this.caveMesh!,
+      glowMats: this.glowMats
     };
   }
 
   /**
-   * Instances, in chunks 40 m long and half the valley wide, each with its own
-   * bounds: what's behind him or off to the side isn't drawn, and the scene
-   * hides what's lost in the haze.
+   * Instances, in chunks 40 m long and half the canyon wide, each with its
+   * own bounds: what's behind him or off to the side isn't drawn, and the
+   * scene picks near or far versions by distance.
    */
-  private instanced(geo: THREE.BufferGeometry, mat: THREE.Material, items: Inst[]): void {
+  private instanced(geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], items: Inst[], lod: 'near' | 'far' | 'any' = 'any'): void {
     const bands = new Map<string, Inst[]>();
     for (const it of items) {
       const e = it.m.elements;
-      const k = `${Math.floor(e[14] / 40)},${e[12] < 0 ? 0 : 1}`;
+      const k = `${Math.floor(e[14] / 60)}`;
       let l = bands.get(k);
       if (!l) bands.set(k, (l = []));
       l.push(it);
@@ -381,7 +535,7 @@ export class Level16Builder {
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
       im.computeBoundingSphere();
       this.group.add(im);
-      this.chunks.push(im);
+      this.chunks.push({ mesh: im, lod });
     }
   }
 
@@ -391,30 +545,40 @@ export class Level16Builder {
     return c;
   }
 
+  /** Where the maws lie: on the way, in among the trees and in the open, none where he has to stand still. */
+  private trapSpots(): THREE.Vector3[] {
+    const out: THREE.Vector3[] = [];
+    const zs = [118, 104, 84, 70, 58, 46, 40, 22, 16, -66, -78, -90, -122, -134, -146];
+    zs.forEach((z, i) => {
+      const x = valleyX(z) + (hash(i, 9) - 0.5) * 16;
+      if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 14 || Math.hypot(x, z - 134) < 14) return;
+      if (OUTCROPS.some((o) => Math.hypot(x - o.x, z - o.z) < o.r + 2)) return;
+      if (PONDS.some((p) => Math.hypot(x - p.x, z - p.z) < p.r + 2)) return;
+      out.push(new THREE.Vector3(x, groundY(x, z), z));
+    });
+    return out;
+  }
+
   // ------------------------------------------------------------- terrain
 
   private buildTerrain(): THREE.Mesh {
     const X0 = -150;
     const X1 = 150;
-    const Z0 = -185;
+    const Z0 = -232;
     const Z1 = 165;
     const step = 1.25;
     const nx = Math.round((X1 - X0) / step);
     const nz = Math.round((Z1 - Z0) / step);
     const pos = new Float32Array((nx + 1) * (nz + 1) * 3);
     const col = new Float32Array((nx + 1) * (nz + 1) * 3);
-    const uv = new Float32Array((nx + 1) * (nz + 1) * 2);
     const heights: number[] = [];
     for (let j = 0; j <= nz; j++)
-      for (let i = 0; i <= nx; i++) {
-        const x = X0 + i * step;
-        const z = Z0 + j * step;
-        heights.push(groundY(x, z));
-      }
+      for (let i = 0; i <= nx; i++) heights.push(groundY(X0 + i * step, Z0 + j * step));
     const H = (i: number, j: number): number => heights[Math.min(nz, Math.max(0, j)) * (nx + 1) + Math.min(nx, Math.max(0, i))];
-    const sponge = new THREE.Color(0xf2ecc0);
-    const moss = new THREE.Color(0xa8c86a);
-    const rock = new THREE.Color(0xa8a090);
+    const sponge = new THREE.Color(0xe2dcb0);
+    const moss = new THREE.Color(0x8aa858);
+    const rock = new THREE.Color(0x7a7268);
+    const rockDark = new THREE.Color(0x4a4440);
     const bed = new THREE.Color(0x3d6a2a);
     const c = new THREE.Color();
     for (let j = 0; j <= nz; j++)
@@ -426,13 +590,12 @@ export class Level16Builder {
         pos[k * 3] = x;
         pos[k * 3 + 1] = y;
         pos[k * 3 + 2] = z;
-        uv[k * 2] = x * 0.17;
-        uv[k * 2 + 1] = z * 0.17;
-        // Colour: moss in the hollows, bare rock where it's steep, green-stained under water
+        // Moss in the hollows, bare rock where it's steep (and darker up the walls), stained green under water
         const slope = Math.hypot(H(i + 1, j) - H(i - 1, j), H(i, j + 1) - H(i, j - 1)) / (2 * step);
         const m = Math.max(0, Math.min(1, 0.5 + fbm(x * 0.05, z * 0.05) * 1.4));
-        c.copy(sponge).lerp(moss, m * 0.7);
-        c.lerp(rock, smoothstep(0.7, 1.4, slope));
+        c.copy(sponge).lerp(moss, m * 0.6);
+        c.lerp(rock, smoothstep(0.6, 1.2, slope));
+        c.lerp(rockDark, smoothstep(2, 14, outside(x, z)) * 0.7);
         if (y < WATER_Y - 0.3 && inLake(x, z)) c.lerp(bed, 0.8);
         for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r) c.lerp(bed, 0.6);
         col[k * 3] = c.r;
@@ -451,13 +614,9 @@ export class Level16Builder {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    const tex = spongeTexture();
-    const bump = spongeBump();
-    bump.repeat.set(1.7, 1.7);
-    const mat = new THREE.MeshStandardMaterial({ map: tex, bumpMap: bump, bumpScale: 1.6, vertexColors: true, roughness: 0.95 });
+    const mat = triplanar(new THREE.MeshStandardMaterial({ map: spongeTexture(), bumpMap: spongeBump(), bumpScale: 1.6, vertexColors: true, roughness: 0.95 }), 0.17, 1.7);
     const mesh = new THREE.Mesh(geo, mat);
     this.group.add(mesh);
     // (not shootable as a mesh: far too many triangles to raycast; the scene marches groundY instead)
@@ -704,32 +863,31 @@ export class Level16Builder {
   }
 
   /**
-   * The cliff across the valley: a band of broken rock over the steep part of
-   * the ground, its strata running sideways, ledges and bulges. Only to look
-   * at: the ground's own slope is what stops him.
+   * The cliff across the canyon: broken rock over the steep part of the
+   * ground, strata running sideways, ledges, overhangs, slabs fallen away.
+   * Only to look at: the ground's own slope is what stops him.
    */
   private buildCliffFace(): void {
     const pos: number[] = [];
-    const uvs: number[] = [];
     const idx: number[] = [];
-    const X0 = -64;
-    const X1 = 64;
-    const nx = Math.round((X1 - X0) / 0.7);
-    const ny = 10;
+    const X0 = -70;
+    const X1 = 80;
+    const nx = Math.round((X1 - X0) / 0.5);
+    const ny = 16;
     for (let i = 0; i <= nx; i++) {
       const x = X0 + (i / nx) * (X1 - X0);
-      // Where the step is along this x (the lip wanders as the ground's does)
       const zc = CLIFF_Z - fbm(x * 0.08, 3) * 1.2;
-      const bot = groundY(x, zc + 1.6) - 0.6;
-      const top = groundY(x, zc - 1.6) + 0.12;
+      const bot = groundY(x, zc + 1.6) - 0.7;
+      const top = groundY(x, zc - 1.6) + 0.15;
       for (let j = 0; j <= ny; j++) {
         const v = j / ny;
         const y = bot + (top - bot) * v;
-        // Strata: ledges every so often, bulges between
-        const strata = Math.sin(y * 3.1 + fbm(x * 0.2, 1) * 2) * 0.12 + fbm(x * 0.35, y * 0.6) * 0.28;
-        const lean = (v - 0.5) * -0.35;
-        pos.push(x, y, zc + 0.35 + strata + lean + (j === ny ? -0.35 : 0));
-        uvs.push(x * 0.5, y * 0.5);
+        // Strata (ledges), blocks standing proud, cracks between them
+        const strata = Math.sin(y * 2.6 + fbm(x * 0.15, 1) * 3) * 0.18;
+        const block = (ridged(x * 0.35, y * 0.5) - 0.5) * 0.9;
+        const crack = Math.pow(1 - Math.abs(noise(x * 0.7, 9)), 8) * -0.4;
+        const lean = (v - 0.5) * -0.45;
+        pos.push(x, y, zc + 0.35 + strata + block + crack + lean + (j === ny ? -0.4 : 0));
       }
     }
     for (let i = 0; i < nx; i++)
@@ -740,7 +898,6 @@ export class Level16Builder {
       }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
     const m = new THREE.Mesh(geo, this.rockMat);
@@ -748,295 +905,195 @@ export class Level16Builder {
     this.shootables.push(m);
   }
 
+  // ------------------------------------------------------------- rock
+
+  /**
+   * Broken rock: spires and slabs along the foot of the canyon walls and on
+   * its terraces, jagged crags on the outcrops, a fringe along the cliff's
+   * lip. Three shapes, instanced.
+   */
+  private buildRocks(): void {
+    const shapes = [0, 1, 2].map((v) => {
+      const g = new THREE.CylinderGeometry(0.35 + v * 0.1, 1.2, 5 + v * 1.5, 9, 14);
+      const p = g.getAttribute('position') as THREE.BufferAttribute;
+      const q = new THREE.Vector3();
+      for (let i = 0; i < p.count; i++) {
+        q.fromBufferAttribute(p, i);
+        const y = q.y / (5 + v * 1.5) + 0.5;
+        const a = Math.atan2(q.z, q.x);
+        // Facets: the radius stepped by angle; ridged noise breaking it up; a lean
+        const facet = 1 + 0.25 * Math.abs(Math.sin(a * (3 + v) + y * 2 + v));
+        const jag = 0.75 + 0.6 * ridged(a * 1.3 + v * 7, y * 3 + v);
+        q.x *= facet * jag;
+        q.z *= facet * jag * (0.7 + v * 0.1);
+        q.x += y * y * (0.8 - v * 0.4);
+        q.y += Math.sin(a * 5 + v) * 0.12 * (1 - y);
+        p.setXYZ(i, q.x, q.y, q.z);
+      }
+      g.translate(0, (5 + v * 1.5) / 2 - 0.4, 0);
+      g.computeVertexNormals();
+      return g;
+    });
+    const items: Inst[][] = [[], [], []];
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const put = (x: number, z: number, s: number, tilt = 0.25): void => {
+      const y = groundY(x, z);
+      q.setFromEuler(new THREE.Euler((Math.random() - 0.5) * tilt, Math.random() * 6.28, (Math.random() - 0.5) * tilt));
+      m4.compose(new THREE.Vector3(x, y - 0.3 * s, z), q, new THREE.Vector3(s, s * (0.7 + Math.random() * 0.8), s));
+      items[Math.floor(Math.random() * 3)].push({ m: m4.clone() });
+      this.trunks.push({ x, z, r: 0.9 * s, h: 4 * s });
+    };
+    // Along the walls, both sides, at the foot and up the terraces
+    for (let z = -158; z < 148; z += 2.2 + Math.random() * 2.5) {
+      for (const side of [-1, 1]) {
+        if (z < MASSIF.z1 + 4 && z > MASSIF.z0 - 6) continue;
+        const cx = valleyX(z);
+        const hw = halfWidth(z);
+        for (let k = 0; k < 2; k++) {
+          const off = hw + 0.5 + Math.random() * (k ? 14 : 4);
+          const x = cx + side * off;
+          if (outside(x, z) < -1) continue;
+          if (this.traps.some((t) => Math.hypot(t.x - x, t.z - z) < 3)) continue;
+          put(x, z, 0.5 + Math.random() * (k ? 1.6 : 1.0));
+        }
+      }
+    }
+    // Crags on the outcrops
+    for (const o of OUTCROPS)
+      for (let k = 0; k < 9; k++) {
+        const a = Math.random() * 6.28;
+        const r = Math.random() * o.r * 0.7;
+        put(o.x + Math.cos(a) * r, o.z + Math.sin(a) * r, 0.6 + Math.random() * 0.9, 0.5);
+      }
+    // A broken fringe along the cliff's lip
+    for (let x = -50; x < 60; x += 3 + Math.random() * 4) {
+      const z = CLIFF_Z - fbm(x * 0.08, 3) * 1.2 - 1.2;
+      if (outside(x, z) > 2) continue;
+      put(x, z, 0.35 + Math.random() * 0.45, 0.6);
+    }
+    shapes.forEach((g, i) => this.instanced(g, this.rockMat, items[i]));
+  }
+
   // ------------------------------------------------------------- the forest
 
   /**
-   * Trees, purple and green, a trunk each and a crown of lumpy clumps; bushes;
-   * spiky plants by the water. Instanced, kept out of the clearings.
+   * The trees: a flared, twisting trunk with roots; branches growing up and
+   * out of its upper half; at the end of each, a cluster of round, lumpy
+   * crowns of foliage, leafy in texture; vines hanging under them. Purple
+   * and green. Four shapes, each in a near version and a far one with much
+   * less in it. Then the undergrowth: fronds, leafy mounds, glowing bulbs
+   * on stalks, tufts of spiky grass.
    */
   private buildForest(): void {
     const clear = (x: number, z: number): boolean => {
-      if (Math.hypot(x - 0, z - 134) < 16) return false;
+      if (Math.hypot(x, z - 134) < 16) return false;
       if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 21) return false;
       if (Math.hypot(x - ARENA.x, z - ARENA.z) < 31) return false;
-      if (Math.hypot(x - PORTAL.x, z - PORTAL.z) < 14) return false;
-      if (Math.abs(z - CLIFF_Z) < 3.5) return false;
+      // (a clear strip along the foot of the cliff, so it can be seen and got at)
+      if (z > CLIFF_Z - 3.5 && z < CLIFF_Z + 9) return false;
+      if (this.traps.some((t) => Math.hypot(t.x - x, t.z - z) < 2.6)) return false;
       if (z < MASSIF.z1 + 4 && z > MASSIF.z0 - 4 && Math.abs(x) < 42) return false;
       if (x > POOL_B.x0 - 4 && x < POOL_B.x1 + 4 && z > POOL_B.z0 - 6 && z < POOL_B.z1) return false;
+      if (x > POOL_A.x0 - 3 && x < POOL_A.x1 + 3 && z > POOL_A.z0 && z < POOL_A.z1 + 3) return false;
+      if (z < -124 && Math.abs(x - CAVE_X) < 18) return false;
       for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r + 2) return false;
-      const { hw, cx } = valley(z);
-      if (Math.abs(x - cx) > hw + 6) return false;
+      for (const o of OUTCROPS) if (Math.hypot(x - o.x, z - o.z) < o.r * 0.9) return false;
+      if (outside(x, z) > 1) return false;
       return true;
     };
-    // ---- Geometry: a tapered, slightly bent trunk; a crown of five displaced lumps
-    const trunk = new THREE.CylinderGeometry(0.12, 0.3, 4.2, 8, 6);
-    {
-      const p = trunk.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < p.count; i++) {
-        const y = p.getY(i);
-        p.setX(i, p.getX(i) + Math.sin(y * 0.8) * 0.12);
-        p.setZ(i, p.getZ(i) + Math.cos(y * 0.6) * 0.08);
-      }
-      trunk.translate(0, 2.1, 0);
-      trunk.computeVertexNormals();
-    }
-    const crownParts: THREE.BufferGeometry[] = [];
-    for (const [x, y, z, r] of [[0, 4.6, 0, 1.5], [1.0, 4.1, 0.3, 1.1], [-0.9, 4.2, -0.4, 1.15], [0.2, 5.4, -0.2, 1.05], [-0.2, 4.0, 1.0, 1.0], [0.4, 3.9, -1.0, 0.95]]) {
-      const g = new THREE.IcosahedronGeometry(r, 1);
-      const p = g.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < p.count; i++) {
-        const v = new THREE.Vector3().fromBufferAttribute(p, i);
-        v.multiplyScalar(1 + fbm(v.x * 2 + x, v.y * 2 + z) * 0.3);
-        p.setXYZ(i, v.x + x, v.y + y, v.z + z);
-      }
-      crownParts.push(g);
-    }
-    const crown = mergeGeometries(crownParts.map((g) => g.toNonIndexed()), false)!;
-    crown.computeVertexNormals();
-    const bark = new THREE.MeshStandardMaterial({ color: 0x4a3c34, roughness: 0.9 });
-    const purple = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, flatShading: true });
-    const green = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, flatShading: true });
+    const leaf = leafTexture();
+    const barkT = barkTexture();
+    const bark = triplanar(new THREE.MeshStandardMaterial({ map: barkT, color: 0x6a5a58, roughness: 0.85, bumpMap: barkT, bumpScale: 1.5 }), 1.6, 1);
+    const foliage = triplanar(new THREE.MeshStandardMaterial({ map: leaf, color: 0xffffff, roughness: 0.75, bumpMap: leaf, bumpScale: 2 }), 1.1, 1);
+    const vineMat = new THREE.MeshStandardMaterial({ color: 0x5a3a5a, roughness: 0.6 });
+    // ---- Four tree shapes
+    const shapes = [0, 1, 2, 3].map((v) => buildTree(v));
     // ---- Placement
-    const spots: { x: number; z: number; s: number; ry: number; p: boolean }[] = [];
-    for (let k = 0; k < 9000 && spots.length < 1500; k++) {
-      const x = -70 + Math.random() * 140;
-      const z = -170 + Math.random() * 318;
+    const spots: { x: number; z: number; s: number; ry: number; p: boolean; v: number }[] = [];
+    for (let k = 0; k < 9000 && spots.length < 1000; k++) {
+      const z = -160 + Math.random() * 310;
+      const x = valleyX(z) + (Math.random() - 0.5) * 2 * (halfWidth(z) + 4);
       if (!clear(x, z)) continue;
-      // Clumped: thinner in places
-      if (fbm(x * 0.03, z * 0.03) < -0.2) continue;
-      if (spots.some((s) => Math.abs(s.x - x) < 2.4 && Math.abs(s.z - z) < 2.4)) continue;
-      spots.push({ x, z, s: 0.8 + Math.random() * 0.8, ry: Math.random() * 6.28, p: Math.random() < 0.55 });
+      if (fbm(x * 0.03, z * 0.03) < -0.22) continue;
+      if (spots.some((s) => Math.abs(s.x - x) < 2.8 && Math.abs(s.z - z) < 2.8)) continue;
+      spots.push({ x, z, s: 0.8 + Math.random() * 0.7, ry: Math.random() * 6.28, p: Math.random() < 0.58, v: Math.floor(Math.random() * 4) });
     }
-    const m4 = new THREE.Matrix4();
     const q = new THREE.Quaternion();
-    const trunkItems: Inst[] = [];
-    const purpleItems: Inst[] = [];
-    const greenItems: Inst[] = [];
-    spots.forEach((s) => {
-      const y = groundY(s.x, s.z) - 0.1;
+    const by: { trunk: Inst[]; purple: Inst[]; green: Inst[] }[] = shapes.map(() => ({ trunk: [], purple: [], green: [] }));
+    for (const s of spots) {
+      const y = groundY(s.x, s.z) - 0.15;
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.ry);
-      const m = new THREE.Matrix4().compose(new THREE.Vector3(s.x, y, s.z), q, new THREE.Vector3(s.s, s.s * (0.9 + Math.random() * 0.4), s.s));
-      trunkItems.push({ m });
-      const c = new THREE.Color().setHSL(s.p ? 0.8 + Math.random() * 0.06 : 0.28 + Math.random() * 0.06, 0.55 + Math.random() * 0.2, s.p ? 0.42 + Math.random() * 0.12 : 0.34 + Math.random() * 0.1);
-      (s.p ? purpleItems : greenItems).push({ m, c });
-      this.trunks.push({ x: s.x, z: s.z, r: 0.28 * s.s, h: 4.2 * s.s });
+      const m = new THREE.Matrix4().compose(new THREE.Vector3(s.x, y, s.z), q, new THREE.Vector3(s.s, s.s * (0.9 + Math.random() * 0.3), s.s));
+      const c = new THREE.Color().setHSL(s.p ? 0.79 + Math.random() * 0.07 : 0.27 + Math.random() * 0.07, 0.5 + Math.random() * 0.25, s.p ? 0.4 + Math.random() * 0.12 : 0.3 + Math.random() * 0.1);
+      by[s.v].trunk.push({ m });
+      (s.p ? by[s.v].purple : by[s.v].green).push({ m, c });
+      this.trunks.push({ x: s.x, z: s.z, r: 0.34 * s.s, h: 4.5 * s.s });
+    }
+    shapes.forEach((sh, v) => {
+      this.instanced(sh.near.wood, bark, by[v].trunk, 'near');
+      this.instanced(sh.near.leaves, foliage, by[v].purple, 'near');
+      this.instanced(sh.near.leaves, foliage, by[v].green, 'near');
+      this.instanced(sh.near.vines, vineMat, by[v].trunk, 'near');
+      this.instanced(sh.far.wood, bark, by[v].trunk, 'far');
+      this.instanced(sh.far.leaves, foliage, by[v].purple, 'far');
+      this.instanced(sh.far.leaves, foliage, by[v].green, 'far');
     });
-    this.instanced(trunk, bark, trunkItems);
-    this.instanced(crown, purple, purpleItems);
-    this.instanced(crown, green, greenItems);
-    const tint = new THREE.Color();
-    // ---- Bushes and spiky plants
-    const bushG = new THREE.IcosahedronGeometry(0.7, 1);
-    {
-      const p = bushG.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < p.count; i++) {
-        const v = new THREE.Vector3().fromBufferAttribute(p, i);
-        v.multiplyScalar(1 + fbm(v.x * 3, v.z * 3) * 0.4);
-        v.y *= 0.65;
-        p.setXYZ(i, v.x, v.y + 0.3, v.z);
-      }
-      bushG.computeVertexNormals();
-    }
-    const spikes: THREE.BufferGeometry[] = [];
-    for (let k = 0; k < 9; k++) {
-      const g = new THREE.ConeGeometry(0.03, 0.6 + Math.random() * 0.5, 4);
-      g.translate(0, 0.3, 0);
-      g.rotateZ((Math.random() - 0.5) * 0.7);
-      g.rotateY((k / 9) * Math.PI * 2);
-      g.translate(Math.random() * 0.15, 0, Math.random() * 0.15);
-      spikes.push(g.toNonIndexed());
-    }
-    const spikeG = mergeGeometries(spikes, false)!;
-    const bushMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, flatShading: true });
-    const spikeMat = new THREE.MeshStandardMaterial({ color: 0x2f5a26, roughness: 0.8 });
-    const bushSpots: { x: number; z: number }[] = [];
-    for (let k = 0; k < 9000 && bushSpots.length < 2400; k++) {
-      const x = -70 + Math.random() * 140;
-      const z = -170 + Math.random() * 318;
-      if (!clear(x, z) && !(Math.hypot(x - MEADOW.x, z - MEADOW.z) > 14 && Math.hypot(x - MEADOW.x, z - MEADOW.z) < 21)) continue;
-      bushSpots.push({ x, z });
-    }
-    this.instanced(
-      bushG,
-      bushMat,
-      bushSpots.map((s) => {
-        const sc = 0.5 + Math.random() * 0.9;
-        const m = new THREE.Matrix4().compose(new THREE.Vector3(s.x, groundY(s.x, s.z) - 0.05, s.z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6), new THREE.Vector3(sc, sc, sc));
-        return { m, c: tint.setHSL(Math.random() < 0.6 ? 0.8 + Math.random() * 0.05 : 0.3, 0.6, 0.38 + Math.random() * 0.12).clone() };
-      })
-    );
-    // Spiky plants round every bit of water
-    const spikeSpots: THREE.Vector3[] = [];
-    const ring = (cx: number, cz: number, r: number, n: number): void => {
-      for (let k = 0; k < n; k++) {
-        const a = Math.random() * Math.PI * 2;
-        const rr = r + (Math.random() - 0.3) * 2.2;
-        const x = cx + Math.cos(a) * rr;
-        const z = cz + Math.sin(a) * rr;
-        spikeSpots.push(new THREE.Vector3(x, groundY(x, z), z));
+    // ---- Undergrowth
+    const frondMat = new THREE.MeshStandardMaterial({ map: frondTexture(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.7, color: 0xffffff });
+    const fern = fernGeometry();
+    const mound = moundGeometry();
+    const tuft = tuftGeometry();
+    const stalk = bulbStalk();
+    const bulbCyan = new THREE.MeshStandardMaterial({ color: 0x0a2a30, emissive: 0x40f0ff, emissiveIntensity: 1.6, roughness: 0.3 });
+    const bulbPink = new THREE.MeshStandardMaterial({ color: 0x300a2a, emissive: 0xff40c8, emissiveIntensity: 1.4, roughness: 0.3 });
+    this.glowMats.push(bulbCyan, bulbPink);
+    const stalkMat = new THREE.MeshStandardMaterial({ color: 0x2a3a2a, roughness: 0.7 });
+    const tuftMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, side: THREE.DoubleSide });
+    const ferns: Inst[] = [];
+    const mounds: Inst[] = [];
+    const tufts: Inst[] = [];
+    const bulbsA: Inst[] = [];
+    const bulbsB: Inst[] = [];
+    const m4 = new THREE.Matrix4();
+    const at = (x: number, z: number, s: number, sink = 0.05): THREE.Matrix4 =>
+      m4.compose(new THREE.Vector3(x, groundY(x, z) - sink, z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6.28), new THREE.Vector3(s, s * (0.8 + Math.random() * 0.4), s)).clone();
+    const scatter = (n: number, f: (x: number, z: number) => void, nearTrees = 0): void => {
+      for (let k = 0; k < n * 4 && n > 0; k++) {
+        let x: number;
+        let z: number;
+        if (nearTrees && Math.random() < nearTrees && spots.length) {
+          const s = spots[Math.floor(Math.random() * spots.length)];
+          const a = Math.random() * 6.28;
+          const r = 1 + Math.random() * 3;
+          x = s.x + Math.cos(a) * r;
+          z = s.z + Math.sin(a) * r;
+        } else {
+          z = -160 + Math.random() * 310;
+          x = valleyX(z) + (Math.random() - 0.5) * 2 * (halfWidth(z) + 3);
+        }
+        if (!clear(x, z) && !(Math.hypot(x - MEADOW.x, z - MEADOW.z) > 15 && Math.hypot(x - MEADOW.x, z - MEADOW.z) < 21)) continue;
+        f(x, z);
+        n--;
       }
     };
-    for (const p of PONDS) ring(p.x, p.z, p.r, 24);
-    ring(0, -6, 11, 30);
-    ring(0, -52, 12, 30);
-    for (let k = 0; k < 500; k++) {
-      const x = -60 + Math.random() * 120;
-      const z = -165 + Math.random() * 310;
-      if (clear(x, z)) spikeSpots.push(new THREE.Vector3(x, groundY(x, z), z));
-    }
-    this.instanced(
-      spikeG,
-      spikeMat,
-      spikeSpots.map((p) => {
-        const sc = 0.7 + Math.random() * 0.8;
-        return { m: new THREE.Matrix4().compose(p, q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6), new THREE.Vector3(sc, sc, sc)) };
-      })
-    );
-    // Boulders scattered about, some by the cliff
-    const boulderG = new THREE.IcosahedronGeometry(1, 1);
-    {
-      const p = boulderG.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < p.count; i++) {
-        const v = new THREE.Vector3().fromBufferAttribute(p, i);
-        v.multiplyScalar(1 + fbm(v.x * 1.5, v.z * 1.5 + v.y) * 0.45);
-        p.setXYZ(i, v.x, v.y * 0.7, v.z);
+    scatter(1500, (x, z) => ferns.push({ m: at(x, z, 0.7 + Math.random() * 0.8), c: new THREE.Color().setHSL(Math.random() < 0.55 ? 0.8 + Math.random() * 0.05 : 0.3 + Math.random() * 0.05, 0.6, 0.38 + Math.random() * 0.1) }), 0.6);
+    scatter(900, (x, z) => mounds.push({ m: at(x, z, 0.5 + Math.random() * 0.8, 0.1), c: new THREE.Color().setHSL(Math.random() < 0.6 ? 0.8 : 0.3, 0.55, 0.3 + Math.random() * 0.1) }), 0.5);
+    scatter(2000, (x, z) => tufts.push({ m: at(x, z, 0.6 + Math.random() * 0.7, 0.02), c: new THREE.Color().setHSL(Math.random() < 0.5 ? 0.82 : 0.28, 0.45, 0.32 + Math.random() * 0.12) }));
+    scatter(420, (x, z) => (Math.random() < 0.5 ? bulbsA : bulbsB).push({ m: at(x, z, 0.7 + Math.random() * 0.7, 0) }), 0.4);
+    // Round every bit of water, tufts and fronds
+    for (const p of PONDS)
+      for (let k = 0; k < 26; k++) {
+        const a = Math.random() * 6.28;
+        const r = p.r + (Math.random() - 0.3) * 2.2;
+        tufts.push({ m: at(p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, 0.7 + Math.random() * 0.6, 0.02), c: new THREE.Color().setHSL(0.3, 0.5, 0.3) });
       }
-      const uvs = new Float32Array(p.count * 2);
-      for (let i = 0; i < p.count; i++) {
-        uvs[i * 2] = p.getX(i) * 2;
-        uvs[i * 2 + 1] = p.getY(i) * 2 + p.getZ(i);
-      }
-      boulderG.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-      boulderG.computeVertexNormals();
-    }
-    const bspots: THREE.Vector3[] = [];
-    for (let k = 0; k < 2000 && bspots.length < 140; k++) {
-      const x = -60 + Math.random() * 120;
-      const z = -165 + Math.random() * 310;
-      if (!clear(x, z) && Math.abs(z - CLIFF_Z) > 6) continue;
-      if (Math.hypot(x - ARENA.x, z - ARENA.z) < 31 && Math.random() < 0.7) continue;
-      bspots.push(new THREE.Vector3(x, groundY(x, z), z));
-    }
-    this.instanced(
-      boulderG,
-      this.rockMat,
-      bspots.map((p) => {
-        const s = 0.4 + Math.pow(Math.random(), 2) * 1.6;
-        if (s > 0.7) this.trunks.push({ x: p.x, z: p.z, r: s * 0.8, h: s * 0.6 });
-        return { m: m4.compose(p.clone().setY(p.y - s * 0.25), q.setFromEuler(new THREE.Euler(Math.random(), Math.random() * 6, Math.random())), new THREE.Vector3(s, s, s)).clone() };
-      })
-    );
-  }
-
-  // ------------------------------------------------------------- the sky
-
-  private buildSky(): { mat: THREE.ShaderMaterial; planets: THREE.Object3D[] } {
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 } },
-      vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
-      fragmentShader: `
-        uniform float uT; varying vec3 vD;
-        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
-        float fb(vec2 p){ float s = 0.0; float a = 0.5; for (int i = 0; i < 5; i++) { s += n(p) * a; p *= 2.1; a *= 0.5; } return s; }
-        void main(){
-          vec3 d = normalize(vD);
-          float up = max(d.y, 0.0);
-          vec2 p = d.xz / (d.y + 0.25);
-          // Black overhead, a deep purple glow toward the horizon
-          vec3 c = mix(vec3(0.16, 0.07, 0.24), vec3(0.004, 0.003, 0.012), smoothstep(0.0, 0.55, up));
-          // Purple cloud banks low in the sky
-          float cl = fb(p * 0.9 + vec2(uT * 0.004, 0.0));
-          c += vec3(0.35, 0.16, 0.5) * smoothstep(0.45, 0.85, cl) * (1.0 - smoothstep(0.05, 0.5, up)) * 0.9;
-          // An aurora: a cyan curtain in one quarter
-          float au = smoothstep(0.6, 0.0, abs(d.y - 0.32 - sin(d.x * 6.0 + uT * 0.05) * 0.05)) * smoothstep(-0.2, 0.6, d.x) * smoothstep(0.3, -0.6, d.z);
-          c += vec3(0.1, 0.55, 0.7) * au * (0.4 + 0.6 * fb(vec2(d.x * 20.0, uT * 0.03))) * 0.6;
-          // Stars
-          vec2 sp = vec2(atan(d.z, d.x) * 200.0, d.y * 260.0);
-          float st = step(0.996, h(floor(sp))) * smoothstep(0.02, 0.2, up);
-          c += vec3(st) * (0.6 + 0.4 * h(floor(sp) + 3.0));
-          gl_FragColor = vec4(c, 1.0);
-        }`,
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false
-    });
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 48, 24), mat);
-    sky.renderOrder = -10;
-    sky.frustumCulled = false;
-    this.group.add(sky);
-    // Planets: a banded giant with a ring, a pale cratered moon, a blue one, two small
-    const planets: THREE.Object3D[] = [];
-    const planetTex = (kind: number): THREE.CanvasTexture => {
-      const c = makeCanvas(512, 256);
-      const g = c.getContext('2d')!;
-      if (kind === 0) {
-        for (let y = 0; y < 256; y++) {
-          const t = y / 256;
-          const v = Math.sin(t * 30 + Math.sin(t * 9) * 2) * 0.5 + 0.5;
-          g.fillStyle = `rgb(${120 + v * 80},${90 + v * 50},${130 + v * 60})`;
-          g.fillRect(0, y, 512, 1);
-        }
-      } else if (kind === 1) {
-        g.fillStyle = '#a8a4a0';
-        g.fillRect(0, 0, 512, 256);
-        for (let k = 0; k < 160; k++) {
-          const x = Math.random() * 512;
-          const y = Math.random() * 256;
-          const r = 2 + Math.pow(Math.random(), 3) * 26;
-          g.fillStyle = 'rgba(60,58,56,0.35)';
-          g.beginPath();
-          g.arc(x, y, r, 0, Math.PI * 2);
-          g.fill();
-          g.strokeStyle = 'rgba(220,216,210,0.3)';
-          g.stroke();
-        }
-      } else {
-        g.fillStyle = '#2a5aa8';
-        g.fillRect(0, 0, 512, 256);
-        for (let k = 0; k < 60; k++) {
-          g.fillStyle = `rgba(${200 + Math.random() * 55},${220 + Math.random() * 35},255,${0.2 + Math.random() * 0.3})`;
-          g.beginPath();
-          g.ellipse(Math.random() * 512, Math.random() * 256, 20 + Math.random() * 60, 4 + Math.random() * 8, 0, 0, Math.PI * 2);
-          g.fill();
-        }
-      }
-      const t = new THREE.CanvasTexture(c);
-      t.colorSpace = THREE.SRGBColorSpace;
-      return t;
-    };
-    const planet = (kind: number, r: number, dir: THREE.Vector3, ring = false): void => {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), new THREE.MeshBasicMaterial({ map: planetTex(kind), fog: false }));
-      // A lit side and a dark side, painted on: a gradient over the sphere
-      const shade = new THREE.Mesh(new THREE.SphereGeometry(r * 1.002, 48, 32), new THREE.ShaderMaterial({
-        uniforms: { uL: { value: new THREE.Vector3(-0.6, 0.4, 0.7).normalize() } },
-        vertexShader: 'varying vec3 vN; void main(){ vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-        fragmentShader: 'uniform vec3 uL; varying vec3 vN; void main(){ float k = smoothstep(-0.25, 0.4, dot(vN, uL)); gl_FragColor = vec4(0.0, 0.0, 0.02, 1.0 - k * 0.92); }',
-        transparent: true,
-        depthWrite: false,
-        fog: false
-      }));
-      const g = new THREE.Group();
-      g.add(m, shade);
-      if (ring) {
-        const rg = new THREE.Mesh(new THREE.RingGeometry(r * 1.4, r * 2.2, 96, 1), new THREE.MeshBasicMaterial({ color: 0xc8b0d8, transparent: true, opacity: 0.45, side: THREE.DoubleSide, fog: false }));
-        rg.rotation.x = Math.PI / 2 - 0.85;
-        rg.rotation.y = 0.45;
-        g.add(rg);
-      }
-      g.position.copy(dir.normalize().multiplyScalar(820));
-      g.renderOrder = -9;
-      g.traverse((o) => (o.frustumCulled = false));
-      this.group.add(g);
-      planets.push(g);
-    };
-    planet(0, 120, new THREE.Vector3(-0.55, 0.42, -0.72), true);
-    planet(1, 45, new THREE.Vector3(0.6, 0.55, -0.5));
-    planet(2, 26, new THREE.Vector3(0.25, 0.32, -0.9));
-    planet(1, 12, new THREE.Vector3(-0.2, 0.7, -0.6));
-    planet(2, 18, new THREE.Vector3(0.8, 0.25, 0.4));
-    return { mat, planets };
+    this.instanced(fern, frondMat, ferns, 'near');
+    this.instanced(mound, foliage, mounds, 'any');
+    this.instanced(tuft, tuftMat, tufts, 'near');
+    this.instanced(stalk.stalk, stalkMat, bulbsA.concat(bulbsB), 'any');
+    this.instanced(stalk.bulbs, bulbCyan, bulbsA, 'any');
+    this.instanced(stalk.bulbs, bulbPink, bulbsB, 'any');
   }
 
   // ------------------------------------------------------------- the survey station
@@ -1333,22 +1390,279 @@ export class Level16Builder {
     return { obj: tab, at: new THREE.Vector3(x, y, z), beacon };
   }
 
-  // ------------------------------------------------------------- the exit portal
+  // ------------------------------------------------------------- the sky
 
-  private buildPortal(): Level16Data['portal'] {
-    const y = groundY(PORTAL.x, PORTAL.z);
+  /**
+   * Black overhead; low down a bruised purple glow and heavy cloud banks,
+   * with a cyan aurora in one quarter; stars; and the planets. `uFlash`
+   * lights the clouds from inside (lightning, far off).
+   */
+  private buildSky(): { mat: THREE.ShaderMaterial; planets: THREE.Object3D[] } {
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uT: { value: 0 }, uFlash: { value: 0 }, uFlashDir: { value: new THREE.Vector2(0.4, -0.9) } },
+      vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
+      fragmentShader: `
+        uniform float uT; uniform float uFlash; uniform vec2 uFlashDir; varying vec3 vD;
+        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+        float fb(vec2 p){ float s = 0.0; float a = 0.5; for (int i = 0; i < 5; i++) { s += n(p) * a; p *= 2.1; a *= 0.5; } return s; }
+        void main(){
+          vec3 d = normalize(vD);
+          float up = max(d.y, 0.0);
+          vec2 p = d.xz / (d.y + 0.22);
+          // Black overhead; a dim, bruised purple toward the horizon
+          vec3 c = mix(vec3(0.09, 0.03, 0.12), vec3(0.002, 0.001, 0.006), smoothstep(0.0, 0.5, up));
+          // Heavy cloud banks low down, darker than the glow behind them
+          float cl = fb(p * 0.8 + vec2(uT * 0.006, uT * 0.002));
+          float bank = smoothstep(0.4, 0.8, cl) * (1.0 - smoothstep(0.05, 0.6, up));
+          c = mix(c, vec3(0.05, 0.02, 0.07), bank * 0.8);
+          c += vec3(0.22, 0.09, 0.3) * smoothstep(0.55, 0.9, cl) * (1.0 - smoothstep(0.0, 0.35, up)) * 0.5;
+          // Lightning inside the clouds, in one part of the sky
+          float near = smoothstep(0.6, 1.0, dot(normalize(d.xz + 1e-4), normalize(uFlashDir)));
+          c += vec3(0.55, 0.45, 0.85) * uFlash * near * (0.3 + bank) * (1.0 - smoothstep(0.0, 0.6, up));
+          // The aurora: a faint cyan curtain
+          float au = smoothstep(0.6, 0.0, abs(d.y - 0.32 - sin(d.x * 6.0 + uT * 0.05) * 0.05)) * smoothstep(-0.2, 0.6, d.x) * smoothstep(0.3, -0.6, d.z);
+          c += vec3(0.05, 0.35, 0.45) * au * (0.4 + 0.6 * fb(vec2(d.x * 20.0, uT * 0.03))) * 0.5;
+          vec2 sp = vec2(atan(d.z, d.x) * 200.0, d.y * 260.0);
+          float st = step(0.996, h(floor(sp))) * smoothstep(0.02, 0.25, up) * (1.0 - bank);
+          c += vec3(st) * (0.5 + 0.5 * h(floor(sp) + 3.0));
+          gl_FragColor = vec4(c, 1.0);
+        }`,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 48, 24), mat);
+    sky.renderOrder = -10;
+    sky.frustumCulled = false;
+    this.group.add(sky);
+    const planets: THREE.Object3D[] = [];
+    const planetTex = (kind: number): THREE.CanvasTexture => {
+      const c = makeCanvas(512, 256);
+      const g = c.getContext('2d')!;
+      if (kind === 0) {
+        for (let y = 0; y < 256; y++) {
+          const t = y / 256;
+          const v = Math.sin(t * 30 + Math.sin(t * 9) * 2) * 0.5 + 0.5;
+          g.fillStyle = `rgb(${110 + v * 70},${60 + v * 40},${90 + v * 50})`;
+          g.fillRect(0, y, 512, 1);
+        }
+      } else if (kind === 1) {
+        g.fillStyle = '#a8a4a0';
+        g.fillRect(0, 0, 512, 256);
+        for (let k = 0; k < 160; k++) {
+          const x = Math.random() * 512;
+          const y = Math.random() * 256;
+          const r = 2 + Math.pow(Math.random(), 3) * 26;
+          g.fillStyle = 'rgba(60,58,56,0.35)';
+          g.beginPath();
+          g.arc(x, y, r, 0, Math.PI * 2);
+          g.fill();
+          g.strokeStyle = 'rgba(220,216,210,0.3)';
+          g.stroke();
+        }
+      } else {
+        g.fillStyle = '#2a5aa8';
+        g.fillRect(0, 0, 512, 256);
+        for (let k = 0; k < 60; k++) {
+          g.fillStyle = `rgba(${200 + Math.random() * 55},${220 + Math.random() * 35},255,${0.2 + Math.random() * 0.3})`;
+          g.beginPath();
+          g.ellipse(Math.random() * 512, Math.random() * 256, 20 + Math.random() * 60, 4 + Math.random() * 8, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
+    const planet = (kind: number, r: number, dir: THREE.Vector3, ring = false, bright = 0.75): void => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), new THREE.MeshBasicMaterial({ map: planetTex(kind), color: new THREE.Color(bright, bright, bright), fog: false }));
+      const shade = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 1.002, 48, 32),
+        new THREE.ShaderMaterial({
+          uniforms: { uL: { value: new THREE.Vector3(-0.6, 0.4, 0.7).normalize() } },
+          vertexShader: 'varying vec3 vN; void main(){ vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+          fragmentShader: 'uniform vec3 uL; varying vec3 vN; void main(){ float k = smoothstep(-0.2, 0.45, dot(vN, uL)); gl_FragColor = vec4(0.0, 0.0, 0.02, 1.0 - k * 0.9); }',
+          transparent: true,
+          depthWrite: false,
+          fog: false
+        })
+      );
+      const g = new THREE.Group();
+      g.add(m, shade);
+      if (ring) {
+        const rg = new THREE.Mesh(new THREE.RingGeometry(r * 1.4, r * 2.2, 96, 1), new THREE.MeshBasicMaterial({ color: 0x9a80a8, transparent: true, opacity: 0.35, side: THREE.DoubleSide, fog: false }));
+        rg.rotation.x = Math.PI / 2 - 0.85;
+        rg.rotation.y = 0.45;
+        g.add(rg);
+      }
+      g.position.copy(dir.normalize().multiplyScalar(820));
+      g.renderOrder = -9;
+      g.traverse((o) => (o.frustumCulled = false));
+      this.group.add(g);
+      planets.push(g);
+    };
+    planet(0, 140, new THREE.Vector3(-0.55, 0.36, -0.72), true, 0.7);
+    planet(1, 45, new THREE.Vector3(0.6, 0.55, -0.5), false, 0.6);
+    planet(2, 26, new THREE.Vector3(0.25, 0.3, -0.9), false, 0.55);
+    planet(1, 12, new THREE.Vector3(-0.2, 0.7, -0.6), false, 0.5);
+    planet(2, 18, new THREE.Vector3(0.8, 0.25, 0.4), false, 0.5);
+    return { mat, planets };
+  }
+
+  // ------------------------------------------------------------- the cave and the portal
+
+  /**
+   * The cave in the canyon's north wall. A way in, winding, wide enough for
+   * two; at the back of it a cavern, domed, crystals glowing in its walls,
+   * and the exit portal standing on a plinth in the middle of it. Walls and
+   * roof of rock on a grid of 1 m cells, as the passage under the massif,
+   * the roof coming up to the mountain's own surface above it.
+   */
+  private buildCave(): Level16Data['portal'] {
+    const rock = this.rockMat;
+    const isCave = (x: number, z: number): boolean => inCave(x, z);
+    const ceilAt = (x: number, z: number): number => {
+      const d = Math.hypot(x - CAVERN.x, z - CAVERN.z);
+      const dome = d < CAVERN.r ? 9 * Math.sqrt(Math.max(0, 1 - (d / (CAVERN.r + 1.5)) ** 2)) : 0;
+      return CAVE_Y + Math.max(5.2, dome) + fbm(x * 0.3, z * 0.3) * 0.5;
+    };
+    const geos: THREE.BufferGeometry[] = [];
+    const gx0 = Math.floor(CAVE_X - 22);
+    const gx1 = Math.ceil(CAVE_X + 12);
+    const gz0 = -214;
+    const gz1 = -146;
+    const cell = (i: number, j: number): boolean => isCave(i + 0.5, j + 0.5);
+    for (let j = gz0; j < gz1; j++)
+      for (let i = gx0; i < gx1; i++) {
+        const x = i + 0.5;
+        const z = j + 0.5;
+        const top = roofY(x, z);
+        if (cell(i, j)) {
+          // The roof: from the ceiling up to the mountain's surface, if there's mountain over it
+          const c = ceilAt(x, z);
+          if (top > c + 0.3 && z < CAVE_MOUTH_Z) {
+            const g = new THREE.BoxGeometry(1, top - c, 1, 2, Math.min(3, Math.max(1, Math.round((top - c) / 2))), 2);
+            g.translate(x, (top + c) / 2, z);
+            geos.push(g);
+            this.collide(i, c, j, i + 1, top, j + 1);
+          }
+          continue;
+        }
+        // A wall cell: next to the cave, up to the surface (and inside the mountain only)
+        let next = false;
+        for (const [a, b] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) if (cell(i + a, j + b)) next = true;
+        if (!next) continue;
+        const wt = Math.max(Math.min(top - 0.25, ceilAt(x, z) + 1.5), CAVE_Y + 0.8);
+        const g = new THREE.BoxGeometry(1, wt - (CAVE_Y - 1), 1, 2, Math.min(6, Math.max(1, Math.round((wt - CAVE_Y) / 1.5))), 2);
+        g.translate(x, (wt + CAVE_Y - 1) / 2, z);
+        geos.push(g);
+        this.collide(i, CAVE_Y - 1, j, i + 1, wt, j + 1);
+      }
+    // Roughen it all: displaced by world-position noise, so neighbouring boxes move together
+    const merged = mergeGeometries(geos.map((g) => g.toNonIndexed()), false)!;
+    const p = merged.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i);
+      const y = p.getY(i);
+      const z = p.getZ(i);
+      const d = (ridged(x * 0.22 + y * 0.15, z * 0.22 - y * 0.12) - 0.45) * 1.7 + (ridged(x * 0.8 + y * 0.4, z * 0.8 - y * 0.3) - 0.45) * 0.5;
+      const e = (ridged(z * 0.25 + 3, x * 0.25 + y * 0.2) - 0.45) * 1.4;
+      p.setXYZ(i, x + d, y + (d + e) * 0.35, z + e);
+    }
+    merged.deleteAttribute('uv');
+    merged.computeVertexNormals();
+    const caveMesh = new THREE.Mesh(merged, rock);
+    this.group.add(caveMesh);
+    this.shootables.push(caveMesh);
+    this.caveMesh = caveMesh;
+    // Crystals in the walls: clusters of glowing shards, violet and cyan
+    const crystalV = new THREE.MeshStandardMaterial({ color: 0x2a1040, emissive: 0xa050ff, emissiveIntensity: 1.6, roughness: 0.15, metalness: 0.2 });
+    const crystalC = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x40d8ff, emissiveIntensity: 1.4, roughness: 0.15, metalness: 0.2 });
+    this.glowMats.push(crystalV, crystalC);
+    const shard = new THREE.OctahedronGeometry(0.2, 0);
+    shard.scale(0.6, 2.4, 0.6);
+    const shardsV: Inst[] = [];
+    const shardsC: Inst[] = [];
+    const q = new THREE.Quaternion();
+    for (let k = 0; k < 400 && shardsV.length + shardsC.length < 170; k++) {
+      const a = Math.random() * 6.28;
+      const z = CAVE_MOUTH_Z - 2 - Math.random() * 50;
+      // Out from the middle of the way to its wall
+      const mx = z < -194 ? CAVERN.x : z < -180 ? CAVE_X - 7 : z < -170 ? CAVE_X - 3.5 : CAVE_X;
+      let x = mx + Math.cos(a) * 12;
+      let zz = z + Math.sin(a) * 12;
+      for (let s = 0; s < 40; s++) {
+        const t = s / 40;
+        const tx = mx + (x - mx) * t;
+        const tz = z + (zz - z) * t;
+        if (!isCave(tx, tz)) {
+          x = tx;
+          zz = tz;
+          break;
+        }
+      }
+      if (isCave(x, zz)) continue;
+      const y = CAVE_Y + Math.random() * 4;
+      const n = 2 + Math.floor(Math.random() * 4);
+      const list = Math.random() < 0.6 ? shardsV : shardsC;
+      for (let c = 0; c < n; c++) {
+        q.setFromEuler(new THREE.Euler((Math.random() - 0.5) * 1.6, Math.random() * 6, (Math.random() - 0.5) * 1.6));
+        const s = 0.5 + Math.random() * 1.2;
+        list.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(x + (Math.random() - 0.5) * 0.5, y + (Math.random() - 0.5) * 0.4, zz + (Math.random() - 0.5) * 0.5), q, new THREE.Vector3(s, s, s)) });
+      }
+    }
+    this.instanced(shard, crystalV, shardsV);
+    this.instanced(shard, crystalC, shardsC);
+    // Stalactites from the cavern's roof
+    const tite = new THREE.ConeGeometry(0.25, 2.2, 7, 4);
+    tite.rotateX(Math.PI);
+    tite.translate(0, -1.1, 0);
+    const tites: Inst[] = [];
+    for (let k = 0; k < 60; k++) {
+      const a = Math.random() * 6.28;
+      const r = Math.random() * CAVERN.r * 0.9;
+      const x = CAVERN.x + Math.cos(a) * r;
+      const z = CAVERN.z + Math.sin(a) * r;
+      if (Math.hypot(x - PORTAL.x, z - PORTAL.z) < 3.5) continue;
+      const s = 0.5 + Math.random() * 1.2;
+      tites.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(x, ceilAt(x, z) + 0.2, z), q.identity(), new THREE.Vector3(s, s, s)) });
+    }
+    this.instanced(tite, rock, tites);
+    // ---- The mouth: an arch of broken rock round it, and crags either side
+    {
+      const arch = new THREE.TorusGeometry(4.6, 1.5, 14, 40, Math.PI);
+      const ap = arch.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < ap.count; i++) {
+        const x = ap.getX(i);
+        const y = ap.getY(i);
+        const z = ap.getZ(i);
+        const k = 1 + (ridged(x * 0.5 + 4, y * 0.5 + z) - 0.45) * 0.9;
+        ap.setXYZ(i, x * (0.95 + 0.1 * k), y * k, z * k * 1.4);
+      }
+      arch.deleteAttribute('uv');
+      arch.computeVertexNormals();
+      const am = new THREE.Mesh(arch, rock);
+      am.position.set(CAVE_X, CAVE_Y - 0.8, CAVE_MOUTH_Z + 0.8);
+      am.scale.set(1, 1.25, 1);
+      this.group.add(am);
+      this.shootables.push(am);
+      for (const s of [-1, 1]) this.collide(CAVE_X + s * 4.6 - 1.6, CAVE_Y - 1, CAVE_MOUTH_Z - 1.2, CAVE_X + s * 4.6 + 1.6, CAVE_Y + 6, CAVE_MOUTH_Z + 2.8);
+    }
+    // ---- The portal: a ring of dark metal on a plinth, in the middle of the cavern
+    const y = CAVE_Y;
     const g = new THREE.Group();
     g.position.set(PORTAL.x, y, PORTAL.z);
     this.group.add(g);
     const metal = new THREE.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.35, metalness: 0.8 });
-    // A plinth, two uprights, the ring between them
     const plinth = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.6, 0.5, 40), metal);
     plinth.position.y = 0.25;
     g.add(plinth);
     for (const s of [-1, 1]) {
-      const up = new THREE.Mesh(new THREE.BoxGeometry(0.5, 5.5, 0.7), metal);
-      up.position.set(s * 2.9, 2.9, 0);
-      g.add(up);
+      const upr = new THREE.Mesh(new THREE.BoxGeometry(0.5, 5.5, 0.7), metal);
+      upr.position.set(s * 2.9, 2.9, 0);
+      g.add(upr);
     }
     const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.25, 16, 64), metal);
     ring.position.y = 3.0;
@@ -1384,36 +1698,41 @@ export class Level16Builder {
   // ------------------------------------------------------------- the tracker's map
 
   private buildMap(): HTMLCanvasElement {
-    const W = 360;
-    const H = 810;
-    const c = makeCanvas(W, H);
-    const g = c.getContext('2d')!;
     const X0 = -70;
     const X1 = 70;
-    const Z0 = -165;
+    const Z0 = -212;
     const Z1 = 150;
+    const W = 360;
+    const H = Math.round((W * (Z1 - Z0)) / (X1 - X0));
+    const c = makeCanvas(W, H);
+    const g = c.getContext('2d')!;
     const img = g.createImageData(W, H);
     for (let j = 0; j < H; j++)
       for (let i = 0; i < W; i++) {
         const x = X0 + ((i + 0.5) / W) * (X1 - X0);
         const z = Z0 + ((j + 0.5) / H) * (Z1 - Z0);
-        const y = groundY(x, z);
         let r: number;
         let gg: number;
         let b: number;
-        if (inLake(x, z) && y < WATER_Y) [r, gg, b] = [60, 240, 90];
+        if (inCave(x, z)) [r, gg, b] = [40, 60, 90];
+        else if (inLake(x, z) && groundY(x, z) < WATER_Y) [r, gg, b] = [60, 240, 90];
         else if (z < MASSIF.z1 && z > MASSIF.z0 && Math.abs(x) < 40) [r, gg, b] = [120, 112, 104];
         else {
-          const k = Math.max(0, Math.min(1, (y + 2) / 30));
-          const steep = Math.abs(groundY(x + 1, z) - groundY(x - 1, z)) + Math.abs(groundY(x, z + 1) - groundY(x, z - 1));
-          r = 70 + k * 120 + Math.min(60, steep * 25);
-          gg = 96 + k * 100 + Math.min(50, steep * 20);
-          b = 70 + k * 90 + Math.min(50, steep * 20);
-          // Contour lines
-          if (Math.abs(((y + 100) % 2.5) - 1.25) < 0.12) {
-            r += 25;
-            gg += 30;
-            b += 30;
+          const y = groundY(x, z);
+          const out = outside(x, z);
+          if (out > 0) {
+            const k = Math.min(1, out / 30);
+            [r, gg, b] = [70 - k * 40, 66 - k * 40, 64 - k * 36];
+          } else {
+            const k = Math.max(0, Math.min(1, (y + 2) / 16));
+            r = 60 + k * 90;
+            gg = 100 + k * 90;
+            b = 70 + k * 70;
+            if (Math.abs(((y + 100) % 2) - 1) < 0.1) {
+              r += 25;
+              gg += 30;
+              b += 30;
+            }
           }
         }
         for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r) [r, gg, b] = [40, 200, 60];
@@ -1426,4 +1745,359 @@ export class Level16Builder {
     g.putImageData(img, 0, 0);
     return c;
   }
+}
+
+// ================================================================ plants
+
+/** A seeded random, so each tree shape is the same every time. */
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Ready to merge: no index, no UVs (the plants are textured by world position). */
+function plain(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const n = g.index ? g.toNonIndexed() : g;
+  if (n.getAttribute('uv')) n.deleteAttribute('uv');
+  return n;
+}
+
+function tube(curve: THREE.Curve<THREE.Vector3>, segs: number, radial: number, r: (u: number, a: number) => number): THREE.BufferGeometry {
+  const g = new THREE.TubeGeometry(curve, segs, 1, radial, false);
+  const p = g.getAttribute('position') as THREE.BufferAttribute;
+  const c = new THREE.Vector3();
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    const ring = Math.floor(i / (radial + 1));
+    const a = ((i % (radial + 1)) / radial) * Math.PI * 2;
+    const u = ring / segs;
+    curve.getPointAt(Math.min(1, u), c);
+    v.fromBufferAttribute(p, i).sub(c).multiplyScalar(r(u, a));
+    p.setXYZ(i, c.x + v.x, c.y + v.y, c.z + v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A lumpy round puff of foliage, smooth-shaded. */
+function puff(r: number, detail: number, seed: number): THREE.BufferGeometry {
+  let g: THREE.BufferGeometry = new THREE.IcosahedronGeometry(r, detail);
+  g.deleteAttribute('uv');
+  g.deleteAttribute('normal');
+  g = mergeVertices(g);
+  const p = g.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    const k = 1 + fbm(v.x * 1.6 + seed, v.z * 1.6 + v.y * 0.9) * 0.45 + ridged(v.x * 3 + seed, v.y * 3 + v.z) * 0.12;
+    v.multiplyScalar(k);
+    v.y *= 0.82;
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * One tree shape (v picks which): a trunk that flares at the root and
+ * twists as it rises; roots spreading into the ground; branches up and out
+ * of its upper half; a cluster of foliage at each branch end and on top;
+ * vines hanging from under the crowns. And a far version: the trunk, and a
+ * few plain crowns.
+ */
+function buildTree(v: number): { near: { wood: THREE.BufferGeometry; leaves: THREE.BufferGeometry; vines: THREE.BufferGeometry }; far: { wood: THREE.BufferGeometry; leaves: THREE.BufferGeometry } } {
+  const R = rng(1013 + v * 7919);
+  const H = 3.4 + v * 0.45;
+  const lean = new THREE.Vector3((R() - 0.5) * 0.8, 0, (R() - 0.5) * 0.8);
+  const trunkPts: THREE.Vector3[] = [];
+  for (let i = 0; i <= 5; i++) {
+    const u = i / 5;
+    trunkPts.push(new THREE.Vector3(lean.x * u * u + Math.sin(u * 4 + v) * 0.15, -0.4 + u * H, lean.z * u * u + Math.cos(u * 3 + v) * 0.15));
+  }
+  const trunkC = new THREE.CatmullRomCurve3(trunkPts);
+  const trunkR = (u: number, a: number): number => (0.34 * (1 - u * 0.62) + 0.22 * Math.pow(Math.max(0, 1 - u * 5), 2)) * (1 + 0.08 * Math.sin(a * 5 + u * 9));
+  const wood: THREE.BufferGeometry[] = [plain(tube(trunkC, 28, 14, trunkR))];
+  const woodFar: THREE.BufferGeometry[] = [plain(tube(trunkC, 8, 7, trunkR))];
+  // Roots
+  const nRoots = 4 + Math.floor(R() * 2);
+  for (let k = 0; k < nRoots; k++) {
+    const a = (k / nRoots) * Math.PI * 2 + R() * 0.6;
+    const l = 0.9 + R() * 0.6;
+    const c = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.35, 0), new THREE.Vector3(Math.cos(a) * l * 0.45, 0.12, Math.sin(a) * l * 0.45), new THREE.Vector3(Math.cos(a) * l, -0.25, Math.sin(a) * l)]);
+    wood.push(plain(tube(c, 10, 7, (u) => 0.13 * (1 - u * 0.8))));
+  }
+  // Branches, and where each ends
+  const tips: { p: THREE.Vector3; s: number }[] = [{ p: trunkC.getPointAt(1).clone().add(new THREE.Vector3(0, 0.5, 0)), s: 1.25 }];
+  const nB = 4 + Math.floor(R() * 3);
+  for (let k = 0; k < nB; k++) {
+    const u = 0.45 + R() * 0.45;
+    const base = trunkC.getPointAt(u);
+    const a = (k / nB) * Math.PI * 2 + R() * 0.8;
+    const l = 1.3 + R() * 1.1;
+    const up = 0.55 + R() * 0.45;
+    const mid = base.clone().add(new THREE.Vector3(Math.cos(a) * l * 0.5, l * up * 0.35, Math.sin(a) * l * 0.5));
+    const end = base.clone().add(new THREE.Vector3(Math.cos(a) * l, l * up, Math.sin(a) * l));
+    const c = new THREE.CatmullRomCurve3([base, mid, end]);
+    const r0 = trunkR(u, 0) * 0.45;
+    wood.push(plain(tube(c, 12, 8, (t) => r0 * (1 - t * 0.7))));
+    woodFar.push(plain(tube(c, 3, 5, (t) => r0 * (1 - t * 0.7))));
+    tips.push({ p: end, s: 0.75 + R() * 0.35 });
+    // A twig or two off it
+    if (R() < 0.7) {
+      const tb = c.getPointAt(0.6);
+      const ta = a + (R() < 0.5 ? 0.9 : -0.9);
+      const te = tb.clone().add(new THREE.Vector3(Math.cos(ta) * 0.7, 0.5, Math.sin(ta) * 0.7));
+      wood.push(plain(tube(new THREE.CatmullRomCurve3([tb, tb.clone().lerp(te, 0.5).add(new THREE.Vector3(0, 0.1, 0)), te]), 6, 6, (t) => r0 * 0.5 * (1 - t * 0.7))));
+      tips.push({ p: te, s: 0.55 });
+    }
+  }
+  // Foliage: a cluster of puffs at each tip
+  const leaves: THREE.BufferGeometry[] = [];
+  const leavesFar: THREE.BufferGeometry[] = [];
+  const vines: THREE.BufferGeometry[] = [];
+  tips.forEach((t, i) => {
+    const n = t.s > 1 ? 3 : 2;
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2 + R();
+      const off = new THREE.Vector3(Math.cos(a) * 0.5 * t.s, (R() - 0.3) * 0.4 * t.s, Math.sin(a) * 0.5 * t.s);
+      const g = puff((0.85 + R() * 0.35) * t.s, 2, i * 13 + k);
+      g.translate(t.p.x + off.x, t.p.y + off.y, t.p.z + off.z);
+      leaves.push(plain(g));
+    }
+    const f = puff(1.15 * t.s, 1, i * 7);
+    f.translate(t.p.x, t.p.y, t.p.z);
+    leavesFar.push(plain(f));
+    // Vines hanging from under it
+    if (i > 0 && R() < 0.8)
+      for (let k = 0; k < 2; k++) {
+        const s = t.p.clone().add(new THREE.Vector3((R() - 0.5) * 0.9, -0.4 * t.s, (R() - 0.5) * 0.9));
+        const len = 0.9 + R() * 1.6;
+        const c = new THREE.CatmullRomCurve3([s, s.clone().add(new THREE.Vector3((R() - 0.5) * 0.2, -len * 0.5, (R() - 0.5) * 0.2)), s.clone().add(new THREE.Vector3((R() - 0.5) * 0.3, -len, (R() - 0.5) * 0.3))]);
+        vines.push(plain(tube(c, 8, 4, (u) => 0.025 * (1 - u * 0.6))));
+      }
+  });
+  const merge = (l: THREE.BufferGeometry[]): THREE.BufferGeometry => {
+    const g = mergeGeometries(l, false)!;
+    g.computeBoundingSphere();
+    return g;
+  };
+  return { near: { wood: merge(wood), leaves: merge(leaves), vines: merge(vines.length ? vines : [plain(new THREE.BoxGeometry(0.01, 0.01, 0.01))]) }, far: { wood: merge(woodFar), leaves: merge(leavesFar) } };
+}
+
+/** A frond-bush: arching fern fronds out from the middle, drooping at their tips. */
+function fernGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const n = 8;
+  for (let k = 0; k < n; k++) {
+    const L = 0.9 + (k % 3) * 0.2;
+    const g = new THREE.PlaneGeometry(0.34, L, 1, 10);
+    g.translate(0, L / 2, 0);
+    const a = (k / n) * Math.PI * 2 + (k % 2) * 0.3;
+    const rise = 0.5 + (k % 2) * 0.25;
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      const w = p.getX(i);
+      const t = p.getY(i) / L;
+      const o = t * L * 0.8;
+      const h = L * rise * Math.sin(t * Math.PI * 0.72);
+      // A little cupped across its width
+      const cup = Math.abs(w) * 0.25;
+      p.setXYZ(i, Math.cos(a) * o - Math.sin(a) * w, h + cup, Math.sin(a) * o + Math.cos(a) * w);
+    }
+    g.computeVertexNormals();
+    parts.push(g);
+  }
+  return mergeGeometries(parts, false)!;
+}
+
+/** A low mound of leafy growth. */
+function moundGeometry(): THREE.BufferGeometry {
+  const g = puff(0.75, 2, 3.3);
+  g.scale(1, 0.75, 1);
+  g.translate(0, 0.28, 0);
+  return g;
+}
+
+/** A tuft of spiky grass: thin blades fanning out and up, bending over. */
+function tuftGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let k = 0; k < 14; k++) {
+    const L = 0.35 + ((k * 37) % 10) * 0.035;
+    const g = new THREE.PlaneGeometry(0.035, L, 1, 4);
+    g.translate(0, L / 2, 0);
+    const a = k * 2.4;
+    const bend = 0.25 + (k % 4) * 0.1;
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      const w = p.getX(i) * (1 - p.getY(i) / L);
+      const t = p.getY(i) / L;
+      const o = 0.04 + t * t * L * bend;
+      p.setXYZ(i, Math.cos(a) * o - Math.sin(a) * w, t * L * (1 - bend * 0.3 * t), Math.sin(a) * o + Math.cos(a) * w);
+    }
+    g.computeVertexNormals();
+    parts.push(plain(g));
+  }
+  return mergeGeometries(parts, false)!;
+}
+
+/** A glowing bulb on a curved stalk, two smaller ones beside it. */
+function bulbStalk(): { stalk: THREE.BufferGeometry; bulbs: THREE.BufferGeometry } {
+  const stalks: THREE.BufferGeometry[] = [];
+  const bulbs: THREE.BufferGeometry[] = [];
+  for (const [dx, dz, h, r] of [[0, 0, 0.95, 0.11], [0.12, 0.06, 0.6, 0.07], [-0.08, 0.1, 0.45, 0.06]]) {
+    const top = new THREE.Vector3(dx + 0.1, h, dz);
+    const c = new THREE.CatmullRomCurve3([new THREE.Vector3(dx, 0, dz), new THREE.Vector3(dx - 0.05, h * 0.5, dz), top]);
+    stalks.push(plain(tube(c, 10, 6, (u) => 0.018 * (1 - u * 0.4))));
+    const b = new THREE.SphereGeometry(r, 14, 10);
+    b.scale(1, 1.3, 1);
+    b.translate(top.x, top.y + r * 0.9, top.z);
+    bulbs.push(plain(b));
+  }
+  return { stalk: mergeGeometries(stalks, false)!, bulbs: mergeGeometries(bulbs, false)! };
+}
+
+// ================================================================ more textures
+
+/** Foliage: a mass of small overlapping leaves, each lit along its middle. Grey: the instances tint it. */
+function leafTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const c = makeCanvas(S, S);
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#6a6a6a';
+  g.fillRect(0, 0, S, S);
+  for (let k = 0; k < 1400; k++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const a = Math.random() * Math.PI * 2;
+    const l = 5 + Math.random() * 9;
+    const w = l * (0.35 + Math.random() * 0.2);
+    const v = 120 + Math.random() * 120;
+    g.save();
+    g.translate(x, y);
+    g.rotate(a);
+    g.fillStyle = `rgb(${v * 0.55},${v * 0.55},${v * 0.55})`;
+    g.beginPath();
+    g.ellipse(0, 0, l, w, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.beginPath();
+    g.ellipse(-l * 0.1, -w * 0.15, l * 0.8, w * 0.55, 0, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = 'rgba(40,40,40,0.5)';
+    g.lineWidth = 0.7;
+    g.beginPath();
+    g.moveTo(-l, 0);
+    g.lineTo(l, 0);
+    g.stroke();
+    g.restore();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** Bark: long fibres and cracks running up it. */
+function barkTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const c = makeCanvas(S, S);
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#8a8080';
+  g.fillRect(0, 0, S, S);
+  for (let k = 0; k < 500; k++) {
+    const x = Math.random() * S;
+    const v = 80 + Math.random() * 110;
+    g.strokeStyle = `rgba(${v},${v * 0.95},${v * 0.95},0.5)`;
+    g.lineWidth = 1 + Math.random() * 3;
+    g.beginPath();
+    g.moveTo(x, 0);
+    let xx = x;
+    for (let y = 0; y <= S; y += 16) g.lineTo((xx += (Math.random() - 0.5) * 4), y);
+    g.stroke();
+  }
+  for (let k = 0; k < 60; k++) {
+    g.strokeStyle = 'rgba(20,16,16,0.7)';
+    g.lineWidth = 1 + Math.random() * 2;
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + (Math.random() - 0.5) * 6, y + 20 + Math.random() * 40);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** A fern frond on transparent: a central rib, paired leaflets curving out along it. */
+function frondTexture(): THREE.CanvasTexture {
+  const W = 128;
+  const H = 512;
+  const c = makeCanvas(W, H);
+  const g = c.getContext('2d')!;
+  g.clearRect(0, 0, W, H);
+  for (let k = 0; k < 26; k++) {
+    const t = k / 26;
+    const y = H - 20 - t * (H - 40);
+    const l = (W / 2 - 4) * Math.sin(Math.min(1, (1 - t) * 1.25) * Math.PI * 0.55 + 0.35) * (1 - t * 0.6);
+    for (const s of [-1, 1]) {
+      g.fillStyle = `rgb(${190 + Math.random() * 40},${190 + Math.random() * 40},${190 + Math.random() * 40})`;
+      g.beginPath();
+      g.moveTo(W / 2, y);
+      g.quadraticCurveTo(W / 2 + s * l * 0.6, y - 14, W / 2 + s * l, y - 22);
+      g.quadraticCurveTo(W / 2 + s * l * 0.5, y - 2, W / 2, y + 6);
+      g.fill();
+      g.strokeStyle = 'rgba(60,60,60,0.6)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(W / 2, y);
+      g.lineTo(W / 2 + s * l * 0.8, y - 16);
+      g.stroke();
+    }
+  }
+  g.strokeStyle = '#555';
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(W / 2, H);
+  g.lineTo(W / 2, 10);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Rock's bump: cracks and grain. */
+function rockBump(): THREE.CanvasTexture {
+  const S = 256;
+  const c = makeCanvas(S, S);
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#808080';
+  g.fillRect(0, 0, S, S);
+  for (let k = 0; k < 2500; k++) {
+    const v = 90 + Math.random() * 90;
+    g.fillStyle = `rgba(${v},${v},${v},0.4)`;
+    g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 4, 1 + Math.random() * 3);
+  }
+  for (let k = 0; k < 50; k++) {
+    g.strokeStyle = 'rgba(10,10,10,0.8)';
+    g.lineWidth = 1 + Math.random() * 2;
+    g.beginPath();
+    let x = Math.random() * S;
+    let y = Math.random() * S;
+    g.moveTo(x, y);
+    for (let s = 0; s < 6; s++) g.lineTo((x += (Math.random() - 0.5) * 40), (y += Math.random() * 25));
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
 }

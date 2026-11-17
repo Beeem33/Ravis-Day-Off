@@ -37,7 +37,7 @@ class Path {
   private T: Sample[] = [];
   private static N = 96;
 
-  constructor(rings: Ring[], q0?: THREE.Quaternion) {
+  constructor(rings: Ring[], q0?: THREE.Quaternion | THREE.Vector3) {
     const n = rings.length;
     const get = (i: number, j: number): number => {
       const r = rings[Math.min(n - 1, Math.max(0, i))];
@@ -59,7 +59,12 @@ class Path {
         .sub(this.T[Math.max(0, k - 1)].c)
         .normalize();
     let prev = tan(0);
-    this.T[0].q.copy(q0 ?? new THREE.Quaternion().setFromUnitVectors(Y, prev));
+    if (q0 instanceof THREE.Vector3) {
+      // A direction for the first frame's +X (phi = 90°): squared off against the tangent
+      const x = q0.clone().addScaledVector(prev, -q0.dot(prev)).normalize();
+      const z = new THREE.Vector3().crossVectors(x, prev);
+      this.T[0].q.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, prev, z));
+    } else this.T[0].q.copy(q0 ?? new THREE.Quaternion().setFromUnitVectors(Y, prev));
     for (let k = 1; k <= Path.N; k++) {
       const t = tan(k);
       this.T[k].q.copy(new THREE.Quaternion().setFromUnitVectors(prev, t).multiply(this.T[k - 1].q));
@@ -108,6 +113,26 @@ class Path {
     }
     return len;
   }
+}
+
+/**
+ * Sections run on past an end into a smooth dome — the spline through
+ * these makes a round fingertip, not a flat disc.
+ */
+function domed(rings: Ring[], start: boolean, end: boolean): Ring[] {
+  const out = rings.slice();
+  const dome = (a: Ring, b: Ring): Ring[] => {
+    const d = V(a[0] - b[0], a[1] - b[1], a[2] - b[2]).normalize();
+    const r = Math.max(a[3], a[4]);
+    return [
+      [0.5, 0.86],
+      [0.82, 0.55],
+      [0.97, 0.18]
+    ].map(([t, k]) => [a[0] + d.x * r * t, a[1] + d.y * r * t, a[2] + d.z * r * t, a[3] * k, a[4] * k, a[5]] as Ring);
+  };
+  if (end) out.push(...dome(rings[rings.length - 1], rings[rings.length - 2]));
+  if (start) out.unshift(...dome(rings[0], rings[1]).reverse());
+  return out;
 }
 
 /** The skin over a path: a closed tube, capped where asked; `ribs` swells or pinches it along its length. */
@@ -692,36 +717,79 @@ export function suitModel(mats: THREE.MeshStandardMaterial[], M: SuitMats = suit
     );
     add(plate(shoulder, { phi: s * 90 * D, half: 40 * D, a: 0.66, b: 0.93, axis: 'v', top: 0.034, bevel: 0.008, nu: 16, nv: 14, cut: cham(0.02, 0.02, 0.015, 0.015) }), M.trim);
 
-    // ---- The hand: palm lofted knuckles to wrist, four fingers and a thumb, a plate on the back of it
-    const hx = s * 0.332;
-    const hand = new Path([
-      [hx, 0.806, 0.09, 0.0165, 0.04, 2.8],
-      [hx, 0.85, 0.08, 0.02, 0.044, 2.8],
-      [hx, 0.895, 0.068, 0.023, 0.038, 2.6],
-      [hx, 0.93, 0.058, 0.03, 0.034, 2.2]
-    ]);
-    add(loft(hand, { seg: 20, rows: 20, capStart: true }), M.rubber);
-    add(plate(hand, { phi: s * 90 * D, half: 62 * D, a: 0.816, b: 0.89, top: 0.008, bevel: 0.005, nu: 14, nv: 14, cut: cham(0.012, 0.012, 0.008, 0.008), groove: (_x, y, _W, H) => line(y - H * 0.4, 0.002, 0.002) }), M.trim);
-    [-0.03, -0.01, 0.01, 0.029].forEach((dz, i) => {
-      const zk = 0.09 + dz;
-      const len = [0.082, 0.092, 0.088, 0.07][i];
-      const f = new Path([
-        [hx - s * 0.03, 0.81 - len, zk + 0.016, 0.0072, 0.0072, 2],
-        [hx - s * 0.02, 0.81 - len * 0.74, zk + 0.013, 0.0082, 0.0084, 2.2],
-        [hx - s * 0.007, 0.81 - len * 0.4, zk + 0.007, 0.0092, 0.0094, 2.2],
-        [hx, 0.812, zk, 0.0098, 0.0098, 2.2]
-      ]);
-      add(loft(f, { seg: 12, rows: 18, capStart: true }), M.rubber);
-      // A knuckle pad
-      add(plate(f, { phi: s * 90 * D, half: 60 * D, a: 0.86, b: 1.0, axis: 'v', top: 0.004, bevel: 0.003, nu: 8, nv: 6 }), M.gun);
+    // ---- The hand, hanging relaxed: palm to the thigh, the back of it out, thumb forward,
+    //      the fingers curling in a little — a full glove, round tips, curved pads on the back
+    const hx = s * 0.334;
+    const out = V(s, 0, 0);
+    const hand = new Path(
+      domed(
+        [
+          [hx, 0.93, 0.062, 0.027, 0.032, 2.2],
+          [hx, 0.9, 0.067, 0.021, 0.042, 2.7],
+          [hx, 0.866, 0.073, 0.019, 0.048, 3.0],
+          [hx - s * 0.002, 0.836, 0.076, 0.0175, 0.047, 3.0]
+        ],
+        false,
+        true
+      ),
+      out
+    );
+    add(loft(hand, { seg: 26, rows: 30 }), M.rubber);
+    add(
+      plate(hand, {
+        phi: 90 * D,
+        half: 72 * D,
+        a: 0.846,
+        b: 0.902,
+        top: 0.0045,
+        bevel: 0.008,
+        nu: 18,
+        nv: 14,
+        cut: cham(0.012, 0.012, 0.008, 0.008),
+        groove: (x, y, W, H) => line(y - H * 0.45, 0.0022, 0.004) + line(x - W / 2, 0.0022, 0.004) * (y > H * 0.45 ? 1 : 0)
+      }),
+      M.trim
+    );
+    add(plate(hand, { phi: 90 * D, half: 84 * D, a: 0.829, b: 0.845, top: 0.006, bevel: 0.007, nu: 18, nv: 6 }), M.armor);
+    add(plate(hand, { phi: 0, half: Math.PI, closed: true, a: 0.905, b: 0.93, top: 0.008, bevel: 0.007, nu: 28, nv: 6, groove: (_x, y, _W, H) => line(y - H * 0.5, 0.002, 0.004) }), M.gun);
+    [-0.033, -0.011, 0.011, 0.031].forEach((dz, i) => {
+      const zk = 0.076 + dz;
+      const L = [0.072, 0.082, 0.078, 0.062][i];
+      const x0 = hx - s * 0.002;
+      const r = [0.0102, 0.0104, 0.0101, 0.0092][i];
+      const f = new Path(
+        domed(
+          [
+            [x0, 0.842, zk, r * 0.95, r, 2.3],
+            [x0 - s * 0.003, 0.834 - L * 0.42, zk + 0.001, r * 0.92, r * 0.96, 2.3],
+            [x0 - s * 0.012, 0.834 - L * 0.75, zk + 0.002, r * 0.86, r * 0.9, 2.2],
+            [x0 - s * 0.025, 0.834 - L * 0.97, zk + 0.002, r * 0.78, r * 0.82, 2.1]
+          ],
+          false,
+          true
+        ),
+        out
+      );
+      add(loft(f, { seg: 14, rows: 24 }), M.rubber);
+      // Curved pads over the first two joints
+      add(plate(f, { phi: 90 * D, half: 66 * D, a: 0.1, b: 0.4, axis: 'v', top: 0.0028, bevel: 0.005, nu: 10, nv: 10 }), M.gun);
+      add(plate(f, { phi: 90 * D, half: 62 * D, a: 0.47, b: 0.7, axis: 'v', top: 0.0025, bevel: 0.005, nu: 10, nv: 8 }), M.gun);
     });
-    const thumb = new Path([
-      [hx - s * 0.024, 0.792, 0.136, 0.0085, 0.0085, 2],
-      [hx - s * 0.016, 0.822, 0.126, 0.0105, 0.0105, 2.2],
-      [hx - s * 0.006, 0.862, 0.108, 0.013, 0.013, 2.2],
-      [hx, 0.89, 0.09, 0.014, 0.015, 2.2]
-    ]);
-    add(loft(thumb, { seg: 12, rows: 16, capStart: true }), M.rubber);
+    const thumb = new Path(
+      domed(
+        [
+          [hx - s * 0.006, 0.9, 0.096, 0.0135, 0.0135, 2.2],
+          [hx - s * 0.013, 0.873, 0.111, 0.0122, 0.0122, 2.2],
+          [hx - s * 0.021, 0.848, 0.117, 0.0108, 0.0108, 2.2],
+          [hx - s * 0.027, 0.828, 0.115, 0.0095, 0.0095, 2.1]
+        ],
+        false,
+        true
+      ),
+      out
+    );
+    add(loft(thumb, { seg: 14, rows: 22 }), M.rubber);
+    add(plate(thumb, { phi: 90 * D, half: 70 * D, a: 0.3, b: 0.62, axis: 'v', top: 0.0028, bevel: 0.005, nu: 10, nv: 10 }), M.gun);
   }
 
   // ============================================================ the helmet
@@ -796,6 +864,7 @@ export function suitArmPieces(M: SuitMats): {
   upper(len: number): THREE.Group;
   fore(len: number): THREE.Group;
   palm(): THREE.Group;
+  finger(len: number, r0: number, r1: number, pad?: boolean): THREE.Group;
   elbow(): THREE.Group;
 } {
   const mesh = (geo: THREE.BufferGeometry, m: THREE.Material): THREE.Mesh => new THREE.Mesh(geo, lined(geo, m));
@@ -848,19 +917,42 @@ export function suitArmPieces(M: SuitMats): {
       g.add(mesh(plate(b, { phi: 0, half: Math.PI, closed: true, a: len * 0.9, b: len * 1.0, top: 0.012, bevel: 0.006, nu: 28, nv: 8, groove: (_x, y, _W, H) => line(y - H * 0.5, 0.002, 0.004) }), M.gun));
       return g;
     },
+    /** One joint of a finger, `len` long down −Z from its knuckle, tapering `r0` to `r1`: round ends that overlap the next, a pad over its back (+Y). */
+    finger(len: number, r0: number, r1: number, pad = true): THREE.Group {
+      const g = new THREE.Group();
+      const p = new Path(
+        domed(
+          [
+            [0, 0, 0, r0 * 0.94, r0, 2.25],
+            [0, 0, -len * 0.5, (r0 + r1) * 0.46, (r0 + r1) * 0.49, 2.25],
+            [0, 0, -len, r1 * 0.92, r1, 2.2]
+          ],
+          true,
+          true
+        ),
+        V(0, 1, 0)
+      );
+      g.add(mesh(loft(p, { seg: 14, rows: 16 }), M.rubber));
+      if (pad) g.add(mesh(plate(p, { phi: 90 * D, half: 64 * D, a: 0.3, b: 0.7, axis: 'v', top: 0.0026, bevel: 0.005, nu: 10, nv: 8 }), M.gun));
+      return g;
+    },
     /** The glove's palm, in the hand's own frame: fingers toward −Z, the back of the hand +Y. */
     palm(): THREE.Group {
       const g = new THREE.Group();
       const p = new Path(
-        [
-          [0, 0, 0.012, 0.036, 0.03, 2.4],
-          [0, 0, -0.04, 0.046, 0.022, 2.8],
-          [0, 0, -0.085, 0.048, 0.019, 2.8],
-          [0, 0, -0.108, 0.044, 0.015, 2.6]
-        ],
+        domed(
+          [
+            [0, 0, 0.012, 0.037, 0.031, 2.4],
+            [0, 0, -0.035, 0.047, 0.024, 2.8],
+            [0, 0, -0.078, 0.05, 0.021, 3.0],
+            [0, 0, -0.1, 0.048, 0.017, 3.0]
+          ],
+          true,
+          true
+        ),
         new THREE.Quaternion().setFromUnitVectors(Y, V(0, 0, -1))
       );
-      g.add(mesh(loft(p, { seg: 22, rows: 18, capStart: true, capEnd: true }), M.rubber));
+      g.add(mesh(loft(p, { seg: 26, rows: 26 }), M.rubber));
       // A plate on the back of the hand, a guard over the knuckles, the clamp at the wrist
       g.add(mesh(plate(p, { phi: 0, half: 72 * D, a: -0.022, b: -0.082, axis: 'z', top: 0.007, bevel: 0.006, nu: 16, nv: 14, cut: cham(0.012, 0.012, 0.01, 0.01), groove: (x, _y, W) => line(x - W / 2, 0.002, 0.004) }), M.trim));
       g.add(mesh(plate(p, { phi: 0, half: 80 * D, a: -0.086, b: -0.108, axis: 'z', top: 0.008, bevel: 0.005, nu: 16, nv: 6 }), M.armor));

@@ -163,6 +163,24 @@ export class AudioManager {
   private musicTeardown: (() => void) | null = null;
 
   /** Must be called from a user gesture before any sound plays. */
+  /**
+   * ?mute keeps everything off the speakers. In a dev build it sticks: once a
+   * browser has loaded the game with ?mute it stays muted on every reload,
+   * whatever the URL, until it loads with ?unmute. Published builds only ever
+   * look at the URL.
+   */
+  static muted(): boolean {
+    const q = new URLSearchParams(location.search);
+    if (!import.meta.env.DEV) return q.has('mute');
+    try {
+      if (q.has('unmute')) localStorage.removeItem('ravi.devMute');
+      else if (q.has('mute')) localStorage.setItem('ravi.devMute', '1');
+      return localStorage.getItem('ravi.devMute') === '1';
+    } catch {
+      return q.has('mute');
+    }
+  }
+
   unlock(): void {
     if (this.ctx) {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
@@ -172,7 +190,7 @@ export class AudioManager {
     this.master = this.ctx.createGain();
     this.master.gain.value = this.masterVolume;
     // Dev convenience (?mute): everything runs, nothing reaches the speakers
-    if (!new URLSearchParams(location.search).has('mute')) this.master.connect(this.ctx.destination);
+    if (!AudioManager.muted()) this.master.connect(this.ctx.destination);
 
     this.sfxBus = this.ctx.createGain();
     this.sfxBus.gain.value = this.sfxVolume;

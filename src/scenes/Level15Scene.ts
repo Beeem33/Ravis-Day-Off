@@ -112,14 +112,9 @@ class SuitArms {
           const pivot = new THREE.Group();
           pivot.position.set(k === 0 ? x * sx : 0, 0, k === 0 ? z : -lens[k - 1]);
           parent.add(pivot);
-          const seg = new THREE.Mesh(new THREE.CapsuleGeometry(0.0115 - k * 0.0012, Math.max(0.002, len - 0.02), 4, 10), M.rubber);
-          seg.rotation.x = Math.PI / 2;
-          seg.position.z = -len / 2;
-          pivot.add(seg);
-          // A pad of plate on the back of each joint
-          const pad = new THREE.Mesh(new THREE.BoxGeometry(0.016 - k * 0.002, 0.004, Math.max(0.006, len - 0.014)), k === 0 ? M.trim : M.gun);
-          pad.position.set(0, 0.0105 - k * 0.001, -len / 2);
-          pivot.add(pad);
+          // A round, tapered joint with a curved pad over its back (none on the tip)
+          const r0 = 0.0118 - k * 0.0011;
+          pivot.add(P.finger(len, r0, r0 - 0.0011, k < 2));
           segs.push(pivot);
           parent = pivot;
           z = 0;
@@ -132,17 +127,11 @@ class SuitArms {
       t0.position.set(-0.042 * sx, -0.006, -0.035);
       t0.rotation.y = 0.75 * sx;
       glove.add(t0);
-      const ts0 = new THREE.Mesh(new THREE.CapsuleGeometry(0.013, 0.02, 4, 10), M.rubber);
-      ts0.rotation.x = Math.PI / 2;
-      ts0.position.z = -0.02;
-      t0.add(ts0);
+      t0.add(P.finger(0.04, 0.0145, 0.0128));
       const t1 = new THREE.Group();
       t1.position.z = -0.04;
       t0.add(t1);
-      const ts1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.012, 4, 10), M.rubber);
-      ts1.rotation.x = Math.PI / 2;
-      ts1.position.z = -0.016;
-      t1.add(ts1);
+      t1.add(P.finger(0.028, 0.0126, 0.011, false));
       thumb.push(t0, t1);
       return { upper, fore, elbow, rings, glove, fingers, thumb };
     };

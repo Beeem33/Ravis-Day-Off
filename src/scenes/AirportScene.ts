@@ -167,7 +167,7 @@ export class AirportScene implements GameScene {
     // Cologne: on the baggage cart's deck out on the hardstand past the runway edge
     {
       const face = this.apt(1, 0).sub(this.apt(0, 0));
-      Colognes.place(this.scene, 'haheed', this.apt(463.55, -60.5).setY(0.54), Math.atan2(face.x, face.z), () => (this.phase === 'drive' ? this.camera : null), { radius: 1.8 });
+      Colognes.place(this.scene, 'haheed', this.apt(463.55, -60.5).setY(0.54), Math.atan2(face.x, face.z), () => (this.phase === 'drive' ? this.camera : null), { radius: 1.8, auto: true });
     }
 
     this.net = new RoadNet(this.buildRoads());

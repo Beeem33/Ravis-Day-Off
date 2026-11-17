@@ -452,7 +452,7 @@ export class StreetScene implements GameScene {
       const f = this.net.sample('highway', 345);
       const at = f.pos.clone().addScaledVector(f.right, -10.4);
       at.y += 0.85;
-      Colognes.place(this.scene, 'curry', at, Math.atan2(f.right.x, f.right.z), () => (this.phase === 'drive' && this.shot === 'chase' ? this.camera : null), { radius: 2.0 });
+      Colognes.place(this.scene, 'curry', at, Math.atan2(f.right.x, f.right.z), () => (this.phase === 'drive' && this.shot === 'chase' ? this.camera : null), { radius: 2.0, auto: true });
     }
     // Light: a car to get round now and then, not a jam to thread
     this.traffic = new Traffic(this.net, {

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { FirstPersonArms, HAND, RaviVisual, grip, type Grip } from './RaviVisual';
 
 /**
  * The fourteen ultra-niche colognes: one hidden somewhere in each of fourteen
@@ -33,26 +35,28 @@ export type CologneId =
 export interface CologneInfo {
   id: CologneId;
   name: string;
+  /** What it smells of, read off the box while he looks it over. */
+  note?: string;
   /** Which level it's hidden in, for the menu ("Level 3"). */
   level: string;
 }
 
 /** In the order of the levels they're hidden in. */
 export const COLOGNES: CologneInfo[] = [
-  { id: 'keypad', name: 'Musty Keypad', level: 'Level 1' },
-  { id: 'scam', name: 'Scent of the Scam', level: 'Level 2' },
-  { id: 'declined', name: 'Declined Card on the Rocks', level: 'Level 3' },
-  { id: 'tikka', name: 'Tikka Tock', level: 'Level 4' },
-  { id: 'sweat', name: 'Sweat of Labour', level: 'Level 5' },
-  { id: 'davi', name: 'Davi Doff', level: 'Level 6' },
-  { id: 'delhi', name: 'Dior de Delhi', level: 'Level 7' },
-  { id: 'pit', name: 'Sinking Pit', level: 'Level 8' },
-  { id: 'deadbull', name: 'Deadbull', level: 'Level 9' },
-  { id: 'curry', name: 'Curry', level: 'Level 10' },
-  { id: 'haheed', name: 'Journey of Haheed', level: 'Level 11' },
-  { id: 'microsuf', name: 'Microsuf', level: 'Level 12' },
-  { id: 'pubjae', name: 'Pubjae', level: 'Level 13' },
-  { id: 'odore', name: 'Odoré', level: 'Level 14' }
+  { id: 'keypad', name: 'Musty Keypad', level: 'Level 1', note: 'Top notes of old phone buttons, desk dust and a 2007 handset.' },
+  { id: 'scam', name: 'Scent of the Scam', level: 'Level 2', note: 'Bergamot, crisp banknotes and the confidence of a man with a script.' },
+  { id: 'declined', name: 'Declined Card on the Rocks', level: 'Level 3', note: 'Smoked oak, ice, and the quiet beep of a card machine saying no.' },
+  { id: 'tikka', name: 'Tikka Tock', level: 'Level 4', note: 'Charred tikka, tick-tock, and the sense that time is running out.' },
+  { id: 'sweat', name: 'Sweat of Labour', level: 'Level 5', note: 'Honest work. Mostly sweat. A whisper of overtime.' },
+  { id: 'davi', name: 'Davi Doff', level: 'Level 6', note: 'Leather chair, corner office, a raise you will never get.' },
+  { id: 'delhi', name: 'Dior de Delhi', level: 'Level 7', note: 'Marigold, monsoon rain, and an auntie asking when you will marry.' },
+  { id: 'pit', name: 'Sinking Pit', level: 'Level 8', note: 'Wet stone, rusty ladder, and regret, deep down.' },
+  { id: 'deadbull', name: 'Deadbull', level: 'Level 9', note: 'Taurine, adrenaline, and a heartbeat you can hear.' },
+  { id: 'curry', name: 'Curry', level: 'Level 10', note: 'Butter chicken. That is it. That is the whole scent.' },
+  { id: 'haheed', name: 'Journey of Haheed', level: 'Level 11', note: 'Jet fuel, duty-free, and a long journey somewhere warm.' },
+  { id: 'microsuf', name: 'Microsuf', level: 'Level 12', note: 'Fresh install, warm plastic, and a forced restart.' },
+  { id: 'pubjae', name: 'Pubjae', level: 'Level 13', note: 'Gunpowder, a frying pan, and a winner winner.' },
+  { id: 'odore', name: 'Odoré', level: 'Level 14', note: 'It smells exactly like the word "Odoré" sounds.' }
 ];
 
 const KEY = 'ravi.colognes';
@@ -69,6 +73,7 @@ interface Placed {
   t: number;
   /** Where the camera was last frame: a car going past at speed is checked along its path. */
   last: THREE.Vector3 | null;
+  auto: boolean;
   /** Riding on something that moves (a parked car): its pose each frame, and where on it. */
   follow?: (pos: THREE.Vector3, quat: THREE.Quaternion) => boolean;
   local?: THREE.Vector3;
@@ -78,6 +83,8 @@ interface Placed {
 export interface PlaceOptions {
   /** Reach from the camera to the middle of the bottle (default 1.3 m). */
   radius?: number;
+  /** Taken just by going past (the driving levels), rather than with E. */
+  auto?: boolean;
   /** The bottle rides on whatever this reports the pose of (it stays where it is on it). */
   follow?: (pos: THREE.Vector3, quat: THREE.Quaternion) => boolean;
 }
@@ -156,7 +163,7 @@ class CologneHunt {
     glint.scale.setScalar(0.09);
     glint.position.set(0.018, 0.11, 0.02);
     group.add(glint);
-    const p: Placed = { id, group, glint, centre: at.clone().add(new THREE.Vector3(0, 0.07, 0)), camera, radius, t: Math.random() * 3, last: null };
+    const p: Placed = { id, group, glint, centre: at.clone().add(new THREE.Vector3(0, 0.07, 0)), camera, radius, t: Math.random() * 3, last: null, auto: !!opts.auto };
     if (opts.follow) {
       // Pinned to the thing's frame where it is now
       const pos = new THREE.Vector3();
@@ -174,9 +181,49 @@ class CologneHunt {
   clear(): void {
     for (const p of this.placed) p.group.removeFromParent();
     this.placed = [];
+    if (this.held) {
+      // Changed level mid-look: it still counts
+      const id = this.held.id;
+      this.held.group.removeFromParent();
+      this.held = null;
+      this.view?.card.classList.remove('show');
+      this.collect(id);
+    }
+    this.near = null;
+    this.prompt?.classList.remove('show');
   }
 
+  // ------------------------------------------------- reaching for one
+
+  private prompt: HTMLElement | null = null;
+  private near: Placed | null = null;
+  private keyBound = false;
+  /** The one in his hand right now, and how long he's been looking at it. */
+  private held: { id: CologneId; group: THREE.Group; t: number } | null = null;
+  private view: {
+    scene: THREE.Scene;
+    cam: THREE.PerspectiveCamera;
+    holder: THREE.Group;
+    arms: FirstPersonArms | null;
+    grip: Grip;
+    card: HTMLElement;
+  } | null = null;
+
+  private onKey = (e: KeyboardEvent): void => {
+    if (e.code !== 'KeyE' || e.repeat || this.held || !this.near) return;
+    const p = this.near;
+    this.near = null;
+    this.placed.splice(this.placed.indexOf(p), 1);
+    this.inspect(p);
+  };
+
   update(dt: number): void {
+    if (!this.keyBound) {
+      this.keyBound = true;
+      document.addEventListener('keydown', this.onKey);
+    }
+    let near: Placed | null = null;
+    let nearD = Infinity;
     for (let i = this.placed.length - 1; i >= 0; i--) {
       const p = this.placed[i];
       // A glint off the glass every few seconds, so a sharp eye can spot it
@@ -199,14 +246,139 @@ class CologneHunt {
         continue;
       }
       const eye = cam.getWorldPosition(new THREE.Vector3());
-      const prev = p.last && p.last.distanceTo(eye) < 6 ? p.last : eye;
-      p.last = eye;
-      if (segDist(p.centre, prev, eye) <= p.radius) {
-        this.placed.splice(i, 1);
-        p.group.removeFromParent();
-        this.collect(p.id);
+      if (p.auto) {
+        // Driving past: taken on the way by
+        const prev = p.last && p.last.distanceTo(eye) < 6 ? p.last : eye;
+        p.last = eye;
+        if (segDist(p.centre, prev, eye) <= p.radius) {
+          this.placed.splice(i, 1);
+          p.group.removeFromParent();
+          this.collect(p.id);
+        }
+        continue;
+      }
+      // On foot: close enough to reach, and he's looking its way
+      const d = eye.distanceTo(p.centre);
+      if (d > p.radius + 0.35 || this.held) continue;
+      const fwd = cam.getWorldDirection(new THREE.Vector3());
+      const to = p.centre.clone().sub(eye).normalize();
+      if (fwd.dot(to) < 0.5) continue;
+      if (d < nearD) {
+        nearD = d;
+        near = p;
       }
     }
+    this.near = near;
+    this.showPrompt(near);
+    if (this.held) this.stepInspect(dt);
+  }
+
+  private showPrompt(p: Placed | null): void {
+    if (!this.uiRoot) return;
+    if (!this.prompt) {
+      this.prompt = document.createElement('div');
+      this.prompt.className = 'cologne-prompt';
+      this.uiRoot.appendChild(this.prompt);
+    }
+    if (!this.prompt.isConnected) this.uiRoot.appendChild(this.prompt);
+    if (p) {
+      const name = COLOGNES.find((c) => c.id === p.id)!.name;
+      const html = `<span class="key">E</span> TAKE THE COLOGNE  <b>${name.toUpperCase()}</b>`;
+      if (this.prompt.innerHTML !== html) this.prompt.innerHTML = html;
+    }
+    this.prompt.classList.toggle('show', !!p);
+  }
+
+  /** He picks it up: into his left hand, up in front of him, turned to the light. */
+  private inspect(p: Placed): void {
+    const v = this.ensureView();
+    p.group.removeFromParent();
+    p.group.position.set(0, 0, 0);
+    p.group.rotation.set(0, 0, 0);
+    p.group.quaternion.identity();
+    p.glint.visible = false;
+    v.holder.add(p.group);
+    this.held = { id: p.id, group: p.group, t: 0 };
+    this.audio?.pocket();
+    const info = COLOGNES.find((c) => c.id === p.id)!;
+    v.card.innerHTML = `<div class="ci-name">${info.name}</div><div class="ci-sub">an ultra-niche cologne</div><div class="ci-note">${info.note ?? ''}</div>`;
+    v.card.classList.add('show');
+    if (this.uiRoot && !v.card.isConnected) this.uiRoot.appendChild(v.card);
+  }
+
+  private ensureView(): NonNullable<CologneHunt['view']> {
+    if (this.view) return this.view;
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight(0xfff4e0, 0x404050, 1.1));
+    const key = new THREE.DirectionalLight(0xffffff, 2.2);
+    key.position.set(-1, 2, 2);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0xffd9a0, 1.4);
+    rim.position.set(2, 1, -1.5);
+    scene.add(rim);
+    const cam = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 10);
+    scene.add(cam);
+    const holder = new THREE.Group();
+    cam.add(holder);
+    // His left hand round the bottle's lower half: palm on its side, fingers
+    // curled round the front, the forearm running back down to his shoulder
+    const hold = grip([-0.05, 0.012, 0.012], [0.3, 0.22, -0.93], [1, 0.05, 0.15], [-0.5, -0.55, 0.67], {
+      fingers: [[55, 62, 38], [60, 66, 40], [64, 68, 42], [68, 70, 44]],
+      thumb: [0.6, 0.45, 0.3],
+      spread: 2
+    });
+    let arms: FirstPersonArms | null = null;
+    if (RaviVisual.ready) {
+      arms = new FirstPersonArms(holder, cam).set('l', holder, hold);
+    }
+    const card = document.createElement('div');
+    card.className = 'cologne-inspect';
+    this.view = { scene, cam, holder, arms, grip: hold, card };
+    return this.view;
+  }
+
+  private stepInspect(dt: number): void {
+    const h = this.held!;
+    const v = this.view!;
+    h.t += dt;
+    const T = 3.6;
+    const t = h.t;
+    // Up from low on the left, held, then down out of sight
+    const up = Math.min(1, t / 0.5);
+    const e = 1 - Math.pow(1 - up, 3);
+    const down = t > T - 0.45 ? Math.min(1, (t - (T - 0.45)) / 0.45) : 0;
+    const d = down * down;
+    v.holder.position.set(-0.32 + 0.3 * e + 0.05 * d, -0.42 + 0.33 * e - 0.4 * d, -0.42);
+    // Turned this way and that in the light, tipped back a touch
+    const look = Math.max(0, Math.min(1, (t - 0.4) / 0.6));
+    v.holder.rotation.set(-0.12 + Math.sin(t * 1.3) * 0.06, -0.35 + look * (0.35 + Math.sin((t - 0.4) * 1.6) * 0.7), 0.06 + Math.sin(t * 0.9) * 0.05);
+    if (t >= T) {
+      h.group.removeFromParent();
+      this.held = null;
+      v.card.classList.remove('show');
+      this.collect(h.id);
+    }
+  }
+
+  /** Drawn over the frame while he's looking at one (the engine calls this after the scene). */
+  renderOverlay(renderer: THREE.WebGLRenderer): void {
+    if (!this.held || !this.view) return;
+    const v = this.view;
+    if (!v.scene.environment) {
+      const pm = new THREE.PMREMGenerator(renderer);
+      v.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+      pm.dispose();
+    }
+    const c = renderer.domElement;
+    v.cam.aspect = c.width / c.height;
+    v.cam.updateProjectionMatrix();
+    v.cam.updateMatrixWorld(true);
+    v.arms?.update();
+    const auto = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(v.scene, v.cam);
+    renderer.autoClear = auto;
   }
 
   private collect(id: CologneId): void {

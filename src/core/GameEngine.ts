@@ -217,6 +217,7 @@ export class GameEngine {
         this.scene.update(dt * this.timeScale, this.elapsed);
         Colognes.update(dt * this.timeScale);
         this.scene.render(this.renderer);
+        Colognes.renderOverlay(this.renderer);
       }
       // The card comes down a frame after the scene has drawn once, so the
       // warm-up hitch lands underneath it rather than in front of the player.

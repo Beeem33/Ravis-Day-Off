@@ -3076,6 +3076,37 @@ export class HitmanVisual {
    * One of the floor's staff, off shift and his own man (staff only): his
    * cap on or off (his hair under it), the shirt he came in, glasses.
    */
+  /** Something worn on a bone, placed in the model's rest space (a hat, a haircut). */
+  wear(o: THREE.Object3D, bone = 'Head'): void {
+    this.hang(o, bone);
+  }
+
+  /** Show one of the model's hairstyles (Hair_<style>), or none. */
+  setHair(style: string | null): void {
+    this.model.traverse((x) => {
+      const m = x as THREE.Mesh;
+      if (!m.isMesh) return;
+      const n = m.name.startsWith('Hair_') ? m.name : x.parent?.name.startsWith('Hair_') ? x.parent.name : '';
+      if (n) m.visible = n.slice(5) === style;
+    });
+  }
+
+  /**
+   * Nothing on but paint: every bit of clothing and both hands one flat
+   * colour, the buttons and the cap gone — the face, eyes, brows and hair
+   * left as they are.
+   */
+  mannequin(color: number): void {
+    const paint = new THREE.MeshStandardMaterial({ name: 'HM_Mannequin', color, roughness: 0.55 });
+    this.model.traverse((x) => {
+      const m = x as THREE.Mesh;
+      if (x.name === 'HitmanCap') x.visible = false;
+      if (!m.isMesh) return;
+      if (m.name === 'HitmanButtons') m.visible = false;
+      else if (m.name.startsWith('HitmanBody')) m.material = Array.isArray(m.material) ? m.material.map(() => paint) : paint;
+    });
+  }
+
   restyleCrew(o: { cap?: boolean; shirt?: number; glasses?: boolean }): void {
     const H = HitmanVisual;
     if (o.cap === false) {

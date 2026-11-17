@@ -1,14 +1,15 @@
 import { ScamMe } from './ScamMe';
 
 /**
- * The files on Ravi's desktop in Level 1, and the apps that open them.
+ * The files and apps on Ravi's desktop in Level 1, and what opens them.
  *
- * Ten things he should not have left on a work PC: a diary, a crypto pitch, a
- * budget in freefall, a dance rehearsal, a Diwali photo, a "free RAM"
- * download, a marriage biodata his mother has been editing, a "tax" folder
- * full of memes, the family group chat, and his ranked list of leave excuses.
+ *  - ScamMe, the office group chat
+ *  - Mail, with Maheer's haircut email (and the photo attached)
+ *  - A classified case file: the team photo, and the man nobody knows
+ *  - "Micheals Day Off game (pirated)", which is mostly pop-up ads
+ *  - The FREE RAM downloader
  *
- * Each viewer draws itself into the window's content rect on the PC's canvas
+ * Each viewer draws itself into its window's content rect on the PC's canvas
  * and registers its own hotspots through the DeskCtx the desktop hands it.
  */
 
@@ -37,6 +38,8 @@ export interface DeskCtx {
   open(id: FileId): void;
   close(): void;
   say(title: string, body: string): void;
+  /** How many windows are open whose app id starts with `prefix`. */
+  count(prefix: string): number;
 }
 
 export interface Viewer {
@@ -45,24 +48,9 @@ export interface Viewer {
   key?(e: KeyboardEvent, c: DeskCtx): boolean;
 }
 
-export type FileId =
-  | 'diary'
-  | 'excuses'
-  | 'biodata'
-  | 'budget'
-  | 'pitch'
-  | 'dance'
-  | 'diwali'
-  | 'chat'
-  | 'tax'
-  | 'ram'
-  | 'meme1'
-  | 'meme2'
-  | 'meme3'
-  | 'taxtxt'
-  | 'scamme';
+export type FileId = 'scamme' | 'mail' | 'classified' | 'game' | 'ram' | 'maheerpic' | `ad${number}`;
 
-type IconKind = 'txt' | 'doc' | 'xls' | 'ppt' | 'mp4' | 'jpg' | 'exe' | 'folder' | 'html' | 'scamme';
+type IconKind = 'txt' | 'doc' | 'xls' | 'ppt' | 'mp4' | 'jpg' | 'exe' | 'folder' | 'html' | 'scamme' | 'mail' | 'secret' | 'game' | 'ad';
 
 export interface FileDef {
   id: FileId;
@@ -73,40 +61,67 @@ export interface FileDef {
   title: string;
   w: number;
   h: number;
+  /** Where its window opens, if not cascaded in the middle. */
+  x?: number;
+  y?: number;
 }
 
 const FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
-const MONO = 'Consolas, "Courier New", monospace';
 const IMPACT = 'Impact, "Arial Black", sans-serif';
 
+/** The two photos taken in the game (see OfficePhotos), once they exist. */
+export const PHOTOS: {
+  team: HTMLCanvasElement | null;
+  stranger: { x: number; y: number; r: number } | null;
+  maheer: HTMLCanvasElement | null;
+} = { team: null, stranger: null, maheer: null };
+
 export const FILES: FileDef[] = [
-  { id: 'diary', name: 'Dear_Diary_DO_NOT_READ_MUMMY.txt', label: ['Dear_Diary_DO_', 'NOT_READ_', 'MUMMY.txt'], icon: 'txt', title: 'Dear_Diary_DO_NOT_READ_MUMMY.txt — Notepad', w: 780, h: 600 },
-  { id: 'excuses', name: 'Leave_Excuses_MASTERLIST.txt', label: ['Leave_Excuses_', 'MASTERLIST.txt'], icon: 'txt', title: 'Leave_Excuses_MASTERLIST.txt — Notepad', w: 820, h: 600 },
-  { id: 'biodata', name: 'Rishta_Biodata_Ravi (edited by Mummy).docx', label: ['Rishta_Biodata_', 'Ravi (edited', 'by Mummy).docx'], icon: 'doc', title: 'Rishta_Biodata_Ravi (edited by Mummy).docx — Word', w: 980, h: 700 },
-  { id: 'budget', name: 'Monthly_Budget_FINAL.xlsx', label: ['Monthly_Budget_', 'FINAL.xlsx'], icon: 'xls', title: 'Monthly_Budget_FINAL.xlsx — Excel', w: 1000, h: 640 },
-  { id: 'pitch', name: 'CurryCoin_Investor_Pitch_v7_FINAL.pptx', label: ['CurryCoin_', 'Investor_Pitch_', 'v7_FINAL.pptx'], icon: 'ppt', title: 'CurryCoin_Investor_Pitch_v7_FINAL.pptx — PowerPoint', w: 940, h: 640 },
-  { id: 'dance', name: 'Ravi_Dance_Practice_Bunty_Wedding.mp4', label: ['Ravi_Dance_', 'Practice_Bunty_', 'Wedding.mp4'], icon: 'mp4', title: 'Ravi_Dance_Practice_Bunty_Wedding.mp4 — Media Player', w: 880, h: 600 },
-  { id: 'diwali', name: 'Family_Photo_Diwali_2025.jpg', label: ['Family_Photo_', 'Diwali_2025.jpg'], icon: 'jpg', title: 'Family_Photo_Diwali_2025.jpg — Photos', w: 940, h: 640 },
-  { id: 'chat', name: 'PARIVAAR_group_chat_backup.html', label: ['PARIVAAR_group_', 'chat_backup.html'], icon: 'html', title: 'PARIVAAR_group_chat_backup.html — Googel Chrome', w: 720, h: 700 },
-  { id: 'tax', name: 'Tax Documents 2025 (DO NOT OPEN)', label: ['Tax Documents', '2025 (DO NOT', 'OPEN)'], icon: 'folder', title: 'Tax Documents 2025 (DO NOT OPEN)', w: 800, h: 480 },
+  { id: 'scamme', name: 'ScamMe', label: ['ScamMe'], icon: 'scamme', title: 'ScamMe — Office Chat', w: 960, h: 700 },
+  { id: 'mail', name: 'Mail', label: ['Mail'], icon: 'mail', title: 'Inbox — ravi@ravicorp.biz — Mail', w: 1040, h: 680 },
+  { id: 'classified', name: 'CLASSIFIED_Case_0447_Exhibit_A.pdf', label: ['CLASSIFIED_', 'Case_0447_', 'Exhibit_A.pdf'], icon: 'secret', title: 'CLASSIFIED_Case_0447_Exhibit_A.pdf — PDF Viewer', w: 900, h: 720 },
+  { id: 'game', name: 'Micheals Day Off game (pirated)', label: ['Micheals Day Off', 'game (pirated)'], icon: 'game', title: "Micheal's Day Off  [CRACKED BY xX_R4V1_Xx]", w: 860, h: 560 },
   { id: 'ram', name: 'FREE_RAM_DOWNLOADER_100GB_REAL_NOT_VIRUS.exe', label: ['FREE_RAM_', 'DOWNLOADER_', '100GB_REAL.exe'], icon: 'exe', title: 'RAM Downloader Pro 4.2 Setup', w: 700, h: 470 },
-  // Inside the "tax" folder
-  { id: 'meme1', name: 'when_manager_says_quick_call.jpg', label: [], icon: 'jpg', title: 'when_manager_says_quick_call.jpg — Photos', w: 700, h: 600 },
-  { id: 'meme2', name: 'relatives_asking_what_i_do.jpg', label: [], icon: 'jpg', title: 'relatives_asking_what_i_do.jpg — Photos', w: 700, h: 600 },
-  { id: 'meme3', name: 'sharma_ji_ka_beta_vs_me.jpg', label: [], icon: 'jpg', title: 'sharma_ji_ka_beta_vs_me.jpg — Photos', w: 820, h: 560 },
-  { id: 'taxtxt', name: 'actual_taxes.txt', label: [], icon: 'txt', title: 'actual_taxes.txt — Notepad', w: 600, h: 400 },
-  { id: 'scamme', name: 'ScamMe', label: ['ScamMe'], icon: 'scamme', title: 'ScamMe — Office Chat', w: 960, h: 700 }
+  { id: 'maheerpic', name: 'IMG_2231.jpg', label: [], icon: 'jpg', title: 'IMG_2231.jpg — Photos', w: 820, h: 620 }
 ];
 
 /** On the desktop, in this order, down the columns. */
-export const DESKTOP_FILES: FileId[] = ['scamme', 'diary', 'excuses', 'biodata', 'budget', 'pitch', 'dance', 'diwali', 'chat', 'tax', 'ram'];
+export const DESKTOP_FILES: FileId[] = ['scamme', 'mail', 'classified', 'game', 'ram'];
+
+// ---- The pop-up ads: one window each, made up on the spot
+type Brand = 'mccarls' | 'sludger' | 'harpees';
+const BRANDS: Brand[] = ['mccarls', 'sludger', 'harpees'];
+const BRAND_NAME: Record<Brand, string> = { mccarls: "McCarl's", sludger: 'Sludger King', harpees: "Harpee's" };
+let adSeq = 0;
+const adDefs = new Map<FileId, FileDef>();
+
+/** A new pop-up ad's id, with a size and a spot on the screen. */
+export function newAd(): FileId {
+  const id = `ad${adSeq++}` as FileId;
+  const n = adSeq;
+  const brand = BRANDS[n % 3];
+  const w = 360 + ((n * 53) % 110);
+  const h = 290 + ((n * 37) % 70);
+  const x = 30 + ((n * 211) % (1200 - w - 60));
+  const y = 10 + ((n * 137) % (800 - 56 - h - 20));
+  adDefs.set(id, { id, name: '', label: [], icon: 'ad', title: `${BRAND_NAME[brand]} — SPECIAL OFFER!!! — Googel Chrome`, w, h, x, y });
+  return id;
+}
+
+function adBrand(id: FileId): Brand {
+  return BRANDS[(Number(id.slice(2)) + 1) % 3];
+}
 
 export function fileDef(id: FileId): FileDef {
-  return FILES.find((f) => f.id === id)!;
+  return adDefs.get(id) ?? FILES.find((f) => f.id === id)!;
 }
 
 export function isFile(app: string): app is FileId {
-  return FILES.some((f) => f.id === app);
+  return FILES.some((f) => f.id === app) || adDefs.has(app as FileId);
+}
+
+export function isAd(app: string): boolean {
+  return /^ad\d+$/.test(app);
 }
 
 // =================================================================== helpers
@@ -181,7 +196,7 @@ class Scroller {
 
 // ===================================================================== icons
 
-export function drawFileIcon(g: CanvasRenderingContext2D, kind: IconKind, x: number, y: number, s: number): void {
+function drawPageIcon(g: CanvasRenderingContext2D, kind: IconKind, x: number, y: number, s: number): void {
   const w = s * 0.78;
   const h = s;
   if (kind === 'folder') {
@@ -292,1291 +307,639 @@ export function drawFileIcon(g: CanvasRenderingContext2D, kind: IconKind, x: num
   for (let i = 0; i < 4; i++) g.fillRect(x + w * 0.6, y + h * (0.46 + i * 0.1), w * 0.3, Math.max(1.5, h * 0.03));
 }
 
-// =================================================================== Notepad
 
-const DIARY = `DEAR DIARY  (PRIVATE!!!  MUMMY, THIS MEANS YOU)
-===============================================
+// ================================================================ new icons
 
-MONDAY
-Mummy called 4 times before 9 AM. Topics covered:
-  1. Did I eat
-  2. Did I eat PROPERLY
-  3. Sharma ji's son got promoted to "Senior Vice Associate"
-  4. Did I eat
-Told her I am also a Senior Associate. She asked "of what". I hung up.
-
-TUESDAY
-Priya from the front desk said "good morning" today.
-Unclear if she said it to me or to the printer.
-The printer did not reply. Taking this as a win.
-
-WEDNESDAY
-Ate the last samosa in the break room.
-There is now a note on the fridge: "WHOEVER ATE THE SAMOSA, GOD IS WATCHING."
-God has not said anything yet. Gary has. Gary is not God.
-
-THURSDAY
-Manager said "quick call" at 4:55 PM.
-The call ended at 7:40 PM.
-There is no such thing as a quick call. There is only suffering.
-
-FRIDAY
-Booked my DAY OFF. First one in 14 months.
-THE PLAN:
-  - sleep till 11
-  - Mummy's rajma chawal
-  - India match on TV
-  - NO phone, NO calls, NO drama
-What could possibly go wrong.
-
-SATURDAY  (day off)
-Manager called. "Small favour, 10 minutes only, just sign one document."
-I am at the office.
-The day off is now "day off (pending)".
-
-P.S. If anybody finds this diary: I was framed. For everything.
-P.P.S. Mummy if this is you, the rajma was very good. Please close this file.`;
-
-const EXCUSES = `LEAVE EXCUSES — MASTER LIST            (updated after every rejection)
-Rating:  ★ = rejected on the spot    ★★★★★ = got the day off
--------------------------------------------------------------------
-
- 1. Grandmother's funeral ............................... ★★★★★
-      Used 6 times. Dadi is alive and active in the family group.
-      She sends "🙏" every morning at 5 AM. Manager has not noticed.
-
- 2. "Stomach issue" ...................................... ★★★★
-      Manager never asks a follow-up question. Never. Not once.
-
- 3. Cousin's wedding ..................................... ★★★
-      Have now used 11 cousins. I have 9 cousins.
-
- 4. "Internet is down at home" ........................... ★
-      Manager: "Then come to the office. The internet is here."
-
- 5. India vs Pakistan match .............................. ★★★★★
-      Manager also took leave. Saw him in the stadium, face painted.
-      We made eye contact. We do not speak of it.
-
- 6. Astrologer says Saturn is in a bad position ........... ★★
-      Manager: "Saturn is not your manager. I am your manager."
-
- 7. Mummy's orders ....................................... ★★★★
-      Nobody argues with a mother. Not even HR.
-
- 8. Power cut ............................................ ★
-      Called from the office landline. Rookie mistake.
-
- 9. "My Wi-Fi password expired" ........................... ★
-      This is not a thing. I know that now.
-
-10. The honest reason ("I am tired") ...................... ✗
-      Never tried. Too dangerous.
-
--------------------------------------------------------------------
-NEXT TIME: ask 3 weeks in advance, in writing, on a Monday, after
-bringing laddoos for the whole floor.
-Expected success rate: 40%.  With kaju katli: 55%.`;
-
-const TAXES = `ACTUAL TAXES 2025
-
-lol
-
-(ask Papa)`;
-
-class Notepad implements Viewer {
-  private s = new Scroller();
-  private lines: string[] = [];
-  private width = -1;
-  constructor(private body: string, private id: FileId) {}
-
-  draw(c: DeskCtx, r: Rect): void {
-    const g = c.g;
+export function drawFileIcon(g: CanvasRenderingContext2D, kind: IconKind, x: number, y: number, s: number): void {
+  if (kind === 'mail') {
+    // An envelope on a blue tile
+    g.fillStyle = '#0f62c4';
+    rr(g, x, y + s * 0.06, s * 0.92, s * 0.88, s * 0.2);
+    g.fill();
     g.fillStyle = '#ffffff';
-    g.fillRect(r.x, r.y, r.w, r.h);
-    // Menu bar
-    g.fillStyle = '#f7f7f7';
-    g.fillRect(r.x, r.y, r.w, 30);
-    ['File', 'Edit', 'View'].forEach((m, i) => {
-      const mr = { x: r.x + 8 + i * 56, y: r.y + 3, w: 50, h: 24 };
-      if (c.hoverId === `${this.id}:m${i}`) {
-        g.fillStyle = '#e5e5e5';
-        rr(g, mr.x, mr.y, mr.w, mr.h, 4);
-        g.fill();
-      }
-      text(g, m, mr.x + 25, r.y + 20, `400 14px ${FONT}`, '#1f1f1f', 'center');
-      c.hot(mr, `${this.id}:m${i}`, { down: () => c.say(m, 'Menus are view-only on this device. Like your career.') });
-    });
-    const area = { x: r.x, y: r.y + 31, w: r.w, h: r.h - 31 - 26 };
-    g.font = `400 16px ${MONO}`;
-    if (this.width !== area.w) {
-      this.width = area.w;
-      this.lines = this.body.split('\n').flatMap((l) => {
-        const lead = l.match(/^ */)![0];
-        return wrap(g, l.trimStart(), area.w - 40 - g.measureText(lead).width).map((w2) => lead + w2);
-      });
-    }
-    const lh = 21;
-    const content = this.lines.length * lh + 20;
-    this.s.step(c.dt, content, area.h);
-    clipTo(g, area);
-    g.fillStyle = '#1f1f1f';
-    this.lines.forEach((l, i) => {
-      const y = area.y + 22 + i * lh - this.s.y;
-      if (y > area.y - lh && y < area.y + area.h + lh) g.fillText(l, area.x + 14, y);
-    });
+    g.fillRect(x + s * 0.16, y + s * 0.3, s * 0.6, s * 0.4);
+    g.strokeStyle = '#0f62c4';
+    g.lineWidth = Math.max(1.5, s * 0.05);
+    g.beginPath();
+    g.moveTo(x + s * 0.16, y + s * 0.3);
+    g.lineTo(x + s * 0.46, y + s * 0.52);
+    g.lineTo(x + s * 0.76, y + s * 0.3);
+    g.stroke();
+    // An unread count
+    g.fillStyle = '#e74c3c';
+    g.beginPath();
+    g.arc(x + s * 0.84, y + s * 0.14, s * 0.15, 0, Math.PI * 2);
+    g.fill();
+    text(g, '5', x + s * 0.84, y + s * 0.2, `700 ${Math.round(s * 0.2)}px ${FONT}`, '#ffffff', 'center');
+    return;
+  }
+  if (kind === 'secret') {
+    drawPageIcon(g, 'txt', x, y, s);
+    g.save();
+    g.translate(x + s * 0.39, y + s * 0.6);
+    g.rotate(-0.35);
+    g.strokeStyle = '#c0392b';
+    g.lineWidth = Math.max(1.5, s * 0.04);
+    g.strokeRect(-s * 0.42, -s * 0.11, s * 0.84, s * 0.22);
+    text(g, 'SECRET', 0, s * 0.07, `900 ${Math.round(s * 0.17)}px ${FONT}`, '#c0392b', 'center');
     g.restore();
-    scrollbar(g, area, this.s.y, content);
-    c.hot(area, `${this.id}:text`, { wheel: (dy) => this.s.by(dy) });
-    // Status bar
-    g.fillStyle = '#f3f3f3';
-    g.fillRect(r.x, r.y + r.h - 26, r.w, 26);
-    text(g, `Ln ${1 + Math.floor(this.s.y / lh)}, Col 1      100%      Windows (CRLF)      UTF-8`, r.x + r.w - 16, r.y + r.h - 8, `400 13px ${FONT}`, '#555', 'right');
+    return;
   }
-
-  key(e: KeyboardEvent): boolean {
-    if (e.code === 'ArrowDown' || e.code === 'KeyS') this.s.by(42);
-    else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.s.by(-42);
-    else if (e.code === 'PageDown' || e.code === 'Space') this.s.by(300);
-    else if (e.code === 'PageUp') this.s.by(-300);
-    else return false;
-    return true;
+  if (kind === 'game') {
+    // A box-art tile: sunset, a hammock, a skull-and-crossbones sticker
+    const gr = g.createLinearGradient(0, y, 0, y + s);
+    gr.addColorStop(0, '#ff8a3d');
+    gr.addColorStop(1, '#7a2a8a');
+    g.fillStyle = gr;
+    rr(g, x + s * 0.04, y, s * 0.84, s, s * 0.08);
+    g.fill();
+    g.fillStyle = '#ffd34d';
+    g.beginPath();
+    g.arc(x + s * 0.46, y + s * 0.5, s * 0.16, 0, Math.PI * 2);
+    g.fill();
+    text(g, "MICHEAL'S", x + s * 0.46, y + s * 0.2, `900 ${Math.round(s * 0.14)}px ${IMPACT}`, '#ffffff', 'center');
+    text(g, 'DAY OFF', x + s * 0.46, y + s * 0.33, `900 ${Math.round(s * 0.14)}px ${IMPACT}`, '#ffffff', 'center');
+    g.fillStyle = '#111';
+    g.beginPath();
+    g.arc(x + s * 0.74, y + s * 0.84, s * 0.15, 0, Math.PI * 2);
+    g.fill();
+    text(g, '☠', x + s * 0.74, y + s * 0.9, `${Math.round(s * 0.2)}px ${FONT}`, '#ffffff', 'center');
+    return;
   }
+  if (kind === 'ad') {
+    g.fillStyle = '#e74c3c';
+    g.beginPath();
+    g.arc(x + s / 2, y + s / 2, s / 2, 0, Math.PI * 2);
+    g.fill();
+    text(g, '!', x + s / 2, y + s * 0.72, `900 ${Math.round(s * 0.6)}px ${FONT}`, '#ffffff', 'center');
+    return;
+  }
+  drawPageIcon(g, kind, x, y, s);
 }
 
-// ======================================================= Word: the biodata
+// =================================================================== Mail
 
-type Run = { t: string; del?: boolean; ins?: boolean; b?: boolean; i?: boolean };
-type Para = { runs: Run[]; size?: number; center?: boolean; gap?: number; note?: string };
+interface Email {
+  from: string;
+  addr: string;
+  subject: string;
+  time: string;
+  body: string[];
+  attach?: boolean;
+  col: string;
+}
 
-const BIODATA: Para[] = [
-  { runs: [{ t: '✿  MARRIAGE BIODATA  ✿', b: true }], size: 26, center: true, gap: 6 },
-  { runs: [{ t: 'Prepared by: Ravi. ', i: true }, { t: 'Improved', ins: true, i: true }, { t: ' by: Mummy.', ins: true, i: true }], center: true, size: 14, gap: 18 },
-  { runs: [{ t: 'Name: ', b: true }, { t: 'Ravi' }] },
-  { runs: [{ t: 'Height: ', b: true }, { t: "5' 6\"", del: true }, { t: " 5' 11\" (with shoes, standing on the stairs)", ins: true }], note: 'Mummy: Nobody measures. Trust me.' },
-  { runs: [{ t: 'Education: ', b: true }, { t: 'B.Com (second attempt)', del: true }, { t: ' B.Com (with Distinction*)', ins: true }], note: 'Ravi: what distinction?   Mummy: *distinctly remembered' },
-  { runs: [{ t: 'Occupation: ', b: true }, { t: 'Call centre, night shift', del: true }, { t: ' International Customer Relations Executive (Technology Sector, Global Clients)', ins: true }] },
-  { runs: [{ t: 'Salary: ', b: true }, { t: '₹32,000 / month', del: true }, { t: ' Confidential (very good)', ins: true }] },
-  { runs: [{ t: 'Hobbies: ', b: true }, { t: 'Gaming, sleeping, curry, more sleeping', del: true }, { t: ' Reading, yoga, classical music, helping elders cross the road', ins: true }], note: 'Ravi: I have never done yoga.   Mummy: You bent down to tie your shoe on Tuesday. Yoga.' },
-  { runs: [{ t: 'Habits: ', b: true }, { t: 'No smoking, no drinking, ' }, { t: '4 cans of Deadbull a day', del: true }, { t: ' only coconut water', ins: true }] },
-  { runs: [{ t: 'Cooking: ', b: true }, { t: 'Maggi', del: true }, { t: ' Expert in all cuisines (has watched MasterChef)', ins: true }] },
-  { runs: [{ t: 'Family: ', b: true }, { t: 'Papa (retired, watches the news at full volume), Mummy (homemaker, CEO of everything), Dadi (very active in WhatsApp), dog: Tiger (good boy)' }] },
-  { runs: [{ t: 'Looking for: ', b: true }, { t: 'Someone who also likes video games', del: true }, { t: ' Homely, educated, well-settled, knows cooking, from a good family, respects elders, likes long walks to the temple', ins: true }, { t: ' — and who will laugh at my jokes', b: true }], note: 'Mummy: Delete the last line.   Ravi: No.   Mummy: Ravi.   Ravi: It stays.' },
-  { runs: [{ t: 'Contact: ', b: true }, { t: "Ravi's mobile", del: true }, { t: " Mummy's mobile ONLY. Do not call Ravi, he will say something.", ins: true }], gap: 22 },
-  { runs: [{ t: 'Note to all aunties forwarding this: the photo on page 2 was taken with the beauty filter on. Ravi does not look like that. Ravi did not agree to the filter.', i: true }], size: 13 }
+const EMAILS: Email[] = [
+  {
+    from: 'Maheer',
+    addr: 'maheer@ravicorp.biz',
+    subject: 'new cut 💈🔥',
+    time: '11:58 AM',
+    col: '#16a085',
+    body: ['yo ravi', '', 'The barber lowk got me right', '', '(pic attached. tell me it’s not hard. you can’t.)', '', '— Maheer', 'Sent from my phone'],
+    attach: true
+  },
+  {
+    from: 'Vikram (Manager)',
+    addr: 'vikram@ravicorp.biz',
+    subject: 'Quick call?',
+    time: '7:58 AM',
+    col: '#c0392b',
+    body: ['Ravi,', '', 'Quick call about your day off. 10 minutes only.', '', 'Also, sign the Terms.', '', 'V.']
+  },
+  {
+    from: 'Sunita (HR)',
+    addr: 'hr@ravicorp.biz',
+    subject: 'REMINDER: Terms and Conditions (UNSIGNED)',
+    time: 'Yesterday',
+    col: '#1565c0',
+    body: ['Dear Ravi,', '', 'Your Terms and Conditions remain unsigned.', 'Employees who have not signed are considered "available".', '', 'Regards,', 'Sunita, Human Resources']
+  },
+  {
+    from: 'Curry Express',
+    addr: 'orders@curryexpress.food',
+    subject: 'Your order is on its way (again)',
+    time: 'Yesterday',
+    col: '#d9771c',
+    body: ['Hi Ravi!', '', 'Your 4th butter chicken of the day has left the kitchen.', 'Our driver says hello. He knows the way by heart now.', '', 'Curry Express — we know what you did last night (ordered curry).']
+  },
+  {
+    from: 'Mummy',
+    addr: 'mummy.loves.ravi@mail.in',
+    subject: 'FW: FW: FW: Good morning 🌻🌻',
+    time: 'Mon',
+    col: '#c2185b',
+    body: ['Beta did you eat.', '', 'Also wear the blue shirt tomorrow. No reason.', '', '🌻 Have a blessed Monday 🌻']
+  }
 ];
 
-class WordDoc implements Viewer {
-  private s = new Scroller();
+class Mail implements Viewer {
+  private sel = 0;
+  private read = new Set<number>();
   constructor(private id: FileId) {}
 
   draw(c: DeskCtx, r: Rect): void {
     const g = c.g;
-    // The ribbon
-    g.fillStyle = '#2b579a';
-    g.fillRect(r.x, r.y, r.w, 34);
-    ['File', 'Home', 'Insert', 'Layout', 'Review'].forEach((m, i) => text(g, m, r.x + 20 + i * 70, r.y + 22, `${m === 'Review' ? 600 : 400} 14px ${FONT}`, '#ffffff'));
-    g.fillStyle = '#c0392b';
-    rr(g, r.x + r.w - 270, r.y + 6, 254, 22, 11);
-    g.fill();
-    text(g, 'TRACK CHANGES: ON  (user: MUMMY)', r.x + r.w - 143, r.y + 22, `700 12px ${FONT}`, '#ffffff', 'center');
-    const area = { x: r.x, y: r.y + 34, w: r.w, h: r.h - 34 };
-    g.fillStyle = '#e6e6e6';
-    g.fillRect(area.x, area.y, area.w, area.h);
-    const notesW = 250;
-    const pageW = Math.min(620, area.w - notesW - 60);
-    const px = area.x + Math.max(20, (area.w - notesW - pageW) / 2 - 10);
-    // Lay the paragraphs out once per frame (cheap enough)
-    type Piece = { t: string; x: number; y: number; run: Run; size: number };
-    const pieces: Piece[] = [];
-    const notes: { y: number; t: string }[] = [];
-    let y = 56;
-    for (const p of BIODATA) {
-      const size = p.size ?? 16;
-      const lh = size * 1.55;
-      const lineStart = y;
-      // Words with their runs, wrapped across runs
-      const words: { t: string; run: Run }[] = [];
-      for (const run of p.runs) for (const w of run.t.split(/(?<= )/)) if (w) words.push({ t: w, run });
-      let line: { t: string; run: Run; w: number }[] = [];
-      let lw = 0;
-      const flush = (): void => {
-        let x = p.center ? (pageW - lw) / 2 : 50;
-        for (const piece of line) {
-          pieces.push({ t: piece.t, x, y, run: piece.run, size });
-          x += piece.w;
-        }
-        line = [];
-        lw = 0;
-        y += lh;
-      };
-      for (const w of words) {
-        g.font = `${w.run.b ? 700 : 400} ${w.run.i ? 'italic ' : ''}${size}px ${FONT}`.replace(/^(\d+) italic/, 'italic $1');
-        const ww = g.measureText(w.t).width;
-        if (lw + ww > pageW - 100 && line.length) flush();
-        line.push({ t: w.t, run: w.run, w: ww });
-        lw += ww;
-      }
-      flush();
-      if (p.note) notes.push({ y: lineStart, t: p.note });
-      y += p.gap ?? 8;
-    }
-    const content = y + 60;
-    this.s.step(c.dt, content, area.h);
-    clipTo(g, area);
-    const top = area.y + 20 - this.s.y;
+    this.read.add(this.sel);
     g.fillStyle = '#ffffff';
-    g.shadowColor = 'rgba(0,0,0,0.2)';
-    g.shadowBlur = 8;
-    g.fillRect(px, top, pageW, content - 20);
-    g.shadowBlur = 0;
-    g.shadowColor = 'transparent';
-    for (const pc of pieces) {
-      const font = `${pc.run.i ? 'italic ' : ''}${pc.run.b ? 700 : 400} ${pc.size}px ${FONT}`;
-      const col = pc.run.del ? '#c0392b' : pc.run.ins ? '#1f5fbf' : '#1f1f1f';
-      text(g, pc.t, px + pc.x, top + pc.y, font, col);
-      g.font = font;
-      const w = g.measureText(pc.t.trimEnd()).width;
-      if (pc.run.del) {
-        g.fillStyle = '#c0392b';
-        g.fillRect(px + pc.x, top + pc.y - pc.size * 0.32, w, 1.6);
-      } else if (pc.run.ins) {
-        g.fillStyle = '#1f5fbf';
-        g.fillRect(px + pc.x, top + pc.y + 3, w, 1.4);
+    g.fillRect(r.x, r.y, r.w, r.h);
+    // Folders
+    const fw = 190;
+    g.fillStyle = '#f3f5f9';
+    g.fillRect(r.x, r.y, fw, r.h);
+    const nb = { x: r.x + 14, y: r.y + 14, w: fw - 28, h: 36 };
+    g.fillStyle = '#0f62c4';
+    rr(g, nb.x, nb.y, nb.w, nb.h, 6);
+    g.fill();
+    text(g, '✎  New mail', nb.x + nb.w / 2, nb.y + 24, `600 14px ${FONT}`, '#ffffff', 'center');
+    c.hot(nb, `${this.id}:new`, { down: () => c.say('New mail', 'Your outbox is full. Of drafts to Priya you never sent.') });
+    const unread = EMAILS.length - this.read.size;
+    ([['Inbox', unread ? String(unread) : ''], ['Sent', ''], ['Drafts', '47'], ['Junk', '1,284'], ['Deleted', '']] as [string, string][]).forEach(([n, k], i) => {
+      const fy = r.y + 70 + i * 36;
+      if (i === 0) {
+        g.fillStyle = '#dde7f5';
+        rr(g, r.x + 8, fy, fw - 16, 32, 5);
+        g.fill();
       }
-    }
-    // Margin comments
-    const nx = px + pageW + 14;
-    let lastBottom = -Infinity;
-    g.font = `400 13px ${FONT}`;
-    for (const n of notes) {
-      const lines = wrap(g, n.t, notesW - 28);
-      const ny = Math.max(top + n.y - 18, lastBottom + 8);
-      const h = lines.length * 17 + 14;
-      g.fillStyle = '#fff4c2';
-      rr(g, nx, ny, notesW - 10, h, 5);
+      text(g, n, r.x + 24, fy + 21, `${i === 0 ? 700 : 400} 14px ${FONT}`, '#1f1f1f');
+      if (k) text(g, k, r.x + fw - 22, fy + 21, `600 13px ${FONT}`, '#0f62c4', 'right');
+      if (i) c.hot({ x: r.x + 8, y: fy, w: fw - 16, h: 32 }, `${this.id}:f${i}`, { down: () => c.say(n, i === 3 ? '1,284 messages. 1,280 of them are from McCarl’s.' : 'This folder has been archived by HR.') });
+    });
+    // The list
+    const lx = r.x + fw;
+    const lw = Math.min(340, r.w * 0.34);
+    g.fillStyle = '#e3e7ee';
+    g.fillRect(lx + lw, r.y, 1, r.h);
+    text(g, 'Inbox', lx + 16, r.y + 32, `700 18px ${FONT}`, '#1f1f1f');
+    EMAILS.forEach((m, i) => {
+      const it = { x: lx, y: r.y + 50 + i * 76, w: lw, h: 76 };
+      const hid = `${this.id}:m${i}`;
+      if (i === this.sel || c.hoverId === hid) {
+        g.fillStyle = i === this.sel ? '#cfe0f7' : '#eef3fb';
+        g.fillRect(it.x, it.y, it.w, it.h);
+      }
+      const unreadM = !this.read.has(i);
+      if (unreadM) {
+        g.fillStyle = '#0f62c4';
+        g.fillRect(it.x, it.y + 6, 3, it.h - 12);
+      }
+      text(g, m.from, it.x + 16, it.y + 22, `${unreadM ? 700 : 600} 14px ${FONT}`, '#1f1f1f');
+      text(g, m.time, it.x + lw - 12, it.y + 22, `400 12px ${FONT}`, '#666', 'right');
+      g.font = `${unreadM ? 700 : 400} 13px ${FONT}`;
+      let sub = m.subject;
+      while (g.measureText(sub).width > lw - 50) sub = sub.slice(0, -2);
+      text(g, sub + (sub === m.subject ? '' : '…'), it.x + 16, it.y + 42, `${unreadM ? 700 : 400} 13px ${FONT}`, unreadM ? '#0f62c4' : '#1f1f1f');
+      let pre = m.body.filter(Boolean).join(' ');
+      g.font = `400 12px ${FONT}`;
+      while (g.measureText(pre).width > lw - 60) pre = pre.slice(0, -2);
+      text(g, pre + '…', it.x + 16, it.y + 60, `400 12px ${FONT}`, '#777');
+      if (m.attach) text(g, '📎', it.x + lw - 18, it.y + 60, `13px ${FONT}`, '#666', 'center');
+      g.fillStyle = '#eceff4';
+      g.fillRect(it.x + 12, it.y + it.h - 1, it.w - 24, 1);
+      c.hot(it, hid, { down: () => (this.sel = i) });
+    });
+    // Reading pane
+    const m = EMAILS[this.sel];
+    const px = lx + lw + 24;
+    const pw = r.x + r.w - px - 24;
+    text(g, m.subject, px, r.y + 40, `600 20px ${FONT}`, '#1f1f1f');
+    g.fillStyle = m.col;
+    g.beginPath();
+    g.arc(px + 20, r.y + 82, 20, 0, Math.PI * 2);
+    g.fill();
+    text(g, m.from[0], px + 20, r.y + 89, `700 18px ${FONT}`, '#ffffff', 'center');
+    text(g, m.from, px + 52, r.y + 78, `700 15px ${FONT}`, '#1f1f1f');
+    text(g, `<${m.addr}>   To: Ravi   ·   ${m.time}`, px + 52, r.y + 97, `400 13px ${FONT}`, '#666');
+    g.fillStyle = '#e3e7ee';
+    g.fillRect(px, r.y + 114, pw, 1);
+    m.body.forEach((l, i) => text(g, l, px, r.y + 146 + i * 24, `400 16px ${FONT}`, '#1f1f1f'));
+    if (m.attach) {
+      // The picture, attached: a thumbnail card that opens it
+      const ay = r.y + 146 + m.body.length * 24 + 10;
+      const card = { x: px, y: ay, w: Math.min(260, pw), h: 210 };
+      const hid = `${this.id}:attach`;
+      g.fillStyle = c.hoverId === hid ? '#eef3fb' : '#f6f8fb';
+      rr(g, card.x, card.y, card.w, card.h, 8);
       g.fill();
-      g.strokeStyle = '#e0c060';
+      g.strokeStyle = '#d6dbe4';
       g.lineWidth = 1;
       g.stroke();
-      g.strokeStyle = 'rgba(224, 192, 96, 0.8)';
-      g.setLineDash([3, 3]);
-      g.beginPath();
-      g.moveTo(px + pageW - 40, top + n.y - 5);
-      g.lineTo(nx, ny + 12);
-      g.stroke();
-      g.setLineDash([]);
-      lines.forEach((l, i) => text(g, l, nx + 9, ny + 18 + i * 17, `400 13px ${FONT}`, '#4a3b10'));
-      lastBottom = ny + h;
+      const pic = PHOTOS.maheer;
+      const th = { x: card.x + 10, y: card.y + 10, w: card.w - 20, h: card.h - 54 };
+      if (pic) {
+        const k = Math.max(th.w / pic.width, th.h / pic.height);
+        const sw = th.w / k;
+        const sh = th.h / k;
+        g.drawImage(pic, (pic.width - sw) / 2, (pic.height - sh) / 2, sw, sh, th.x, th.y, th.w, th.h);
+      } else {
+        g.fillStyle = '#ccd3de';
+        g.fillRect(th.x, th.y, th.w, th.h);
+      }
+      text(g, '📎 IMG_2231.jpg', card.x + 12, card.y + card.h - 24, `600 13px ${FONT}`, '#1f1f1f');
+      text(g, '2.4 MB  ·  click to open', card.x + 12, card.y + card.h - 8, `400 12px ${FONT}`, '#777');
+      c.hot(card, hid, { down: () => c.open('maheerpic') });
     }
-    g.restore();
-    scrollbar(g, area, this.s.y, content);
-    c.hot(area, `${this.id}:page`, { wheel: (dy) => this.s.by(dy) });
+    // Reply, which goes nowhere
+    const rb = { x: px, y: r.y + r.h - 56, w: 100, h: 34 };
+    g.fillStyle = c.hoverId === `${this.id}:reply` ? '#e5edf9' : '#f3f5f9';
+    rr(g, rb.x, rb.y, rb.w, rb.h, 6);
+    g.fill();
+    text(g, '↩  Reply', rb.x + rb.w / 2, rb.y + 22, `600 14px ${FONT}`, '#1f1f1f', 'center');
+    c.hot(rb, `${this.id}:reply`, {
+      down: () => c.say('Reply', m.from === 'Maheer' ? 'You typed "fire 🔥" and deleted it four times. Message not sent.' : 'Replying would mean admitting you read it. Message not sent.')
+    });
   }
 
   key(e: KeyboardEvent): boolean {
-    if (e.code === 'ArrowDown' || e.code === 'KeyS') this.s.by(42);
-    else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.s.by(-42);
-    else if (e.code === 'PageDown' || e.code === 'Space') this.s.by(300);
-    else if (e.code === 'PageUp') this.s.by(-300);
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') this.sel = Math.min(EMAILS.length - 1, this.sel + 1);
+    else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.sel = Math.max(0, this.sel - 1);
     else return false;
     return true;
   }
 }
 
-// ====================================================== Excel: the budget
-
-type Cell = { v: string; f?: string; neg?: boolean; b?: boolean; num?: boolean };
-const SHEETS: { name: string; cols: number[]; rows: Cell[][] }[] = [
-  {
-    name: 'Budget',
-    cols: [250, 100, 100, 340],
-    rows: [
-      [{ v: 'ITEM', b: true }, { v: 'PLANNED (₹)', b: true }, { v: 'ACTUAL (₹)', b: true }, { v: 'NOTES', b: true }],
-      [{ v: 'Salary' }, { v: '32,000', num: true }, { v: '32,000', num: true }, { v: "after 'deductions' (nobody can explain these)" }],
-      [{ v: 'Rent (paid to Papa)' }, { v: '8,000', num: true }, { v: '8,000', num: true }, { v: 'He makes me sign a receipt. He has a stamp.' }],
-      [{ v: 'Chai' }, { v: '600', num: true }, { v: '4,250', num: true, neg: true }, { v: 'Ramesh bhaiya’s stall has a loyalty card now. I am Gold.' }],
-      [{ v: 'Deadbull™' }, { v: '0', num: true }, { v: '3,100', num: true, neg: true }, { v: 'medical expense' }],
-      [{ v: 'Gym membership' }, { v: '1,500', num: true }, { v: '1,500', num: true }, { v: 'Visits: 1 (went to cancel it, they talked me out of it)' }],
-      [{ v: 'Mummy "loan"' }, { v: '0', num: true }, { v: '5,000', num: true, neg: true }, { v: '"loan"' }],
-      [{ v: 'Cousin Bunty "loan"' }, { v: '0', num: true }, { v: '2,500', num: true, neg: true }, { v: 'will never see this money again. accepted.' }],
-      [{ v: 'Wedding gifts (cousins)' }, { v: '2,000', num: true }, { v: '9,000', num: true, neg: true }, { v: '3 weddings in ONE month. Who approved this.' }],
-      [{ v: 'Curry delivery' }, { v: '1,000', num: true }, { v: '6,780', num: true, neg: true }, { v: 'Curry Express knows my name, my order and my sins' }],
-      [{ v: '' }, { v: '' }, { v: '' }, { v: '' }],
-      [{ v: 'SAVINGS', b: true }, { v: '10,000', num: true, b: true }, { v: '-8,130', num: true, neg: true, b: true, f: '=C2-SUM(C3:C10)-HOPE' }, { v: 'Savings are also emotionally negative', b: true }],
-      [{ v: '' }, { v: '' }, { v: '' }, { v: '' }],
-      [{ v: 'Months until financial freedom', b: true }, { v: '' }, { v: '#DIV/0!', neg: true, f: '=FREEDOM/SALARY' }, { v: 'Excel is also confused' }]
-    ]
-  },
-  {
-    name: "Sharma ji's son",
-    cols: [260, 160, 120, 300],
-    rows: [
-      [{ v: 'His salary:', b: true }, { v: 'Too much.', f: '=MY_SALARY*14' }, { v: '' }, { v: '' }],
-      [{ v: 'His car:', b: true }, { v: 'German.', f: '=IMPORTED("yes")' }, { v: '' }, { v: '' }],
-      [{ v: 'Times Mummy mentioned him this month:', b: true }, { v: '47', num: true, f: '=COUNTIF(EVERY_CALL,"Sharma ji")' }, { v: '' }, { v: '' }],
-      [{ v: '' }, { v: '' }, { v: '' }, { v: '' }],
-      [{ v: 'Why I made this sheet:', b: true }, { v: 'I do not know. Close it.' }, { v: '' }, { v: '' }]
-    ]
-  },
-  { name: 'DO NOT OPEN', cols: [300, 100, 100, 300], rows: [[{ v: 'I said do not open.', b: true }]] }
-];
-
-class Sheet implements Viewer {
-  private tab = 0;
-  private sel: [number, number] = [11, 2];
-  constructor(private id: FileId) {}
-
-  draw(c: DeskCtx, r: Rect): void {
-    const g = c.g;
-    const sheet = SHEETS[this.tab];
-    g.fillStyle = '#217346';
-    g.fillRect(r.x, r.y, r.w, 32);
-    ['File', 'Home', 'Insert', 'Formulas', 'Data', 'Review'].forEach((m, i) => text(g, m, r.x + 18 + i * 76, r.y + 21, `400 14px ${FONT}`, '#ffffff'));
-    // Formula bar
-    g.fillStyle = '#ffffff';
-    g.fillRect(r.x, r.y + 32, r.w, 34);
-    g.strokeStyle = '#d4d4d4';
-    g.lineWidth = 1;
-    g.strokeRect(r.x + 8, r.y + 38, 70, 22);
-    const [sr, sc] = this.sel;
-    const cell = sheet.rows[sr]?.[sc];
-    text(g, `${'ABCD'[sc]}${sr + 1}`, r.x + 43, r.y + 54, `400 14px ${FONT}`, '#1f1f1f', 'center');
-    text(g, 'fx', r.x + 92, r.y + 54, `italic 400 15px ${FONT}`, '#666');
-    text(g, cell ? cell.f ?? cell.v : '', r.x + 120, r.y + 54, `400 15px ${FONT}`, '#1f1f1f');
-    // The grid
-    const gx = r.x + 40;
-    const gy = r.y + 66 + 24;
-    const rh = 28;
-    g.fillStyle = '#f3f3f3';
-    g.fillRect(r.x, r.y + 66, r.w, 24);
-    g.fillRect(r.x, r.y + 66, 40, r.h - 66 - 30);
-    let x = gx;
-    sheet.cols.forEach((w, i) => {
-      text(g, 'ABCD'[i], x + w / 2, r.y + 83, `400 13px ${FONT}`, '#444', 'center');
-      x += w;
-    });
-    const rows = Math.max(sheet.rows.length + 4, 18);
-    for (let i = 0; i < rows; i++) {
-      const y = gy + i * rh;
-      if (y > r.y + r.h - 30) break;
-      text(g, String(i + 1), r.x + 20, y + 19, `400 13px ${FONT}`, '#444', 'center');
-      let cx = gx;
-      sheet.cols.forEach((w, j) => {
-        const cr = { x: cx, y, w, h: rh };
-        g.strokeStyle = '#e1e1e1';
-        g.strokeRect(cr.x, cr.y, cr.w, cr.h);
-        const ce = sheet.rows[i]?.[j];
-        if (ce && ce.v) {
-          const col = ce.neg ? '#c0392b' : '#1f1f1f';
-          g.save();
-          g.beginPath();
-          g.rect(cr.x, cr.y, cr.w - 2, cr.h);
-          g.clip();
-          text(g, ce.v, ce.num || ce.v.startsWith('#') ? cr.x + cr.w - 8 : cr.x + 6, y + 19, `${ce.b ? 700 : 400} 14px ${FONT}`, col, ce.num || ce.v.startsWith('#') ? 'right' : 'left');
-          g.restore();
-        }
-        c.hot(cr, `${this.id}:c${i}_${j}`, {
-          down: () => {
-            this.sel = [i, j];
-          }
-        });
-        cx += w;
-      });
-    }
-    // Selection
-    const sx = gx + sheet.cols.slice(0, sc).reduce((a, b) => a + b, 0);
-    g.strokeStyle = '#217346';
-    g.lineWidth = 2.5;
-    g.strokeRect(sx, gy + sr * rh, sheet.cols[sc], rh);
-    // Tabs
-    const ty = r.y + r.h - 30;
-    g.fillStyle = '#f3f3f3';
-    g.fillRect(r.x, ty, r.w, 30);
-    let tx = r.x + 50;
-    SHEETS.forEach((s, i) => {
-      g.font = `${i === this.tab ? 700 : 400} 13px ${FONT}`;
-      const tw = g.measureText(s.name).width + 30;
-      const tr = { x: tx, y: ty, w: tw, h: 28 };
-      if (i === this.tab) {
-        g.fillStyle = '#ffffff';
-        g.fillRect(tr.x, tr.y, tr.w, tr.h);
-        g.fillStyle = '#217346';
-        g.fillRect(tr.x, tr.y + tr.h - 3, tr.w, 3);
-      }
-      text(g, s.name, tr.x + tw / 2, ty + 19, `${i === this.tab ? 700 : 400} 13px ${FONT}`, i === this.tab ? '#217346' : '#333', 'center');
-      c.hot(tr, `${this.id}:tab${i}`, {
-        down: () => {
-          this.tab = i;
-          this.sel = [0, 1];
-        }
-      });
-      tx += tw + 2;
-    });
-  }
-}
-
-// ================================================== PowerPoint: CurryCoin
-
-type Slide = { title: string; sub?: string; bullets?: string[]; bg: [string, string]; chart?: boolean; big?: string };
-const SLIDES: Slide[] = [
-  { title: 'CURRYCOIN', big: '🍛', sub: "The world's first blockchain backed by butter chicken", bullets: ['Founder, CEO, CFO, CTO & Intern: Ravi'], bg: ['#5a1a00', '#d9771c'] },
-  { title: 'THE PROBLEM', bullets: ['Money is boring', 'Curry is delicious', 'Nobody has ever combined them', '(We checked on Googel for four whole minutes)'], bg: ['#1b2a4a', '#2b4c7e'] },
-  { title: 'THE SOLUTION', bullets: ['Every CurryCoin is backed by 1 (one) bowl of curry', "Stored securely in Mummy's fridge, behind the pickle jars", 'Proof-of-Taste: every block is personally tasted by Mummy', 'Gas fees are paid in actual gas (cylinder delivery pending)'], bg: ['#0f3d2e', '#1f7a5a'] },
-  { title: 'MARKET SIZE', chart: true, bg: ['#2a1a4a', '#5a3a8a'] },
-  { title: 'ROADMAP', bullets: ['Q1 — Launch coin', 'Q2 — To the moon', 'Q3 — Lamborghini (used is fine)', 'Q4 — Explain to Papa what crypto is (stretch goal)', 'Q5 — Explain it to Dadi (impossible)'], bg: ['#4a1030', '#9a2a5a'] },
-  { title: 'THE ASK', bullets: ['₹50,000 for 0.001% of the company', 'We accept: UPI, cash, leftover laddoos', "Investors so far: Mummy (₹500, 'for chai')", 'Questions? No.'], bg: ['#3a2a00', '#b8860b'] }
-];
-
-class Slides implements Viewer {
-  private i = 0;
-  constructor(private id: FileId) {}
-
-  private go(d: number): void {
-    this.i = Math.max(0, Math.min(SLIDES.length - 1, this.i + d));
-  }
-
-  draw(c: DeskCtx, r: Rect): void {
-    const g = c.g;
-    g.fillStyle = '#d24726';
-    g.fillRect(r.x, r.y, r.w, 30);
-    ['File', 'Home', 'Insert', 'Design', 'Slide Show'].forEach((m, i) => text(g, m, r.x + 18 + i * 80, r.y + 20, `400 14px ${FONT}`, '#ffffff'));
-    g.fillStyle = '#2b2b2b';
-    g.fillRect(r.x, r.y + 30, r.w, r.h - 30);
-    // Thumbnails down the left
-    const tw = 120;
-    SLIDES.forEach((s, k) => {
-      const tr = { x: r.x + 14, y: r.y + 44 + k * 78, w: tw, h: 68 };
-      if (tr.y + tr.h > r.y + r.h - 50) return;
-      const gr = g.createLinearGradient(tr.x, tr.y, tr.x + tw, tr.y + 68);
-      gr.addColorStop(0, s.bg[0]);
-      gr.addColorStop(1, s.bg[1]);
-      g.fillStyle = gr;
-      g.fillRect(tr.x, tr.y, tr.w, tr.h);
-      if (k === this.i) {
-        g.strokeStyle = '#f0a070';
-        g.lineWidth = 3;
-        g.strokeRect(tr.x - 2, tr.y - 2, tr.w + 4, tr.h + 4);
-      }
-      text(g, s.title, tr.x + tw / 2, tr.y + 38, `700 11px ${FONT}`, '#ffffff', 'center');
-      c.hot(tr, `${this.id}:t${k}`, { down: () => (this.i = k) });
-    });
-    // The slide, 16:9
-    const ax = r.x + tw + 34;
-    const aw = r.w - tw - 54;
-    const ah = r.h - 30 - 70;
-    let sw = aw;
-    let sh = (sw * 9) / 16;
-    if (sh > ah) {
-      sh = ah;
-      sw = (sh * 16) / 9;
-    }
-    const sx = ax + (aw - sw) / 2;
-    const sy = r.y + 44;
-    const s = SLIDES[this.i];
-    const k = sw / 960;
-    const gr = g.createLinearGradient(sx, sy, sx + sw, sy + sh);
-    gr.addColorStop(0, s.bg[0]);
-    gr.addColorStop(1, s.bg[1]);
-    g.fillStyle = gr;
-    g.fillRect(sx, sy, sw, sh);
-    text(g, s.title, sx + 60 * k, sy + 110 * k, `900 ${Math.round(64 * k)}px ${FONT}`, '#ffffff');
-    if (s.big) text(g, s.big, sx + sw - 170 * k, sy + 200 * k, `${Math.round(150 * k)}px ${FONT}`, '#ffffff', 'center');
-    if (s.sub) text(g, s.sub, sx + 60 * k, sy + 170 * k, `italic 400 ${Math.round(30 * k)}px ${FONT}`, '#ffe9c8');
-    (s.bullets ?? []).forEach((b, n) => {
-      const y = sy + (s.sub ? 300 : 210) * k + n * 66 * k;
-      g.fillStyle = '#ffd38a';
-      g.beginPath();
-      g.arc(sx + 74 * k, y - 10 * k, 7 * k, 0, Math.PI * 2);
-      g.fill();
-      text(g, b, sx + 98 * k, y, `400 ${Math.round(30 * k)}px ${FONT}`, '#ffffff');
-    });
-    if (s.chart) {
-      // People who eat curry vs people who understand crypto
-      const base = sy + 420 * k;
-      const bars: [string, string, number, string][] = [
-        ['People who eat curry', '1.5 BILLION', 240, '#f2a93b'],
-        ['People who understand crypto', '7', 2, '#6fd3ff']
-      ];
-      bars.forEach(([label, val, hgt, col], n) => {
-        const bx = sx + (180 + n * 330) * k;
-        g.fillStyle = col;
-        g.fillRect(bx, base - Math.max(3, hgt) * k, 160 * k, Math.max(3, hgt) * k);
-        text(g, val, bx + 80 * k, base - Math.max(3, hgt) * k - 14 * k, `800 ${Math.round(28 * k)}px ${FONT}`, '#ffffff', 'center');
-        text(g, label, bx + 80 * k, base + 34 * k, `400 ${Math.round(20 * k)}px ${FONT}`, '#ffffff', 'center');
-      });
-      text(g, 'TOTAL ADDRESSABLE MARKET: 1,500,000,007', sx + sw / 2, sy + 512 * k, `800 ${Math.round(26 * k)}px ${FONT}`, '#ffe066', 'center');
-    }
-    text(g, `${this.i + 1}`, sx + sw - 24 * k, sy + sh - 18 * k, `400 ${Math.round(18 * k)}px ${FONT}`, 'rgba(255,255,255,0.7)', 'right');
-    c.hot({ x: sx, y: sy, w: sw, h: sh }, `${this.id}:slide`, { down: () => this.go(1), wheel: (dy) => this.go(dy > 0 ? 1 : -1) });
-    // Controls
-    const cy = r.y + r.h - 40;
-    const prev = { x: ax + aw / 2 - 120, y: cy, w: 60, h: 30 };
-    const next = { x: ax + aw / 2 + 60, y: cy, w: 60, h: 30 };
-    for (const [b, lab, d] of [
-      [prev, '◀', -1],
-      [next, '▶', 1]
-    ] as [Rect, string, number][]) {
-      g.fillStyle = c.hoverId === `${this.id}:${lab}` ? '#555' : '#3c3c3c';
-      rr(g, b.x, b.y, b.w, b.h, 5);
-      g.fill();
-      text(g, lab, b.x + b.w / 2, b.y + 21, `400 16px ${FONT}`, '#ffffff', 'center');
-      c.hot(b, `${this.id}:${lab}`, { down: () => this.go(d) });
-    }
-    text(g, `Slide ${this.i + 1} of ${SLIDES.length}`, ax + aw / 2, cy + 21, `400 15px ${FONT}`, '#dddddd', 'center');
-  }
-
-  key(e: KeyboardEvent): boolean {
-    if (e.code === 'ArrowRight' || e.code === 'Space' || e.code === 'KeyD' || e.code === 'PageDown') this.go(1);
-    else if (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'PageUp') this.go(-1);
-    else return false;
-    return true;
-  }
-}
-
-// ================================================ Media Player: the dance
-
-const DANCE_LEN = 22;
-const SUBS: [number, number, string][] = [
-  [0, 3, '♪ (dhol intensifies) ♪'],
-  [3, 6.5, "[Ravi enters. Does the 'screwing in a light bulb' move]"],
-  [6.5, 10, '♪ Mera dil hai curry, tera pyaar hai naan ♪'],
-  [10, 12.5, '♪ Tadka laga de, meri jaan, meri jaan ♪'],
-  [12.5, 14.5, "[Ravi's elbow meets Mummy's good vase]"],
-  [14.5, 17, 'MUMMY (off camera):  RAVIIIIII!!!'],
-  [17, 19.5, '[music stops. Ravi becomes a statue. Statues cannot be scolded.]'],
-  [19.5, 22, 'BUNTY (holding the phone):  bhaiya this is going on the family group']
-];
-
-class MediaPlayer implements Viewer {
-  private t = 0;
-  private playing = true;
-  constructor(private id: FileId) {}
-
-  draw(c: DeskCtx, r: Rect): void {
-    const g = c.g;
-    if (this.playing) this.t = (this.t + c.dt) % DANCE_LEN;
-    const t = this.t;
-    const vid = { x: r.x, y: r.y, w: r.w, h: r.h - 56 };
-    g.fillStyle = '#000';
-    g.fillRect(r.x, r.y, r.w, r.h);
-    // Fit a 16:9 frame
-    let fw = vid.w;
-    let fh = (fw * 9) / 16;
-    if (fh > vid.h) {
-      fh = vid.h;
-      fw = (fh * 16) / 9;
-    }
-    const fx = vid.x + (vid.w - fw) / 2;
-    const fy = vid.y + (vid.h - fh) / 2;
-    const k = fw / 800;
-    clipTo(g, { x: fx, y: fy, w: fw, h: fh });
-    // The living room
-    g.fillStyle = '#e7c98f';
-    g.fillRect(fx, fy, fw, fh);
-    g.fillStyle = '#8a5a3a';
-    g.fillRect(fx, fy + fh * 0.72, fw, fh * 0.28);
-    // A garland of marigolds across the top
-    for (let i = 0; i < 26; i++) {
-      g.fillStyle = i % 2 ? '#f39c12' : '#e67e22';
-      g.beginPath();
-      g.arc(fx + (i + 0.5) * (fw / 26), fy + 18 * k + Math.sin((i / 25) * Math.PI) * 26 * k, 8 * k, 0, Math.PI * 2);
-      g.fill();
-    }
-    // Sofa, side table and THE vase
-    g.fillStyle = '#7b2d26';
-    rr(g, fx + 520 * k, fy + 300 * k, 230 * k, 90 * k, 12 * k);
-    g.fill();
-    g.fillStyle = '#5b3a1e';
-    g.fillRect(fx + 120 * k, fy + 330 * k, 90 * k, 70 * k);
-    const vaseFall = t > 12.7 ? Math.min(1, (t - 12.7) / 0.5) : 0;
-    g.save();
-    g.translate(fx + 165 * k, fy + 330 * k);
-    g.rotate(vaseFall * 1.5);
-    g.translate(vaseFall * 40 * k, vaseFall * 60 * k);
-    g.fillStyle = '#2e86de';
-    g.beginPath();
-    g.ellipse(0, -30 * k, 18 * k, 30 * k, 0, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#f1c40f';
-    g.fillRect(-14 * k, -34 * k, 28 * k, 5 * k);
-    g.restore();
-    // Party lights
-    for (let i = 0; i < 5; i++) {
-      const on = Math.sin(t * 6 + i * 1.7) > 0 && t < 17;
-      g.fillStyle = on ? ['rgba(255,80,80,0.25)', 'rgba(80,200,255,0.25)', 'rgba(255,230,80,0.25)', 'rgba(180,90,255,0.25)', 'rgba(80,255,140,0.25)'][i] : 'rgba(0,0,0,0)';
-      g.beginPath();
-      g.arc(fx + (100 + i * 150) * k, fy + 120 * k, 70 * k, 0, Math.PI * 2);
-      g.fill();
-    }
-    // Ravi, dancing (until he's a statue)
-    const dancing = t > 3 && t < 17;
-    const ph = t * 7.5;
-    const cx = fx + (t < 3 ? 900 - t * 140 : 420 + (dancing ? Math.sin(ph * 0.5) * 30 : 0)) * k;
-    const by = fy + 420 * k;
-    const hip = dancing ? Math.sin(ph) * 12 : 0;
-    g.strokeStyle = '#3b2a1e';
-    g.lineCap = 'round';
-    g.lineWidth = 12 * k;
-    // legs
-    g.beginPath();
-    g.moveTo(cx + hip * k, by - 110 * k);
-    g.lineTo(cx - 22 * k, by);
-    g.moveTo(cx + hip * k, by - 110 * k);
-    g.lineTo(cx + 22 * k + (dancing ? Math.sin(ph) * 10 * k : 0), by);
-    g.stroke();
-    // body (kurta)
-    g.fillStyle = '#ffffff';
-    rr(g, cx - 26 * k + hip * k, by - 210 * k, 52 * k, 110 * k, 14 * k);
-    g.fill();
-    g.strokeStyle = '#c8a24a';
-    g.lineWidth = 3 * k;
-    g.stroke();
-    // arms: the light-bulb twist, then hands up, then the statue pose
-    g.strokeStyle = '#8a5a3a';
-    g.lineWidth = 10 * k;
-    const sx2 = cx + hip * k;
-    const sy2 = by - 195 * k;
-    const statue = t >= 17;
-    const up = statue ? 1 : dancing ? 0.5 + 0.5 * Math.sin(ph * 0.5) : 0;
-    for (const s of [-1, 1]) {
-      const ax = sx2 + s * (40 + 20 * up) * k;
-      const ay = sy2 - (statue ? 70 : 60 * up) * k + (dancing ? Math.sin(ph + s) * 14 * k : 30 * k);
-      g.beginPath();
-      g.moveTo(sx2 + s * 22 * k, sy2);
-      g.lineTo(ax, ay);
-      g.stroke();
-      if (dancing) {
-        // twisting a light bulb
-        g.fillStyle = '#8a5a3a';
-        g.beginPath();
-        g.arc(ax + Math.cos(ph * 2 * s) * 6 * k, ay + Math.sin(ph * 2 * s) * 6 * k, 8 * k, 0, Math.PI * 2);
-        g.fill();
-      }
-    }
-    // head
-    g.fillStyle = '#8a5a3a';
-    g.beginPath();
-    g.arc(cx + hip * k, by - 240 * k, 30 * k, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#1e140c';
-    g.beginPath();
-    g.arc(cx + hip * k, by - 252 * k, 30 * k, Math.PI * 1.05, Math.PI * 1.95);
-    g.fill();
-    // face: grin, then panic
-    g.strokeStyle = '#1e140c';
-    g.lineWidth = 3 * k;
-    g.beginPath();
-    if (t > 12.7) g.arc(cx + hip * k, by - 228 * k, 7 * k, 0, Math.PI * 2);
-    else g.arc(cx + hip * k, by - 232 * k, 12 * k, 0.15 * Math.PI, 0.85 * Math.PI);
-    g.stroke();
-    // The vase in bits
-    if (vaseFall >= 1) {
-      g.fillStyle = '#2e86de';
-      for (let i = 0; i < 6; i++) {
-        g.beginPath();
-        g.arc(fx + (180 + i * 14) * k, fy + 452 * k - (i % 2) * 4 * k, 6 * k, 0, Math.PI * 2);
-        g.fill();
-      }
-    }
-    // Phone-camera framing
-    g.strokeStyle = 'rgba(255,255,255,0.7)';
-    g.lineWidth = 2;
-    g.strokeRect(fx + 10, fy + 10, 26, 0.01);
-    text(g, '● REC  BUNTY_PHONE', fx + 16, fy + 26, `700 ${Math.max(11, Math.round(14 * k))}px ${FONT}`, '#ff4d4d');
-    g.restore();
-    // Subtitles
-    const sub = SUBS.find(([a, b]) => t >= a && t < b);
-    if (sub) {
-      g.font = `600 ${Math.max(14, Math.round(22 * k))}px ${FONT}`;
-      const tw = g.measureText(sub[2]).width + 28;
-      g.fillStyle = 'rgba(0,0,0,0.65)';
-      rr(g, fx + fw / 2 - tw / 2, fy + fh - 58 * k, tw, 36 * k, 4);
-      g.fill();
-      text(g, sub[2], fx + fw / 2, fy + fh - 33 * k, `600 ${Math.max(14, Math.round(22 * k))}px ${FONT}`, '#ffffff', 'center');
-    }
-    c.hot(vid, `${this.id}:frame`, { down: () => (this.playing = !this.playing) });
-    // Controls
-    const cy = r.y + r.h - 56;
-    g.fillStyle = '#1c1c1c';
-    g.fillRect(r.x, cy, r.w, 56);
-    const pb = { x: r.x + 14, y: cy + 12, w: 32, h: 32 };
-    g.fillStyle = '#ffffff';
-    if (this.playing) {
-      g.fillRect(pb.x + 8, pb.y + 7, 6, 18);
-      g.fillRect(pb.x + 18, pb.y + 7, 6, 18);
-    } else {
-      g.beginPath();
-      g.moveTo(pb.x + 9, pb.y + 6);
-      g.lineTo(pb.x + 26, pb.y + 16);
-      g.lineTo(pb.x + 9, pb.y + 26);
-      g.fill();
-    }
-    c.hot(pb, `${this.id}:play`, { down: () => (this.playing = !this.playing) });
-    const bar = { x: r.x + 60, y: cy + 24, w: r.w - 220, h: 8 };
-    g.fillStyle = '#555';
-    rr(g, bar.x, bar.y, bar.w, bar.h, 4);
-    g.fill();
-    g.fillStyle = '#e8473c';
-    rr(g, bar.x, bar.y, Math.max(8, (bar.w * t) / DANCE_LEN), bar.h, 4);
-    g.fill();
-    c.hot({ x: bar.x, y: bar.y - 10, w: bar.w, h: 28 }, `${this.id}:seek`, { down: () => (this.t = Math.max(0, Math.min(0.999, (c.mx - bar.x) / bar.w)) * DANCE_LEN) });
-    const fmt = (s: number): string => `0:${String(Math.floor(s)).padStart(2, '0')}`;
-    text(g, `${fmt(t)} / ${fmt(DANCE_LEN)}`, r.x + r.w - 18, cy + 33, `400 14px ${FONT}`, '#dddddd', 'right');
-    text(g, '🔇', r.x + r.w - 130, cy + 34, `16px ${FONT}`, '#ffffff', 'center');
-  }
-
-  key(e: KeyboardEvent): boolean {
-    if (e.code === 'Space' || e.code === 'KeyK') this.playing = !this.playing;
-    else if (e.code === 'ArrowRight') this.t = Math.min(DANCE_LEN - 0.01, this.t + 3);
-    else if (e.code === 'ArrowLeft') this.t = Math.max(0, this.t - 3);
-    else return false;
-    return true;
-  }
-}
-
-// ======================================================= Photos: Diwali
-
-type Person = { name: string; tag: string; x: number; h: number; outfit: string; trim: string; hair: string; extra?: 'phone' | 'thumbs' | 'blink' | 'glare' | 'dog' | 'specs' };
-const FAMILY: Person[] = [
-  { name: 'Dadi', tag: "'Why is the photo taking so long'", x: 110, h: 0.86, outfit: '#f4f4f4', trim: '#c0392b', hair: '#d8d8d8', extra: 'specs' },
-  { name: 'Papa', tag: 'Checking the cricket score', x: 235, h: 1.02, outfit: '#f1e3c6', trim: '#8a6a2a', hair: '#555', extra: 'phone' },
-  { name: 'Mummy', tag: 'Perfect. As always.', x: 355, h: 0.94, outfit: '#c2185b', trim: '#f1c40f', hair: '#1e140c' },
-  { name: 'Ravi (me)', tag: 'Blinked. Take 14. They gave up.', x: 475, h: 1, outfit: '#2e86de', trim: '#f1c40f', hair: '#1e140c', extra: 'blink' },
-  { name: 'Chachi', tag: 'Already judging the rangoli', x: 595, h: 0.93, outfit: '#27ae60', trim: '#f1c40f', hair: '#1e140c', extra: 'glare' },
-  { name: 'Cousin Bunty', tag: 'Owes me ₹2,500', x: 715, h: 0.98, outfit: '#8e44ad', trim: '#ecf0f1', hair: '#1e140c', extra: 'thumbs' },
-  { name: 'Tiger', tag: 'Only one who listened', x: 820, h: 0.4, outfit: '#c8873a', trim: '#000', hair: '#c8873a', extra: 'dog' }
-];
+// ============================================================ Photos
 
 class Photo implements Viewer {
-  private tags = true;
   constructor(private id: FileId) {}
 
   draw(c: DeskCtx, r: Rect): void {
     const g = c.g;
     g.fillStyle = '#1c1c1c';
     g.fillRect(r.x, r.y, r.w, r.h);
-    // Toolbar
-    if (this.id === 'diwali') {
-      const tb = { x: r.x + r.w - 160, y: r.y + 8, w: 146, h: 28 };
-      g.fillStyle = c.hoverId === `${this.id}:tags` ? '#3a3a3a' : '#2c2c2c';
-      rr(g, tb.x, tb.y, tb.w, tb.h, 5);
-      g.fill();
-      text(g, this.tags ? '🏷  People tags: ON' : '🏷  People tags: OFF', tb.x + tb.w / 2, tb.y + 19, `400 13px ${FONT}`, '#ffffff', 'center');
-      c.hot(tb, `${this.id}:tags`, { down: () => (this.tags = !this.tags) });
-    }
-    const area = { x: r.x + 16, y: r.y + 44, w: r.w - 32, h: r.h - 84 };
-    // The photo, 900x560 design space, fitted
-    const k = Math.min(area.w / 900, area.h / 560);
-    const pw = 900 * k;
-    const ph = 560 * k;
-    const px = area.x + (area.w - pw) / 2;
-    const py = area.y + (area.h - ph) / 2;
-    clipTo(g, { x: px, y: py, w: pw, h: ph });
-    if (this.id === 'diwali') this.diwali(g, c, px, py, k);
-    else meme(g, this.id, px, py, k, c.time);
-    g.restore();
-    text(g, `${fileDef(this.id).name}   ·   1 of 1`, r.x + r.w / 2, r.y + r.h - 14, `400 13px ${FONT}`, '#bbbbbb', 'center');
-  }
-
-  private diwali(g: CanvasRenderingContext2D, c: DeskCtx, px: number, py: number, k: number): void {
-    const P = (x: number, y: number): [number, number] => [px + x * k, py + y * k];
-    // Night sky, a house front with string lights
-    const sky = g.createLinearGradient(0, py, 0, py + 560 * k);
-    sky.addColorStop(0, '#0b1030');
-    sky.addColorStop(1, '#3a1d4a');
-    g.fillStyle = sky;
-    g.fillRect(px, py, 900 * k, 560 * k);
-    g.fillStyle = '#c99a6b';
-    g.fillRect(...P(0, 150), 900 * k, 300 * k);
-    g.fillStyle = '#6b4226';
-    g.fillRect(...P(380, 190), 140 * k, 260 * k);
-    for (let i = 0; i < 30; i++) {
-      const on = Math.sin(c.time * 4 + i) > -0.3;
-      g.fillStyle = on ? ['#ffd34d', '#ff6b6b', '#6bd3ff', '#9bff6b'][i % 4] : '#5a4a3a';
-      g.beginPath();
-      g.arc(...P(15 + i * 30, 160 + Math.sin(i * 0.6) * 8), 5 * k, 0, Math.PI * 2);
-      g.fill();
-    }
-    // Fireworks
-    for (const [fx, fy, col] of [
-      [120, 70, '#ffd34d'],
-      [760, 60, '#ff6bd5']
-    ] as [number, number, string][]) {
-      g.strokeStyle = col;
-      g.lineWidth = 2 * k;
-      for (let a = 0; a < 12; a++) {
-        const an = (a / 12) * Math.PI * 2;
-        g.beginPath();
-        g.moveTo(...P(fx + Math.cos(an) * 12, fy + Math.sin(an) * 12));
-        g.lineTo(...P(fx + Math.cos(an) * 38, fy + Math.sin(an) * 38));
-        g.stroke();
-      }
-    }
-    // Floor and the rangoli
-    g.fillStyle = '#a0522d';
-    g.fillRect(...P(0, 450), 900 * k, 110 * k);
-    const rc = P(450, 515);
-    for (const [rad, col] of [
-      [70, '#e74c3c'],
-      [55, '#f1c40f'],
-      [40, '#27ae60'],
-      [25, '#3498db'],
-      [10, '#ffffff']
-    ] as [number, string][]) {
-      g.fillStyle = col;
-      g.beginPath();
-      g.ellipse(rc[0], rc[1], rad * k, rad * 0.35 * k, 0, 0, Math.PI * 2);
-      g.fill();
-    }
-    // Diyas along the front
-    for (let i = 0; i < 9; i++) {
-      const [dx, dy] = P(40 + i * 100, 470);
-      g.fillStyle = '#b5651d';
-      g.beginPath();
-      g.ellipse(dx, dy, 14 * k, 6 * k, 0, 0, Math.PI);
-      g.fill();
-      g.fillStyle = '#ffcc33';
-      g.beginPath();
-      g.ellipse(dx, dy - 8 * k - Math.sin(c.time * 9 + i) * 1.5 * k, 4 * k, 9 * k, 0, 0, Math.PI * 2);
-      g.fill();
-    }
-    // The family
-    for (const p of FAMILY) {
-      const foot = 455;
-      if (p.extra === 'dog') {
-        g.fillStyle = p.outfit;
-        g.beginPath();
-        g.ellipse(...P(p.x, foot - 28), 34 * k, 18 * k, 0, 0, Math.PI * 2);
-        g.fill();
-        g.beginPath();
-        g.arc(...P(p.x + 34, foot - 48), 16 * k, 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = '#000';
-        g.beginPath();
-        g.arc(...P(p.x + 40, foot - 52), 2.5 * k, 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = p.outfit;
-        for (const lx of [-20, -6, 10, 22]) g.fillRect(...P(p.x + lx, foot - 16), 6 * k, 16 * k);
-      } else {
-        const H = 230 * p.h;
-        const top = foot - H;
-        // Body (kurta / saree)
-        g.fillStyle = p.outfit;
-        rr(g, ...P(p.x - 34, top + 52), 68 * k, (H - 52) * k, 14 * k);
-        g.fill();
-        g.fillStyle = p.trim;
-        g.fillRect(...P(p.x - 34, foot - 22), 68 * k, 6 * k);
-        g.fillRect(...P(p.x - 3, top + 56), 6 * k, (H - 80) * k);
-        // Head
-        g.fillStyle = '#8a5a3a';
-        g.beginPath();
-        g.arc(...P(p.x, top + 26), 26 * k, 0, Math.PI * 2);
-        g.fill();
-        g.fillStyle = p.hair;
-        g.beginPath();
-        g.arc(...P(p.x, top + 18), 27 * k, Math.PI * 1.02, Math.PI * 1.98);
-        g.fill();
-        // Eyes
-        g.fillStyle = '#1e140c';
-        g.strokeStyle = '#1e140c';
-        g.lineWidth = 2.5 * k;
-        for (const s of [-1, 1]) {
-          const [ex, ey] = P(p.x + s * 9, top + 26);
-          if (p.extra === 'blink') {
-            g.beginPath();
-            g.moveTo(ex - 5 * k, ey);
-            g.lineTo(ex + 5 * k, ey);
-            g.stroke();
-          } else if (p.extra === 'glare') {
-            g.beginPath();
-            g.moveTo(ex - 5 * k, ey - 4 * k * s);
-            g.lineTo(ex + 5 * k, ey + 4 * k * s);
-            g.stroke();
-          } else {
-            g.beginPath();
-            g.arc(ex, ey, 2.8 * k, 0, Math.PI * 2);
-            g.fill();
-          }
-        }
-        if (p.extra === 'specs') {
-          g.strokeStyle = '#444';
-          g.lineWidth = 2 * k;
-          for (const s of [-1, 1]) {
-            g.beginPath();
-            g.arc(...P(p.x + s * 9, top + 26), 8 * k, 0, Math.PI * 2);
-            g.stroke();
-          }
-        }
-        // Smile (Papa's is pointed down at the phone)
-        g.strokeStyle = '#3a1e10';
-        g.lineWidth = 2 * k;
-        g.beginPath();
-        g.arc(...P(p.x, top + 34), 8 * k, 0.15 * Math.PI, 0.85 * Math.PI);
-        g.stroke();
-        if (p.extra === 'phone') {
-          g.fillStyle = '#111';
-          g.fillRect(...P(p.x + 10, top + 90), 18 * k, 30 * k);
-          g.fillStyle = '#6bd3ff';
-          g.fillRect(...P(p.x + 12, top + 93), 14 * k, 22 * k);
-        }
-        if (p.extra === 'thumbs') {
-          g.fillStyle = '#8a5a3a';
-          g.beginPath();
-          g.arc(...P(p.x + 46, top + 84), 10 * k, 0, Math.PI * 2);
-          g.fill();
-          g.fillRect(...P(p.x + 42, top + 62), 7 * k, 18 * k);
-        }
-      }
-      if (this.tags) {
-        // A tag under each face
-        // Every other one higher, so neighbours' tags don't overlap
-        const lift = (FAMILY.indexOf(p) % 2) * 50;
-        const [tx, ty] = P(p.x, p.extra === 'dog' ? foot - 80 : foot - 230 * p.h - 20 - lift);
-        g.font = `600 ${Math.max(10, Math.round(13 * k))}px ${FONT}`;
-        const lines = [p.name, p.tag];
-        const w = Math.max(...lines.map((l) => g.measureText(l).width)) + 14;
-        const by = ty - 38 * k;
-        g.fillStyle = 'rgba(255,255,255,0.92)';
-        rr(g, tx - w / 2, by, w, 34 * k + 6, 4);
-        g.fill();
-        text(g, p.name, tx, by + 15 * k, `700 ${Math.max(10, Math.round(13 * k))}px ${FONT}`, '#1f1f1f', 'center');
-        text(g, p.tag, tx, by + 31 * k, `400 ${Math.max(9, Math.round(12 * k))}px ${FONT}`, '#444', 'center');
-      }
-    }
+    const pic = PHOTOS.maheer;
+    const area = { x: r.x + 16, y: r.y + 16, w: r.w - 32, h: r.h - 56 };
+    if (pic) {
+      const k = Math.min(area.w / pic.width, area.h / pic.height);
+      g.drawImage(pic, area.x + (area.w - pic.width * k) / 2, area.y + (area.h - pic.height * k) / 2, pic.width * k, pic.height * k);
+    } else text(g, 'Loading…', r.x + r.w / 2, r.y + r.h / 2, `400 16px ${FONT}`, '#ccc', 'center');
+    text(g, 'IMG_2231.jpg   ·   from Maheer   ·   1 of 1', r.x + r.w / 2, r.y + r.h - 16, `400 13px ${FONT}`, '#bbbbbb', 'center');
   }
 }
 
-/** The "tax documents": three memes, drawn in the 900x560 design space. */
-function meme(g: CanvasRenderingContext2D, id: FileId, px: number, py: number, k: number, time: number): void {
-  const P = (x: number, y: number): [number, number] => [px + x * k, py + y * k];
-  const caption = (s: string, y: number, size = 54): void => {
-    g.font = `${Math.round(size * k)}px ${IMPACT}`;
-    g.textAlign = 'center';
-    g.lineJoin = 'round';
-    g.strokeStyle = '#000';
-    g.lineWidth = 7 * k;
-    g.strokeText(s, ...P(450, y));
-    g.fillStyle = '#fff';
-    g.fillText(s, ...P(450, y));
-    g.textAlign = 'left';
-  };
-  if (id === 'meme1') {
-    g.fillStyle = '#4a6a8a';
-    g.fillRect(px, py, 900 * k, 560 * k);
-    // A clock with its hands spinning, and a skeleton at the desk
-    const [cx, cy] = P(250, 290);
-    g.fillStyle = '#fff';
-    g.beginPath();
-    g.arc(cx, cy, 110 * k, 0, Math.PI * 2);
-    g.fill();
-    g.strokeStyle = '#222';
-    g.lineWidth = 6 * k;
-    g.stroke();
-    g.lineCap = 'round';
-    g.beginPath();
-    g.moveTo(cx, cy);
-    g.lineTo(cx + Math.cos(time * 6) * 80 * k, cy + Math.sin(time * 6) * 80 * k);
-    g.moveTo(cx, cy);
-    g.lineTo(cx + Math.cos(time * 0.5) * 50 * k, cy + Math.sin(time * 0.5) * 50 * k);
-    g.stroke();
-    // Skeleton with a headset
-    g.fillStyle = '#f2f2e8';
-    g.beginPath();
-    g.arc(...P(640, 230), 50 * k, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#222';
-    g.beginPath();
-    g.arc(...P(622, 225), 12 * k, 0, Math.PI * 2);
-    g.arc(...P(658, 225), 12 * k, 0, Math.PI * 2);
-    g.fill();
-    g.strokeStyle = '#f2f2e8';
-    g.lineWidth = 10 * k;
-    for (let i = 0; i < 5; i++) {
-      g.beginPath();
-      g.moveTo(...P(600, 300 + i * 22));
-      g.lineTo(...P(680, 300 + i * 22));
-      g.stroke();
-    }
-    g.strokeStyle = '#222';
-    g.lineWidth = 6 * k;
-    g.beginPath();
-    g.arc(...P(640, 225), 62 * k, Math.PI, 0);
-    g.stroke();
-    g.fillStyle = '#5b3a1e';
-    g.fillRect(...P(520, 420), 320 * k, 24 * k);
-    caption('MANAGER: "QUICK CALL?"', 70);
-    caption('THE CALL: 2 HOURS 45 MINUTES', 530);
-  } else if (id === 'meme2') {
-    g.fillStyle = '#d8a35a';
-    g.fillRect(px, py, 900 * k, 560 * k);
-    // Three aunties, one Ravi, sweating
-    for (let i = 0; i < 3; i++) {
-      const x = 170 + i * 130;
-      g.fillStyle = ['#c2185b', '#27ae60', '#f39c12'][i];
-      rr(g, ...P(x - 40, 250), 80 * k, 200 * k, 16 * k);
-      g.fill();
-      g.fillStyle = '#8a5a3a';
-      g.beginPath();
-      g.arc(...P(x, 220), 34 * k, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = '#1e140c';
-      g.beginPath();
-      g.arc(...P(x, 196), 30 * k, Math.PI, 0);
-      g.fill();
-      g.fillStyle = '#c0392b';
-      g.beginPath();
-      g.arc(...P(x, 206), 4 * k, 0, Math.PI * 2);
-      g.fill();
-    }
-    g.fillStyle = '#2e86de';
-    rr(g, ...P(660, 250), 90 * k, 200 * k, 16 * k);
-    g.fill();
-    g.fillStyle = '#8a5a3a';
-    g.beginPath();
-    g.arc(...P(705, 220), 36 * k, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#6bd3ff';
-    for (let i = 0; i < 4; i++) {
-      g.beginPath();
-      g.ellipse(...P(668 + i * 22, 200 + (i % 2) * 18 + ((time * 40 + i * 13) % 30)), 4 * k, 7 * k, 0, 0, Math.PI * 2);
-      g.fill();
-    }
-    caption('AUNTIES: "SO WHAT DO YOU DO, BETA?"', 70, 46);
-    caption('ME: "...IT\'S COMPLICATED, AUNTY"', 530, 50);
-  } else {
-    // Two panels: him / me
-    g.fillStyle = '#f5f5f5';
-    g.fillRect(px, py, 900 * k, 560 * k);
-    g.fillStyle = '#ffe9a8';
-    g.fillRect(...P(0, 0), 450 * k, 560 * k);
-    g.fillStyle = '#d6e4f0';
-    g.fillRect(...P(450, 0), 450 * k, 560 * k);
-    g.fillStyle = '#222';
-    g.fillRect(...P(447, 0), 6 * k, 560 * k);
-    const head = (x: number, col: string, crown: boolean): void => {
-      g.fillStyle = col;
-      rr(g, ...P(x - 50, 250), 100 * k, 190 * k, 18 * k);
-      g.fill();
-      g.fillStyle = '#8a5a3a';
-      g.beginPath();
-      g.arc(...P(x, 210), 44 * k, 0, Math.PI * 2);
-      g.fill();
-      if (crown) {
-        g.fillStyle = '#f1c40f';
-        g.beginPath();
-        g.moveTo(...P(x - 40, 168));
-        g.lineTo(...P(x - 40, 128));
-        g.lineTo(...P(x - 20, 150));
-        g.lineTo(...P(x, 120));
-        g.lineTo(...P(x + 20, 150));
-        g.lineTo(...P(x + 40, 128));
-        g.lineTo(...P(x + 40, 168));
-        g.fill();
-      }
-    };
-    head(225, '#1b2a4a', true);
-    head(675, '#7f8c8d', false);
-    // A samosa in Ravi's hand
-    g.fillStyle = '#d4a03a';
-    g.beginPath();
-    g.moveTo(...P(740, 330));
-    g.lineTo(...P(790, 300));
-    g.lineTo(...P(790, 350));
-    g.fill();
-    caption("SHARMA JI'S SON", 70, 44);
-    g.font = `${Math.round(30 * k)}px ${IMPACT}`;
-    const left = ['IIT', 'IIM', 'NASA INTERN', 'MARRIED, 2 KIDS, 3 FLATS'];
-    const right = ['ME:', 'FOUND A SAMOSA', 'IN MY POCKET', '(IT WAS GOOD)'];
-    const col = (lines: string[], x: number): void =>
-      lines.forEach((l, i) => {
-        g.textAlign = 'center';
-        g.strokeStyle = '#000';
-        g.lineWidth = 5 * k;
-        g.fillStyle = '#fff';
-        g.strokeText(l, ...P(x, 410 + i * 36));
-        g.fillText(l, ...P(x, 410 + i * 36));
-        g.textAlign = 'left';
-      });
-    col(left, 225);
-    col(right, 675);
-  }
-}
+// ================================================= The classified case file
 
-// ======================================================= Chrome: the chat
-
-type Msg = { who: string; t?: string; time: string; img?: string };
-const CHAT: Msg[] = [
-  { who: 'Mama Ji', time: '5:02 AM', img: '🌻 GOOD MORNING 🌻\nHave a blessed Tuesday' },
-  { who: 'Dadi', time: '5:03 AM', t: '🙏🙏🙏🙏🙏🙏🙏' },
-  { who: 'Mummy', time: '8:40 AM', t: 'Ravi beta did you eat' },
-  { who: 'Mummy', time: '8:52 AM', t: 'Ravi' },
-  { who: 'Mummy', time: '9:10 AM', t: 'RAVI' },
-  { who: 'Mummy', time: '9:14 AM', t: 'Seen at 9:11. No reply. OK. Fine.' },
-  { who: 'Ravi', time: '9:15 AM', t: 'yes mummy i ate' },
-  { who: 'Mummy', time: '9:15 AM', t: 'What did you eat' },
-  { who: 'Ravi', time: '9:16 AM', t: 'food' },
-  { who: 'Papa', time: '10:02 AM', t: 'Forwarded as received: NASA has confirmed that this Diwali the Earth will be closest to the Moon in 500 years. Share with 10 people for good luck.' },
-  { who: 'Bunty', time: '10:03 AM', t: 'chachu NASA did not say this' },
-  { who: 'Papa', time: '10:05 AM', t: 'Bunty you are not NASA' },
-  { who: 'Chachi', time: '11:30 AM', t: "Did everyone see Sharma ji's son's new car? 😊😊" },
-  { who: 'Mummy', time: '11:31 AM', t: 'Ravi also has a car' },
-  { who: 'Ravi', time: '11:31 AM', t: 'mummy i have a cycle' },
-  { who: 'Mummy', time: '11:32 AM', t: 'Ravi also has a car (edited)' },
-  { who: 'Dadi', time: '12:00 PM', t: 'Who is this group' },
-  { who: 'Bunty', time: '1:12 PM', t: 'Ravi bhaiya can u send ₹500 urgent. will return tomorrow' },
-  { who: 'Ravi', time: '1:13 PM', t: 'you said that in 2021' },
-  { who: 'Bunty', time: '1:13 PM', t: 'and has tomorrow come yet? no. so technically i am not lying' },
-  { who: 'Mama Ji', time: '2:40 PM', img: '▶  DOCTORS HATE this one\nturmeric trick (Must Watch)' },
-  { who: 'Mummy', time: '6:01 PM', t: "Ravi tomorrow is your day off na? Come home. Rajma is ready. Also Gupta aunty's niece is coming 'by chance'. Wear the blue shirt." },
-  { who: 'Ravi', time: '6:05 PM', t: 'MUMMY' },
-  { who: 'Mummy', time: '6:05 PM', t: 'Blue shirt.' },
-  { who: 'Bunty', time: '6:06 PM', t: '😂😂😂 rishta incoming' },
-  { who: 'Dadi', time: '6:30 PM', t: '🙏' }
-];
-const NAME_COL: Record<string, string> = { Mummy: '#c2185b', Papa: '#1565c0', Dadi: '#6a1b9a', Chachi: '#2e7d32', 'Mama Ji': '#e65100', Bunty: '#00838f' };
-
-class Chat implements Viewer {
+class Classified implements Viewer {
   private s = new Scroller();
   constructor(private id: FileId) {}
 
   draw(c: DeskCtx, r: Rect): void {
     const g = c.g;
-    // Header
-    g.fillStyle = '#075e54';
-    g.fillRect(r.x, r.y, r.w, 62);
-    g.fillStyle = '#f39c12';
-    g.beginPath();
-    g.arc(r.x + 36, r.y + 31, 20, 0, Math.PI * 2);
-    g.fill();
-    text(g, '🪔', r.x + 36, r.y + 38, `18px ${FONT}`, '#fff', 'center');
-    text(g, 'PARIVAAR ❤️ (Official)', r.x + 68, r.y + 27, `700 17px ${FONT}`, '#ffffff');
-    text(g, 'Dadi, Papa, Mummy, Chachi, Mama Ji, Bunty, You', r.x + 68, r.y + 48, `400 13px ${FONT}`, '#cfe9e5');
-    const area = { x: r.x, y: r.y + 62, w: r.w, h: r.h - 62 - 52 };
-    g.fillStyle = '#ece5dd';
-    g.fillRect(area.x, area.y, area.w, area.h);
-    // Lay the bubbles out
-    const maxW = Math.min(440, area.w * 0.7);
-    let y = 16;
-    const items: { m: Msg; lines: string[]; x: number; y: number; w: number; h: number; mine: boolean; showName: boolean }[] = [];
-    let prev = '';
+    g.fillStyle = '#3b3f45';
+    g.fillRect(r.x, r.y, r.w, r.h);
+    const pageW = Math.min(720, r.w - 60);
+    const px = r.x + (r.w - pageW) / 2;
+    const pageH = 1150;
+    this.s.step(c.dt, pageH + 40, r.h);
+    clipTo(g, r);
+    const top = r.y + 20 - this.s.y;
+    g.fillStyle = '#fbfaf6';
+    g.fillRect(px, top, pageW, pageH);
+    const L = px + 44;
+    const W = pageW - 88;
+    // Letterhead
+    g.fillStyle = '#7a1414';
+    g.fillRect(px, top, pageW, 10);
+    text(g, 'RAVICORP INTERNAL AFFAIRS', L, top + 52, `800 15px ${FONT}`, '#7a1414');
+    text(g, 'CLASSIFIED — EYES ONLY', L + W, top + 52, `800 15px ${FONT}`, '#7a1414', 'right');
+    g.fillStyle = '#7a1414';
+    g.fillRect(L, top + 64, W, 2);
+    text(g, 'CASE FILE #0447', L, top + 104, `900 30px ${FONT}`, '#1f1f1f');
+    text(g, 'THE TEAM PHOTO', L, top + 140, `900 30px ${FONT}`, '#1f1f1f');
+    const meta: [string, string][] = [
+      ['Date of incident:', 'Team-building day (mandatory)'],
+      ['Location:', "Ravi's office, south wall"],
+      ['Photographer:', '██████████ (asked to remain anonymous)'],
+      ['Status:', 'UNSOLVED']
+    ];
+    meta.forEach(([k, v], i) => {
+      text(g, k, L, top + 182 + i * 24, `700 14px ${FONT}`, '#444');
+      text(g, v, L + 150, top + 182 + i * 24, `400 14px ${FONT}`, '#1f1f1f');
+    });
+    // Exhibit A
+    text(g, 'EXHIBIT A', L, top + 300, `800 14px ${FONT}`, '#7a1414');
+    const ph = { x: L, y: top + 312, w: W, h: (W * 2) / 3 };
+    const pic = PHOTOS.team;
+    if (pic) g.drawImage(pic, ph.x, ph.y, ph.w, ph.h);
+    else {
+      g.fillStyle = '#ddd';
+      g.fillRect(ph.x, ph.y, ph.w, ph.h);
+    }
+    g.strokeStyle = '#1f1f1f';
+    g.lineWidth = 1;
+    g.strokeRect(ph.x, ph.y, ph.w, ph.h);
+    // The red circle and the question
+    const st = PHOTOS.stranger;
+    if (pic && st) {
+      const k = ph.w / pic.width;
+      const cx = ph.x + st.x * k;
+      const cy = ph.y + st.y * k;
+      const rad = st.r * k;
+      g.strokeStyle = '#e8141c';
+      g.lineWidth = 5;
+      g.beginPath();
+      g.ellipse(cx, cy, rad * 0.62, rad, 0.05, 0, Math.PI * 2);
+      g.stroke();
+      g.save();
+      g.font = `900 34px ${IMPACT}`;
+      g.textAlign = 'center';
+      g.lineWidth = 5;
+      g.strokeStyle = '#ffffff';
+      const ty = Math.max(ph.y + 40, cy - rad - 14);
+      const tx = Math.min(ph.x + ph.w - 90, cx);
+      g.strokeText('WHO IS HE?', tx, ty);
+      g.fillStyle = '#e8141c';
+      g.fillText('WHO IS HE?', tx, ty);
+      g.restore();
+    }
+    text(g, 'Fig. 1 — Ravi (centre), with his arms around two coworkers who did not agree to this.', L, ph.y + ph.h + 22, `italic 400 13px ${FONT}`, '#555');
+    // Findings
+    let y = ph.y + ph.h + 64;
+    text(g, 'FINDINGS', L, y, `800 14px ${FONT}`, '#7a1414');
+    y += 28;
+    const findings = [
+      '1. Nobody on the floor recognises the individual at the far right of the photo.',
+      '2. He is not on the payroll. He is not in the visitor log. He was not invited.',
+      '3. He is not wearing anything. He is yellow. All of him. Except the face.',
+      '4. When asked, Ravi said: "He was already there when I got there."',
+      '5. When asked again, Ravi said: "I thought he was with you guys."',
+      '6. The coffee machine has been making a 7th cup every morning since that day.',
+      '7. Gary claims he has "seen him in the stairwell". Gary has been sent home.'
+    ];
     g.font = `400 15px ${FONT}`;
-    for (const m of CHAT) {
-      const mine = m.who === 'Ravi';
-      const showName = !mine && m.who !== prev;
-      const body = m.img ?? m.t ?? '';
-      const lines = body.split('\n').flatMap((l) => wrap(g, l, maxW - 24));
-      const w = Math.min(maxW, Math.max(110, ...lines.map((l) => g.measureText(l).width + 24), showName ? g.measureText(m.who).width + 30 : 0));
-      const h = (showName ? 20 : 0) + (m.img ? 96 : 0) + lines.length * 20 + 26;
-      const x = mine ? area.w - w - 14 : 14;
-      items.push({ m, lines, x, y, w, h, mine, showName });
-      y += h + (m.who === prev ? 4 : 10);
-      prev = m.who;
-    }
-    const content = y + 10;
-    this.s.step(c.dt, content, area.h);
-    clipTo(g, area);
-    for (const it of items) {
-      const bx = area.x + it.x;
-      const by = area.y + it.y - this.s.y;
-      if (by > area.y + area.h || by + it.h < area.y) continue;
-      g.fillStyle = it.mine ? '#dcf8c6' : '#ffffff';
-      rr(g, bx, by, it.w, it.h, 8);
-      g.fill();
-      let ty = by + 20;
-      if (it.showName) {
-        text(g, it.m.who, bx + 12, ty, `700 13px ${FONT}`, NAME_COL[it.m.who] ?? '#555');
-        ty += 20;
+    for (const f of findings) {
+      for (const l of wrap(g, f, W)) {
+        text(g, l, L, y, `400 15px ${FONT}`, '#1f1f1f');
+        y += 22;
       }
-      if (it.m.img) {
-        const ig = g.createLinearGradient(bx, ty - 10, bx + it.w, ty + 80);
-        ig.addColorStop(0, it.m.img.startsWith('▶') ? '#333' : '#f9e79f');
-        ig.addColorStop(1, it.m.img.startsWith('▶') ? '#7a1f1f' : '#f5b041');
-        g.fillStyle = ig;
-        rr(g, bx + 8, ty - 10, it.w - 16, 86, 6);
-        g.fill();
-        ty += 96;
-        it.lines.forEach((l, i) => {
-          text(g, l, bx + 12, ty - 82 + 26 + i * 22, `700 15px ${FONT}`, it.m.img!.startsWith('▶') ? '#ffffff' : '#7a3b00');
-        });
-        text(g, 'Forwarded many times', bx + 12, ty - 2, `italic 400 12px ${FONT}`, '#888');
-        ty += 6;
-      } else {
-        it.lines.forEach((l, i) => text(g, l, bx + 12, ty + i * 20, `400 15px ${FONT}`, '#1f1f1f'));
-      }
-      text(g, it.m.time + (it.mine ? '  ✓✓' : ''), bx + it.w - 10, by + it.h - 8, `400 11px ${FONT}`, it.mine ? '#4fa3e0' : '#999', 'right');
+      y += 6;
     }
+    y += 14;
+    text(g, 'RECOMMENDATION', L, y, `800 14px ${FONT}`, '#7a1414');
+    y += 26;
+    for (const l of wrap(g, 'Do not engage. Do not make eye contact. Do not, under any circumstances, invite him to the team lunch. If he is already at the team lunch, leave quietly and inform HR (Sunita).', W)) {
+      text(g, l, L, y, `400 15px ${FONT}`, '#1f1f1f');
+      y += 22;
+    }
+    // The stamp
+    g.save();
+    g.translate(px + pageW * 0.66, top + 190);
+    g.rotate(-0.22);
+    g.globalAlpha = 0.8;
+    g.strokeStyle = '#c0392b';
+    g.lineWidth = 5;
+    rr(g, -150, -38, 300, 76, 8);
+    g.stroke();
+    text(g, 'CLASSIFIED', 0, 16, `900 42px ${FONT}`, '#c0392b', 'center');
     g.restore();
-    scrollbar(g, area, this.s.y, content);
-    c.hot(area, `${this.id}:area`, { wheel: (dy) => this.s.by(dy) });
-    // The input, which doesn't work for Ravi
-    const ib = { x: r.x + 12, y: r.y + r.h - 44, w: r.w - 24, h: 36 };
-    g.fillStyle = '#f0f0f0';
-    g.fillRect(r.x, r.y + r.h - 52, r.w, 52);
-    g.fillStyle = '#ffffff';
-    rr(g, ib.x, ib.y, ib.w, ib.h, 18);
-    g.fill();
-    text(g, 'Only admins can send messages. Admin: Mummy', ib.x + 18, ib.y + 23, `italic 400 14px ${FONT}`, '#999');
-    c.hot(ib, `${this.id}:input`, { down: () => c.say('PARIVAAR ❤️', 'You have been muted by Mummy (admin) until you wear the blue shirt.') });
+    g.restore();
+    scrollbar(g, r, this.s.y, pageH + 40);
+    c.hot(r, `${this.id}:page`, { wheel: (dy) => this.s.by(dy) });
   }
 
   key(e: KeyboardEvent): boolean {
     if (e.code === 'ArrowDown' || e.code === 'KeyS') this.s.by(50);
     else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.s.by(-50);
-    else if (e.code === 'PageDown' || e.code === 'Space') this.s.by(300);
-    else if (e.code === 'PageUp') this.s.by(-300);
+    else if (e.code === 'PageDown' || e.code === 'Space') this.s.by(320);
+    else if (e.code === 'PageUp') this.s.by(-320);
     else return false;
     return true;
   }
 }
 
-// ==================================================== Explorer: "taxes"
+// ============================================= Micheal's Day Off (pirated)
 
-const TAX_ITEMS: { id: FileId; size: string; type: string }[] = [
-  { id: 'meme1', size: '214 KB', type: 'JPG File' },
-  { id: 'meme2', size: '188 KB', type: 'JPG File' },
-  { id: 'meme3', size: '301 KB', type: 'JPG File' },
-  { id: 'taxtxt', size: '1 KB', type: 'Text Document' }
-];
-
-class Folder implements Viewer {
-  private sel = -1;
+class Game implements Viewer {
+  private t = 0;
+  private spawned = 0;
+  private wave = 9;
+  private state: 'ads' | 'title' | 'loading' | 'won' = 'ads';
+  private loadT = 0;
   constructor(private id: FileId) {}
 
   draw(c: DeskCtx, r: Rect): void {
     const g = c.g;
-    g.fillStyle = '#ffffff';
+    this.t += c.dt;
+    // The ads pour in, one after another, on top of everything
+    if (this.state === 'ads' && this.spawned < this.wave && this.t > 0.35 + this.spawned * 0.22) {
+      this.spawned++;
+      c.open(newAd());
+    }
+    const ads = c.count('ad');
+    if (this.state === 'ads' && this.spawned >= this.wave && ads === 0) this.state = 'title';
+    // The title screen behind them
+    const gr = g.createLinearGradient(0, r.y, 0, r.y + r.h);
+    gr.addColorStop(0, '#ff9a3d');
+    gr.addColorStop(0.55, '#c2397a');
+    gr.addColorStop(1, '#2a1240');
+    g.fillStyle = gr;
     g.fillRect(r.x, r.y, r.w, r.h);
-    g.fillStyle = '#f7f9fc';
-    g.fillRect(r.x, r.y, r.w, 42);
-    g.strokeStyle = '#d0d4da';
-    g.lineWidth = 1;
-    rr(g, r.x + 12, r.y + 8, r.w - 24, 26, 4);
-    g.stroke();
-    text(g, 'This PC  ›  Documents  ›  Tax Documents 2025 (DO NOT OPEN)', r.x + 24, r.y + 26, `400 14px ${FONT}`, '#1f1f1f');
-    const lx = r.x + 20;
-    text(g, 'Name', lx + 30, r.y + 66, `400 13px ${FONT}`, '#5f6368');
-    text(g, 'Type', lx + 400, r.y + 66, `400 13px ${FONT}`, '#5f6368');
-    text(g, 'Size', lx + 560, r.y + 66, `400 13px ${FONT}`, '#5f6368');
-    g.fillStyle = '#ececec';
-    g.fillRect(lx, r.y + 74, r.w - 40, 1);
-    TAX_ITEMS.forEach((it, i) => {
-      const y = r.y + 80 + i * 34;
-      const rowR = { x: lx - 4, y, w: r.w - 32, h: 32 };
-      const hid = `${this.id}:row${i}`;
-      if (this.sel === i || c.hoverId === hid) {
-        g.fillStyle = this.sel === i ? '#cce4f7' : '#eef4fb';
-        g.fillRect(rowR.x, rowR.y, rowR.w, rowR.h);
+    g.fillStyle = '#ffe28a';
+    g.beginPath();
+    g.arc(r.x + r.w / 2, r.y + r.h * 0.62, 90, Math.PI, 0);
+    g.fill();
+    // Palm trees and a hammock with Micheal in it
+    g.strokeStyle = '#2a1240';
+    g.lineWidth = 10;
+    for (const s of [-1, 1]) {
+      const tx = r.x + r.w / 2 + s * 200;
+      g.beginPath();
+      g.moveTo(tx, r.y + r.h * 0.9);
+      g.quadraticCurveTo(tx - s * 20, r.y + r.h * 0.6, tx + s * 10, r.y + r.h * 0.42);
+      g.stroke();
+      g.fillStyle = '#2a1240';
+      for (let k = 0; k < 5; k++) {
+        g.save();
+        g.translate(tx + s * 10, r.y + r.h * 0.42);
+        g.rotate(-Math.PI / 2 + (k - 2) * 0.6);
+        g.beginPath();
+        g.ellipse(40, 0, 44, 9, 0, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
       }
-      drawFileIcon(g, fileDef(it.id).icon, lx + 2, y + 5, 22);
-      text(g, fileDef(it.id).name, lx + 30, y + 21, `400 14px ${FONT}`, '#1f1f1f');
-      text(g, it.type, lx + 400, y + 21, `400 14px ${FONT}`, '#5f6368');
-      text(g, it.size, lx + 560, y + 21, `400 14px ${FONT}`, '#5f6368');
-      c.hot(rowR, hid, { down: () => (this.sel = i), dbl: () => c.open(it.id) });
+    }
+    g.strokeStyle = '#f2f2f2';
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(r.x + r.w / 2 - 190, r.y + r.h * 0.6);
+    g.quadraticCurveTo(r.x + r.w / 2, r.y + r.h * 0.82, r.x + r.w / 2 + 190, r.y + r.h * 0.6);
+    g.stroke();
+    g.fillStyle = '#2a1240';
+    g.beginPath();
+    g.ellipse(r.x + r.w / 2, r.y + r.h * 0.7, 80, 14, 0.05, 0, Math.PI * 2);
+    g.fill();
+    g.beginPath();
+    g.arc(r.x + r.w / 2 - 82, r.y + r.h * 0.67, 14, 0, Math.PI * 2);
+    g.fill();
+    // Title
+    g.save();
+    g.font = `900 64px ${IMPACT}`;
+    g.textAlign = 'center';
+    g.lineWidth = 8;
+    g.strokeStyle = '#2a1240';
+    g.strokeText("MICHEAL'S DAY OFF", r.x + r.w / 2, r.y + 92);
+    g.fillStyle = '#fff3c4';
+    g.fillText("MICHEAL'S DAY OFF", r.x + r.w / 2, r.y + 92);
+    g.restore();
+    text(g, '[ CRACKED BY xX_R4V1_Xx ]  [ 100% REAL ]  [ NO VIRUS ]  [ FREE ]', r.x + r.w / 2, r.y + 124, `700 14px ${FONT}`, '#ffffff', 'center');
+    const bx = r.x + r.w / 2;
+    const by = r.y + r.h - 70;
+    if (this.state === 'ads') {
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      rr(g, bx - 200, by - 26, 400, 44, 8);
+      g.fill();
+      text(g, ads ? `Close all ads to continue (${ads} left)` : 'Loading ads…', bx, by + 3, `700 17px ${FONT}`, '#ffd34d', 'center');
+    } else if (this.state === 'title') {
+      const b = { x: bx - 110, y: by - 28, w: 220, h: 50 };
+      const hid = `${this.id}:start`;
+      g.fillStyle = c.hoverId === hid ? '#ffe066' : '#ffd34d';
+      rr(g, b.x, b.y, b.w, b.h, 10);
+      g.fill();
+      text(g, '▶  START', bx, b.y + 34, `900 24px ${IMPACT}`, '#2a1240', 'center');
+      c.hot(b, hid, {
+        down: () => {
+          this.state = 'loading';
+          this.loadT = 0;
+        }
+      });
+    } else if (this.state === 'loading') {
+      this.loadT += c.dt;
+      const p = Math.min(0.99, this.loadT / 2.5);
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      rr(g, bx - 220, by - 34, 440, 62, 8);
+      g.fill();
+      g.fillStyle = '#444';
+      g.fillRect(bx - 200, by - 18, 400, 14);
+      g.fillStyle = '#ffd34d';
+      g.fillRect(bx - 200, by - 18, 400 * p, 14);
+      text(g, this.loadT < 3.4 ? `Loading… ${Math.round(p * 100)}%` : 'crack.dll is having a day off too. Please download more RAM.', bx, by + 16, `600 14px ${FONT}`, '#ffffff', 'center');
+      if (this.loadT > 6) {
+        // ...and the ads are back
+        this.state = 'ads';
+        this.spawned = 0;
+        this.wave = 5;
+        this.t = 0;
+      }
+    }
+  }
+}
+
+class Ad implements Viewer {
+  private t = 0;
+  constructor(private id: FileId) {}
+
+  draw(c: DeskCtx, r: Rect): void {
+    const g = c.g;
+    this.t += c.dt;
+    const brand = adBrand(this.id);
+    const n = Number(this.id.slice(2));
+    const blink = Math.floor(this.t * 3) % 2 === 0;
+    const cx = r.x + r.w / 2;
+    if (brand === 'mccarls') {
+      g.fillStyle = '#d61f26';
+      g.fillRect(r.x, r.y, r.w, r.h);
+      // A grinning yellow star
+      g.fillStyle = '#ffcc00';
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const rad = i % 2 ? 26 : 58;
+        g.lineTo(r.x + 80 + Math.cos(a) * rad, r.y + 96 + Math.sin(a) * rad);
+      }
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#d61f26';
+      g.beginPath();
+      g.arc(r.x + 70, r.y + 92, 5, 0, Math.PI * 2);
+      g.arc(r.x + 90, r.y + 92, 5, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#d61f26';
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(r.x + 80, r.y + 102, 10, 0.2, Math.PI - 0.2);
+      g.stroke();
+      text(g, "McCARL'S", r.x + 150, r.y + 82, `900 40px ${IMPACT}`, '#ffcc00');
+      text(g, "i'm lowkey lovin' it", r.x + 152, r.y + 108, `italic 700 16px ${FONT}`, '#ffffff');
+      text(g, ['2 BURGERS FOR ₹1*', 'FREE FRIES FOR LIFE*', 'BIG McCARL: NOW 40% BIGGER*'][n % 3], cx, r.y + 190, `900 30px ${IMPACT}`, blink ? '#ffffff' : '#ffcc00', 'center');
+      text(g, '*burgers not included. fries not included. life not included.', cx, r.y + 216, `400 11px ${FONT}`, '#ffd1d1', 'center');
+    } else if (brand === 'sludger') {
+      g.fillStyle = '#1d2b6b';
+      g.fillRect(r.x, r.y, r.w, r.h);
+      // A dripping crown
+      g.fillStyle = '#ff8a00';
+      g.beginPath();
+      g.moveTo(r.x + 30, r.y + 120);
+      g.lineTo(r.x + 30, r.y + 60);
+      g.lineTo(r.x + 55, r.y + 90);
+      g.lineTo(r.x + 80, r.y + 50);
+      g.lineTo(r.x + 105, r.y + 90);
+      g.lineTo(r.x + 130, r.y + 60);
+      g.lineTo(r.x + 130, r.y + 120);
+      g.closePath();
+      g.fill();
+      g.fillStyle = '#7a4a1a';
+      for (let i = 0; i < 5; i++) {
+        const dx = r.x + 40 + i * 22;
+        const len = 10 + ((n + i) % 3) * 8 + Math.sin(this.t * 2 + i) * 3;
+        g.beginPath();
+        g.ellipse(dx, r.y + 120 + len / 2, 6, len / 2 + 4, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.fillRect(r.x + 30, r.y + 112, 100, 10);
+      text(g, 'SLUDGER', r.x + 150, r.y + 82, `900 40px ${IMPACT}`, '#ff8a00');
+      text(g, 'KING', r.x + 150, r.y + 120, `900 40px ${IMPACT}`, '#f5e6c8');
+      text(g, ['HAVE IT YOUR WAY (THE WRONG WAY)', 'THE SLUDGEROONI — 99% OFF', 'CONGRATS!! YOU WON A CROWN'][n % 3], cx, r.y + 190, `900 24px ${IMPACT}`, blink ? '#ffffff' : '#ff8a00', 'center');
+      text(g, 'Sludger King is not responsible for what is in the sludge.', cx, r.y + 216, `400 11px ${FONT}`, '#aab4e8', 'center');
+    } else {
+      g.fillStyle = '#ffffff';
+      g.fillRect(r.x, r.y, r.w, r.h);
+      g.fillStyle = '#c8102e';
+      g.fillRect(r.x, r.y, r.w, 12);
+      // A harp, and a star over it
+      g.strokeStyle = '#c8102e';
+      g.lineWidth = 5;
+      g.beginPath();
+      g.moveTo(r.x + 50, r.y + 140);
+      g.lineTo(r.x + 50, r.y + 60);
+      g.quadraticCurveTo(r.x + 100, r.y + 50, r.x + 120, r.y + 90);
+      g.lineTo(r.x + 50, r.y + 140);
+      g.stroke();
+      g.lineWidth = 2;
+      for (let i = 1; i < 5; i++) {
+        g.beginPath();
+        g.moveTo(r.x + 50 + i * 13, r.y + 64 + i * 3);
+        g.lineTo(r.x + 50 + i * 13, r.y + 140 - i * 10);
+        g.stroke();
+      }
+      g.fillStyle = '#ffd200';
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const rad = i % 2 ? 7 : 16;
+        g.lineTo(r.x + 104 + Math.cos(a) * rad, r.y + 50 + Math.sin(a) * rad);
+      }
+      g.fill();
+      text(g, "HARPEE'S", r.x + 145, r.y + 100, `900 40px ${IMPACT}`, '#c8102e');
+      text(g, ['THICCBURGER: NOW THICCER', 'WIN A FREE iPHONE (REAL!!)', 'HOT FRIES IN YOUR AREA'][n % 3], cx, r.y + 190, `900 26px ${IMPACT}`, blink ? '#c8102e' : '#1f1f1f', 'center');
+      text(g, "You are the 1,000,000th visitor! (Everyone is.)", cx, r.y + 216, `400 12px ${FONT}`, '#777', 'center');
+    }
+    // CLAIM NOW: which, of course, opens another one
+    const b = { x: cx - 100, y: r.y + r.h - 62, w: 200, h: 42 };
+    const hid = `${this.id}:claim`;
+    g.fillStyle = c.hoverId === hid ? '#2ecc71' : '#27ae60';
+    rr(g, b.x, b.y, b.w, b.h, 21);
+    g.fill();
+    text(g, blink ? 'CLAIM NOW!!' : 'CLICK HERE!!', cx, b.y + 28, `900 20px ${IMPACT}`, '#ffffff', 'center');
+    c.hot(b, hid, { down: () => c.open(newAd()) });
+    // A fake little ✕ in the corner of the ad itself
+    const fx = { x: r.x + r.w - 26, y: r.y + 16, w: 16, h: 16 };
+    text(g, '✕', fx.x + 8, fx.y + 13, `400 13px ${FONT}`, 'rgba(0,0,0,0.35)', 'center');
+    c.hot(fx, `${this.id}:fake`, {
+      down: () => {
+        c.open(newAd());
+        c.open(newAd());
+      }
     });
-    g.fillStyle = '#f7f9fc';
-    g.fillRect(r.x, r.y + r.h - 26, r.w, 26);
-    text(g, `${TAX_ITEMS.length} items   ·   0 actual tax documents`, r.x + 14, r.y + r.h - 8, `400 13px ${FONT}`, '#5f6368');
   }
 }
 
@@ -1703,33 +1066,19 @@ class Installer implements Viewer {
 // ==================================================================== make
 
 export function viewerFor(id: FileId): Viewer {
+  if (isAd(id)) return new Ad(id);
   switch (id) {
-    case 'diary':
-      return new Notepad(DIARY, id);
-    case 'excuses':
-      return new Notepad(EXCUSES, id);
-    case 'taxtxt':
-      return new Notepad(TAXES, id);
-    case 'biodata':
-      return new WordDoc(id);
-    case 'budget':
-      return new Sheet(id);
-    case 'pitch':
-      return new Slides(id);
-    case 'dance':
-      return new MediaPlayer(id);
-    case 'diwali':
-    case 'meme1':
-    case 'meme2':
-    case 'meme3':
-      return new Photo(id);
-    case 'chat':
-      return new Chat(id);
-    case 'tax':
-      return new Folder(id);
     case 'scamme':
       return new ScamMe(id);
-    case 'ram':
+    case 'mail':
+      return new Mail(id);
+    case 'classified':
+      return new Classified(id);
+    case 'game':
+      return new Game(id);
+    case 'maheerpic':
+      return new Photo(id);
+    default:
       return new Installer(id);
   }
 }

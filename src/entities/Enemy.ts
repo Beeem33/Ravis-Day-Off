@@ -2587,6 +2587,21 @@ export class Enemy {
     this.hitman?.restyleCrew(o);
   }
 
+  /** Model only: wear something on a bone, placed in the model's rest space. */
+  wear(o: THREE.Object3D, bone = 'Head'): void {
+    this.hitman?.wear(o, bone);
+  }
+
+  /** Model only: one of the model's hairstyles, or a shaved head. */
+  setHair(style: string | null): void {
+    this.hitman?.setHair(style);
+  }
+
+  /** Model only: clothes and hands all one flat colour (the face left alone). */
+  mannequin(color: number): void {
+    this.hitman?.mannequin(color);
+  }
+
   /** The coworkers' kit for the fight (model only): a carrier that fits him, and a helmet in place of his cap. */
   wearCrewKit(): void {
     if (this.armoured) return;

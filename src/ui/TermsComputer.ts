@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
-import { DESKTOP_FILES, drawFileIcon, fileDef, isFile, viewerFor, type DeskCtx, type FileId, type Viewer } from './RaviFiles';
+import { DESKTOP_FILES, drawFileIcon, fileDef, isAd, isFile, viewerFor, type DeskCtx, type FileId, type Viewer } from './RaviFiles';
 
 /**
  * Ravi's work PC, at the very top of the game: a live canvas on the monitor in
@@ -354,7 +354,15 @@ export class TermsComputer {
       const d = fileDef(app);
       const n = this.wins.length;
       this.viewers.set(app, viewerFor(app));
-      this.wins.push({ app, x: Math.max(0, (W - d.w) / 2 + (n % 4) * 26 - 39), y: Math.max(0, Math.min(H - TASK_H - d.h, 30 + (n % 4) * 22)), w: d.w, h: Math.min(d.h, H - TASK_H), min: false, max: false });
+      this.wins.push({
+        app,
+        x: d.x ?? Math.max(0, (W - d.w) / 2 + (n % 4) * 26 - 39),
+        y: d.y ?? Math.max(0, Math.min(H - TASK_H - d.h, 30 + (n % 4) * 22)),
+        w: d.w,
+        h: Math.min(d.h, H - TASK_H),
+        min: false,
+        max: false
+      });
       this.audio.mouseClick();
       return;
     }
@@ -382,7 +390,8 @@ export class TermsComputer {
       hot: (r, id, o = {}) => this.hot(r, id, { win: w, ...o }),
       open: (id) => this.open(id),
       close: () => this.close(w),
-      say: (t, b) => this.say(t, b)
+      say: (t, b) => this.say(t, b),
+      count: (p) => this.wins.filter((o) => o.app.startsWith(p)).length
     };
   }
 
@@ -800,7 +809,7 @@ export class TermsComputer {
       apps.push({ id: 'task:terms', app: 'terms', draw: (cx, cy) => drawPdf(g, cx - 12, cy - 15, 24, 30), click: () => this.taskClick('terms') });
     for (const w of this.wins) {
       const app = w.app;
-      if (!isFile(app) || apps.some((a) => a.app === app)) continue;
+      if (!isFile(app) || isAd(app) || apps.some((a) => a.app === app)) continue;
       apps.push({ id: 'task:' + app, app, draw: (cx, cy) => drawFileIcon(g, fileDef(app).icon, cx - 10, cy - 13, 26), click: () => this.taskClick(app) });
     }
     const n = apps.length;
@@ -904,7 +913,7 @@ export class TermsComputer {
       { label: 'Notepad', draw: (cx, cy) => drawTile(g, cx, cy, '#2d7dd2', '✎'), fn: () => this.disabled('Notepad') },
       { label: 'Solitaire', draw: (cx, cy) => drawTile(g, cx, cy, '#1d7a3a', '♠'), fn: () => this.say('Solitaire', 'Games are blocked during work hours. It is your day off. Still blocked.') },
       { label: 'Photos', draw: (cx, cy) => drawTile(g, cx, cy, '#c2447a', '▣'), fn: () => this.disabled('Photos') },
-      { label: 'Mail', draw: (cx, cy) => drawTile(g, cx, cy, '#0f62c4', '✉'), fn: () => this.say('Mail', '1,284 unread. Subject of the newest: "Quick favour on your day off?"') },
+      { label: 'Mail', draw: (cx, cy) => drawTile(g, cx, cy, '#0f62c4', '✉'), fn: () => this.open('mail') },
       { label: 'Camera', draw: (cx, cy) => drawTile(g, cx, cy, '#444', '◉'), fn: () => this.say('Camera', 'The camera is already on. It has been on all day.') },
       { label: 'Store', draw: (cx, cy) => drawTile(g, cx, cy, '#7a4bc2', '🛍'), fn: () => this.disabled('Store') }
     ];

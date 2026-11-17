@@ -19,6 +19,8 @@ import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import type { BreakableGlass } from '../environment/BreakableGlass';
 import { TermsComputer } from '../ui/TermsComputer';
+import { PHOTOS } from '../ui/RaviFiles';
+import { shootOfficePhotos } from './OfficePhotos';
 
 const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
@@ -345,6 +347,14 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private startTerms(): void {
     const face = this.level.ravisScreen;
     this.phase = 'terms';
+    // The photos on his PC are taken here, in this office, with the real models
+    if (!PHOTOS.team) {
+      shootOfficePhotos(this.ctx.engine.renderer, this.scene, (p) => {
+        PHOTOS.team = p.team;
+        PHOTOS.stranger = p.stranger;
+        PHOTOS.maheer = p.maheer;
+      });
+    }
     this.terms = new TermsComputer(face, 0.66, 0.44, this.ctx.audio);
     this.screenMat = face.material as THREE.Material;
     face.material = this.terms.material;

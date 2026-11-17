@@ -106,6 +106,10 @@ class TCar implements TrafficCarState {
   fz = -1;
   wreckAge = 0;
   still = false;
+  /** Committed to the launch ramp: up it and off the end. */
+  rampJump = false;
+  /** Seconds sat at the foot of the ramp with the road gone ahead. */
+  rampWait = 0;
   constructor(id: number) {
     this.id = id;
   }
@@ -177,6 +181,14 @@ export class Traffic implements ITraffic {
   enabled = true;
   /** Everyone's seen something terrible up ahead: every car brakes to a stop where it is, and stays stopped. */
   halt = false;
+  /**
+   * A launch ramp in one of the lanes, short of a hole in the deck. Before the
+   * hole opens the cars in its lane stop short of it (in plain sight, not
+   * inside it); once it's open, most of them drive up it and off the end.
+   */
+  ramp: { road: RoadId; s0: number; len: number; height: number; d: number; open: boolean } | null = null;
+  /** Cars that went off the end of the ramp this frame: the scene sends them down the hole. */
+  readonly launches: { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; pitch: number; vel: THREE.Vector3 }[] = [];
   onHorn: ((pos: THREE.Vector3) => void) | null = null;
 
   private pool: TCar[] = [];
@@ -373,6 +385,8 @@ export class Traffic implements ITraffic {
 
   private kill(c: TCar): void {
     c.active = false;
+    c.rampJump = false;
+    c.rampWait = 0;
     c.wrecked = false;
     this.free.push(c.id);
   }
@@ -474,6 +488,28 @@ export class Traffic implements ITraffic {
     c.react -= dt;
     c.laneTimer -= dt;
 
+    // ---- the launch ramp, if this lane has one
+    const rp = this.ramp;
+    let rampRel = NaN;
+    let jumper = false;
+    if (rp && dir === 1 && c.at.road === rp.road && Math.abs(L.lane.offset - rp.d) < 1.2) {
+      rampRel = s - rp.s0;
+      if (rampRel > -160 && rampRel < rp.len + 8) {
+        // Most of them go for it once the road's gone; before that, nobody does
+        if (rampRel >= -0.5 && rp.open && c.id % 3 !== 0) c.rampJump = true;
+        // Sat at the foot of it a while with the road gone ahead and everyone behind leaning on the horn: he goes for it too
+        if (rp.open && rampRel > -14 && rampRel < 0 && c.speed < 1) c.rampWait += dt;
+        if (c.rampWait > 3.5) c.rampJump = true;
+        jumper = c.rampJump || (rp.open && c.id % 3 !== 0);
+      }
+    }
+    if (jumper) {
+      // Straight up the middle, at a steady clip: not so fast it clears the hole
+      c.v0 = 15 + (c.id % 4);
+      c.swerve = 0;
+      c.react = 0;
+    }
+
     // ---- what's ahead: the next car in the lane (on into the next road's lane at the end)
     let gap = Infinity;
     let vLead = 0;
@@ -499,6 +535,7 @@ export class Traffic implements ITraffic {
     for (let i = 0; i < this.wrecks.length; i++) {
       const w = this.pool[this.wrecks[i]];
       if (w.at.road !== c.at.road) continue;
+      if (jumper && rp && w.at.s > rp.s0 + rp.len - 0.5) continue; // he's going over it
       const ahead = (w.at.s - s) * dir;
       if (ahead < 0 || ahead > 150) continue;
       // A wreck lying across the road blocks as wide as it is long
@@ -516,9 +553,16 @@ export class Traffic implements ITraffic {
     for (let i = 0; i < others.length; i++) {
       const o = others[i];
       if (o.at.road !== c.at.road) continue;
+      // Off the end of the ramp, nothing beyond the lip is in his way: he's flying over it
+      if (jumper && rp && o.at.s > rp.s0 + rp.len - 0.5) continue;
       const ahead = (o.at.s - s) * dir;
       const lat = Math.abs(o.at.d - d);
       const vAlong = o.velocity.x * c.fx + o.velocity.z * c.fz;
+      // Lights and siren coming up behind: pull over and let him through
+      if ((o as { role?: string }).role === 'cop' && vAlong > c.speed + 5 && ahead < -3 && ahead > -75 && lat < 3.6 && !jumper) {
+        this.yieldTo(c, o);
+        continue;
+      }
       const oh = (o as { halfLength?: number }).halfLength ?? 2.4;
       if (ahead > 0 && ahead < 150 && lat < corridor + 0.3) {
         const g = ahead - c.halfLength - oh;
@@ -534,6 +578,16 @@ export class Traffic implements ITraffic {
       } else if (Math.abs(ahead) < 4 && lat < 3.4 && Math.abs(vAlong - c.speed) > 12 && c.hornCd <= 0 && this.rng() < 0.02) {
         this.honk(c); // a near miss going past
       }
+    }
+
+    // Not going up it: stop short of the ramp, where he can be seen, and look for a way round
+    if (rp && !jumper && !Number.isNaN(rampRel) && rampRel < 0 && rampRel > -160) {
+      const g = -rampRel - c.halfLength - 2;
+      if (g < gap) {
+        gap = g;
+        vLead = 0;
+      }
+      if (g < staticAhead) staticAhead = g;
     }
 
     // ---- IDM
@@ -552,7 +606,7 @@ export class Traffic implements ITraffic {
     // Whatever the model says, never drive into the car in front
     if (gap < 1.5) c.speed = Math.min(c.speed, Math.max(0, vLead) * Math.max(0, gap / 1.5));
     // Halted: on the brakes (some harder than others), down to a stop, and no lane changes
-    if (this.halt) {
+    if (this.halt && !jumper) {
       c.speed = Math.max(0, Math.min(c.speed, v - (5 + c.trait * 4) * dt));
       c.laneTimer = 99;
     }
@@ -631,10 +685,45 @@ export class Traffic implements ITraffic {
       ns += net.roads[rid].length;
       c.lane = nx;
     }
+    // Off the end of the ramp: into the air, and the scene takes it from here
+    if (jumper && rp && rid === rp.road && ns - rp.s0 > rp.len) {
+      c.at.s = rp.s0 + rp.len;
+      c.at.d = nd;
+      this.poseLane(c);
+      const ang = Math.atan2(rp.height, rp.len);
+      const v = Math.max(9, c.speed);
+      this.launches.push({
+        kind: c.kind,
+        colour: c.colour.clone(),
+        position: c.position.clone().setY(c.position.y + rp.height),
+        yaw: c.yaw,
+        pitch: ang,
+        vel: new THREE.Vector3(c.fx * v * Math.cos(ang), v * Math.sin(ang), c.fz * v * Math.cos(ang))
+      });
+      this.kill(c);
+      return;
+    }
     c.at.road = rid;
     c.at.s = ns;
     c.at.d = nd;
     this.poseLane(c);
+    // Up the ramp: lifted, nose up
+    if (jumper && rp && rid === rp.road) {
+      const up = (ns - rp.s0) / rp.len;
+      if (up > 0) {
+        c.position.y += Math.min(1, up) * rp.height;
+        c.pitch += Math.atan2(rp.height, rp.len) * Math.min(1, (up * rp.len) / 1.2);
+      }
+    }
+  }
+
+  /** The cop's coming through: brake a little and get over to the side away from him. */
+  private yieldTo(c: TCar, o: ICar): void {
+    if (c.react > 0) return;
+    c.react = 1.8;
+    c.reactBrake = 0.75;
+    const side = Math.sign(c.at.d - o.at.d) || 1;
+    c.swerve = side * 1.6;
   }
 
   /** Something fast behind, or coming head-on: brake, edge aside, honk — or nothing, some people just don't look. */

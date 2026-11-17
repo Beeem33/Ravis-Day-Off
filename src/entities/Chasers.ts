@@ -49,7 +49,7 @@ interface Style {
 }
 
 const BOSS_STYLE: Style = { trigger: 34, triggerT: 1.35, lateral: 5.6, oncoming: true, shoulder: true, clearance: 0.55, cornerGrip: 0.88 };
-const COP_STYLE: Style = { trigger: 30, triggerT: 1.25, lateral: 3.4, oncoming: false, shoulder: false, clearance: 0.8, cornerGrip: 0.9 };
+const COP_STYLE: Style = { trigger: 42, triggerT: 1.75, lateral: 6.4, oncoming: false, shoulder: true, clearance: 0.55, cornerGrip: 0.93 };
 
 class RouteDriver {
   readonly car: DriveCar;
@@ -139,7 +139,7 @@ class RouteDriver {
       const c = cars[i] as TrafficCar & { vel?: THREE.Vector3 };
       if (c.at.road !== myRoad && c.at.road !== nextRoad && c.at.road !== prevRoad) continue;
       const R = net.routeS(c.at);
-      if (R < myR - behind || R > myR + 110) continue;
+      if (R < myR - behind || R > myR + 190) continue;
       const o = this.obstacles[n++];
       o.R = R;
       o.d = c.at.d;
@@ -154,7 +154,7 @@ class RouteDriver {
     for (const c of this.hazards.length ? [...extra, ...this.hazards] : extra) {
       if (!c || (c.at.road !== myRoad && c.at.road !== nextRoad && c.at.road !== prevRoad) || n >= this.obstacles.length) continue;
       const R = net.routeS(c.at);
-      if (R < myR - behind || R > myR + 110) continue;
+      if (R < myR - behind || R > myR + 190) continue;
       const o = this.obstacles[n++];
       o.R = R;
       o.d = c.at.d;
@@ -252,7 +252,7 @@ class RouteDriver {
     const me = this.car;
     if (this.base.road !== me.at.road) return;
     const v = Math.max(0, me.speed);
-    const look = clamp(30 + v * 1.0, 30, 80);
+    const look = clamp(30 + v * 1.4, 30, 150);
     const n = this.candidates(this.cands);
     this.lineHold -= dt;
     const curRoom = this.roomIn(this.wantD, look);
@@ -800,8 +800,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
   constructor(net: RoadNet, tune: CarTune = COP_TUNE) {
     super(net, tune, 'cop', COP_STYLE);
     this.car.onImpact = null;
-    // Pursuit brakes, and a pursuit driver: he leaves it late
-    this.planDecel = 12;
+    // Pursuit brakes, and a pursuit driver: late on the brakes, but not so late he can't stop
+    this.planDecel = 10;
   }
 
   /** Park him (the scene: StreetData.cop.pos / yaw). */
@@ -915,8 +915,8 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       v = Math.min(v, this.cornerLimit());
       this.vRef = v;
       this.pickLine(dt, this.exitPull());
-      // A policeman: he waits for a gap rather than shoving traffic out of his way
-      v = this.followLimit(v);
+      // He picks his way through; boxed in for a couple of seconds, he muscles through rather than lose Ravi
+      v = this.followOrShove(dt, v);
     }
     this.vWant = v;
     this.driveTo(dt, Math.max(0, v));

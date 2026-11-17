@@ -305,6 +305,24 @@ export class HighwayCollapse {
     });
   }
 
+  /**
+   * A car off the end of the launch ramp: already moving (forward and up),
+   * nose up, no waiting — it flies, tips over and comes down on the ground.
+   */
+  launchCar(kind: CarKind, colour: THREE.Color, position: THREE.Vector3, yaw: number, pitch: number, vel: THREE.Vector3): void {
+    this.dropCar(kind, colour, position, yaw, vel);
+    const open = this.holes.filter((q) => q.def);
+    const h = open.reduce<Hole | null>((best, q) => (!best || q.def!.centre.distanceTo(position) < best.def!.centre.distanceTo(position) ? q : best), null);
+    const p = h?.pieces[h.pieces.length - 1];
+    if (!h || !p) return;
+    p.obj.rotation.set(pitch, yaw, 0, 'YXZ');
+    p.vel.copy(vel);
+    p.state = 'fall';
+    // The nose goes down as it flies: a slow turn about its own right-hand axis, and a little roll
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    p.spin.copy(right).multiplyScalar(-0.9).add(new THREE.Vector3(0, (Math.random() - 0.5) * 0.4, 0));
+  }
+
   update(dt: number): void {
     for (const h of this.holes) {
       if (!h.def) continue;

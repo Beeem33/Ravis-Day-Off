@@ -1399,6 +1399,8 @@ export class StreetScene implements GameScene {
       // (well beyond anything the Civic can do: Ravi can't simply outrun him)
       t.topSpeed = behind > 80 ? 92 : behind > 40 ? 80 : 72;
       t.accel = behind > 80 ? 20 : behind > 40 ? 16 : 13;
+      // ...and pursuit brakes to match, so he can thread traffic at that speed
+      t.brake = 21;
       if (this.cop.ramming || this.cop.swiping) this.copAttackT = 0.7;
       this.copAttackT = Math.max(0, this.copAttackT - dt);
       this.copShoveCd = Math.max(0, this.copShoveCd - dt);
@@ -3431,6 +3433,8 @@ export class StreetScene implements GameScene {
     this.scene.add(R.group);
     this.ramp = { ...R, origin, fwd, right, pop: 0, s };
     this.onRamp = 0;
+    // The traffic in its lane: short of it until the road goes, then up it and off
+    this.traffic.ramp = { road: 'highway', s0: s, len: R.length, height: R.height, d: lane.offset, open: false };
     // Nobody stopped on it, or queued in front of it
     this.traffic.clear('highway', s - 40, plan.s + HOLE_HALF);
   }
@@ -3439,13 +3443,23 @@ export class StreetScene implements GameScene {
     if (!this.ramp) return;
     this.ramp.group.removeFromParent();
     this.ramp = null;
+    this.traffic.ramp = null;
     this.onRamp = 0;
   }
 
   /** The ramp popping up out of the road, riding up it, off the lip, and gone once he's well past. */
   private updateRamp(dt: number): void {
+    // The cars that went off the end: up, over, and all the way down
+    for (const l of this.traffic.launches.splice(0)) {
+      this.collapse.launchCar(l.kind, l.colour, l.position, l.yaw, l.pitch, l.vel);
+      const d = this.camera.position.distanceTo(l.position);
+      this.ctx.audio.carWhoosh(d);
+      this.ctx.audio.carScrape(d);
+      this.particles.sparks(l.position, StreetScene.tmpA.set(0, 1, 0), 16);
+    }
     const R = this.ramp;
     if (!R) return;
+    if (this.traffic.ramp) this.traffic.ramp.open = this.collapse.anyOpen;
     if (R.pop < 1) {
       if (R.pop === 0) {
         const mid = R.origin.clone().addScaledVector(R.fwd, R.length * 0.5);

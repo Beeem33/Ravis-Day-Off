@@ -21,11 +21,7 @@ const TASK_H = 56;
 const TITLE_H = 38;
 const FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
-type AppId = 'terms' | 'chrome' | 'bin' | 'photo';
-
-/** The picture file in the corner of the desktop (public/desktop/sara-waft.webp). */
-const PHOTO_NAME = 'Sara Waft.png';
-const PHOTO_SRC = `${import.meta.env.BASE_URL}desktop/sara-waft.webp`;
+type AppId = 'terms' | 'chrome' | 'bin';
 interface Rect {
   x: number;
   y: number;
@@ -112,8 +108,7 @@ const BIN_ITEMS = [
 const TITLES: Record<AppId, string> = {
   terms: 'Terms_and_Conditions_FINAL_v2(3).pdf — PDF Viewer',
   chrome: 'Google Chrome',
-  bin: 'Recycle Bin',
-  photo: `${PHOTO_NAME} — Photos`
+  bin: 'Recycle Bin'
 };
 
 export class TermsComputer {
@@ -127,8 +122,6 @@ export class TermsComputer {
   private canvas = document.createElement('canvas');
   private g: CanvasRenderingContext2D;
   private wallpaper: HTMLCanvasElement;
-  private photo = new Image();
-  private photoState: 'loading' | 'ok' | 'missing' = 'loading';
   private time = 0;
   private live = true;
 
@@ -213,9 +206,6 @@ export class TermsComputer {
     this.canvas.height = H;
     this.g = this.canvas.getContext('2d')!;
     this.wallpaper = TermsComputer.paintWallpaper();
-    this.photo.onload = () => (this.photoState = 'ok');
-    this.photo.onerror = () => (this.photoState = 'missing');
-    this.photo.src = PHOTO_SRC;
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
     this.texture.anisotropy = 8;
@@ -354,8 +344,7 @@ export class TermsComputer {
     const at: Record<AppId, Rect> = {
       terms: { x: 70, y: 18, w: 1060, h: 710 },
       chrome: { x: 130, y: 40, w: 920, h: 620 },
-      bin: { x: 210, y: 110, w: 780, h: 470 },
-      photo: { x: 360, y: 14, w: 520, h: 716 }
+      bin: { x: 210, y: 110, w: 780, h: 470 }
     };
     if (app === 'chrome') {
       this.page = 'newtab';
@@ -506,7 +495,6 @@ export class TermsComputer {
     });
     this.drawIcons();
     this.drawStickyNote();
-    this.drawPhotoIcon();
     for (const w of this.wins) if (!w.min) this.drawWindow(w);
     this.drawTaskbar();
     if (this.startOpen) this.drawStart();
@@ -603,90 +591,6 @@ export class TermsComputer {
         }
       });
     });
-  }
-
-  /** The picture file down in the bottom-right corner of the desktop. */
-  private drawPhotoIcon(): void {
-    const g = this.g;
-    const r = { x: W - 130, y: H - TASK_H - 132, w: 112, h: 116 };
-    const sel = this.selectedIcon === 'photo';
-    const hov = this.hoverId === 'icon:photo';
-    if (sel || hov) {
-      g.fillStyle = sel ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.16)';
-      rr(g, r.x, r.y, r.w, r.h, 6);
-      g.fill();
-    }
-    this.drawThumb(r.x + 31, r.y + 8, 50, 60);
-    g.font = `400 15px ${FONT}`;
-    g.textAlign = 'center';
-    g.fillStyle = '#ffffff';
-    g.shadowColor = 'rgba(0,0,0,0.85)';
-    g.shadowBlur = 4;
-    g.shadowOffsetY = 1;
-    g.fillText(PHOTO_NAME, r.x + r.w / 2, r.y + 88);
-    g.shadowColor = 'transparent';
-    g.shadowBlur = 0;
-    g.shadowOffsetY = 0;
-    g.textAlign = 'left';
-    this.hot(r, 'icon:photo', {
-      down: () => (this.selectedIcon = 'photo'),
-      dbl: () => {
-        this.selectedIcon = 'photo';
-        this.open('photo');
-      },
-      right: () => (this.selectedIcon = 'photo')
-    });
-  }
-
-  /** A picture file's icon: the picture itself, framed, once it's loaded. */
-  private drawThumb(x: number, y: number, w: number, h: number): void {
-    const g = this.g;
-    g.fillStyle = '#ffffff';
-    g.fillRect(x - 2, y - 2, w + 4, h + 4);
-    if (this.photoState === 'ok') {
-      const k = Math.max(w / this.photo.width, h / this.photo.height);
-      const sw = w / k;
-      const sh = h / k;
-      g.drawImage(this.photo, (this.photo.width - sw) / 2, (this.photo.height - sh) / 2, sw, sh, x, y, w, h);
-    } else {
-      g.fillStyle = '#9fc6f2';
-      g.fillRect(x, y, w, h);
-      g.fillStyle = '#3f9a3a';
-      g.beginPath();
-      g.moveTo(x, y + h);
-      g.lineTo(x + w * 0.4, y + h * 0.45);
-      g.lineTo(x + w * 0.7, y + h * 0.75);
-      g.lineTo(x + w, y + h * 0.5);
-      g.lineTo(x + w, y + h);
-      g.closePath();
-      g.fill();
-      g.fillStyle = '#f4c20d';
-      g.beginPath();
-      g.arc(x + w * 0.72, y + h * 0.25, w * 0.1, 0, Math.PI * 2);
-      g.fill();
-    }
-    g.strokeStyle = 'rgba(0,0,0,0.35)';
-    g.lineWidth = 1;
-    g.strokeRect(x - 2, y - 2, w + 4, h + 4);
-  }
-
-  /** The Photos app: the picture on black, fitted to the window. */
-  private drawPhotoApp(_w: Win, r: Rect): void {
-    const g = this.g;
-    g.fillStyle = '#1c1c1c';
-    g.fillRect(r.x, r.y, r.w, r.h);
-    if (this.photoState === 'ok') {
-      const k = Math.min((r.w - 24) / this.photo.width, (r.h - 24) / this.photo.height);
-      const dw = this.photo.width * k;
-      const dh = this.photo.height * k;
-      g.drawImage(this.photo, r.x + (r.w - dw) / 2, r.y + (r.h - dh) / 2, dw, dh);
-    } else {
-      g.fillStyle = '#d0d0d0';
-      g.font = `400 17px ${FONT}`;
-      g.textAlign = 'center';
-      g.fillText(this.photoState === 'loading' ? 'Loading…' : "We can't open this file.", r.x + r.w / 2, r.y + r.h / 2);
-      g.textAlign = 'left';
-    }
   }
 
   private drawStickyNote(): void {
@@ -822,8 +726,6 @@ export class TermsComputer {
     ];
     if (this.wins.some((w) => w.app === 'terms'))
       apps.push({ id: 'task:terms', app: 'terms', draw: (cx, cy) => drawPdf(g, cx - 12, cy - 15, 24, 30), click: () => this.taskClick('terms') });
-    if (this.wins.some((w) => w.app === 'photo'))
-      apps.push({ id: 'task:photo', app: 'photo', draw: (cx, cy) => this.drawThumb(cx - 11, cy - 14, 22, 28), click: () => this.taskClick('photo') });
     const n = apps.length;
     const x0 = W / 2 - (n * 52) / 2;
     apps.forEach((a, i) => {
@@ -1067,7 +969,6 @@ export class TermsComputer {
       });
     } else {
       if (w.app === 'terms') drawPdf(g, r.x + 14, r.y + 9, 16, 20);
-      else if (w.app === 'photo') this.drawThumb(r.x + 15, r.y + 10, 16, 18);
       else drawBin(g, r.x + 12, r.y + 8, 22, this.binItems.length > 0);
       g.font = `400 14px ${FONT}`;
       g.fillStyle = focused ? '#1f1f1f' : '#777';
@@ -1110,8 +1011,7 @@ export class TermsComputer {
     const c = { x: r.x, y: r.y + TITLE_H, w: r.w, h: r.h - TITLE_H };
     if (w.app === 'terms') this.drawTerms(w, c);
     else if (w.app === 'chrome') this.drawChromeApp(w, c);
-    else if (w.app === 'bin') this.drawBinApp(w, c);
-    else this.drawPhotoApp(w, c);
+    else this.drawBinApp(w, c);
     g.restore();
     if (!w.max) {
       g.strokeStyle = 'rgba(0,0,0,0.18)';

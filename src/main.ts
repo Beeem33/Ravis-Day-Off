@@ -65,7 +65,7 @@ document.addEventListener('keydown', unlockOnce);
 // A new game opens on the intro, which hands off to the call centre.
 bus.on(Events.StartGame, () => {
   audio.stopMenuMusic();
-  engine.setScene(new IntroLevelScene(ctx), 'THE CALL FLOOR');
+  engine.setScene(new IntroLevelScene(ctx, true), 'THE CALL FLOOR');
 });
 bus.on(Events.RestartIntro, () => {
   engine.setScene(new IntroLevelScene(ctx), 'THE CALL FLOOR');
@@ -172,7 +172,7 @@ bus.on(Events.ReturnToMenu, () => {
 // The menu's level-select page: start any floor as if it had been reached
 // normally, so a single level can be played without the four before it.
 const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> = {
-  intro: () => ({ scene: new IntroLevelScene(ctx), title: 'THE CALL FLOOR' }),
+  intro: () => ({ scene: new IntroLevelScene(ctx, true), title: 'THE CALL FLOOR' }),
   office: () => ({ scene: new OfficeLevelScene(ctx), title: 'LEVEL 2 — RAVI-CALL SYSTEMS' }),
   level3: () => ({ scene: new Level3Scene(ctx), title: 'LEVEL 3 — THE OTHER FLOOR' }),
   level4: () => ({ scene: new Level4Scene(ctx), title: 'LEVEL 4 — LIGHTS OUT' }),

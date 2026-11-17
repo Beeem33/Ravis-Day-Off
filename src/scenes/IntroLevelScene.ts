@@ -17,6 +17,7 @@ import { Enemy } from '../entities/Enemy';
 import { EnemyAI } from '../entities/EnemyAI';
 import { FPSHUD } from '../ui/FPSHUD';
 import type { BreakableGlass } from '../environment/BreakableGlass';
+import { TermsComputer } from '../ui/TermsComputer';
 
 const FIRE_COOLDOWN = 0.17;
 const MAG_SIZE = 10;
@@ -76,7 +77,15 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private coworker!: Enemy;
   private hud!: FPSHUD;
 
-  private phase: 'cutscene' | 'play' | 'leaving' | 'dead' = 'cutscene';
+  private phase: 'terms' | 'cutscene' | 'play' | 'leaving' | 'dead' = 'cutscene';
+  /** The Terms and Conditions on his monitor, before anything happens (a new game only). */
+  private terms: TermsComputer | null = null;
+  private termsHint: HTMLElement | null = null;
+  /** The monitor's own material (the news), put back once he's agreed. */
+  private screenMat: THREE.Material | null = null;
+  /** Seconds since the agreement went through and the camera started pulling back. */
+  private pullT = -1;
+  private termsTime = 0;
   private t = 0;
   private beats = new Set<string>();
   private fireCooldown = 0;
@@ -98,7 +107,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private corpsePooled = new Set<Enemy>();
 
-  constructor(ctx: GameContext) {
+  /** `withTerms`: open on the Terms and Conditions (a new game, not a restart after dying). */
+  constructor(ctx: GameContext, private readonly withTerms = false) {
     super(ctx);
   }
 
@@ -254,6 +264,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 1, this.player.maxHealth);
     this.buildUI();
+    if (this.withTerms) this.startTerms();
 
     this.unsubs.push(
       bus.on(Events.Resize, () => {
@@ -276,6 +287,7 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     document.removeEventListener('keydown', this.keyHandler);
     this.hud.destroy();
     this.ui.remove();
+    this.terms?.dispose();
     this.ctx.input.exitPointerLock();
     this.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -299,6 +311,95 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.letterbox = el.querySelector('.intro-letterbox')!;
     this.objective = el.querySelector('.intro-objective')!;
     this.fadeEl = el.querySelector('.intro-fade')!;
+  }
+
+  // ------------------------------------------------- terms and conditions
+
+  /**
+   * Before the cutscene, Ravi is leaning right into his screen: the Terms and
+   * Conditions are up and he has to scroll through them and agree. The
+   * controls are the clauses. The pointer is a bowl of curry.
+   */
+  private startTerms(): void {
+    const face = this.level.ravisScreen;
+    this.phase = 'terms';
+    this.terms = new TermsComputer(face, 0.66, 0.44, this.ctx.audio);
+    this.screenMat = face.material as THREE.Material;
+    face.material = this.terms.material;
+    // No bars, no skip: this isn't a cutscene, it's paperwork
+    this.letterbox.classList.add('open');
+    this.ui.querySelector('.intro-skip')!.classList.add('gone');
+    const hint = document.createElement('div');
+    hint.className = 'intro-terms-hint';
+    hint.innerHTML = '<b>MOUSE WHEEL</b> SCROLL &nbsp;·&nbsp; <b>CLICK</b> WITH THE CURRY';
+    this.ui.appendChild(hint);
+    this.termsHint = hint;
+    this.ctx.input.exitPointerLock();
+  }
+
+  private updateTerms(dt: number): void {
+    const { input } = this.ctx;
+    const terms = this.terms!;
+    this.termsTime += dt;
+    this.player.update(dt, this.level.colliders);
+    this.weapon.update(dt, this.player, 0, 0, false);
+    this.agent.update(dt);
+    this.coworker.update(dt);
+    this.stepWorld(dt);
+
+    // Where the cutscene's camera is (the player has just put it there)...
+    const cam = this.player.camera;
+    const homePos = cam.position.clone();
+    const homeQ = cam.quaternion.clone();
+    // ...and his face right up against the screen, the window filling the view
+    const face = this.level.ravisScreen;
+    face.updateWorldMatrix(true, false);
+    const centre = face.getWorldPosition(new THREE.Vector3());
+    const normal = new THREE.Vector3(0, 0, 1).transformDirection(face.matrixWorld);
+    const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
+    const d = Math.max(0.22 / (tanV * 0.86), 0.33 / (tanV * cam.aspect * 0.94));
+    // Leaning in to read: a slow drift, closer when he hits the small print
+    const s = this.termsTime;
+    const closePos = centre
+      .clone()
+      .addScaledVector(normal, d + 0.006 * Math.sin(s * 0.9))
+      .add(new THREE.Vector3(0.004 * Math.sin(s * 0.53), 0.003 * Math.sin(s * 0.71 + 1), 0));
+    const closeQ = new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().lookAt(closePos, centre.clone().add(new THREE.Vector3(0.002 * Math.sin(s * 0.4), 0, 0)), new THREE.Vector3(0, 1, 0))
+    );
+
+    // Once it's signed, he sits back and the cutscene picks up from there
+    if (terms.done && this.pullT < 0) {
+      this.pullT = 0;
+      this.termsHint?.classList.add('gone');
+    }
+    let k = 1;
+    if (this.pullT >= 0) {
+      this.pullT += dt;
+      const u = Math.min(1, this.pullT / 1.3);
+      k = 1 - u * u * (3 - 2 * u);
+    }
+    cam.position.lerpVectors(homePos, closePos, k);
+    cam.quaternion.slerpQuaternions(homeQ, closeQ, k);
+    cam.updateMatrixWorld(true);
+    terms.update(dt, cam);
+
+    if (this.pullT >= 1.3) this.endTerms();
+    input.consumeClick();
+    input.endFrame();
+  }
+
+  private endTerms(): void {
+    // The news goes back up on his screen
+    this.level.ravisScreen.material = this.screenMat!;
+    this.terms?.dispose();
+    this.terms = null;
+    this.termsHint?.remove();
+    this.termsHint = null;
+    this.letterbox.classList.remove('open');
+    this.ui.querySelector('.intro-skip')!.classList.remove('gone');
+    this.phase = 'cutscene';
+    this.t = 0;
   }
 
   private setObjective(text: string): void {
@@ -505,6 +606,10 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
   update(dt: number, _time: number): void {
     const { input } = this.ctx;
 
+    if (this.phase === 'terms') {
+      this.updateTerms(dt);
+      return;
+    }
     if (this.phase === 'cutscene') {
       this.updateCutscene(dt);
       this.player.update(dt, this.level.colliders);

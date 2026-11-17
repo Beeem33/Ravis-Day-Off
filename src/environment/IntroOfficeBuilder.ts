@@ -32,6 +32,8 @@ export interface IntroLevelData {
   doorPivot: THREE.Group;
   /** Walk in here (once the agent is down) to finish the level. */
   exitTrigger: THREE.Box3;
+  /** The face of Ravi's own monitor (0.66 x 0.44, facing +Z): the Terms and Conditions go on it. */
+  ravisScreen: THREE.Mesh;
 }
 
 const WALL_H = 3.0;
@@ -83,6 +85,7 @@ export class IntroOfficeBuilder {
   private plasticMat!: THREE.MeshLambertMaterial;
   private coolerMat!: THREE.MeshLambertMaterial;
   private newsMat!: THREE.MeshBasicMaterial;
+  private ravisScreen!: THREE.Mesh;
   private doorPivot!: THREE.Group;
   private deskGun!: THREE.Group;
   private coworkerChair!: THREE.Group;
@@ -184,6 +187,7 @@ export class IntroOfficeBuilder {
       agentFiringPos: new THREE.Vector3(3.2, 0, -0.7),
       doorPivot: this.doorPivot,
       deskGun: this.deskGun,
+      ravisScreen: this.ravisScreen,
       coworkerChair: this.coworkerChair,
       exitTrigger: new THREE.Box3(
         new THREE.Vector3(12.2, 0, -0.9),
@@ -323,7 +327,7 @@ export class IntroOfficeBuilder {
   }
 
   /** Monitor: solid shell, glowing face, neck and base. */
-  private screen(w: number, h: number, x: number, y: number, z: number, yaw: number, mat?: THREE.Material): void {
+  private screen(w: number, h: number, x: number, y: number, z: number, yaw: number, mat?: THREE.Material): THREE.Mesh {
     const g = new THREE.Group();
     g.position.set(x, y, z);
     g.rotation.y = yaw;
@@ -341,6 +345,7 @@ export class IntroOfficeBuilder {
     const base = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.014, 0.13), this.darkMetalMat);
     base.position.set(0, bottom - 0.048, -0.02);
     g.add(base);
+    return face;
   }
 
   // --------------------------------------------------------------- shell
@@ -430,7 +435,7 @@ export class IntroOfficeBuilder {
     this.solid(2.6, 0.72, 0.8, -5, 0, deskZ, this.deskMat, { surface: 'wood', occlude: false });
     // Monitor stands ON the desk: screen() drops its base 0.055 below the
     // panel, so the panel centre has to sit that far above the desktop.
-    this.screen(0.66, 0.44, -5, 0.72 + 0.055 + 0.22, back + 0.16, 0, this.newsMat);
+    this.ravisScreen = this.screen(0.66, 0.44, -5, 0.72 + 0.055 + 0.22, back + 0.16, 0, this.newsMat);
     const desk = new THREE.Group();
     this.group.add(desk);
     // Keyboard and mouse in front of the screen, between it and Ravi

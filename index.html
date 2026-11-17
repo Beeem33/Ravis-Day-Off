@@ -257,6 +257,14 @@
       75% { opacity: 1; }
       100% { opacity: 0; }
     }
+    body.terms-cursor, body.terms-cursor * { cursor: none !important; }
+    .intro-terms-hint {
+      position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+      color: rgba(232,244,236,0.8); font-size: 13px; letter-spacing: 2px; white-space: nowrap;
+      text-shadow: 0 0 8px rgba(0,0,0,0.95); transition: opacity 0.5s;
+    }
+    .intro-terms-hint b { color: #f2a93b; font-weight: normal; }
+    .intro-terms-hint.gone { opacity: 0; }
     .intro-fade {
       position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none;
     }

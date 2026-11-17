@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
+import { DESKTOP_FILES, drawFileIcon, fileDef, isFile, viewerFor, type DeskCtx, type FileId, type Viewer } from './RaviFiles';
 
 /**
  * Ravi's work PC, at the very top of the game: a live canvas on the monitor in
  * the office that behaves like a desktop. A bare desktop with a Recycle Bin,
- * Google Chrome and the Terms and Conditions file on it; a taskbar with a
+ * Googel Chrome, the Terms and Conditions file on it; a taskbar with a
  * Start menu and a clock; windows that open on a double-click, drag by their
  * title bars, minimise, maximise and close. Chrome takes typing and goes
  * nowhere useful. The Terms have to be scrolled to the bottom (the controls
@@ -21,7 +22,7 @@ const TASK_H = 56;
 const TITLE_H = 38;
 const FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
-type AppId = 'terms' | 'chrome' | 'bin';
+type AppId = 'terms' | 'chrome' | 'bin' | FileId;
 interface Rect {
   x: number;
   y: number;
@@ -105,9 +106,9 @@ const BIN_ITEMS = [
   ['curry_recipe_DO_NOT_DELETE.txt', 'C:\\Users\\Ravi\\Documents', 'Today 12:30 PM']
 ] as const;
 
-const TITLES: Record<AppId, string> = {
+const TITLES: Record<'terms' | 'chrome' | 'bin', string> = {
   terms: 'Terms_and_Conditions_FINAL_v2(3).pdf — PDF Viewer',
-  chrome: 'Google Chrome',
+  chrome: 'Googel Chrome',
   bin: 'Recycle Bin'
 };
 
@@ -123,7 +124,10 @@ export class TermsComputer {
   private g: CanvasRenderingContext2D;
   private wallpaper: HTMLCanvasElement;
   private time = 0;
+  private dt = 0;
   private live = true;
+  /** The open files' apps, by file. */
+  private viewers = new Map<FileId, Viewer>();
 
   // ---- pointer
   private mx = W / 2;
@@ -299,6 +303,11 @@ export class TermsComputer {
       return;
     }
     const top = this.topWin();
+    if (top && isFile(top.app)) {
+      const v = this.viewers.get(top.app);
+      if (v?.key?.(e, this.ctxFor(top))) e.preventDefault();
+      return;
+    }
     if (top?.app === 'terms') {
       const page = 360;
       if (e.code === 'ArrowDown' || e.code === 'KeyS') this.scrollBy(60);
@@ -341,7 +350,15 @@ export class TermsComputer {
       this.focus(have);
       return;
     }
-    const at: Record<AppId, Rect> = {
+    if (isFile(app)) {
+      const d = fileDef(app);
+      const n = this.wins.length;
+      this.viewers.set(app, viewerFor(app));
+      this.wins.push({ app, x: Math.max(0, (W - d.w) / 2 + (n % 4) * 26 - 39), y: Math.max(0, Math.min(H - TASK_H - d.h, 30 + (n % 4) * 22)), w: d.w, h: Math.min(d.h, H - TASK_H), min: false, max: false });
+      this.audio.mouseClick();
+      return;
+    }
+    const at: Record<'terms' | 'chrome' | 'bin', Rect> = {
       terms: { x: 70, y: 18, w: 1060, h: 710 },
       chrome: { x: 130, y: 40, w: 920, h: 620 },
       bin: { x: 210, y: 110, w: 780, h: 470 }
@@ -352,6 +369,21 @@ export class TermsComputer {
       this.typed = '';
     }
     this.wins.push({ app, ...at[app], min: false, max: false });
+  }
+
+  private ctxFor(w: Win): DeskCtx {
+    return {
+      g: this.g,
+      time: this.time,
+      dt: this.dt,
+      hoverId: this.hoverId,
+      mx: this.mx,
+      my: this.my,
+      hot: (r, id, o = {}) => this.hot(r, id, { win: w, ...o }),
+      open: (id) => this.open(id),
+      close: () => this.close(w),
+      say: (t, b) => this.say(t, b)
+    };
   }
 
   private close(w: Win): void {
@@ -423,6 +455,7 @@ export class TermsComputer {
 
   update(dt: number, camera: THREE.Camera): void {
     this.time += dt;
+    this.dt = dt;
     if (!this.live) return;
     this.pick(camera);
 
@@ -494,6 +527,7 @@ export class TermsComputer {
       }
     });
     this.drawIcons();
+    this.drawFileIcons();
     this.drawStickyNote();
     for (const w of this.wins) if (!w.min) this.drawWindow(w);
     this.drawTaskbar();
@@ -551,7 +585,7 @@ export class TermsComputer {
     const g = this.g;
     const icons: { id: AppId; label: string[]; draw: (x: number, y: number) => void }[] = [
       { id: 'bin', label: ['Recycle Bin'], draw: (x, y) => drawBin(g, x, y, 54, this.binItems.length > 0) },
-      { id: 'chrome', label: ['Google Chrome'], draw: (x, y) => drawChrome(g, x + 27, y + 27, 26) },
+      { id: 'chrome', label: ['Googel Chrome'], draw: (x, y) => drawChrome(g, x + 27, y + 27, 26) },
       { id: 'terms', label: ['Terms_and_', 'Conditions_FINAL', '_v2(3).pdf'], draw: (x, y) => drawPdf(g, x + 6, y, 42, 54) }
     ];
     icons.forEach((ic, i) => {
@@ -589,6 +623,44 @@ export class TermsComputer {
         right: () => {
           this.selectedIcon = ic.id;
         }
+      });
+    });
+  }
+
+  /** Ravi's files, down the columns after the three system icons. */
+  private drawFileIcons(): void {
+    const g = this.g;
+    DESKTOP_FILES.forEach((id, k) => {
+      const slot = 3 + k;
+      const r = { x: 18 + Math.floor(slot / 6) * 118, y: 16 + (slot % 6) * 122, w: 112, h: 116 };
+      const d = fileDef(id);
+      const sel = this.selectedIcon === id;
+      const hov = this.hoverId === 'icon:' + id;
+      if (sel || hov) {
+        g.fillStyle = sel ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.16)';
+        rr(g, r.x, r.y, r.w, r.h, 6);
+        g.fill();
+      }
+      const wide = d.icon === 'folder' || d.icon === 'exe';
+      drawFileIcon(g, d.icon, r.x + (wide ? 30 : 34), r.y + 8, wide ? 52 : 56);
+      g.font = `400 14px ${FONT}`;
+      g.textAlign = 'center';
+      g.fillStyle = '#ffffff';
+      g.shadowColor = 'rgba(0,0,0,0.85)';
+      g.shadowBlur = 4;
+      g.shadowOffsetY = 1;
+      d.label.forEach((l, i) => g.fillText(l, r.x + r.w / 2, r.y + 80 + i * 16));
+      g.shadowColor = 'transparent';
+      g.shadowBlur = 0;
+      g.shadowOffsetY = 0;
+      g.textAlign = 'left';
+      this.hot(r, 'icon:' + id, {
+        down: () => (this.selectedIcon = id),
+        dbl: () => {
+          this.selectedIcon = id;
+          this.open(id);
+        },
+        right: () => (this.selectedIcon = id)
       });
     });
   }
@@ -726,6 +798,11 @@ export class TermsComputer {
     ];
     if (this.wins.some((w) => w.app === 'terms'))
       apps.push({ id: 'task:terms', app: 'terms', draw: (cx, cy) => drawPdf(g, cx - 12, cy - 15, 24, 30), click: () => this.taskClick('terms') });
+    for (const w of this.wins) {
+      const app = w.app;
+      if (!isFile(app) || apps.some((a) => a.app === app)) continue;
+      apps.push({ id: 'task:' + app, app, draw: (cx, cy) => drawFileIcon(g, fileDef(app).icon, cx - 10, cy - 13, 26), click: () => this.taskClick(app) });
+    }
     const n = apps.length;
     const x0 = W / 2 - (n * 52) / 2;
     apps.forEach((a, i) => {
@@ -954,7 +1031,7 @@ export class TermsComputer {
       drawChrome(g, r.x + 28, r.y + 21, 8);
       g.font = `400 14px ${FONT}`;
       g.fillStyle = '#1f1f1f';
-      const t = this.page === 'newtab' ? 'New Tab' : this.page === 'results' ? `${this.query} - Google Search` : 'Site blocked';
+      const t = this.page === 'newtab' ? 'New Tab' : this.page === 'results' ? `${this.query} - Googel Search` : 'Site blocked';
       g.fillText(ellipsize(g, t, tw - 70), r.x + 44, r.y + 26);
       g.fillText('✕', r.x + tw - 14, r.y + 26);
       g.font = `300 22px ${FONT}`;
@@ -968,11 +1045,12 @@ export class TermsComputer {
         }
       });
     } else {
-      if (w.app === 'terms') drawPdf(g, r.x + 14, r.y + 9, 16, 20);
+      if (isFile(w.app)) drawFileIcon(g, fileDef(w.app).icon, r.x + 15, r.y + 9, 20);
+      else if (w.app === 'terms') drawPdf(g, r.x + 14, r.y + 9, 16, 20);
       else drawBin(g, r.x + 12, r.y + 8, 22, this.binItems.length > 0);
       g.font = `400 14px ${FONT}`;
       g.fillStyle = focused ? '#1f1f1f' : '#777';
-      g.fillText(ellipsize(g, TITLES[w.app], r.w - 220), r.x + 44, r.y + 24);
+      g.fillText(ellipsize(g, isFile(w.app) ? fileDef(w.app).title : TITLES[w.app], r.w - 220), r.x + 44, r.y + 24);
     }
     // ─ □ ✕
     const bx = r.x + r.w - 138;
@@ -1011,7 +1089,8 @@ export class TermsComputer {
     const c = { x: r.x, y: r.y + TITLE_H, w: r.w, h: r.h - TITLE_H };
     if (w.app === 'terms') this.drawTerms(w, c);
     else if (w.app === 'chrome') this.drawChromeApp(w, c);
-    else this.drawBinApp(w, c);
+    else if (w.app === 'bin') this.drawBinApp(w, c);
+    else this.viewers.get(w.app)?.draw(this.ctxFor(w), c);
     g.restore();
     if (!w.max) {
       g.strokeStyle = 'rgba(0,0,0,0.18)';
@@ -1320,10 +1399,10 @@ export class TermsComputer {
       : this.page === 'newtab'
         ? ''
         : this.page === 'results'
-          ? `google.com/search?q=${this.query}`
+          ? `googel.com/search?q=${this.query}`
           : this.blockedUrl;
     g.fillStyle = shown ? '#202124' : '#5f6368';
-    g.fillText(ellipsize(g, shown || 'Search Google or type a URL', om.w - 50), om.x + 18, om.y + 21);
+    g.fillText(ellipsize(g, shown || 'Search Googel or type a URL', om.w - 50), om.x + 18, om.y + 21);
     if (this.typing && Math.floor(this.time * 2) % 2 === 0) {
       const cx = om.x + 18 + g.measureText(this.typed).width + 1;
       g.fillStyle = '#202124';
@@ -1360,8 +1439,8 @@ export class TermsComputer {
       ['o', '#ea4335'],
       ['o', '#fbbc05'],
       ['g', '#4285f4'],
-      ['l', '#34a853'],
-      ['e', '#ea4335']
+      ['e', '#ea4335'],
+      ['l', '#34a853']
     ];
     const total = letters.reduce((s, [l]) => s + g.measureText(l).width, 0);
     let cx = x - total / 2;
@@ -1387,7 +1466,7 @@ export class TermsComputer {
     drawSearch(g, sb.x + 26, sb.y + 23);
     g.font = `400 16px ${FONT}`;
     g.fillStyle = this.typing && this.typed ? '#202124' : '#70757a';
-    g.fillText(this.typing ? this.typed : 'Search Google or type a URL', sb.x + 50, sb.y + 29);
+    g.fillText(this.typing ? this.typed : 'Search Googel or type a URL', sb.x + 50, sb.y + 29);
     if (this.typing && Math.floor(this.time * 2) % 2 === 0) {
       g.fillStyle = '#202124';
       g.fillRect(sb.x + 50 + g.measureText(this.typed).width + 1, sb.y + 13, 1.5, 20);

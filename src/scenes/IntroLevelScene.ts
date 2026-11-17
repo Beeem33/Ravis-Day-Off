@@ -380,15 +380,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     const normal = new THREE.Vector3(0, 0, 1).transformDirection(face.matrixWorld);
     const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
     const d = Math.max(0.22 / (tanV * 0.86), 0.33 / (tanV * cam.aspect * 0.94));
-    // Leaning in to read: a slow drift, closer when he hits the small print
-    const s = this.termsTime;
-    const closePos = centre
-      .clone()
-      .addScaledVector(normal, d + 0.006 * Math.sin(s * 0.9))
-      .add(new THREE.Vector3(0.004 * Math.sin(s * 0.53), 0.003 * Math.sin(s * 0.71 + 1), 0));
-    const closeQ = new THREE.Quaternion().setFromRotationMatrix(
-      new THREE.Matrix4().lookAt(closePos, centre.clone().add(new THREE.Vector3(0.002 * Math.sin(s * 0.4), 0, 0)), new THREE.Vector3(0, 1, 0))
-    );
+    // Held still, square on to the screen, while he's using it
+    const closePos = centre.clone().addScaledVector(normal, d);
+    const closeQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(closePos, centre, new THREE.Vector3(0, 1, 0)));
 
     // Once it's signed, he sits back and the cutscene picks up from there
     if (terms.done && this.pullT < 0) {

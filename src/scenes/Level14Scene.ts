@@ -2107,8 +2107,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
       this.rumble?.set(0);
       this.klaxon?.set(0);
     }
-    if (t > 1.9) this.card.style.opacity = '1';
-    if (t > 6 && this.phase === 'exit') {
+    // On through it: the portal room
+    if (t > 2.4 && this.phase === 'exit') {
       this.phase = 'done';
       this.ctx.bus.emit(Events.Level14Complete);
     }

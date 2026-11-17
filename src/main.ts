@@ -20,6 +20,7 @@ import { RunwayScene } from './scenes/RunwayScene';
 import { HQScene } from './scenes/HQScene';
 import { Level13Scene } from './scenes/Level13Scene';
 import { Level14Scene } from './scenes/Level14Scene';
+import { Level15Scene } from './scenes/Level15Scene';
 import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
@@ -140,6 +141,9 @@ bus.on<{ checkpoint?: number }>(Events.RestartLevel14, (p) => {
   engine.setScene(new Level14Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 14 — THE LABORATORY');
 });
 bus.on(Events.Level14Complete, () => {
+  engine.setScene(new Level15Scene(ctx), 'LEVEL 15 — THE PORTAL ROOM');
+});
+bus.on(Events.Level15Complete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
 });
@@ -183,7 +187,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   runway: () => ({ scene: new RunwayScene(ctx), title: 'LEVEL 11 (ALTERNATE) — LEFT ON THE RUNWAY' }),
   hq: () => ({ scene: new HQScene(ctx), title: 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE' }),
   level13: () => ({ scene: new Level13Scene(ctx), title: 'LEVEL 13 — THE UNDERWORKS' }),
-  level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' })
+  level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' }),
+  level15: () => ({ scene: new Level15Scene(ctx), title: 'LEVEL 15 — THE PORTAL ROOM' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

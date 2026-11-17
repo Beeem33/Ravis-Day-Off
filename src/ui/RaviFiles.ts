@@ -1,3 +1,5 @@
+import { ScamMe } from './ScamMe';
+
 /**
  * The files on Ravi's desktop in Level 1, and the apps that open them.
  *
@@ -57,9 +59,10 @@ export type FileId =
   | 'meme1'
   | 'meme2'
   | 'meme3'
-  | 'taxtxt';
+  | 'taxtxt'
+  | 'scamme';
 
-type IconKind = 'txt' | 'doc' | 'xls' | 'ppt' | 'mp4' | 'jpg' | 'exe' | 'folder' | 'html';
+type IconKind = 'txt' | 'doc' | 'xls' | 'ppt' | 'mp4' | 'jpg' | 'exe' | 'folder' | 'html' | 'scamme';
 
 export interface FileDef {
   id: FileId;
@@ -91,11 +94,12 @@ export const FILES: FileDef[] = [
   { id: 'meme1', name: 'when_manager_says_quick_call.jpg', label: [], icon: 'jpg', title: 'when_manager_says_quick_call.jpg — Photos', w: 700, h: 600 },
   { id: 'meme2', name: 'relatives_asking_what_i_do.jpg', label: [], icon: 'jpg', title: 'relatives_asking_what_i_do.jpg — Photos', w: 700, h: 600 },
   { id: 'meme3', name: 'sharma_ji_ka_beta_vs_me.jpg', label: [], icon: 'jpg', title: 'sharma_ji_ka_beta_vs_me.jpg — Photos', w: 820, h: 560 },
-  { id: 'taxtxt', name: 'actual_taxes.txt', label: [], icon: 'txt', title: 'actual_taxes.txt — Notepad', w: 600, h: 400 }
+  { id: 'taxtxt', name: 'actual_taxes.txt', label: [], icon: 'txt', title: 'actual_taxes.txt — Notepad', w: 600, h: 400 },
+  { id: 'scamme', name: 'ScamMe', label: ['ScamMe'], icon: 'scamme', title: 'ScamMe — Office Chat', w: 960, h: 700 }
 ];
 
 /** On the desktop, in this order, down the columns. */
-export const DESKTOP_FILES: FileId[] = ['diary', 'excuses', 'biodata', 'budget', 'pitch', 'dance', 'diwali', 'chat', 'tax', 'ram'];
+export const DESKTOP_FILES: FileId[] = ['scamme', 'diary', 'excuses', 'biodata', 'budget', 'pitch', 'dance', 'diwali', 'chat', 'tax', 'ram'];
 
 export function fileDef(id: FileId): FileDef {
   return FILES.find((f) => f.id === id)!;
@@ -192,6 +196,22 @@ export function drawFileIcon(g: CanvasRenderingContext2D, kind: IconKind, x: num
     g.fillRect(x + s * 0.12, y + h * 0.18, s * 0.6, h * 0.12);
     g.fillStyle = '#f7c64e';
     g.fillRect(x, y + h * 0.3, s, h * 0.64);
+    return;
+  }
+  if (kind === 'scamme') {
+    // A blue rounded tile with a white speech bubble and a $
+    g.fillStyle = '#2f6fdc';
+    rr(g, x, y + s * 0.06, s * 0.92, s * 0.88, s * 0.2);
+    g.fill();
+    g.fillStyle = '#ffffff';
+    rr(g, x + s * 0.18, y + s * 0.24, s * 0.56, s * 0.42, s * 0.12);
+    g.fill();
+    g.beginPath();
+    g.moveTo(x + s * 0.3, y + s * 0.62);
+    g.lineTo(x + s * 0.24, y + s * 0.78);
+    g.lineTo(x + s * 0.44, y + s * 0.64);
+    g.fill();
+    text(g, '$', x + s * 0.46, y + s * 0.56, `900 ${Math.round(s * 0.34)}px ${FONT}`, '#2f6fdc', 'center');
     return;
   }
   if (kind === 'exe') {
@@ -1707,6 +1727,8 @@ export function viewerFor(id: FileId): Viewer {
       return new Chat(id);
     case 'tax':
       return new Folder(id);
+    case 'scamme':
+      return new ScamMe(id);
     case 'ram':
       return new Installer(id);
   }

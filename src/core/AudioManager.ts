@@ -5455,6 +5455,96 @@ export class AudioManager {
     for (let i = 0; i < 14; i++) this.burst(out, { at: 0.2 + Math.random() * 0.9, D: 0.05, type: 'bandpass', f: 800 + Math.random() * 1600, q: 3, gain: 0.12 + Math.random() * 0.1, attack: 0.002 });
   }
 
+  /** An alien hound: a wet, gargling shriek out of a mouth with no face round it. */
+  houndScreech(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.5, 0.35);
+    const f = 700 + Math.random() * 300;
+    this.partial(out, { D: 0.55, type: 'sawtooth', f, f1: f * 0.45, gain: 0.35, attack: 0.02 });
+    this.partial(out, { D: 0.5, type: 'square', f: f * 1.48, f1: f * 0.7, gain: 0.08, attack: 0.02 });
+    this.burst(out, { D: 0.5, type: 'bandpass', f: 1400, f1: 500, q: 2, gain: 0.45, attack: 0.01 });
+    for (let i = 0; i < 6; i++) this.burst(out, { at: 0.05 + i * 0.07, D: 0.05, type: 'lowpass', f: 600, gain: 0.25, attack: 0.002 });
+  }
+
+  /** Its jaws snapping shut. */
+  houndBite(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.6, 0.2);
+    this.burst(out, { D: 0.08, type: 'bandpass', f: 2200, q: 1.5, gain: 0.7, attack: 0.001 });
+    this.partial(out, { D: 0.12, type: 'sine', f: 180, f1: 70, gain: 0.6, attack: 0.002 });
+    this.burst(out, { at: 0.05, D: 0.18, type: 'lowpass', f: 1200, f1: 300, gain: 0.4, attack: 0.004 });
+  }
+
+  /** A bolt out of one of the big one's arms: a crackling electric spit. */
+  alienBolt(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.55, 0.35);
+    this.partial(out, { D: 0.22, type: 'square', f: 1600, f1: 220, gain: 0.25, attack: 0.002 });
+    this.partial(out, { D: 0.3, type: 'sine', f: 420, f1: 90, gain: 0.5, attack: 0.002 });
+    this.burst(out, { D: 0.2, type: 'highpass', f: 3000, gain: 0.35, attack: 0.001 });
+    for (let i = 0; i < 5; i++) this.burst(out, { at: Math.random() * 0.2, D: 0.02, type: 'bandpass', f: 3000 + Math.random() * 3000, q: 5, gain: 0.2, attack: 0.001 });
+  }
+
+  /** The blaster: a wet, heavy thoomp and a gurgle. */
+  gooShot(): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, 0.6, 0.2);
+    this.partial(out, { D: 0.16, type: 'sine', f: 210, f1: 55, gain: 0.85, attack: 0.002 });
+    this.partial(out, { D: 0.1, type: 'triangle', f: 900, f1: 260, gain: 0.18, attack: 0.002 });
+    this.burst(out, { D: 0.14, type: 'lowpass', f: 1800, f1: 300, gain: 0.5, attack: 0.002 });
+    for (let i = 0; i < 3; i++) this.partial(out, { at: 0.04 + Math.random() * 0.1, D: 0.04, type: 'sine', f: 500 + Math.random() * 500, f1: 1200 + Math.random() * 600, gain: 0.12, attack: 0.002 });
+  }
+
+  /** Goo landing on something. */
+  gooSplat(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.4, 0.2);
+    this.burst(out, { D: 0.16, type: 'lowpass', f: 1500, f1: 250, gain: 0.6, attack: 0.002 });
+    this.partial(out, { D: 0.08, type: 'sine', f: 160, f1: 60, gain: 0.4, attack: 0.002 });
+  }
+
+  /** Under the water: a dull, heavy hush and bubbles. set(0..1). */
+  underwaterLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    out.connect(this.sfxBus);
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuffer;
+    n.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 260;
+    lp.Q.value = 0.8;
+    n.connect(lp).connect(out);
+    n.start();
+    let k = 0;
+    let stopped = false;
+    const bubble = (): void => {
+      if (stopped) return;
+      if (k > 0.1 && this.ctx) {
+        const o = this.place(this.ctx, 0, 0.12 * k, 0.1);
+        const f = 300 + Math.random() * 500;
+        this.partial(o, { D: 0.05, type: 'sine', f, f1: f * 2.2, gain: 0.5, attack: 0.002 });
+      }
+      window.setTimeout(bubble, 80 + Math.random() * 420);
+    };
+    bubble();
+    return {
+      set: (v: number): void => {
+        k = v;
+        out.gain.setTargetAtTime(v * 0.9, ctx.currentTime, 0.15);
+      },
+      stop: (): void => {
+        stopped = true;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
+        window.setTimeout(() => n.stop(), 600);
+      }
+    };
+  }
+
   /** Whole game paused: everything in the audio graph holds where it is. */
   setPaused(on: boolean): void {
     if (!this.ctx) return;

@@ -17,7 +17,7 @@ import { FirstPersonArms, grip, mixGrip, type Grip } from './RaviVisual';
  */
 
 /** The fist round the handle: knuckles forward, palm in, thumb on top. */
-const GRIP_HOLD = grip([0.024, -0.004, 0.07], [0.08, 0.04, -1], [-1, 0, -0.1], [0.3, -0.4, 0.86], {
+export const GRIP_HOLD = grip([0.024, -0.004, 0.07], [0.08, 0.04, -1], [-1, 0, -0.1], [0.3, -0.4, 0.86], {
   fingers: [[78, 96, 60], [82, 98, 62], [84, 100, 62], [86, 100, 62]],
   thumb: [0.5, 0.75, 0.6]
 });
@@ -81,7 +81,7 @@ function scaleTexture(): THREE.CanvasTexture {
  * handle, laminate scales screwed to both sides of it, a bolster, the claw
  * with its ground edge and a fuller, jimping on the spine, and the ring.
  */
-function karambit(): THREE.Group {
+export function karambit(): THREE.Group {
   const g = new THREE.Group();
   const steel = new THREE.MeshStandardMaterial({ color: 0xb9c0c7, roughness: 0.32, metalness: 0.5, emissive: 0x16181b });
   const edgeMat = new THREE.MeshStandardMaterial({ color: 0xeef2f5, roughness: 0.18, metalness: 0.4, emissive: 0x2a2d30 });

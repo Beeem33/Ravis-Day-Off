@@ -403,7 +403,7 @@ export class Level15Scene extends CombatScene<Level15Data> {
       <div class="hq-card" style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;
         opacity:0;transition:opacity 1.6s;pointer-events:none;color:#e8e6df;letter-spacing:8px">
         <div style="font-size:13px;opacity:.6;letter-spacing:6px;margin-bottom:18px">LEVEL 15 — THE PORTAL ROOM</div>
-        <div style="font-size:42px;font-weight:bold">TO BE CONTINUED</div>
+        <div style="font-size:42px;font-weight:bold">COMPLETE</div>
       </div>
     `;
     this.ctx.uiRoot.appendChild(el);
@@ -740,7 +740,7 @@ export class Level15Scene extends CombatScene<Level15Data> {
     this.helmetEl.style.opacity = '0';
     this.ctx.engine.renderer.toneMappingExposure = this.exposure0;
     this.later(1.2, () => (this.card.style.opacity = '1'));
-    this.later(8.0, () => this.ctx.bus.emit(Events.Level15Complete));
+    this.later(5.0, () => this.ctx.bus.emit(Events.Level15Complete));
   }
 
   // ============================================================ the room, alive

@@ -7,7 +7,7 @@
  * One element for the whole game, made the first time it's wanted.
  */
 
-export type InventoryIcon = 'pistol' | 'shotgun' | 'quad' | 'rifle' | 'knife';
+export type InventoryIcon = 'pistol' | 'shotgun' | 'quad' | 'rifle' | 'knife' | 'blaster';
 
 export interface InventoryItem {
   /** The number key it's on. */
@@ -38,6 +38,13 @@ const ICONS: Record<InventoryIcon | 'grenade', string> = {
     '<path d="M100 26a8 8 0 1 1 0 .1zm4 0a4 4 0 1 0 0-.1z" fill-rule="evenodd"/>' +
     '<path d="M94 23L62 14c-3-1-6 1-6 4s2 5 5 6l32 6z"/>' +
     '<path d="M58 15C40 8 22 12 8 30c16-9 32-9 48-4z"/><path d="M70 18l2 8M78 20l2 8M86 22l1 7" stroke="#000" stroke-width="1.4" opacity=".4"/>',
+  blaster:
+    // A fleshy arm-cannon: the toothed mouth to the left, ribbed flesh, tendrils gripping a forearm at the right
+    '<path d="M4 20c0-8 6-13 14-13h6l6 4h40c10 0 16 4 20 9-4 5-10 9-20 9H30l-6 4h-6C10 33 4 28 4 20z"/>' +
+    '<path d="M9 14l4 3-4 2zM9 26l4-3-4-2zM14 11l2 4 2-4zM14 29l2-4 2 4z" fill="#000" opacity=".55"/>' +
+    '<circle cx="10" cy="20" r="3.2" fill="#5fd4ff"/>' +
+    '<path d="M36 11v18M44 11v18M52 11v18M60 11v18" stroke="#000" stroke-width="1.6" opacity=".35"/>' +
+    '<path d="M88 13c8-3 16 0 24 6M88 27c8 3 16 0 24-6M92 20h24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
   grenade:
     '<path d="M10 13h8v-3h-3V7h10v3h-3v3c5 2 8 6 8 11 0 6-4 10-11 10S8 30 8 24c0-5 1-9 2-11z"/><path d="M25 8h8l3 10h-3l-2-7h-6z"/>'
 };

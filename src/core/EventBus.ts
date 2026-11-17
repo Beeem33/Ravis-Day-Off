@@ -104,8 +104,12 @@ export const Events = {
   RestartLevel14: 'restart-level14',
   /** Through the fire door at the end of the hallway. */
   Level14Complete: 'level14-complete',
-  /** Into the Atom Warper: to be continued. */
+  /** Into the Atom Warper. */
   Level15Complete: 'level15-complete',
+  /** {checkpoint: number} — Level 16 again: 0 the station, 1 the tracker, 2 over the cliff, 3 past the water, 4 the big one. */
+  RestartLevel16: 'restart-level16',
+  /** Through the exit portal: to be continued. */
+  Level16Complete: 'level16-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -130,7 +134,8 @@ export const LEVELS = [
   { id: 'hq', n: '12', name: 'THE EXTERMINATOR COLLECTIVE', blurb: 'Through the gates, the towers, and up to the headquarters' },
   { id: 'level13', n: '13', name: 'THE UNDERWORKS', blurb: 'Down the tube, through the sewers, across the walkways over the abyss' },
   { id: 'level14', n: '14', name: 'THE LABORATORY', blurb: 'The report, the scientists, the rocket and the hallway' },
-  { id: 'level15', n: '15', name: 'THE PORTAL ROOM', blurb: 'The suit, the three buttons, the Atom Warper' }
+  { id: 'level15', n: '15', name: 'THE PORTAL ROOM', blurb: 'The suit, the three buttons, the Atom Warper' },
+  { id: 'level16', n: '16', name: 'THE FAR SIDE', blurb: 'The station, the tracker, the water, and the thing with the arms' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

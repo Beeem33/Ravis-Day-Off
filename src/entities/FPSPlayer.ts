@@ -91,6 +91,19 @@ export class FPSPlayer {
   readonly boost = new THREE.Vector3();
   /** Knocked silly: he goes where he's thrown, the keys do nothing. */
   stunned = false;
+  /**
+   * Open ground: a height at every (x, z), walked on as well as the boxes. Up
+   * a slope steeper than `groundMaxSlope` he can't walk; a face higher than
+   * his knee he can't jump into either.
+   */
+  ground: ((x: number, z: number) => number) | null = null;
+  groundMaxSlope = 1.1;
+  /**
+   * In deep water: no gravity, he swims where he looks (W), Space up, C down;
+   * `swimTop` is the highest his feet can float (head just out of the surface).
+   */
+  swimming = false;
+  swimTop = Infinity;
 
   /**
    * Thrown along `n` (a unit vector) at `speed`. What he was already doing
@@ -255,7 +268,7 @@ export class FPSPlayer {
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
 
     // ---- Crouch (with headroom check before standing)
-    const wantCrouch = input.isDown('ControlLeft') || input.isDown('KeyC');
+    const wantCrouch = !this.swimming && (input.isDown('ControlLeft') || input.isDown('KeyC'));
     if (wantCrouch) {
       this.crouching = true;
     } else if (this.crouching) {
@@ -285,6 +298,10 @@ export class FPSPlayer {
     const wishZ = (-cos * fwd - sin * strafe) || 0;
     const wishLen = Math.hypot(wishX, wishZ);
 
+    if (this.swimming) {
+      this.swim(dt, fwd, strafe, colliders);
+      return;
+    }
     const accel = this.grounded ? ACCEL_GROUND : ACCEL_AIR;
     if (wishLen > 0.001) {
       const nx = wishX / wishLen;
@@ -379,6 +396,49 @@ export class FPSPlayer {
     this.applyCamera();
   }
 
+  /**
+   * Swimming: along where he's looking, slow, the water dragging at him;
+   * Space up, C (or Ctrl) down, and a little drift up when he does nothing.
+   */
+  private swim(dt: number, fwd: number, strafe: number, colliders: Collider[]): void {
+    const input = this.input;
+    const SWIM = this.sprinting ? 3.6 : 2.7;
+    const cp = Math.cos(this.pitch);
+    const sin = Math.sin(this.yaw);
+    const cos = Math.cos(this.yaw);
+    let tx = (-sin * cp * fwd + cos * strafe) * SWIM;
+    let tz = (-cos * cp * fwd - sin * strafe) * SWIM;
+    let ty = Math.sin(this.pitch) * fwd * SWIM;
+    if (input.isDown('Space')) ty += 2.4;
+    if (input.isDown('KeyC') || input.isDown('ControlLeft')) ty -= 2.4;
+    if (!fwd && !strafe && !input.isDown('Space') && !input.isDown('KeyC') && !input.isDown('ControlLeft')) ty = 0.25;
+    const len = Math.hypot(tx, tz);
+    if (len > SWIM) {
+      tx *= SWIM / len;
+      tz *= SWIM / len;
+    }
+    const k = Math.min(1, dt * 2.6);
+    this.velocity.x += (tx - this.velocity.x) * k;
+    this.velocity.z += (tz - this.velocity.z) * k;
+    this.velocity.y += (ty - this.velocity.y) * k;
+    this.boost.multiplyScalar(Math.exp(-4 * dt));
+    this.currentSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    this.moveAxis((this.velocity.x + this.boost.x) * dt, 0, colliders, false);
+    this.moveAxis((this.velocity.z + this.boost.z) * dt, 2, colliders, false);
+    this.moveVertical(this.velocity.y * dt, colliders);
+    // (not where the bottom comes up higher than that: he's wading out)
+    const g = this.ground ? this.ground(this.position.x, this.position.z) : -Infinity;
+    if (this.position.y > Math.max(this.swimTop, g)) {
+      this.position.y = Math.max(this.swimTop, g);
+      this.velocity.y = Math.min(0, this.velocity.y);
+    }
+    this.grounded = false;
+    // A slow stroke: the view rocks gently
+    this.bobPhase += dt * (1.6 + this.currentSpeed);
+    this.bobAmount += ((this.currentSpeed > 0.4 ? 0.6 : 0.25) - this.bobAmount) * Math.min(1, dt * 3);
+    this.applyCamera();
+  }
+
   /** Write position/yaw/pitch (plus head bob) onto the camera. */
   private applyCamera(): void {
     const bobY = Math.abs(Math.sin(this.bobPhase)) * 0.045 * this.bobAmount;
@@ -441,6 +501,21 @@ export class FPSPlayer {
     const pos = this.position;
     const key = axis === 0 ? 'x' : 'z';
     pos[key] += delta;
+    if (this.ground) {
+      const rise = this.ground(pos.x, pos.z) - pos.y;
+      if (rise > 0.02) {
+        // Walking up it, if it isn't too steep; in the air (or swimming), onto it if it's only a lip
+        const ok = this.grounded ? rise <= Math.abs(delta) * this.groundMaxSlope + 0.03 : rise < 0.7;
+        if (!ok) {
+          pos[key] -= delta;
+          this.velocity[key] = 0;
+          if (key === 'x') this.boost.x = 0;
+          else this.boost.z = 0;
+          return;
+        }
+        if (this.grounded) pos.y += rise;
+      }
+    }
     const box = this.box(this.height, pos, 'horizontal', axis);
     let blockedTop = -Infinity;
     let hit = false;
@@ -487,6 +562,10 @@ export class FPSPlayer {
       if (c.disabled || c.box.max.y > p.y + 1e-3) continue;
       if (probe.intersectsBox(c.box)) top = Math.max(top, c.box.max.y);
     }
+    if (this.ground) {
+      const g = this.ground(p.x, p.z);
+      if (g <= p.y + 1e-3 && g >= p.y - STEP_DOWN) top = Math.max(top, g);
+    }
     if (top === -Infinity) return;
     // Does he fit there? The landing test's footprint, a hair inside his radius:
     // leaving a step, the full one still grazes the step he has just left
@@ -519,6 +598,17 @@ export class FPSPlayer {
       }
       // Recompute box after correction
       box.copy(this.box(this.height, pos, 'vertical'));
+    }
+    if (this.ground) {
+      const g = this.ground(pos.x, pos.z);
+      if (pos.y < g) {
+        pos.y = g;
+        if (this.velocity.y <= 0) {
+          if (!wasGrounded && this.velocity.y < -8) this.landedHard = true;
+          this.velocity.y = 0;
+          this.grounded = true;
+        }
+      }
     }
   }
 

@@ -98,6 +98,15 @@ export class Arsenal {
   knifeActive = false;
   knifeStow = 1;
   /**
+   * Slot 5, where he has one: something else carried the knife's way (the
+   * arsenal keeps the slot, the scene owns the thing). The knife fields then
+   * mean "the side slot": `side` says which of the two is out, `sideWant`
+   * which was asked for — one goes away before the other comes up.
+   */
+  hasBlaster = false;
+  side: 'knife' | 'blaster' = 'knife';
+  sideWant: 'knife' | 'blaster' = 'knife';
+  /**
    * The quad-barrel's pressure shot (right mouse, where a level turns it on):
    * no pellets, all gas — it throws him the opposite way to where he's
    * aiming. Three charges, each five seconds to come back, one at a time.
@@ -238,7 +247,8 @@ export class Arsenal {
     if (this.owned.has('shotgun')) items.push(this.shotgun.isQuad ? { key: 2, icon: 'quad', name: 'QUAD-BARREL' } : { key: 2, icon: 'shotgun', name: 'SHOTGUN' });
     if (this.owned.has('rifle')) items.push({ key: 3, icon: 'rifle', name: 'AK-47' });
     if (this.hasKnife) items.push({ key: 4, icon: 'knife', name: 'KARAMBIT' });
-    const want = this.knifeWanted ? 4 : this.wanted === 'pistol' ? 1 : this.wanted === 'shotgun' ? 2 : 3;
+    if (this.hasBlaster) items.push({ key: 5, icon: 'blaster', name: 'ALIEN BLASTER' });
+    const want = this.knifeWanted ? (this.sideWant === 'knife' ? 4 : 5) : this.wanted === 'pistol' ? 1 : this.wanted === 'shotgun' ? 2 : 3;
     return { items, active: items.findIndex((i) => i.key === want) };
   }
 
@@ -249,8 +259,10 @@ export class Arsenal {
   }
 
   private select(key: number): void {
-    if (key === 4) this.knifeWanted = true;
-    else {
+    if (key === 4 || key === 5) {
+      this.knifeWanted = true;
+      this.sideWant = key === 4 ? 'knife' : 'blaster';
+    } else {
       this.knifeWanted = false;
       this.wanted = key === 1 ? 'pistol' : key === 2 ? 'shotgun' : 'rifle';
     }
@@ -301,6 +313,10 @@ export class Arsenal {
         this.select(4);
         picked = true;
       }
+      if (this.hasBlaster && input.wasPressed('Digit5')) {
+        this.select(5);
+        picked = true;
+      }
       if (wheel) {
         // A notch at a time through the slots he has, round and round
         const { items, active } = this.inventory();
@@ -319,7 +335,15 @@ export class Arsenal {
       // The gun down first, then the knife out
       if (!this.knifeActive) {
         held.stow = Math.min(1, held.stow + dt * this.stowRate);
-        if (held.stow >= 1) this.knifeActive = true;
+        if (held.stow >= 1) {
+          this.knifeActive = true;
+          this.side = this.sideWant;
+        }
+      } else if (this.side !== this.sideWant) {
+        // The other one away first
+        for (const v of this.all) v.stow = 1;
+        this.knifeStow = Math.min(1, this.knifeStow + dt * 7);
+        if (this.knifeStow >= 1) this.side = this.sideWant;
       } else {
         for (const v of this.all) v.stow = 1;
         this.knifeStow = Math.max(0, this.knifeStow - dt * 6);

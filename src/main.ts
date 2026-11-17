@@ -22,6 +22,7 @@ import { HQScene } from './scenes/HQScene';
 import { Level13Scene } from './scenes/Level13Scene';
 import { Level14Scene } from './scenes/Level14Scene';
 import { Level15Scene } from './scenes/Level15Scene';
+import { Level16Scene } from './scenes/Level16Scene';
 import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
@@ -149,6 +150,12 @@ bus.on(Events.Level14Complete, () => {
   engine.setScene(new Level15Scene(ctx), 'LEVEL 15 — THE PORTAL ROOM');
 });
 bus.on(Events.Level15Complete, () => {
+  engine.setScene(new Level16Scene(ctx), 'LEVEL 16 — THE FAR SIDE');
+});
+bus.on<{ checkpoint?: number }>(Events.RestartLevel16, (p) => {
+  engine.setScene(new Level16Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 16 — THE FAR SIDE');
+});
+bus.on(Events.Level16Complete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
 });
@@ -193,7 +200,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   hq: () => ({ scene: new HQScene(ctx), title: 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE' }),
   level13: () => ({ scene: new Level13Scene(ctx), title: 'LEVEL 13 — THE UNDERWORKS' }),
   level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' }),
-  level15: () => ({ scene: new Level15Scene(ctx), title: 'LEVEL 15 — THE PORTAL ROOM' })
+  level15: () => ({ scene: new Level15Scene(ctx), title: 'LEVEL 15 — THE PORTAL ROOM' }),
+  level16: () => ({ scene: new Level16Scene(ctx), title: 'LEVEL 16 — THE FAR SIDE' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

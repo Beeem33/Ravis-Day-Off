@@ -76,9 +76,32 @@ export interface Level15Data extends CombatLevel {
   sparkPoints: THREE.Vector3[];
   lights: { center: THREE.PointLight; ring: THREE.PointLight[]; entry: THREE.PointLight };
   lamps: THREE.MeshStandardMaterial;
+  /** A soft glow hung round the rings: the portal lit, the rest of the room not. */
+  halo: THREE.Sprite;
 }
 
 // ================================================================ textures
+
+/** Pulses of light along a cable: bright dashes on a dim blue run, to be scrolled. */
+function pulseTexture(): THREE.CanvasTexture {
+  const c = makeCanvas(256, 8);
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#0c2a40';
+  g.fillRect(0, 0, 256, 8);
+  for (const [x, w] of [[20, 26], [120, 14], [190, 34]]) {
+    const gr = g.createLinearGradient(x, 0, x + w, 0);
+    gr.addColorStop(0, 'rgba(90,200,255,0)');
+    gr.addColorStop(0.7, 'rgba(160,230,255,1)');
+    gr.addColorStop(1, 'rgba(90,200,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(x, 0, w, 8);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(3, 1);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 function floorTexture(): THREE.CanvasTexture {
   const S = 2048;
@@ -567,7 +590,7 @@ export class Level15Builder {
   private sparkPoints: THREE.Vector3[] = [];
   private M = {
     floor: new THREE.MeshStandardMaterial({ roughness: 0.32, metalness: 0.35 }),
-    wall: new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.25, color: 0xb8c4cc }),
+    wall: new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.3, color: 0x7a8690 }),
     steel: new THREE.MeshStandardMaterial({ color: 0x8e979e, roughness: 0.35, metalness: 0.8 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x23282c, roughness: 0.45, metalness: 0.7 }),
     black: new THREE.MeshStandardMaterial({ color: 0x0b0c0d, roughness: 0.6, metalness: 0.3 }),
@@ -587,7 +610,7 @@ export class Level15Builder {
     paper: new THREE.MeshStandardMaterial({ color: 0xece9e0, roughness: 0.9, side: THREE.DoubleSide })
   };
   private pylonGlow = new THREE.MeshStandardMaterial({ color: 0x0a1a24, emissive: 0x58c8ff, emissiveIntensity: 0.6, roughness: 0.3 });
-  private cableGlow = new THREE.MeshStandardMaterial({ color: 0x08141c, emissive: 0x3aa8ff, emissiveIntensity: 0.4, roughness: 0.4 });
+  private cableGlow = new THREE.MeshStandardMaterial({ color: 0x08141c, emissive: 0xffffff, emissiveMap: pulseTexture(), emissiveIntensity: 1.6, roughness: 0.4 });
   private suitMats: THREE.MeshStandardMaterial[] = [];
 
   build(): Level15Data {
@@ -643,7 +666,8 @@ export class Level15Builder {
       props: this.kprops,
       sparkPoints: this.sparkPoints,
       lights,
-      lamps: M.white
+      lamps: M.white,
+      halo: this.buildHalo()
     };
   }
 
@@ -750,7 +774,7 @@ export class Level15Builder {
     // The dome: a shallow half-sphere, its meridian ribs meeting at a hub over the machine
     const domeGeo = new THREE.SphereGeometry(r, 64, 20, 0, Math.PI * 2, 0, Math.PI / 2);
     domeGeo.scale(1, dome / r, 1);
-    const domeMat = new THREE.MeshStandardMaterial({ color: 0x3a444b, roughness: 0.7, metalness: 0.2, side: THREE.BackSide });
+    const domeMat = new THREE.MeshStandardMaterial({ color: 0x20262b, roughness: 0.7, metalness: 0.2, side: THREE.BackSide });
     const dm = new THREE.Mesh(domeGeo, domeMat);
     dm.position.y = h;
     this.props.add(dm);
@@ -1017,9 +1041,9 @@ export class Level15Builder {
   private buildRings(): THREE.Group[] {
     const M = this.M;
     const out: THREE.Group[] = [];
-    [2.7, 2.35, 2.0].forEach((r, i) => {
+    [2.6, 2.35, 2.1].forEach((r, i) => {
       const g = new THREE.Group();
-      g.position.set(0, DAIS.top + 2.2, 0);
+      g.position.set(0, DAIS.top + 2.9, 0);
       this.group.add(g);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.07 + i * 0.01, 10, 96), M.steel);
       g.add(ring);
@@ -1038,7 +1062,7 @@ export class Level15Builder {
     });
     // The outermost ring's pivots: arms out to two of the pylons
     for (const s of [-1, 1]) {
-      const arm = this.box(PYLON.r - 3.1, 0.12, 0.12, s * (2.75 + (PYLON.r - 3.1) / 2), DAIS.top + 2.2, 0, M.dark);
+      const arm = this.box(PYLON.r - 3.15, 0.12, 0.12, s * (2.8 + (PYLON.r - 3.15) / 2), DAIS.top + 2.9, 0, M.dark);
       arm.rotation.y = 0;
     }
     return out;
@@ -1276,7 +1300,7 @@ export class Level15Builder {
     g.updateMatrixWorld(true);
     const a0 = g.localToWorld(V(-W / 2, 0, 0));
     const a1 = g.localToWorld(V(W / 2, 0, 0));
-    this.lineCollider(a0, a1, 0.38, 0, 0.92, 0.35);
+    this.lineCollider(a0, a1, 0.38, 0, 0.905, 0.35);
     // What's on the desk, loose: a cup or two, papers, a clipboard, a binder
     const top = 0.905;
     const loose = (o: THREE.Object3D, lx: number, lz: number, half: THREE.Vector3, mass: number, kind: KnockProp['kind'], ry = 0): void => {
@@ -1713,17 +1737,38 @@ export class Level15Builder {
     return { model, stand: g.localToWorld(V(0, 0, -0.4)).setY(0), look: g.localToWorld(V(0, 1.4, 0.9)), light };
   }
 
+  private buildHalo(): THREE.Sprite {
+    const c = makeCanvas(256, 256);
+    const g = c.getContext('2d')!;
+    const gr = g.createRadialGradient(128, 128, 4, 128, 128, 128);
+    gr.addColorStop(0, 'rgba(210,240,255,0.9)');
+    gr.addColorStop(0.25, 'rgba(120,200,255,0.45)');
+    gr.addColorStop(0.6, 'rgba(60,130,220,0.12)');
+    gr.addColorStop(1, 'rgba(40,90,180,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 256, 256);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    s.position.set(0, DAIS.top + 2.9, 0);
+    s.scale.setScalar(9);
+    s.renderOrder = 7;
+    this.group.add(s);
+    return s;
+  }
+
   // ------------------------------------------------------------- lights
 
   private buildLights(): Level15Data['lights'] {
-    const center = new THREE.PointLight(0xbfe6ff, 10, 24, 1.1);
-    center.position.set(0, DAIS.top + 4, 0);
+    const center = new THREE.PointLight(0xbfe6ff, 26, 26, 1.35);
+    center.position.set(0, DAIS.top + 3.4, 0);
     this.group.add(center);
     const ring: THREE.PointLight[] = [];
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const l = new THREE.PointLight(0xcfe0f0, 26, 38, 1.1);
-      l.position.copy(polar(a, 15, 10));
+      // Low, cold, over the consoles only: the room left in the dark round its machine
+      const l = new THREE.PointLight(0x7f9cc4, 6, 22, 1.5);
+      l.position.copy(polar(a, 16, 6.5));
       this.group.add(l);
       ring.push(l);
     }

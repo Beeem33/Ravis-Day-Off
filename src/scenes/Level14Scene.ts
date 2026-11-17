@@ -14,6 +14,7 @@ import { GRIP_L, GRIP_R } from '../entities/ShotgunViewmodel';
 import { launcherModel } from '../entities/LauncherViewmodel';
 import { FirstPersonArms, RaviVisual, HAND, mixShape, type HandShape, type RaviRig, type Grip, type Side } from '../entities/RaviVisual';
 import { FPSHUD } from '../ui/FPSHUD';
+import { RobotArm } from '../entities/RobotArm';
 import { smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
 
 /**
@@ -368,6 +369,21 @@ export class Level14Scene extends CombatScene<Level14Data> {
     const hemi = new THREE.HemisphereLight(0x6f8288, 0x0c1010, 0.3);
     this.scene.add(hemi);
     this.puffTex = this.makePuffTex();
+    // A lab arm on the island, moving sample tubes from the racks to the centrifuge
+    this.labArm = new RobotArm('lab', [
+      { yaw: 0, sh: 0.25, el: 1.35, wr: 1.25, roll: 0, grip: 1 },
+      { yaw: 0.15, sh: 0.7, el: 1.45, wr: 0.95, roll: 0.4, grip: 1 },
+      { yaw: 0.15, sh: 0.88, el: 1.3, wr: 0.95, roll: 0.4, grip: 1 },
+      { yaw: 0.15, sh: 0.88, el: 1.3, wr: 0.95, roll: 0.4, grip: 0, hold: true },
+      { yaw: 0.15, sh: 0.55, el: 1.5, wr: 1.05, roll: 0.4, grip: 0, hold: true },
+      { yaw: -1.05, sh: 0.6, el: 1.45, wr: 1.0, roll: -0.6, grip: 0, hold: true },
+      { yaw: -1.05, sh: 0.8, el: 1.3, wr: 1.0, roll: -0.6, grip: 0, hold: true },
+      { yaw: -1.05, sh: 0.8, el: 1.3, wr: 1.0, roll: -0.6, grip: 1 },
+      { yaw: -0.5, sh: 0.4, el: 1.4, wr: 1.2, roll: 0, grip: 1 }
+    ], 1.2);
+    this.labArm.root.position.set(2.1, 0.91, -3.22);
+    this.labArm.root.rotation.y = Math.PI;
+    this.scene.add(this.labArm.root);
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, 0, this.player.maxHealth);
     this.hud.setCounter(null);
@@ -2178,6 +2194,9 @@ export class Level14Scene extends CombatScene<Level14Data> {
     // ---- The world
     this.updateSlab(sdt);
     this.updateCrumble(dt);
+    // The arm keeps working through the fight; once the place starts coming down it jerks about
+    this.labArm.agitation = this.crumbleT > 0 || this.phase === 'run' ? 0.6 : 0;
+    this.labArm.update(sdt);
     this.updateAtmosphere(dt);
     this.updatePuffs(sdt);
     this.hud.setHealth(p.health, p.regenProgress);
@@ -2228,6 +2247,7 @@ export class Level14Scene extends CombatScene<Level14Data> {
   }
 
   private screenI = 0;
+  private labArm!: RobotArm;
 
   private applyShake(dt: number): void {
     this.shake = Math.max(0, this.shake - dt * 1.4);

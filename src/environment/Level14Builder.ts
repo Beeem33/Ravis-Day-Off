@@ -1218,7 +1218,9 @@ export class Level14Builder {
       }
       this.floaters.push(fig);
       // Hoses up out of its cap into the duct
-      for (const s2 of [-1, 1]) this.cyl(0.05, 0.05, ROOM.h - 3.0, px + s2 * 0.25, 3.0 + (ROOM.h - 3.0) / 2, z, M.darkSteel, 8);
+      // Hoses up out of its cap into the underside of the duct (not through it)
+      for (const s2 of [-1, 1]) this.cyl(0.05, 0.05, 1.04, px + s2 * 0.25, 3.0 + 0.52, z, M.darkSteel, 8);
+      this.box(0.7, 0.06, 0.2, px, 4.02, z, M.darkSteel, { shoot: false });
       this.collide(px - 0.72, 0, z - 0.72, px + 0.72, 3.0, z + 0.72);
     }
     // ---- Behind the island: gas bottles chained to a post, an IV stand
@@ -1238,8 +1240,9 @@ export class Level14Builder {
       const px = x - 3.8 + k * 7.6;
       this.box(0.15, 0.004, 0.15, px, 0.003, z - 1.55, i % 2 ? M.yellow : M.rubber, { shoot: false });
     }
-    this.box(8.3, 0.04, 0.32, x + 6.4, 0.02, z + 0.35, M.yellow, { shoot: false });
-    for (let k = 0; k < 3; k++) this.cyl(0.025, 0.025, 8.3, x + 6.4, 0.045, z + 0.27 + k * 0.08, M.rubber, 6).rotation.z = Math.PI / 2;
+    // (from past the east pod to the cabinets on the wall)
+    this.box(5.3, 0.04, 0.32, 8.35, 0.02, z + 0.35, M.yellow, { shoot: false });
+    for (let k = 0; k < 3; k++) this.cyl(0.025, 0.025, 5.3, 8.35, 0.045, z + 0.27 + k * 0.08, M.rubber, 6).rotation.z = Math.PI / 2;
     // ---- A steel trolley by the machines with a tray of instruments and a box of gloves
     const tx = 6.3;
     const tz = -0.6;

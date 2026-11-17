@@ -11,6 +11,7 @@ import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
 import { FPSPlayer } from '../entities/FPSPlayer';
 import { FPSHUD } from '../ui/FPSHUD';
 import { smooth, clamp01, yawPitchTo, wrapAngle } from './cutscene';
+import { RobotArm } from '../entities/RobotArm';
 import { suitMaterials, suitArmPieces, type SuitMats } from '../entities/FieldSuit';
 
 /**
@@ -266,6 +267,7 @@ export class Level15Scene extends CombatScene<Level15Data> {
   private ledT = 0;
   private screenI = 0;
   private ringSpeed = [0, 0, 0];
+  private robots: RobotArm[] = [];
   private from = { yaw: 0, pitch: 0, pos: new THREE.Vector3() };
 
   private ui!: HTMLElement;
@@ -286,7 +288,7 @@ export class Level15Scene extends CombatScene<Level15Data> {
   enter(): void {
     const { bus, input, audio } = this.ctx;
     this.scene.background = new THREE.Color(0x0a0e12);
-    this.scene.fog = new THREE.FogExp2(0x10161b, 0.009);
+    this.scene.fog = new THREE.FogExp2(0x05090d, 0.016);
     this.level = new Level15Builder().build();
     const L = this.level;
     this.scene.add(L.group);
@@ -319,7 +321,8 @@ export class Level15Scene extends CombatScene<Level15Data> {
     this.arms = new SuitArms(this.player.camera, armMats);
     this.arms.visible = false;
 
-    const hemi = new THREE.HemisphereLight(0x9ab2c4, 0x1a2026, 1.0);
+    // Dark round the edges: the machine is what lights the room
+    const hemi = new THREE.HemisphereLight(0x6a7e96, 0x07090c, 0.3);
     this.scene.add(hemi);
 
     // What the warp will knock about: each a body, asleep where it sits
@@ -352,6 +355,23 @@ export class Level15Scene extends CombatScene<Level15Data> {
     this.hum = audio.portalHum();
     this.rumble = audio.rumbleLoop();
     this.rumble.set(0);
+    // Two service arms on the deck, tending the rings and the pylons
+    for (const [a, off] of [[Math.PI / 4, 0], [-Math.PI / 4, 1.3]] as const) {
+      const arm = new RobotArm('industrial', [
+        { yaw: 0.0, sh: 0.35, el: 0.9, wr: 0.6, roll: 0, grip: 1 },
+        { yaw: 0.45, sh: 0.55, el: 0.7, wr: 0.9, roll: 1.2, grip: 0.4 },
+        { yaw: 0.45, sh: 0.62, el: 0.62, wr: 1.0, roll: 1.2, grip: 0 },
+        { yaw: -0.35, sh: 0.2, el: 1.1, wr: 0.2, roll: -0.8, grip: 0.6 },
+        { yaw: -0.6, sh: 0.45, el: 0.8, wr: 0.7, roll: 0.3, grip: 1 }
+      ], 1.6);
+      arm.moveTime = 2.4;
+      arm.hold = 0.9;
+      arm.update(off);
+      arm.root.position.set(Math.sin(a) * 4.4, DAIS.top, Math.cos(a) * 4.4);
+      arm.root.rotation.y = a;
+      this.scene.add(arm.root);
+      this.robots.push(arm);
+    }
     this.startArrive();
   }
 
@@ -731,7 +751,7 @@ export class Level15Scene extends CombatScene<Level15Data> {
     const k = this.phase === 'warp' ? 0.6 + 0.4 * clamp01(this.warpT / 10) : this.stage * 0.2;
     const w = this.phase === 'warp' ? clamp01(this.warpT / 10.5) : 0;
     // The gimbal rings: still, then turning, then a blur
-    const want = this.phase === 'warp' ? [1.2 + 9 * w * w, 1.6 + 11 * w * w, 2.2 + 14 * w * w] : this.stage === 0 ? [0, 0, 0] : this.stage === 1 ? [0.25, 0.35, 0.5] : [0.6, 0.85, 1.1];
+    const want = this.phase === 'warp' ? [1.2 + 9 * w * w, 1.6 + 11 * w * w, 2.2 + 14 * w * w] : this.stage === 0 ? [0.05, 0.07, 0.09] : this.stage === 1 ? [0.25, 0.35, 0.5] : [0.6, 0.85, 1.1];
     L.rings.forEach((r, i) => {
       this.ringSpeed[i] += (want[i] - this.ringSpeed[i]) * Math.min(1, dt * 0.8);
       const s = this.ringSpeed[i] * dt;
@@ -744,12 +764,18 @@ export class Level15Scene extends CombatScene<Level15Data> {
     if (collar) collar.rotation.y += dt * (0.2 + this.stage * 0.6 + 12 * w);
     // Glows
     const pulse = 0.5 + 0.5 * Math.sin(this.t * (2 + 10 * k));
-    L.pylonGlow.emissiveIntensity = 0.6 + 1.2 * k + 0.6 * pulse * k + 6 * w * w;
-    L.cableGlow.emissiveIntensity = 0.4 + 1.5 * k * pulse + 4 * w * w;
-    L.padMat.emissiveIntensity = 0.5 + 1.2 * k + 5 * w * w;
+    L.pylonGlow.emissiveIntensity = 1.4 + 1.4 * k + 0.6 * pulse * k + 6 * w * w;
+    L.cableGlow.emissiveIntensity = 1.6 + 1.5 * k * pulse + 4 * w * w;
+    L.padMat.emissiveIntensity = 1.1 + 1.2 * k + 5 * w * w;
+    // Energy running along the glowing cables, in toward the machine
+    if (L.cableGlow.emissiveMap) L.cableGlow.emissiveMap.offset.x -= dt * (0.25 + 0.8 * k + 3 * w);
+    // The halo round the rings breathing
+    const halo = L.halo.material as THREE.SpriteMaterial;
+    halo.opacity = 0.32 + 0.1 * Math.sin(this.t * 1.3) + 0.25 * k + 0.4 * w;
+    L.halo.scale.setScalar(9 + 1.5 * Math.sin(this.t * 0.9) + 6 * w);
     const beam = L.beam.material as THREE.MeshBasicMaterial;
-    beam.opacity = this.phase === 'warp' ? clamp01((this.warpT - 1.5) / 6) * (0.7 + 0.3 * Math.sin(this.t * 40)) : this.stage >= 2 ? 0.04 + 0.03 * pulse : 0;
-    L.lights.center.intensity = 6 + 6 * this.stage + (this.phase === 'warp' ? 120 * w * w : 0);
+    beam.opacity = this.phase === 'warp' ? Math.max(0.08, clamp01((this.warpT - 1.5) / 6)) * (0.7 + 0.3 * Math.sin(this.t * 40)) : 0.07 + 0.03 * pulse + 0.05 * this.stage;
+    L.lights.center.intensity = 26 + 10 * this.stage + 4 * pulse + (this.phase === 'warp' ? 160 * w * w : 0);
     L.lights.center.color.setRGB(0.75 + 0.25 * w, 0.9 + 0.1 * w, 1);
     // The room lights flicker in the warp
     L.lights.ring.forEach((l, i) => {
@@ -843,6 +869,10 @@ export class Level15Scene extends CombatScene<Level15Data> {
     if (this.phase === 'play') this.hud.setPrompt(this.suitPromptOn ? '[ E ] PUT ON THE SUIT' : this.padPromptOn ? '[ E ] PRESS' : null);
     if (this.phase !== 'end') this.updateMachine(dt);
     this.updateProps();
+    for (const r of this.robots) {
+      r.agitation = this.phase === 'warp' ? clamp01(this.warpT / 6) : this.stage * 0.08;
+      r.update(dt);
+    }
     this.particles.update(dt);
     this.flashPool.update(dt);
     this.world.step(1 / 60, dt, 3);
@@ -871,6 +901,25 @@ export class Level15Scene extends CombatScene<Level15Data> {
   private onKey(e: KeyboardEvent): void {
     if (this.ctx.engine.paused) return;
     if (e.code === 'Escape' && this.phase === 'end') this.ctx.bus.emit(Events.ReturnToMenu);
+    // Enter skips the cutscenes (on a replay nobody wants to sit through them again)
+    if (e.code !== 'Enter') return;
+    if (this.phase === 'arrive') {
+      this.phaseT = Math.max(this.phaseT, 3.65);
+    } else if (this.phase === 'suit') {
+      const L = this.level;
+      L.suit.model.visible = false;
+      L.suit.light.intensity = 3;
+      this.helmetEl.style.opacity = '1';
+      this.fadeEl.style.transition = 'opacity 0.3s';
+      this.fadeEl.style.opacity = '0';
+      this.arms.visible = false;
+      this.suited = true;
+      this.phase = 'play';
+      this.phaseT = 0;
+      this.player.cinematic = false;
+      this.player.position.copy(L.suit.stand);
+      this.cinema(false);
+    }
   }
 
   render(renderer: THREE.WebGLRenderer): void {

@@ -449,6 +449,8 @@ export class HQScene extends CombatScene<HQData> {
     document.addEventListener('keydown', this.keyHandler);
 
     this.rain = audio.rainLoop();
+    // The level's ambient score (Alexander Zhelanov), looped whole
+    audio.startTrackMusic('audio/demo3.ogg', 0, 0, 0.5, 4);
     this.klaxon = audio.klaxonLoop();
 
     if (this.from === 0) this.startArrival();
@@ -1123,7 +1125,6 @@ export class HQScene extends CombatScene<HQData> {
     this.player.camera.updateProjectionMatrix();
     this.setObjective(`DESTROY THE OUTPOST TOWERS (${this.towersDown()}/4)`);
     this.hud.setCounter('TOWERS STANDING', 4 - this.towersDown());
-    this.ctx.audio.startBossMusic();
     this.ctx.input.requestPointerLock();
     // The Collective come out to meet them
     for (let i = 0; i < 8; i++) this.waveQueue.push(L.spawns.near[i % L.spawns.near.length]);
@@ -1292,7 +1293,6 @@ export class HQScene extends CombatScene<HQData> {
       });
       this.sanjay.slingWeapon(false);
       this.movedMid = true;
-      this.ctx.audio.startBossMusic();
       this.ctx.input.requestPointerLock();
       this.klaxon?.set(0.5);
     } else {

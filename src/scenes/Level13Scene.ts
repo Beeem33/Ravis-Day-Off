@@ -552,12 +552,15 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.fliesSound = audio.fliesLoop();
     this.winch = audio.winchLoop();
     this.grind = audio.rumbleLoop();
+    // The level's ambient score (Alexander Zhelanov), looped whole
+    audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.55, 3);
 
     if (this.from === 0) this.startTube();
     else this.startPlay();
   }
 
   exit(): void {
+    this.ctx.audio.stopTrackMusic(0.8);
     for (const u of this.unsubs) u();
     document.removeEventListener('click', this.clickHandler);
     document.removeEventListener('keydown', this.keyHandler);

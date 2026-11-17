@@ -1,7 +1,7 @@
 import { EventBus, Events, LEVELS, LevelId } from '../core/EventBus';
 import type { AudioManager } from '../core/AudioManager';
 
-type Panel = 'main' | 'audio' | 'controls' | 'admin' | 'quit';
+type Panel = 'main' | 'audio' | 'controls' | 'admin' | 'credits' | 'quit';
 
 /**
  * MenuUI — the diegetic security-terminal overlay for the main menu:
@@ -42,6 +42,7 @@ export class MenuUI {
         <button class="menu-item" data-act="audio">AUDIO SETTINGS</button>
         <button class="menu-item" data-act="controls">CONTROLS</button>
         <button class="menu-item" data-act="admin">ADMIN — LEVEL SELECT</button>
+        <button class="menu-item" data-act="credits">CREDITS</button>
         <button class="menu-item" data-act="quit">QUIT</button>
       `;
     } else if (panel === 'admin') {
@@ -106,6 +107,19 @@ export class MenuUI {
           </table>
           <div class="divider"></div>
           <div>ONE SHOT KILLS THEM. YOU HAVE 5 HP<br/>AND HEAL 1 EVERY 30s.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>
+        </div>
+        <div class="divider"></div>
+        <button class="menu-item" data-act="back">BACK</button>
+      `;
+    } else if (panel === 'credits') {
+      this.el.innerHTML = `
+        ${this.header()}
+        <div class="menu-panel">
+          <table>
+            <tr><td>MADE BY</td><td>BENDABLE PIPE STUDIO</td></tr>
+            <tr><td>MUSIC</td><td>FUZZEKE</td></tr>
+            <tr><td></td><td>ALEXANDER ZHELANOV</td></tr>
+          </table>
         </div>
         <div class="divider"></div>
         <button class="menu-item" data-act="back">BACK</button>

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -128,6 +129,8 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
 
     this.level = new IntroOfficeBuilder().build();
     this.scene.add(this.level.group);
+    // Cologne: on the filing cabinet in the corner behind him
+    Colognes.place(this.scene, 'keypad', new THREE.Vector3(-8.57, 1.4205, 1.6), Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
 
     this.world = this.createPhysicsWorld(this.level.colliders);
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -163,6 +164,8 @@ export class Level6Scene extends CombatScene<Level6Data> {
 
     this.level = new Level6Builder().build();
     this.scene.add(this.level.group);
+    // Cologne: on the bookcase's third shelf, in the gap at the end of the books
+    Colognes.place(this.scene, 'davi', new THREE.Vector3(-2.31, 0.955, -0.935), Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     const L = this.level;

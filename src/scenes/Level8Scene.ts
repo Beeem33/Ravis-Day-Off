@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -315,6 +316,15 @@ export class Level8Scene extends CombatScene<Level8Data> {
     for (const s of L.parked) this.cars.addParked(s);
     for (const s of L.pile) this.cars.addPile(s);
     this.cars.settle();
+    // Cologne: in the bed of the pickup down the south-east end, against the tailgate.
+    // It rides on the truck if the General sends it flying.
+    {
+      const truck = this.cars.carAt(-26, 37.6);
+      Colognes.place(this.scene, 'deadbull', new THREE.Vector3(-28.45, 0.623, 38.2), -Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null), {
+        radius: 1.35,
+        follow: (p, q) => this.cars.pose(truck, p, q)
+      });
+    }
     this.cars.onCrush = (c) => this.onCrush(c.lethal, c.push);
     this.cars.onImpact = (i) => {
       if (!this.player.alive) return;

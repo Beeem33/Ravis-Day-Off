@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level4Builder, Level4Data, CEILING_H } from '../environment/Level4Builder';
@@ -118,6 +119,8 @@ export class Level4Scene extends CombatScene<Level4Data> {
 
     this.level = new Level4Builder().build();
     this.scene.add(this.level.group);
+    // Cologne: on the filing cabinet in Break Room 2's blind corner
+    Colognes.place(this.scene, 'tikka', new THREE.Vector3(-2.78, 1.5205, 7.6), Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);

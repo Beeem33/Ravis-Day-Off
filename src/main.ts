@@ -6,6 +6,7 @@ import { InputManager } from './core/InputManager';
 import { AudioManager } from './core/AudioManager';
 import { MainMenuScene } from './scenes/MainMenuScene';
 import { IntroLevelScene } from './scenes/IntroLevelScene';
+import { Colognes } from './entities/Colognes';
 import { OfficeLevelScene } from './scenes/OfficeLevelScene';
 import { Level3Scene } from './scenes/Level3Scene';
 import { Level4Scene } from './scenes/Level4Scene';
@@ -60,6 +61,10 @@ const unlockOnce = (): void => {
 };
 document.addEventListener('pointerdown', unlockOnce);
 document.addEventListener('keydown', unlockOnce);
+
+// The colognes' pickup sound and achievement card
+Colognes.audio = audio;
+Colognes.uiRoot = uiRoot;
 
 // ---- Scene flow
 // A new game opens on the intro, which hands off to the call centre.

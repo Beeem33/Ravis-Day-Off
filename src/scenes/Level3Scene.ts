@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -119,6 +120,8 @@ export class Level3Scene extends CombatScene<Level3Data> {
 
     this.level = new Level3Builder().build();
     this.scene.add(this.level.group);
+    // Cologne: on the breakroom counter, by the sink
+    Colognes.place(this.scene, 'declined', new THREE.Vector3(8.95, 0.94, 7.48), Math.PI, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);

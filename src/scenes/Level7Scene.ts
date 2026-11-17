@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -263,6 +264,8 @@ export class Level7Scene extends CombatScene<Level7Data> {
 
     this.level = new Level7Builder().build();
     this.scene.add(this.level.group);
+    // Cologne: at the end of the CCTV desk in the security room
+    Colognes.place(this.scene, 'delhi', new THREE.Vector3(23.45, 0.785, 21.3), -Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
     const L = this.level;
 

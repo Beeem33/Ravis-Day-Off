@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
@@ -445,6 +446,14 @@ export class StreetScene implements GameScene {
     this.level = new StreetBuilder().build();
     this.scene.add(this.level.group);
     this.net = new RoadNet(this.level.roads);
+    // Cologne: on top of the highway's median barrier, between two lamp posts:
+    // only a driver scraping right along the median gets it
+    {
+      const f = this.net.sample('highway', 345);
+      const at = f.pos.clone().addScaledVector(f.right, -10.4);
+      at.y += 0.85;
+      Colognes.place(this.scene, 'curry', at, Math.atan2(f.right.x, f.right.z), () => (this.phase === 'drive' && this.shot === 'chase' ? this.camera : null), { radius: 2.0 });
+    }
     // Light: a car to get round now and then, not a jam to thread
     this.traffic = new Traffic(this.net, {
       seed: (Math.random() * 1e6) | 0,

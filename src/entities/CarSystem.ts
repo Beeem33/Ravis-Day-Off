@@ -535,6 +535,29 @@ export class CarSystem implements ICarSystem {
     }
   }
 
+  /** The car whose home is nearest (x, z) on the ground. */
+  carAt(x: number, z: number): number {
+    let best = -1;
+    let bd = Infinity;
+    this.cars.forEach((c, i) => {
+      const d = Math.hypot(c.home.x - x, c.home.z - z);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  /** A car's ground origin and orientation as of its last sync; false if there is no such car. */
+  pose(id: number, pos: THREE.Vector3, quat: THREE.Quaternion): boolean {
+    const car = this.cars[id];
+    if (!car) return false;
+    pos.copy(car.origin);
+    quat.copy(car.quat);
+    return true;
+  }
+
   state(id: number): CarState {
     return this.cars[id]?.state ?? 'resting';
   }

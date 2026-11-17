@@ -1,7 +1,8 @@
 import { EventBus, Events, LEVELS, LevelId } from '../core/EventBus';
 import type { AudioManager } from '../core/AudioManager';
+import { Colognes, COLOGNES } from '../entities/Colognes';
 
-type Panel = 'main' | 'audio' | 'controls' | 'admin' | 'credits' | 'quit';
+type Panel = 'main' | 'audio' | 'controls' | 'colognes' | 'admin' | 'credits' | 'quit';
 
 /**
  * MenuUI — the diegetic security-terminal overlay for the main menu:
@@ -41,6 +42,7 @@ export class MenuUI {
         <button class="menu-item" data-act="start">START SHIFT</button>
         <button class="menu-item" data-act="audio">AUDIO SETTINGS</button>
         <button class="menu-item" data-act="controls">CONTROLS</button>
+        <button class="menu-item" data-act="colognes">COLOGNES — ${Colognes.found().size} / ${COLOGNES.length}</button>
         <button class="menu-item" data-act="admin">ADMIN — LEVEL SELECT</button>
         <button class="menu-item" data-act="credits">CREDITS</button>
         <button class="menu-item" data-act="quit">QUIT</button>
@@ -107,6 +109,23 @@ export class MenuUI {
           </table>
           <div class="divider"></div>
           <div>ONE SHOT KILLS THEM. YOU HAVE 5 HP<br/>AND HEAL 1 EVERY 30s.<br/>USE COVER. LISTEN. CLEAR EVERY ROOM.</div>
+        </div>
+        <div class="divider"></div>
+        <button class="menu-item" data-act="back">BACK</button>
+      `;
+    } else if (panel === 'colognes') {
+      const found = Colognes.found();
+      this.el.innerHTML = `
+        ${this.header()}
+        <div class="menu-panel">
+          <div class="dim">ULTRA-NICHE COLOGNES: ${found.size} / ${COLOGNES.length} FOUND. One is hidden somewhere in each level. Walk right up to one to take it.</div>
+          <div class="cologne-grid">
+            ${COLOGNES.map((c) =>
+              found.has(c.id)
+                ? `<div class="cg-cell got"><img src="${Colognes.label(c.id).toDataURL()}" alt=""><div>${c.name}</div><span>${c.level}</span></div>`
+                : `<div class="cg-cell"><div class="cg-q">?</div><div>???</div><span>${c.level}</span></div>`
+            ).join('')}
+          </div>
         </div>
         <div class="divider"></div>
         <button class="menu-item" data-act="back">BACK</button>

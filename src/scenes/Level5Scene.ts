@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level5Builder, Level5Data, ElevatorCar, LIFT_FLOORS } from '../environment/Level5Builder';
@@ -229,6 +230,8 @@ export class Level5Scene extends CombatScene<Level5Data> {
 
     this.level = new Level5Builder().build();
     this.scene.add(this.level.group);
+    // Cologne: on the yellow drum in the generator room's corner
+    Colognes.place(this.scene, 'sweat', new THREE.Vector3(191.6, 0.88, 7.9), Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
 
     this.player = new FPSPlayer(this.level.playerSpawn, this.level.playerSpawnYaw, input, audio, bus);

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -410,6 +411,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.level = new Level13Builder().build();
     const L = this.level;
     this.scene.add(L.group);
+    // Cologne: on the maintenance-room workbench, between the jug and the mug
+    Colognes.place(this.scene, 'pubjae', new THREE.Vector3(-65.15, 30.913, -25.45), Math.PI, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(L.colliders);
     // What moves (the carts, the crates, the lift and its gates) stays out of the physics world
     L.colliders.push(...L.dyn);

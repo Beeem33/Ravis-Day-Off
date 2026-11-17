@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level14Builder, type Level14Data, ROOM, HALL, STAND } from '../environment/Level14Builder';
@@ -319,6 +320,8 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.level = new Level14Builder().build();
     const L = this.level;
     this.scene.add(L.group);
+    // Cologne: on the instrument trolley by the east machines
+    Colognes.place(this.scene, 'odore', new THREE.Vector3(6.55, 0.865, -0.42), 0, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(L.colliders);
     this.checkpoint = Math.min(2, Math.max(0, this.from));
     this.player = new FPSPlayer(L.start.pos.clone(), L.start.yaw, input, audio, bus);

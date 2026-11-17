@@ -231,6 +231,27 @@
     .hud-prompt.flash .key { min-width: 32px; padding: 5px 9px 4px; font-size: 18px; }
     @keyframes prompt-flash { 0% { opacity: 1; } 100% { opacity: 0.25; } }
 
+    /* ---------- Colognes: the achievement card and the menu's collection ---------- */
+    .cologne-toast {
+      position: fixed; top: 22px; right: 22px; z-index: 9500; display: flex; gap: 14px; align-items: center;
+      padding: 12px 18px 12px 12px; min-width: 330px; max-width: 430px;
+      background: linear-gradient(135deg, rgba(28, 20, 8, 0.94), rgba(8, 8, 10, 0.94));
+      border: 1px solid #d8aa48; border-radius: 6px; box-shadow: 0 0 24px rgba(216, 170, 72, 0.35);
+      color: #f4e6c0; font-family: 'Courier New', monospace; pointer-events: none;
+      transform: translateX(120%); opacity: 0; transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.5s;
+    }
+    .cologne-toast.show { transform: translateX(0); opacity: 1; }
+    .cologne-toast img { width: 64px; height: 76px; object-fit: contain; border-radius: 3px; background: #000; }
+    .cologne-toast .ct-kicker { font-size: 11px; letter-spacing: 2px; color: #d8aa48; }
+    .cologne-toast .ct-name { font-size: 19px; letter-spacing: 1px; margin: 4px 0; color: #fff3cf; }
+    .cologne-toast .ct-count { font-size: 11px; letter-spacing: 1px; color: #bfa874; }
+    .cologne-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-top: 8px; max-height: 52vh; overflow-y: auto; }
+    .cg-cell { border: 1px solid #1f5c30; padding: 5px 4px; text-align: center; font-size: 10px; color: #2e8f47; line-height: 1.3; }
+    .cg-cell.got { border-color: #52e07a; color: #b8ffcf; }
+    .cg-cell img { width: 100%; height: 72px; object-fit: contain; background: #000; display: block; margin-bottom: 3px; }
+    .cg-cell .cg-q { height: 72px; display: flex; align-items: center; justify-content: center; font-size: 34px; color: #1f5c30; }
+    .cg-cell span { display: block; color: #2e8f47; font-size: 9px; }
+
     /* ---------- Intro level: letterbox, objective, wipe ---------- */
     #intro-ui { position: absolute; inset: 0; pointer-events: none; }
     .intro-letterbox span {

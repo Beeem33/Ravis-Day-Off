@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
@@ -283,6 +284,8 @@ export class HQScene extends CombatScene<HQData> {
     this.level = new HQBuilder().build();
     const L = this.level;
     this.scene.add(L.group);
+    // Cologne: on the crate by the gate's west corner
+    Colognes.place(this.scene, 'microsuf', new THREE.Vector3(-16.9, 1.1, -15.6), 0.8, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(L.colliders);
 
     const start = L.starts[Math.min(this.from, 3)];

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { StairwellBuilder, type StairwellData, type StairAgent, type StairDrip } from '../environment/StairwellBuilder';
@@ -189,6 +190,8 @@ export class StairwellScene extends CombatScene<StairwellData> {
 
     this.level = new StairwellBuilder().build();
     this.scene.add(this.level.group);
+    // Cologne: on a tread of the bottom flight, reached from the floor of the well under it
+    Colognes.place(this.scene, 'pit', new THREE.Vector3(5.1, 1.0154, 5.92), Math.PI, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     this.world = this.createPhysicsWorld(this.level.colliders);
     const L = this.level;
     this.checkpoint = Math.min(this.from, L.checkpoints.length - 1);

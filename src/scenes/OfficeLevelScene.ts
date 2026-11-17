@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { OfficeLevelBuilder, LevelData } from '../environment/OfficeLevelBuilder';
@@ -108,6 +109,8 @@ export class OfficeLevelScene extends CombatScene<LevelData> {
     this.level = new OfficeLevelBuilder().build();
     this.randomizeSpawns();
     this.scene.add(this.level.group);
+    // Cologne: on the filing bank in the back office
+    Colognes.place(this.scene, 'scam', new THREE.Vector3(-8.9, 1.3205, -8.4), Math.PI / 2, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
 
     this.world = this.createPhysicsWorld(this.level.colliders);
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { EventBus, Events } from './EventBus';
+import { Colognes } from '../entities/Colognes';
 
 /**
  * A GameScene owns its own THREE.Scene/camera and is driven by the engine.
@@ -128,6 +129,7 @@ export class GameEngine {
   setScene(scene: GameScene, label = ''): void {
     this.paused = false;
     this.onSceneChange?.();
+    Colognes.clear(); // the old level's bottle goes with it
     this.loadingCard = this.showLoading(label);
     // The swap is deferred by a frame on purpose. Building a level and then
     // compiling its shaders is one long synchronous block — around a second
@@ -213,6 +215,7 @@ export class GameEngine {
       }
       if (this.scene) {
         this.scene.update(dt * this.timeScale, this.elapsed);
+        Colognes.update(dt * this.timeScale);
         this.scene.render(this.renderer);
       }
       // The card comes down a frame after the scene has drawn once, so the

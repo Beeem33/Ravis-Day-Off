@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
 import type { GameScene } from '../core/GameEngine';
 import type { GameContext } from '../main';
@@ -163,6 +164,11 @@ export class AirportScene implements GameScene {
     const f = new THREE.Vector3(end.tangent.x, 0, end.tangent.z).normalize();
     this.airside = buildAirside({ origin: end.pos.clone().setY(0), f, r: new THREE.Vector3(-f.z, 0, f.x) });
     this.scene.add(this.airside.group);
+    // Cologne: on the baggage cart's deck out on the hardstand past the runway edge
+    {
+      const face = this.apt(1, 0).sub(this.apt(0, 0));
+      Colognes.place(this.scene, 'haheed', this.apt(463.55, -60.5).setY(0.54), Math.atan2(face.x, face.z), () => (this.phase === 'drive' ? this.camera : null), { radius: 1.8 });
+    }
 
     this.net = new RoadNet(this.buildRoads());
     this.player = new DriveCar(this.net, CIVIC_TUNE, 'player');

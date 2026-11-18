@@ -446,6 +446,8 @@ export interface Level16Data extends CombatLevel {
   chunks: { mesh: THREE.InstancedMesh; lod: 'near' | 'far' | 'any' }[];
   /** Where the maws lie in wait. */
   trapSpots: THREE.Vector3[];
+  /** Trees standing round the big one's clearing, on their own (not instanced): it can rip them up. */
+  arenaTrees: { group: THREE.Group; x: number; z: number }[];
   /** The cave's rock: only drawn once he's near the north end. */
   cave: THREE.Mesh;
   /** Glowing things (fungus, bulbs, crystals) whose light pulses. */
@@ -471,6 +473,7 @@ export class Level16Builder {
   private glowMats: THREE.MeshStandardMaterial[] = [];
   private traps: THREE.Vector3[] = [];
   private caveMesh: THREE.Mesh | null = null;
+  private arenaTrees: Level16Data['arenaTrees'] = [];
 
   build(): Level16Data {
     const rt = rockTexture();
@@ -507,6 +510,7 @@ export class Level16Builder {
       chunks: this.chunks,
       trapSpots: this.traps,
       cave: this.caveMesh!,
+      arenaTrees: this.arenaTrees,
       glowMats: this.glowMats
     };
   }
@@ -1009,6 +1013,25 @@ export class Level16Builder {
     const vineMat = new THREE.MeshStandardMaterial({ color: 0x5a3a5a, roughness: 0.6 });
     // ---- Four tree shapes
     const shapes = [0, 1, 2, 3].map((v) => buildTree(v));
+    // ---- Round the clearing: trees standing on their own, for the big one to tear up
+    {
+      const fP = triplanar(new THREE.MeshStandardMaterial({ map: leaf, bumpMap: leaf, bumpScale: 2, color: 0x7e3aa0, roughness: 0.75 }), 1.1, 1);
+      const fG = triplanar(new THREE.MeshStandardMaterial({ map: leaf, bumpMap: leaf, bumpScale: 2, color: 0x3c6e2c, roughness: 0.8 }), 1.1, 1);
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + 0.5;
+        const r = 24 + (k % 2) * 3;
+        const x = ARENA.x + Math.cos(a) * r;
+        const z = ARENA.z + Math.sin(a) * r;
+        const sh = shapes[k % 4];
+        const g = new THREE.Group();
+        g.add(new THREE.Mesh(sh.near.wood, bark), new THREE.Mesh(sh.near.leaves, k % 2 ? fG : fP), new THREE.Mesh(sh.near.vines, vineMat));
+        g.position.set(x, groundY(x, z) - 0.15, z);
+        g.rotation.y = k * 1.3;
+        g.scale.setScalar(1.15);
+        this.group.add(g);
+        this.arenaTrees.push({ group: g, x, z });
+      }
+    }
     // ---- Placement
     const spots: { x: number; z: number; s: number; ry: number; p: boolean; v: number }[] = [];
     for (let k = 0; k < 9000 && spots.length < 1000; k++) {

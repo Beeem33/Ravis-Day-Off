@@ -31,7 +31,7 @@ import { hideInventory } from '../ui/InventoryUI';
 import { FPSHUD } from '../ui/FPSHUD';
 import { FirstPersonArms, RaviVisual, grip, mixGrip } from '../entities/RaviVisual';
 import { dressSuit } from '../entities/SuitDress';
-import { Hound, SpiderBoss, MawTrap, GlowShots, Droplets, type GlowShot } from '../entities/AlienCreatures';
+import { Hound, SpiderBoss, MawTrap, GlowShots, Droplets, grabberHead, wetFlesh, KIND_GLOW, type GlowShot } from '../entities/AlienCreatures';
 import { AlienBlaster } from '../entities/AlienBlaster';
 import { TrackerTablet } from '../entities/TrackerTablet';
 import type { Enemy } from '../entities/Enemy';
@@ -43,16 +43,17 @@ import type { Enemy } from '../entities/Enemy';
  *     button by the door lifts it, and there's the planet.
  *  2. The canyon: a crashed drone in a meadow, smoke going up, its beacon
  *     blinking; the tracker in the sponge beside it. Hounds come out of the
- *     trees on the way; maws lie open in the ground. The tracker (hold M)
- *     shows the exit portal's coordinates.
- *  3. A cliff across the canyon — over it with the pressure shotgun; the
- *     massif, and under it through the lake, the suit's lamp on, round the
- *     turns, up the other side.
- *  4. The big one in its clearing. Kill it, take its cannon (E), wear it.
+ *     trees on the way; maws lie open in the ground.
+ *  3. A cliff — over it with the pressure shotgun; the massif, and under it
+ *     through the lake, the suit's lamp on.
+ *  4. The big one in its clearing: it lobs acid, sprays it, reaches for him
+ *     with its grabber, tears trees up and drags them at him. Kill it, take
+ *     both its cannons (E): the acid on his right arm, the grabber on his left.
  *  5. The cave in the canyon's end wall, and the portal at the back of it.
  */
 
 type Phase = 'play' | 'harvest' | 'end';
+type BossMove = 'idle' | 'mortar' | 'spray' | 'grab' | 'tree' | 'stagger';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 const smooth = (x: number): number => {
@@ -64,13 +65,17 @@ const HOUND_SPEED = 6.9;
 const BOSS_NAME = 'THE MAW';
 const ALIEN_BLOOD = 0x9ad02a;
 const BOSS_BLOOD = 0x9a2a6a;
-const GOO = 0x46b8ff;
+const ACID = KIND_GLOW.acid;
+/** Acid globs fall this hard. */
+const ACID_G = 11;
+/** F presses to tear free of its grabber. */
+const BREAK_FREE = 10;
 
 interface Hit {
   dist: number;
   point: THREE.Vector3;
   normal: THREE.Vector3;
-  kind: 'terrain' | 'world' | 'trunk' | 'hound' | 'boss' | 'trap';
+  kind: 'terrain' | 'world' | 'trunk' | 'hound' | 'boss' | 'trap' | 'tongue';
   hound?: Hound;
   trap?: MawTrap;
   head?: boolean;
@@ -81,6 +86,40 @@ interface Pack {
   at: { x: number; z: number }[];
   spawned: boolean;
   needs?: 'tablet' | 'harvest';
+}
+
+/** A pool of acid on the ground: it eats whatever stands in it, then dries away. */
+interface Puddle {
+  mesh: THREE.Mesh;
+  mat: THREE.ShaderMaterial;
+  x: number;
+  z: number;
+  r: number;
+  life: number;
+  max: number;
+  enemy: boolean;
+  /** For Ravi's hurt in it: time since the last burn. */
+  burn: number;
+}
+
+/** A warning ring where a glob is going to come down. */
+interface Marker {
+  mesh: THREE.Mesh;
+  t: number;
+  land: number;
+  r: number;
+}
+
+/** A tongue: the grabber's, his or the big one's — a stretch of flesh with a mouth on the end. */
+interface Tongue {
+  state: 'idle' | 'out' | 'hold' | 'back';
+  from: THREE.Vector3;
+  tip: THREE.Vector3;
+  dir: THREE.Vector3;
+  len: number;
+  mesh: THREE.Mesh;
+  head: THREE.Group;
+  radius: number;
 }
 
 // ================================================================ the harvest
@@ -96,12 +135,7 @@ const L_OPEN = grip([-0.03, -0.004, 0.075], [-0.06, 0.12, -1], [0.9, 0.42, -0.1]
   spread: 5
 });
 
-/**
- * His hands for taking the cannon: the karambit in his right for the
- * sawing, his left to hold the thing while he cuts and then to bring it to
- * his right forearm. (His right fist with the cannon going on it is the
- * blaster's own viewmodel.)
- */
+/** His hands for the cutting: the karambit in his right, his left holding the thing still. */
 class HarvestHands {
   readonly knifeRoot = new THREE.Group();
   readonly knifeHand = new THREE.Group();
@@ -135,13 +169,52 @@ class HarvestHands {
   }
 }
 
+// ================================================================ acid
+
+let puddleShader: { vertexShader: string; fragmentShader: string } | null = null;
+function puddleMaterial(seed: number): THREE.ShaderMaterial {
+  puddleShader ??= {
+    vertexShader: 'varying vec2 vUv; varying vec3 vW; void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+    fragmentShader: `
+      uniform float uT; uniform float uFade; uniform float uSeed; uniform vec3 uCol;
+      varying vec2 vUv; varying vec3 vW;
+      float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+      void main(){
+        vec2 p = vUv * 2.0 - 1.0; float r = length(p);
+        float a = atan(p.y, p.x);
+        float edge = 0.78 + 0.18 * n(vec2(a * 2.5 + uSeed, uSeed * 3.0));
+        if (r > edge) discard;
+        float b = n(vW.xz * 3.5 + vec2(uT * 0.5, -uT * 0.3));
+        vec3 c = mix(uCol * 0.35, uCol * 1.5, b);
+        vec2 cell = floor(vW.xz * 3.0); vec2 f = fract(vW.xz * 3.0) - 0.5;
+        float rr = h(cell + uSeed); float life = fract(uT * (0.6 + rr) + rr * 7.0);
+        c += vec3(0.9, 1.0, 0.7) * smoothstep(0.07, 0.0, abs(length(f) - life * 0.42)) * step(0.55, rr) * (1.0 - life);
+        c = mix(c, uCol * 0.2, smoothstep(edge - 0.06, edge, r) * 0.6);
+        gl_FragColor = vec4(c, smoothstep(edge, edge - 0.1, r) * 0.9 * uFade);
+      }`
+  };
+  return new THREE.ShaderMaterial({
+    ...puddleShader,
+    uniforms: { uT: { value: 0 }, uFade: { value: 0 }, uSeed: { value: seed }, uCol: { value: new THREE.Color(ACID) } },
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4
+  });
+}
+
 // ================================================================ scene
 
 export class Level16Scene extends CombatScene<Level16Data> {
   private arsenal!: Arsenal;
   private knife!: KnifeTwirlViewmodel;
   private drink!: DrinkViewmodel;
-  private blaster!: AlienBlaster;
+  /** The two cannons on his arms: the acid on the right, the grabber on the left. */
+  private acidArm!: AlienBlaster;
+  private grabArm!: AlienBlaster;
   private tablet!: TrackerTablet;
   private hands!: HarvestHands;
   private hud!: FPSHUD;
@@ -152,26 +225,44 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private checkpoint = 0;
   private hounds: Hound[] = [];
   private houndHits: THREE.Mesh[] = [];
+  private flung = new Map<Hound, THREE.Vector3>();
   private packs: Pack[] = [];
   private traps: MawTrap[] = [];
   private trapHits: THREE.Mesh[] = [];
   private heldBy: MawTrap | null = null;
   private heldBite = 0;
+  // ---- the big one
   private boss!: SpiderBoss;
   private bossAwake = false;
   private bossVel = new THREE.Vector3();
-  private bossFireT = 3;
-  private bossVolley = 0;
   private bossSide = 1;
   private bossSideT = 0;
-  private bossArm = 0;
-  private bossShots = 0;
+  private move: BossMove = 'idle';
+  private moveT = 0;
+  private moveI = 0;
+  private moveShots = 0;
   private lastStomp = 0;
-  private lastGrowl = -10;
-  private bolts!: GlowShots;
-  private goo!: GlowShots;
+  private bossTongue!: Tongue;
+  private tongueHit!: THREE.Mesh;
+  private tongueHp = 0;
+  /** Its grabber has him: presses of F so far. */
+  private grabbed = false;
+  private presses = 0;
+  private tree: { i: number; stage: 'reach' | 'wrap' | 'fall' | 'drag'; t: number; from: THREE.Vector3; to: THREE.Vector3; dir: THREE.Vector3; hit: boolean } | null = null;
+  private treeCols: Collider[] = [];
+  private treeUsed: boolean[] = [];
+  // ---- his arms
+  private tongue!: Tongue;
+  private holding: Hound | null = null;
+  private holdPrev = new THREE.Vector3();
+  private holdVel = new THREE.Vector3();
+  private lmbWas = false;
+  private acidShots!: GlowShots;
+  private bossAcid!: GlowShots;
+  private puddles: Puddle[] = [];
+  private markers: Marker[] = [];
   private drops!: Droplets;
-  private gooLight!: THREE.PointLight;
+  private acidLight!: THREE.PointLight;
   private portalLight!: THREE.PointLight;
   private lamp!: THREE.SpotLight;
   private lampOn = 0;
@@ -186,13 +277,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private caveHinted = false;
   private smokeT = 0;
   private bubbleT = 0;
+  private hissT = 0;
+  private burnT = 0.5;
   private shake = 0;
   private flashT = 9;
   private flash = 0;
-  private harvestArm = 0;
+  private lastGrowl = -10;
+  // ---- the harvest
+  private harvestOrder = [0, 1];
   private harvestFrom = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
-  private slideFrom = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
-  private severed: THREE.Group | null = null;
+  private fallen: (THREE.Group | null)[] = [null, null];
+  private fallV = [0, 0];
+  private leapFrom: { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 }[] = [];
   private lastInside = new THREE.Vector3();
   private nearCols: Collider[] = [];
   private nearPool: Collider[] = [];
@@ -228,13 +324,19 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   enter(): void {
     const { bus, input, audio } = this.ctx;
-    // He's in the field suit: every first-person arm made from here on wears it
     RaviVisual.dressArms = dressSuit;
     this.scene.background = new THREE.Color(0x000000);
     this.scene.fog = new THREE.FogExp2(Level16Scene.FOG_AIR.getHex(), 0.022);
     this.level = new Level16Builder().build();
     const L = this.level;
     this.scene.add(L.group);
+    // The trees round the clearing stand in the way until they're torn up
+    for (const t of L.arenaTrees) {
+      const c: Collider = { box: new THREE.Box3(V(t.x - 0.4, groundY(t.x, t.z) - 1, t.z - 0.4), V(t.x + 0.4, groundY(t.x, t.z) + 5, t.z + 0.4)) };
+      L.colliders.push(c);
+      this.treeCols.push(c);
+      this.treeUsed.push(false);
+    }
     this.world = this.createPhysicsWorld(L.colliders);
     this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
     this.floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
@@ -294,31 +396,36 @@ export class Level16Scene extends CombatScene<Level16Data> {
       else if (e === 'crush') audio.canCrush();
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
-    this.blaster = new AlienBlaster(this.player.camera);
+    this.acidArm = new AlienBlaster(this.player.camera, 'r', 'acid');
+    this.grabArm = new AlienBlaster(this.player.camera, 'l', 'grabber');
     this.tablet = new TrackerTablet(this.player.camera, L.mapCanvas, L.mapBounds);
     this.hands = new HarvestHands(this.player.camera);
 
-    // ---- Light: dark and cold. A dim purple sky, a hard cold light off the big planet raking
-    //      across the canyon from the north-west; the glowing water, bulbs and crystals the only warmth.
+    // ---- Light
     this.hemi = new THREE.HemisphereLight(0x5a4c86, 0x1c1a14, Level16Scene.HEMI);
     this.moon = new THREE.DirectionalLight(0xa8b0e8, Level16Scene.MOON);
     this.moon.position.set(280, 210, 40);
     this.scene.add(this.hemi, this.moon, this.moon.target);
-    // The suit's lamp: on its shoulder, on whenever it's dark (in the water, in the cave)
     this.lamp = new THREE.SpotLight(0xe8f4ff, 0, 40, 0.55, 0.5, 1.2);
     this.lamp.position.set(0.18, -0.12, 0.05);
     this.lamp.target.position.set(0.05, -0.15, -8);
     this.player.camera.add(this.lamp, this.lamp.target);
-    this.gooLight = new THREE.PointLight(0x46b8ff, 0, 9, 1.6);
-    this.scene.add(this.gooLight);
+    this.acidLight = new THREE.PointLight(ACID, 0, 9, 1.6);
+    this.scene.add(this.acidLight);
     this.portalLight = new THREE.PointLight(0x6ae0ff, 6, 30, 1.3);
     this.portalLight.position.copy(L.portal.at).add(V(0, 2.6, 1.5));
     this.scene.add(this.portalLight);
 
-    this.bolts = new GlowShots(0x4ac8ff, 0.12, 0, 0, 40);
-    this.goo = new GlowShots(GOO, 0.075, 5, 0.25, 40);
-    this.drops = new Droplets(700);
-    this.scene.add(this.bolts.group, this.goo.group, this.drops.points);
+    this.acidShots = new GlowShots(ACID, 0.09, ACID_G, 0.3, 30);
+    this.bossAcid = new GlowShots(ACID, 0.17, ACID_G, 0.3, 40);
+    this.drops = new Droplets(900);
+    this.scene.add(this.acidShots.group, this.bossAcid.group, this.drops.points);
+    this.buildPools();
+    this.tongue = this.makeTongue(0.028, 1);
+    this.bossTongue = this.makeTongue(0.085, 2.4);
+    this.tongueHit = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
+    this.tongueHit.userData.tongue = true;
+    this.scene.add(this.tongueHit);
 
     // ---- The big one, waiting in its clearing; the packs; the maws
     this.boss = new SpiderBoss(groundY);
@@ -329,15 +436,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
       { trigger: 121, at: [at(104, -4), at(110, 10), at(98, 4)], spawned: false },
       { trigger: 26, at: [at(8, -12), at(6, 12), at(2, -4), at(14, 16)], spawned: false, needs: 'tablet' },
       { trigger: -60, at: [at(-72, -12), at(-74, 6), at(-80, -2), at(-68, 14)], spawned: false },
-      { trigger: 999, at: [at(-134, -14), at(-136, 12), at(-140, -4), at(-142, 6), at(-130, 18), at(-128, -18)], spawned: false, needs: 'harvest' }
+      { trigger: 999, at: [at(-134, -14), at(-136, 12), at(-140, -4), at(-142, 6), at(-130, 18), at(-128, -18)], spawned: false, needs: 'harvest' },
+      { trigger: -146, at: [at(-154, -8), at(-156, 8), at(-153, 0), at(-150, 12)], spawned: false, needs: 'harvest' }
     ];
-    // Packs behind where he starts are done with; the one he was fighting when he died comes again
     const done = [this.checkpoint >= 1, this.checkpoint >= 3, this.checkpoint >= 4];
     done.forEach((d, i) => (this.packs[i].spawned = d));
     for (const s of L.trapSpots) {
       const m = new MawTrap();
-      m.group.position.copy(s);
-      m.group.rotation.y = Math.random() * 6.28;
+      // Sat on the ground, tilted to its slope, not half sunk in it
+      const e = 0.5;
+      const n = V(groundY(s.x - e, s.z) - groundY(s.x + e, s.z), 2 * e, groundY(s.x, s.z - e) - groundY(s.x, s.z + e)).normalize();
+      m.group.quaternion.setFromUnitVectors(V(0, 1, 0), n).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.random() * 6.28));
+      m.group.position.set(s.x, s.y + 0.1, s.z);
       this.scene.add(m.group);
       this.traps.push(m);
       this.trapHits.push(m.hitbox);
@@ -361,6 +471,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         this.dead = true;
         this.hud.setBoss(null, 0);
         this.release();
+        this.grabbed = false;
       })
     );
     document.addEventListener('keydown', this.keyHandler);
@@ -463,6 +574,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     return this.phase === 'play' && this.player.alive;
   }
 
+  /** Something else has the prompt (a maw, its grabber): leave it be. */
+  private get promptBusy(): boolean {
+    return !!this.heldBy || this.grabbed;
+  }
+
   // ============================================================ frame
 
   update(dt: number, _time: number): void {
@@ -480,13 +596,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     const a = this.arsenal;
 
-    // ---- Water: deep enough and he swims
     const pos = p.position;
     const lake = inLake(pos.x, pos.z);
-    p.swimming = p.alive && this.phase === 'play' && lake && pos.y < WATER_Y - SWIM_DEPTH && !this.heldBy;
+    p.swimming = p.alive && this.phase === 'play' && lake && pos.y < WATER_Y - SWIM_DEPTH && !this.heldBy && !this.grabbed;
     p.swimTop = WATER_Y - 1.45;
-    const camY = p.camera.position.y;
-    this.underwater = inLake(p.camera.position.x, p.camera.position.z) && camY < WATER_Y - 0.02;
+    this.underwater = inLake(p.camera.position.x, p.camera.position.z) && p.camera.position.y < WATER_Y - 0.02;
     if (p.swimming && !this.swimHinted) {
       this.swimHinted = true;
       this.ctx.audio.splash(true);
@@ -494,7 +608,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.hint('SUIT LAMP ON — [W] SWIM WHERE YOU LOOK · [SPACE] UP · [C] DOWN', 7);
     }
 
-    // ---- His hands: the tracker on M; a can on G
     const free = this.playable && input.pointerLocked && !p.swimming;
     const wantTablet = this.hasTablet && free && input.isDown('KeyM') && !this.drink.engaged;
     if (input.wasPressed('KeyG') && free && !a.reloading && !this.knife.busy && !wantTablet) this.drink.start();
@@ -504,27 +617,35 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !a.reloading && !a.switching && !a.pressureArmed;
     p.aiming = aiming;
 
-    // ---- Moving: the boxes and the trees near him; a maw holds him where he is
     if (this.phase === 'play' || this.dead) {
       this.refreshNear();
       p.update(dt, this.allCols);
       this.keepInside();
     }
     this.updateTraps(dt);
+    this.updateBossGrip(dt);
     this.floorBody.position.set(0, groundY(pos.x, pos.z), 0);
 
-    // ---- Weapons
+    // ---- Weapons: the guns, the knife, or the two alien arms
     const sideOut = a.knifeActive;
+    const armsOut = sideOut && a.side === 'blaster';
     this.knife.stow = sideOut && a.side === 'knife' ? a.knifeStow : 1;
-    if (this.phase !== 'harvest') this.blaster.stow = sideOut && a.side === 'blaster' ? a.knifeStow : 1;
+    if (this.phase !== 'harvest') {
+      this.acidArm.stow = armsOut ? a.knifeStow : 1;
+      this.grabArm.stow = armsOut ? a.knifeStow : 1;
+    }
     const canFire = this.playable && input.pointerLocked && !busy;
     if (sideOut && a.side === 'knife' && a.knifeWanted && canFire && a.knifeStow < 0.15 && input.consumeClick() && this.knife.trick()) this.ctx.audio.punchSwish();
-    if (sideOut && a.side === 'blaster') {
+    if (armsOut) {
       input.consumeClick();
-      if (canFire && input.mouseHeld && !p.sprinting && this.blaster.fire()) this.fireGoo();
-    }
+      this.updateArms(dt, canFire && !p.sprinting);
+    } else if (this.tongue.state !== 'idle') this.retract(this.tongue);
+    this.lmbWas = input.mouseHeld;
     this.knife.update(dt, p);
-    if (this.phase !== 'harvest') this.blaster.update(dt, p);
+    if (this.phase !== 'harvest') {
+      this.acidArm.update(dt, p);
+      this.grabArm.update(dt, p);
+    }
     a.updateViewmodels(dt, aiming);
     a.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
     this.hud.setAmmoShown(!a.knifeActive && !a.knifeWanted);
@@ -546,14 +667,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updatePacks();
     this.updateHounds(dt);
     this.updateBoss(dt);
-    this.updateShots(dt);
+    this.updateTongues(dt);
+    this.updateAcid(dt);
     this.updateHarvestPrompt();
     if (this.phase === 'harvest') this.updateHarvest(dt);
     this.updatePortal(dt);
     this.updateCheckpoints();
     this.updateHints(dt);
 
-    // ---- The world
     this.updateAtmosphere(dt);
     this.drops.update(dt, groundY);
     this.hud.setHealth(p.health, p.regenProgress);
@@ -561,13 +682,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.decals.update(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
-    this.gooLight.intensity = Math.max(0, this.gooLight.intensity - dt * 60);
+    this.acidLight.intensity = Math.max(0, this.acidLight.intensity - dt * 50);
     this.world.step(1 / 60, dt, 3);
     this.applyShake(dt);
     input.endFrame();
   }
 
-  /** The level's boxes, and boxes for the trunks and rocks within a few metres of him. */
   private refreshNear(): void {
     const p = this.player.position;
     if (this.nearAt.distanceToSquared(p) > 1 || this.allCols.length === 0) {
@@ -593,7 +713,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
 
-  /** Not up the canyon walls (a pressure shot can throw him a long way): back to the last place he was in it. */
   private keepInside(): void {
     const p = this.player;
     if (!p.alive) return;
@@ -671,7 +790,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (d < 2.2) {
       this.hud.setPrompt('[ E ] PICK UP THE TRACKER');
       if (this.ctx.input.wasPressed('KeyE')) this.takeTablet(false);
-    } else if (this.doorT >= 0 && !this.heldBy) this.hud.setPrompt(null);
+    } else if (this.doorT >= 0 && !this.promptBusy) this.hud.setPrompt(null);
   }
 
   private takeTablet(silent: boolean): void {
@@ -688,11 +807,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   // ============================================================ maws
 
-  /**
-   * The maws: lying open; one he walks onto snaps shut round his legs and
-   * has him — he can't move or jump, it bites, and bites again; he can
-   * shoot it (it dies and lets go) or wait for it to spit him out.
-   */
   private updateTraps(dt: number): void {
     const p = this.player;
     const pos = p.position;
@@ -702,7 +816,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         m.state = 'open';
         m.stateT = 0;
       }
-      if (m.state !== 'open' || this.heldBy || !p.alive || this.phase !== 'play' || p.swimming) continue;
+      if (m.state !== 'open' || this.heldBy || this.grabbed || !p.alive || this.phase !== 'play' || p.swimming) continue;
       const g = m.group.position;
       if (Math.hypot(pos.x - g.x, pos.z - g.z) < MawTrap.REACH && pos.y - g.y < 0.6) {
         m.snap();
@@ -720,8 +834,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     const m = this.heldBy;
     if (!m) {
-      p.stunned = false;
-      this.vignette.style.opacity = '0';
+      if (!this.grabbed) {
+        p.stunned = false;
+        this.vignette.style.opacity = '0';
+      }
       return;
     }
     const g = m.group.position;
@@ -747,7 +863,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   private release(): void {
     this.heldBy = null;
-    this.player.stunned = false;
+    this.player.stunned = this.grabbed;
   }
 
   private hurtTrap(m: MawTrap, dmg: number, point: THREE.Vector3, dir: THREE.Vector3): void {
@@ -771,7 +887,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     for (const pk of this.packs) {
       if (pk.spawned) continue;
       if (pk.needs === 'tablet' && !this.hasTablet) continue;
-      if (pk.needs === 'harvest') continue;
+      if (pk.needs === 'harvest' && (!this.harvested || pk.trigger > 900)) continue;
       if (z < pk.trigger && this.playable) this.spawnPack(pk);
     }
   }
@@ -789,7 +905,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.hounds.push(h);
       this.houndHits.push(...h.hitboxes);
     });
-    // One snarl for the lot of them as they come
     this.later(0.4, () => this.ctx.audio.houndScreech(this.player.position.distanceTo(V(pk.at[0].x, 0, pk.at[0].z)) * 0.6));
   }
 
@@ -802,10 +917,59 @@ export class Level16Scene extends CombatScene<Level16Data> {
       h.stateT += dt;
       if (!h.alive) {
         h.deadT += dt;
-        h.knock.multiplyScalar(Math.exp(-4 * dt));
-        g.x += h.knock.x * dt;
-        g.z += h.knock.z * dt;
-        g.y = groundY(g.x, g.z);
+        const fv = this.flung.get(h);
+        if (fv) {
+          // Still flying when it died: it lands
+          fv.y -= 18 * dt;
+          g.addScaledVector(fv, dt);
+          const gy = groundY(g.x, g.z);
+          if (g.y <= gy) {
+            g.y = gy;
+            this.flung.delete(h);
+          }
+        } else {
+          h.knock.multiplyScalar(Math.exp(-4 * dt));
+          g.x += h.knock.x * dt;
+          g.z += h.knock.z * dt;
+          g.y = groundY(g.x, g.z);
+        }
+        h.animate(dt, this.t);
+        continue;
+      }
+      if (h.held) {
+        h.animate(dt, this.t);
+        continue;
+      }
+      // Thrown: through the air till it lands, and the landing hurts
+      const fv = this.flung.get(h);
+      if (fv) {
+        fv.y -= 18 * dt;
+        g.addScaledVector(fv, dt);
+        h.group.rotation.x += h.spin.x * dt;
+        h.group.rotation.z += h.spin.z * dt;
+        // Into another one on the way
+        for (const o of this.hounds) {
+          if (o === h || !o.alive || o.held) continue;
+          if (o.group.position.distanceTo(g) < 1.3) {
+            this.hurtHound(o, 2.5, o.group.position.clone().add(V(0, 0.7, 0)), fv.clone().normalize());
+            fv.multiplyScalar(0.5);
+          }
+        }
+        const gy = groundY(g.x, g.z);
+        if (g.y <= gy) {
+          g.y = gy;
+          const sp = fv.length();
+          this.flung.delete(h);
+          h.group.rotation.x = 0;
+          h.group.rotation.z = 0;
+          this.ctx.audio.bodyThud(g.distanceTo(pp));
+          this.drops.burst(g.clone().add(V(0, 0.4, 0)), V(0, 1, 0), 14, 2.5, ALIEN_BLOOD);
+          this.hurtHound(h, Math.max(1, sp * 0.4), g.clone().add(V(0, 0.6, 0)), fv.clone().normalize());
+          if (h.alive) {
+            h.state = 'recover';
+            h.stateT = -0.8;
+          }
+        }
         h.animate(dt, this.t);
         continue;
       }
@@ -828,7 +992,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.airV = 3.6;
           h.vel.set(Math.sin(h.yaw), 0, Math.cos(h.yaw)).multiplyScalar(9);
         }
-        // Now and then a growl, never all of them at once
         h.growlT -= dt;
         if (h.growlT <= 0) {
           h.growlT = 6 + Math.random() * 6;
@@ -901,23 +1064,28 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
 
-  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3): void {
-    this.drops.burst(point, dir.clone().negate().setY(0.3), 12, 3, ALIEN_BLOOD);
-    this.ctx.audio.fleshHit();
+  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false): void {
+    if (!acid) {
+      this.drops.burst(point, dir.clone().negate().setY(0.3), 12, 3, ALIEN_BLOOD);
+      this.ctx.audio.fleshHit();
+    }
     if (!h.alive) return;
     h.hp -= dmg;
-    this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
+    if (!acid) this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
     if (h.hp > 0) {
-      h.speed *= 0.4;
+      if (!acid) h.speed *= 0.4;
       return;
     }
+    if (acid) this.ctx.bus.emit(Events.HitMarker, { lethal: true });
     h.alive = false;
     h.state = 'dead';
     h.deadT = 0;
     h.air = 0;
     h.airV = 0;
-    h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(3 + dmg);
-    this.drops.burst(point, V(0, 1, 0), 30, 4, ALIEN_BLOOD);
+    h.melted = acid;
+    if (h.held) this.dropHeld(false);
+    h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(acid ? 0 : 3 + Math.min(dmg, 4));
+    this.drops.burst(point, V(0, 1, 0), acid ? 24 : 30, acid ? 2 : 4, acid ? ACID : ALIEN_BLOOD);
     if (this.t - this.lastGrowl > 1) {
       this.lastGrowl = this.t;
       this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
@@ -932,7 +1100,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player.position;
     const f = this.player.forwardDir();
     for (const h of this.hounds) {
-      if (!h.alive) continue;
+      if (!h.alive || h.held) continue;
       const at = h.group.position;
       const dx = at.x - p.x;
       const dz = at.z - p.z;
@@ -943,15 +1111,382 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.ctx.audio.knifeStab();
       return;
     }
-    // Or the maw that has him
     if (this.heldBy) {
       this.hurtTrap(this.heldBy, 2, this.heldBy.group.position.clone().add(V(0, 0.4, 0)), V(0, -1, 0));
       this.ctx.audio.knifeStab();
     }
   }
 
+  // ============================================================ his alien arms
+
+  /**
+   * Right mouse: the acid arm lobs a glob that bursts into a pool. Left
+   * mouse: the grabber's tongue shoots out; if it takes a hound, he has it
+   * on the end while he holds the button — swing it about with the mouse,
+   * let go and it's thrown.
+   */
+  private updateArms(dt: number, canFire: boolean): void {
+    const { input } = this.ctx;
+    const p = this.player;
+    // ---- Acid
+    if (canFire && input.rightHeld && this.acidArm.fire(0.42)) {
+      const from = this.acidArm.muzzleWorld();
+      const dir = p.camera.getWorldDirection(new THREE.Vector3());
+      const v = dir.multiplyScalar(25).add(V(0, 2.2, 0)).add(p.velocity.clone().multiplyScalar(0.5));
+      this.acidShots.fire(from, v, 'player', 1.5);
+      this.ctx.audio.gooShot();
+      this.acidLight.position.copy(from);
+      this.acidLight.intensity = 12;
+      this.shake = Math.max(this.shake, 0.1);
+    }
+    // ---- The grabber
+    const T = this.tongue;
+    const lmb = input.mouseHeld && canFire;
+    T.from.copy(this.grabArm.muzzleWorld());
+    if (lmb && !this.lmbWas && T.state === 'idle' && this.grabArm.stow < 0.1) {
+      // Out along where he's aiming
+      const dir = p.camera.getWorldDirection(new THREE.Vector3());
+      const aim = this.trace(p.camera.position, dir, 30, true);
+      const at = aim ? aim.point : p.camera.position.clone().addScaledVector(dir, 30);
+      T.dir.copy(at).sub(T.from).normalize();
+      T.state = 'out';
+      T.len = 0;
+      this.ctx.audio.kickWhoosh();
+      this.ctx.audio.squelchPop();
+    }
+    if (T.state === 'out') {
+      const before = T.len;
+      T.len += 46 * dt;
+      T.tip.copy(T.from).addScaledVector(T.dir, T.len);
+      this.grabArm.recoil = Math.max(this.grabArm.recoil, 0.6);
+      const a = T.from.clone().addScaledVector(T.dir, before);
+      const h = this.trace(a, T.dir, T.len - before, true);
+      if (h && h.kind === 'hound' && h.hound && h.hound.alive) {
+        this.takeHold(h.hound);
+      } else if (h && h.kind === 'trap' && h.trap) {
+        // Torn out of the ground
+        this.hurtTrap(h.trap, 99, h.point, T.dir);
+        this.ctx.audio.squelchPop();
+        T.state = 'back';
+      } else if (h) {
+        T.tip.copy(h.point);
+        T.state = 'back';
+        this.drops.burst(h.point, h.normal, 6, 1.5, 0xc04a8a);
+      } else if (T.len > 26 || !lmb) T.state = 'back';
+    }
+    if (T.state === 'hold') {
+      const hd = this.holding!;
+      if (!hd.alive || !lmb) {
+        this.dropHeld(lmb);
+      } else {
+        // Out in front of him, where he looks: swung round as he turns
+        const dir = p.camera.getWorldDirection(new THREE.Vector3());
+        const want = p.camera.position.clone().addScaledVector(dir, 4.2);
+        want.y = Math.max(want.y - 0.6, groundY(want.x, want.z) + 0.2);
+        const g = hd.group.position;
+        this.holdPrev.copy(g);
+        g.lerp(want, Math.min(1, dt * 12));
+        this.holdVel.subVectors(g, this.holdPrev).divideScalar(Math.max(dt, 1e-4));
+        hd.group.rotation.y = p.yaw + Math.PI;
+        T.tip.copy(g).add(V(0, 0.75, 0));
+        T.len = T.tip.distanceTo(T.from);
+        this.grabArm.tremor = 0.6;
+        this.grabArm.recoil = Math.max(this.grabArm.recoil, 0.4);
+        // Swung into the others
+        const sp = this.holdVel.length();
+        if (sp > 5)
+          for (const o of this.hounds) {
+            if (o === hd || !o.alive || o.held) continue;
+            if (o.group.position.distanceTo(g) < 1.4) {
+              this.hurtHound(o, 2, o.group.position.clone().add(V(0, 0.7, 0)), this.holdVel.clone().normalize());
+              this.hurtHound(hd, 1, g.clone().add(V(0, 0.7, 0)), this.holdVel.clone().normalize().negate());
+              this.shake = Math.max(this.shake, 0.3);
+            }
+          }
+      }
+    } else this.grabArm.tremor = 0;
+  }
+
+  private takeHold(h: Hound): void {
+    const T = this.tongue;
+    this.holding = h;
+    h.held = true;
+    h.air = 0;
+    h.airV = 0;
+    h.state = 'recover';
+    this.flung.delete(h);
+    T.state = 'hold';
+    this.holdPrev.copy(h.group.position);
+    this.holdVel.set(0, 0, 0);
+    this.ctx.audio.houndBite(0);
+    this.ctx.audio.houndScreech(T.len);
+    this.shake = Math.max(this.shake, 0.3);
+  }
+
+  /** Let go of what's on the end: thrown (`throwIt`) or just dropped as the tongue comes back. */
+  private dropHeld(stillHeld: boolean): void {
+    const h = this.holding;
+    this.holding = null;
+    if (h) {
+      h.held = false;
+      if (h.alive || !stillHeld) {
+        const v = this.holdVel.clone().multiplyScalar(1.15).add(V(0, 2.5, 0));
+        if (v.length() > 26) v.setLength(26);
+        this.flung.set(h, v);
+        h.spin.set((Math.random() - 0.5) * 12, 0, (Math.random() - 0.5) * 12);
+        if (v.length() > 6) this.ctx.audio.kickWhoosh();
+      }
+    }
+    this.tongue.state = 'back';
+  }
+
+  private retract(T: Tongue): void {
+    if (T === this.tongue && this.holding) this.dropHeld(false);
+    if (T.state !== 'idle') T.state = 'back';
+  }
+
+  private makeTongue(radius: number, headScale: number): Tongue {
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), wetFlesh(4));
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    const head = grabberHead().group;
+    head.scale.setScalar(headScale);
+    head.visible = false;
+    this.scene.add(mesh, head);
+    return { state: 'idle', from: new THREE.Vector3(), tip: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, -1), len: 0, mesh, head, radius };
+  }
+
+  /** Both tongues: drawn from where they leave the arm to their tips, a sag in them, ribbed. */
+  private updateTongues(dt: number): void {
+    for (const T of [this.tongue, this.bossTongue]) {
+      if (T.state === 'back') {
+        T.len = Math.max(0, T.len - 55 * dt);
+        T.dir.copy(T.tip).sub(T.from).normalize();
+        T.tip.copy(T.from).addScaledVector(T.dir, T.len);
+        if (T.len < 0.3) T.state = 'idle';
+      }
+      const on = T.state !== 'idle' && T.len > 0.05;
+      T.mesh.visible = on;
+      T.head.visible = on;
+      if (!on) continue;
+      const a = T.from;
+      const b = T.tip;
+      const len = a.distanceTo(b);
+      const mid = a.clone().lerp(b, 0.5).add(V(0, -Math.min(1.5, len * 0.06), 0));
+      const w = a.clone().lerp(b, 0.25).add(V(Math.sin(this.t * 13) * 0.05 * len * 0.05, 0, Math.cos(this.t * 11) * 0.05 * len * 0.05));
+      const curve = new THREE.CatmullRomCurve3([a.clone(), w, mid, b.clone()]);
+      const segs = 28;
+      const radial = 8;
+      const g = new THREE.TubeGeometry(curve, segs, T.radius, radial, false);
+      const pp = g.getAttribute('position') as THREE.BufferAttribute;
+      const c = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      const col = new Float32Array(pp.count * 3);
+      for (let i = 0; i < pp.count; i++) {
+        const u = Math.floor(i / (radial + 1)) / segs;
+        curve.getPointAt(Math.min(1, u), c);
+        const rib = 1 + 0.25 * Math.max(0, Math.sin(u * len * 9));
+        v.fromBufferAttribute(pp, i).sub(c).multiplyScalar(rib);
+        pp.setXYZ(i, c.x + v.x, c.y + v.y, c.z + v.z);
+        col[i * 3] = 0.75;
+        col[i * 3 + 1] = 0.25;
+        col[i * 3 + 2] = 0.45;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      g.computeVertexNormals();
+      T.mesh.geometry.dispose();
+      T.mesh.geometry = g;
+      T.head.position.copy(b);
+      T.head.lookAt(b.clone().add(curve.getTangentAt(1)));
+    }
+    // The big one's tongue-tip is a thing to shoot
+    const BT = this.bossTongue;
+    this.tongueHit.position.copy(BT.tip);
+    this.tongueHit.visible = BT.state === 'out';
+  }
+
+  // ============================================================ acid
+
+  private buildPools(): void {
+    for (let i = 0; i < 36; i++) {
+      const mat = puddleMaterial(Math.random() * 40);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2, 10, 10), mat);
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      mesh.renderOrder = 3;
+      this.scene.add(mesh);
+      this.puddles.push({ mesh, mat, x: 0, z: 0, r: 1, life: 0, max: 1, enemy: false, burn: 0 });
+    }
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xff5a20, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    for (let i = 0; i < 30; i++) {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 48), ringMat.clone());
+      ring.rotation.x = -Math.PI / 2;
+      ring.visible = false;
+      ring.renderOrder = 4;
+      this.scene.add(ring);
+      this.markers.push({ mesh: ring, t: 0, land: -1, r: 1 });
+    }
+  }
+
+  /** A pool of acid where something came down: lying on the ground, whatever its shape. */
+  private spawnPuddle(x: number, z: number, r: number, enemy: boolean, life = 6): void {
+    if (inLake(x, z) && groundY(x, z) < WATER_Y) return;
+    const pd = this.puddles.reduce((a, b) => (b.life < a.life ? b : a));
+    pd.x = x;
+    pd.z = z;
+    pd.r = r;
+    pd.life = life;
+    pd.max = life;
+    pd.enemy = enemy;
+    pd.burn = 0.5;
+    const pos = pd.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const uv = pd.mesh.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const px = x + (uv.getX(i) * 2 - 1) * r;
+      const pz = z - (uv.getY(i) * 2 - 1) * r;
+      pos.setXYZ(i, px, groundY(px, pz) + 0.06, pz);
+    }
+    pos.needsUpdate = true;
+    pd.mesh.geometry.computeBoundingSphere();
+    pd.mesh.visible = true;
+    this.drops.burst(V(x, groundY(x, z) + 0.1, z), V(0, 1, 0), 16, 3, ACID);
+    this.ctx.audio.gooSplat(Math.hypot(x - this.player.position.x, z - this.player.position.z));
+  }
+
+  private mark(x: number, z: number, r: number, land: number): void {
+    const m = this.markers.find((k) => k.land < 0);
+    if (!m) return;
+    m.t = 0;
+    m.land = land;
+    m.r = r;
+    m.mesh.position.set(x, groundY(x, z) + 0.12, z);
+    m.mesh.visible = true;
+  }
+
+  private updateAcid(dt: number): void {
+    const p = this.player;
+    const pp = p.position;
+    const seg = new THREE.Vector3();
+    // ---- His globs: whatever they hit, a pool where they land
+    this.acidShots.update(dt, this.t, (s, a, b) => {
+      seg.subVectors(b, a);
+      const len = seg.length();
+      if (len < 1e-5) return false;
+      seg.divideScalar(len);
+      const h = this.trace(a, seg, len, true);
+      if (!h) return false;
+      this.acidHit(s, h, seg);
+      return true;
+    });
+    // ---- Its globs: on him, or on the ground
+    this.bossAcid.update(dt, this.t, (_s, a, b) => {
+      seg.subVectors(b, a);
+      const len = seg.length();
+      if (len < 1e-5) return false;
+      seg.divideScalar(len);
+      if (p.alive) {
+        const c = pp.clone().add(V(0, 0.95, 0));
+        const t = THREE.MathUtils.clamp(c.clone().sub(a).dot(seg), 0, len);
+        const near = a.clone().addScaledVector(seg, t);
+        if (Math.abs(near.x - c.x) < 0.4 && Math.abs(near.z - c.z) < 0.4 && Math.abs(near.y - c.y) < 0.95) {
+          this.shake = Math.max(this.shake, 0.4);
+          this.vignette.style.opacity = '0.8';
+          p.hit('ACID', a.clone());
+          this.spawnPuddle(near.x, near.z, 1.7, true);
+          return true;
+        }
+      }
+      if (b.y < groundY(b.x, b.z)) {
+        this.spawnPuddle(b.x, b.z, 1.9, true);
+        return true;
+      }
+      return false;
+    });
+    // ---- The warning rings: closing in on where it'll land, pulsing
+    for (const m of this.markers) {
+      if (m.land < 0) continue;
+      m.t += dt;
+      const k = Math.min(1, m.t / m.land);
+      m.mesh.scale.setScalar(m.r * (1 + (1 - k) * 1.3));
+      (m.mesh.material as THREE.MeshBasicMaterial).opacity = 0.3 + 0.35 * Math.abs(Math.sin(m.t * (6 + k * 10)));
+      if (m.t >= m.land) {
+        m.land = -1;
+        m.mesh.visible = false;
+      }
+    }
+    // ---- The pools: eat what's in them, then dry up
+    this.hissT -= dt;
+    let inAcid: Puddle | null = null;
+    for (const pd of this.puddles) {
+      if (pd.life <= 0) continue;
+      pd.life -= dt;
+      const grow = Math.min(1, (pd.max - pd.life) / 0.25);
+      pd.mat.uniforms.uFade.value = Math.min(1, pd.life / 1.5) * grow;
+      pd.mat.uniforms.uT.value = this.t;
+      if (pd.life <= 0) {
+        pd.mesh.visible = false;
+        continue;
+      }
+      const r = pd.r * 0.82;
+      if (Math.random() < dt * 3) this.drops.burst(V(pd.x + (Math.random() - 0.5) * pd.r, groundY(pd.x, pd.z) + 0.1, pd.z + (Math.random() - 0.5) * pd.r), V(0, 1, 0), 2, 0.8, ACID);
+      // Hounds melt
+      for (const h of this.hounds) {
+        if (!h.alive || h.held || this.flung.has(h)) continue;
+        const g = h.group.position;
+        if (Math.hypot(g.x - pd.x, g.z - pd.z) > r + 0.3) continue;
+        h.speed *= Math.exp(-dt * 2);
+        if (Math.random() < dt * 5) this.particles.smokeColumn(g.clone().add(V(0, 0.4, 0)), 0.3, 1);
+        if (Math.random() < dt * 4) this.drops.burst(g.clone().add(V(0, 0.5, 0)), V(0, 1, 0), 3, 1.2, ACID);
+        this.hurtHound(h, 1.6 * dt, g.clone().add(V(0, 0.5, 0)), V(0, 1, 0), true);
+        if (this.hissT <= 0) {
+          this.hissT = 0.5;
+          this.ctx.audio.fireCrackle(g.distanceTo(pp));
+        }
+      }
+      // Maws in it die
+      for (const m of this.traps) {
+        if (m.state === 'dead') continue;
+        const g = m.group.position;
+        if (Math.hypot(g.x - pd.x, g.z - pd.z) < r + 0.4) {
+          m.hp -= dt * 1.5;
+          if (m.hp <= 0) this.hurtTrap(m, 1, g.clone().add(V(0, 0.3, 0)), V(0, 1, 0));
+        }
+      }
+      // Its acid burns him
+      if (pd.enemy && p.alive && Math.hypot(pp.x - pd.x, pp.z - pd.z) < r && pp.y - groundY(pp.x, pp.z) < 0.4) inAcid = pd;
+    }
+    if (inAcid) {
+      this.burnT += dt;
+      this.vignette.style.opacity = '0.55';
+      if (this.burnT > 0.85) {
+        this.burnT = 0;
+        this.ctx.audio.fireCrackle(0);
+        this.shake = Math.max(this.shake, 0.25);
+        p.hit('ACID', V(inAcid.x, pp.y, inAcid.z));
+      }
+    } else this.burnT = Math.min(this.burnT, 0.5);
+  }
+
+  private acidHit(s: GlowShot, h: Hit, dir: THREE.Vector3): void {
+    this.drops.burst(h.point, h.normal, 14, 2.6, ACID);
+    if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, s.damage, h.point, dir, true);
+    else if (h.kind === 'boss') this.hurtBoss(s.damage * 2, h.point, dir, !!h.head);
+    else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage * 2, h.point, dir);
+    else if (h.kind === 'tongue') this.hurtTongue(3);
+    this.spawnPuddle(h.point.x, h.point.z, 1.6, false);
+  }
+
   // ============================================================ the big one
 
+  /**
+   * It circles him; every so often it does one of four things. It lobs acid
+   * at him (rings on the ground where it'll land); it sprays a whole field
+   * of it round him (get out — the pressure shotgun); it sends its grabber
+   * for him (shoot the tongue-tip, or if it gets him, F to tear free before
+   * it pulls him in to its mouth); or it reaches for a tree, tears it up and
+   * drags it along the ground through where he's standing (jump it, or get
+   * out of the way).
+   */
   private updateBoss(dt: number): void {
     const b = this.boss;
     const p = this.player;
@@ -968,28 +1503,36 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const to = V(pp.x - b.at.x, 0, pp.z - b.at.z);
     const dist = to.length();
     to.normalize();
+    const enraged = b.hp < b.maxHp * 0.5;
+    // ---- Moving: circling him, standing still while it reaches
+    const still = this.move === 'grab' || this.move === 'tree' || this.move === 'stagger' || (this.move === 'spray' && this.moveT < 1);
     this.bossSideT -= dt;
     if (this.bossSideT <= 0) {
       this.bossSideT = 4 + Math.random() * 4;
       this.bossSide = Math.random() < 0.5 ? -1 : 1;
     }
-    const enraged = b.hp < b.maxHp * 0.5;
     const radial = THREE.MathUtils.clamp((dist - 15) * 0.5, -3.5, 2.5);
-    const tang = V(-to.z, 0, to.x).multiplyScalar(this.bossSide * (enraged ? 3.2 : 2.2));
-    const want = to.clone().multiplyScalar(radial).add(tang);
+    const want = to.clone().multiplyScalar(radial).add(V(-to.z, 0, to.x).multiplyScalar(this.bossSide * (enraged ? 3.2 : 2.2)));
     const off = V(b.at.x - ARENA.x, 0, b.at.z - ARENA.z);
-    if (off.length() > 22) want.addScaledVector(off.normalize(), -3);
-    if (!p.alive || this.phase !== 'play') want.set(0, 0, 0);
+    if (off.length() > 20) want.addScaledVector(off.normalize(), -3);
+    if (!p.alive || this.phase !== 'play' || still) want.set(0, 0, 0);
     this.bossVel.lerp(want, Math.min(1, dt * 1.5));
     b.at.x += this.bossVel.x * dt;
     b.at.z += this.bossVel.z * dt;
     b.at.y = groundY(b.at.x, b.at.z);
-    const face = Math.atan2(to.x, to.z);
+    // Faces him (or, reaching for a tree, the tree)
+    let faceAt = pp;
+    if (this.tree && this.tree.stage !== 'drag') faceAt = this.bossTongue.tip;
+    const face = Math.atan2(faceAt.x - b.at.x, faceAt.z - b.at.z);
     const dy = Math.atan2(Math.sin(face - b.yaw), Math.cos(face - b.yaw));
     b.yaw += THREE.MathUtils.clamp(dy, -dt * 1.6, dt * 1.6);
-    const aim = p.camera.position.clone().add(V(0, -0.3, 0));
-    b.update(dt, this.bossVel, [aim, aim]);
-    if (dist < 3.4 && p.alive) {
+    // Arms: the acid one up for a lob, the grabber at its tongue's tip
+    const up = b.at.clone().addScaledVector(to, 6).add(V(0, 14, 0));
+    const aimAcid = this.move === 'mortar' || this.move === 'spray' ? up : p.camera.position.clone();
+    const aimGrab = this.bossTongue.state !== 'idle' ? this.bossTongue.tip.clone() : p.camera.position.clone();
+    b.update(dt, this.bossVel, [aimAcid, aimGrab]);
+    // He's in its way: it shoves him off
+    if (dist < 3.4 && p.alive && !this.grabbed) {
       p.launch(V(to.x, 0.35, to.z).normalize(), 7);
       if (this.t - this.lastStomp > 1.2) {
         this.lastStomp = this.t;
@@ -998,27 +1541,331 @@ export class Level16Scene extends CombatScene<Level16Data> {
         this.shake = Math.max(this.shake, 0.7);
       }
     }
+    this.hud.setBoss(BOSS_NAME, b.hp / b.maxHp);
     if (!p.alive || this.phase !== 'play') return;
-    this.bossFireT -= dt;
-    if (this.bossFireT <= 0) {
-      if (this.bossShots > 0) {
-        this.bossShots--;
-        this.boltFrom(this.bossArm, enraged ? 0.08 : 0.06);
-        this.bossFireT = this.bossShots > 0 ? (enraged ? 0.2 : 0.28) : enraged ? 1.4 : 2.0;
-        if (this.bossShots === 0) this.bossArm = 1 - this.bossArm;
-      } else {
-        this.bossVolley++;
-        if (this.bossVolley % 4 === 0) {
-          this.ctx.audio.giantRoar(0.7, dist);
-          for (let k = -3; k <= 3; k++) this.later(0.5 + Math.abs(k) * 0.03, () => this.boltFan(k));
-          this.bossFireT = 2.2;
-        } else {
-          this.bossShots = enraged ? 4 : 3;
-          this.bossFireT = 0.01;
+    // ---- What it's doing
+    this.moveT += dt;
+    const T = this.bossTongue;
+    T.from.copy(b.muzzle(1));
+    switch (this.move) {
+      case 'idle': {
+        if (this.moveT > (enraged ? 1.3 : 2.1)) {
+          const order: BossMove[] = ['mortar', 'grab', 'spray', 'tree'];
+          let next = order[this.moveI++ % order.length];
+          if (next === 'tree' && this.treeUsed.every((u) => u)) next = 'mortar';
+          this.startMove(next);
         }
+        break;
+      }
+      case 'mortar': {
+        // Globs one after another, each at him (or near), a ring where it'll come down
+        const n = enraged ? 7 : 5;
+        if (this.moveShots < n && this.moveT > 0.4 + this.moveShots * 0.32) {
+          const spread = this.moveShots === 0 ? 0 : 3.5;
+          const a = Math.random() * Math.PI * 2;
+          const r = Math.sqrt(Math.random()) * spread;
+          const lead = p.velocity.clone().multiplyScalar(0.6);
+          this.lob(pp.x + lead.x + Math.cos(a) * r, pp.z + lead.z + Math.sin(a) * r, 1.5, 1.9);
+          this.moveShots++;
+        }
+        if (this.moveShots >= n && this.moveT > 0.4 + n * 0.32 + 0.6) this.startMove('idle');
+        break;
+      }
+      case 'spray': {
+        // A roar, the arm up, and a whole field of it at once round him: get clear
+        if (this.moveShots === 0 && this.moveT > 0.9) {
+          const n = enraged ? 24 : 18;
+          const R = enraged ? 9.5 : 8;
+          this.lob(pp.x, pp.z, 1.9, 1.9);
+          for (let k = 1; k < n; k++) {
+            const a = (k / n) * Math.PI * 2 * 2.3 + Math.random() * 0.4;
+            const r = R * Math.sqrt(k / n) + (Math.random() - 0.5);
+            this.lob(pp.x + Math.cos(a) * r, pp.z + Math.sin(a) * r, 1.8 + Math.random() * 0.4, 1.9);
+          }
+          this.moveShots = n;
+          this.shake = Math.max(this.shake, 0.4);
+          if (!this.sprayHinted) {
+            this.sprayHinted = true;
+            this.hint('GET OUT OF THE RINGS — A PRESSURE SHOT [2]+[RMB] CARRIES YOU CLEAR', 5);
+          }
+        }
+        if (this.moveT > 3.4) this.startMove('idle');
+        break;
+      }
+      case 'grab': {
+        // Its tongue comes for him, steering after him; shoot the tip
+        if (T.state === 'out') {
+          const target = p.camera.position.clone().add(V(0, -0.4, 0));
+          const want2 = target.sub(T.tip).normalize();
+          const turn = Math.min(1, dt * 2.2);
+          T.dir.lerp(want2, turn).normalize();
+          T.tip.addScaledVector(T.dir, (enraged ? 10.5 : 8.5) * dt);
+          T.len = T.tip.distanceTo(T.from);
+          if (T.tip.distanceTo(p.camera.position) < 1.1) this.seize();
+          else if (T.len > 34 || this.moveT > 7) this.retract(T);
+        }
+        if (T.state === 'idle' && !this.grabbed) this.startMove('idle');
+        break;
+      }
+      case 'tree':
+        this.updateTreeDrag(dt);
+        break;
+      case 'stagger':
+        if (this.moveT > 1.6) this.startMove('idle');
+        break;
+    }
+  }
+  private sprayHinted = false;
+  private grabHinted = false;
+
+  private startMove(m: BossMove): void {
+    this.move = m;
+    this.moveT = 0;
+    this.moveShots = 0;
+    const b = this.boss;
+    const T = this.bossTongue;
+    const d = this.player.position.distanceTo(b.at);
+    if (m === 'spray') this.ctx.audio.giantRoar(0.8, d);
+    if (m === 'grab') {
+      T.from.copy(b.muzzle(1));
+      T.tip.copy(T.from);
+      T.dir.copy(this.player.camera.position).sub(T.from).normalize();
+      T.state = 'out';
+      T.len = 0;
+      this.tongueHp = 4.5;
+      this.ctx.audio.kickWhoosh();
+      this.ctx.audio.houndScreech(d);
+      if (!this.grabHinted) {
+        this.grabHinted = true;
+        this.hint('ITS GRABBER — SHOOT THE TIP BEFORE IT GETS YOU', 5);
       }
     }
-    this.hud.setBoss(BOSS_NAME, b.hp / b.maxHp);
+    if (m === 'tree') {
+      // The tree with him most nearly between it and the big one
+      let best = -1;
+      let bestScore = Infinity;
+      const pp = this.player.position;
+      this.level.arenaTrees.forEach((t, i) => {
+        if (this.treeUsed[i]) return;
+        const ax = t.x;
+        const az = t.z;
+        const dx = b.at.x - ax;
+        const dz = b.at.z - az;
+        const l2 = dx * dx + dz * dz;
+        const u = THREE.MathUtils.clamp(((pp.x - ax) * dx + (pp.z - az) * dz) / l2, 0, 1);
+        const off = Math.hypot(pp.x - ax - dx * u, pp.z - az - dz * u);
+        const score = off + (u < 0.1 || u > 0.9 ? 20 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          best = i;
+        }
+      });
+      if (best < 0) {
+        this.startMove('idle');
+        return;
+      }
+      this.treeUsed[best] = true;
+      const t = this.level.arenaTrees[best];
+      T.from.copy(b.muzzle(1));
+      T.tip.copy(T.from);
+      T.state = 'out';
+      T.len = 0;
+      this.tongueHp = 99;
+      const grabAt = V(t.x, groundY(t.x, t.z) + 2.2, t.z);
+      T.dir.copy(grabAt).sub(T.from).normalize();
+      this.tree = { i: best, stage: 'reach', t: 0, from: V(t.x, groundY(t.x, t.z), t.z), to: new THREE.Vector3(), dir: new THREE.Vector3(), hit: false };
+      this.ctx.audio.giantRoar(0.6, d);
+    }
+  }
+
+  /** One glob of acid on a high arc from the acid arm to (x, z), landing in `tf` seconds; a ring there till it does. */
+  private lob(x: number, z: number, r: number, tf: number): void {
+    const from = this.boss.muzzle(0);
+    const y = groundY(x, z);
+    const v = V((x - from.x) / tf, (y - from.y) / tf + 0.5 * ACID_G * tf, (z - from.z) / tf);
+    this.bossAcid.fire(from, v, 'enemy');
+    this.mark(x, z, r, tf);
+    this.boss.kick[0] = 1;
+    this.ctx.audio.gooShot();
+  }
+
+  /** The tree: the tongue to it, round it, it comes down across the way, and it's dragged at him. */
+  private updateTreeDrag(dt: number): void {
+    const tr = this.tree;
+    const b = this.boss;
+    const T = this.bossTongue;
+    if (!tr) {
+      this.startMove('idle');
+      return;
+    }
+    const tree = this.level.arenaTrees[tr.i];
+    const g = tree.group;
+    tr.t += dt;
+    if (tr.stage === 'reach') {
+      const target = tr.from.clone().add(V(0, 2.2, 0));
+      T.dir.copy(target).sub(T.tip).normalize();
+      T.tip.addScaledVector(T.dir, Math.min(18 * dt, T.tip.distanceTo(target)));
+      T.len = T.tip.distanceTo(T.from);
+      if (T.tip.distanceTo(target) < 0.2) {
+        tr.stage = 'wrap';
+        tr.t = 0;
+        this.ctx.audio.houndBite(T.len);
+        this.drops.burst(target, V(0, 1, 0), 10, 2, 0x6a5040);
+      }
+    } else if (tr.stage === 'wrap') {
+      g.rotation.z = Math.sin(tr.t * 30) * 0.03;
+      if (tr.t > 0.5) {
+        tr.stage = 'fall';
+        tr.t = 0;
+        // Dragged toward the big one; it lies across the way it's dragged
+        tr.dir.set(b.at.x - tr.from.x, 0, b.at.z - tr.from.z).normalize();
+        tr.to.copy(b.at).addScaledVector(tr.dir, -4.5);
+        this.treeCols[tr.i].disabled = true;
+        this.allCols = [];
+        this.ctx.audio.wallCollapse();
+        this.shake = Math.max(this.shake, 0.6);
+        this.particles.dust(tr.from.clone(), 3);
+      }
+    } else if (tr.stage === 'fall') {
+      // Over toward the big one, the crown swinging down sideways
+      const k = smooth(tr.t / 0.45);
+      const yaw = Math.atan2(tr.dir.x, tr.dir.z);
+      g.rotation.set(0, 0, 0);
+      g.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0)).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, k * Math.PI * 0.5)));
+      g.position.y = groundY(tr.from.x, tr.from.z) + k * 0.35;
+      T.tip.copy(tr.from).add(V(0, 2.2 * (1 - k) + 0.4 * k, 0));
+      T.len = T.tip.distanceTo(T.from);
+      if (tr.t > 0.45) {
+        tr.stage = 'drag';
+        tr.t = 0;
+        this.ctx.audio.bigEngineDrive(2.5, 0);
+      }
+    } else {
+      // Dragged along the ground, through him if he's still there
+      const step = 10 * dt;
+      const left = tr.to.clone().sub(g.position).setY(0);
+      const go = Math.min(step, left.length());
+      g.position.addScaledVector(tr.dir, go);
+      g.position.y = groundY(g.position.x, g.position.z) + 0.35;
+      T.tip.copy(g.position).add(V(0, 0.4, 0));
+      T.len = T.tip.distanceTo(T.from);
+      if (Math.random() < 0.5) this.particles.dust(g.position.clone(), 1.5);
+      if (Math.random() < 0.3) this.shake = Math.max(this.shake, 0.15);
+      // What it sweeps over: a band across the way, the trunk 0.8 high
+      const p = this.player;
+      const pp = p.position;
+      const rel = V(pp.x - g.position.x, 0, pp.z - g.position.z);
+      const along = rel.dot(tr.dir);
+      const across = Math.abs(rel.x * tr.dir.z - rel.z * tr.dir.x);
+      if (!tr.hit && p.alive && Math.abs(along) < 0.9 && across < 3.6 && pp.y - groundY(pp.x, pp.z) < 0.85) {
+        tr.hit = true;
+        p.hit('A TREE', g.position.clone());
+        p.launch(V(tr.dir.x, 0.6, tr.dir.z).normalize(), 9);
+        this.shake = Math.max(this.shake, 0.8);
+        this.ctx.audio.bodyThud(0);
+      }
+      for (const h of this.hounds) {
+        if (!h.alive) continue;
+        const r2 = V(h.group.position.x - g.position.x, 0, h.group.position.z - g.position.z);
+        if (Math.abs(r2.dot(tr.dir)) < 0.9 && Math.abs(r2.x * tr.dir.z - r2.z * tr.dir.x) < 3.6) this.hurtHound(h, 9, h.group.position.clone().add(V(0, 0.6, 0)), tr.dir);
+      }
+      if (go < step * 0.5) {
+        this.retract(T);
+        this.tree = null;
+        this.startMove('idle');
+      }
+    }
+  }
+
+  /** Its grabber has him: pulled in toward its mouth; F, again and again, to tear free. */
+  private seize(): void {
+    this.grabbed = true;
+    this.presses = 0;
+    this.bossTongue.state = 'hold';
+    this.player.stunned = true;
+    this.ctx.audio.houndBite(0);
+    this.shake = Math.max(this.shake, 0.7);
+    this.player.hit(BOSS_NAME, this.boss.at.clone());
+    this.hud.setPrompt(`[ F ] BREAK FREE  ${BREAK_FREE}`);
+  }
+
+  private updateBossGrip(dt: number): void {
+    if (!this.grabbed) return;
+    const p = this.player;
+    const b = this.boss;
+    const T = this.bossTongue;
+    if (!p.alive || !b.alive) {
+      this.grabbed = false;
+      p.stunned = !!this.heldBy;
+      this.retract(T);
+      this.hud.setPrompt(null);
+      return;
+    }
+    const pp = p.position;
+    // Pulled in
+    const to = V(b.at.x - pp.x, 0, b.at.z - pp.z);
+    const d = to.length();
+    to.normalize();
+    pp.addScaledVector(to, 2.3 * dt);
+    p.velocity.set(0, Math.min(0, p.velocity.y), 0);
+    p.boost.set(0, 0, 0);
+    T.tip.copy(p.camera.position).add(V(0, -0.5, 0));
+    T.len = T.tip.distanceTo(T.from);
+    this.vignette.style.opacity = String(0.5 + 0.3 * Math.sin(this.t * 10));
+    this.shake = Math.max(this.shake, 0.12);
+    if (this.ctx.input.wasPressed('KeyF')) {
+      this.presses++;
+      this.shake = Math.max(this.shake, 0.3);
+      this.ctx.audio.effortGrunt(0.6);
+      this.drops.burst(T.tip.clone(), V(0, 0.5, 0), 4, 1.5, 0xc04a8a);
+    }
+    const need = b.hp < b.maxHp * 0.5 ? BREAK_FREE + 3 : BREAK_FREE;
+    this.hud.setPrompt(`[ F ] BREAK FREE  ${Math.max(0, need - this.presses)}`);
+    if (this.presses >= need) {
+      // Torn free: the tongue snaps back, the big one reels
+      this.grabbed = false;
+      p.stunned = !!this.heldBy;
+      this.hud.setPrompt(null);
+      this.retract(T);
+      this.drops.burst(T.tip.clone(), V(0, 1, 0), 30, 3, BOSS_BLOOD);
+      this.ctx.audio.squelchPop();
+      p.launch(to.clone().negate().setY(0.4).normalize(), 6);
+      this.stagger();
+    } else if (d < 4.2) {
+      // Into its mouth: bitten, and spat back out
+      this.grabbed = false;
+      p.stunned = !!this.heldBy;
+      this.hud.setPrompt(null);
+      this.retract(T);
+      this.ctx.audio.houndBite(0);
+      this.ctx.audio.giantRoar(0.7, d);
+      this.shake = Math.max(this.shake, 1);
+      p.hit(BOSS_NAME, b.at.clone());
+      p.hit(BOSS_NAME, b.at.clone());
+      p.launch(to.clone().negate().setY(0.5).normalize(), 10);
+      this.startMove('idle');
+    }
+  }
+
+  private hurtTongue(dmg: number): void {
+    if (this.move !== 'grab' || this.bossTongue.state !== 'out') return;
+    this.tongueHp -= dmg;
+    this.drops.burst(this.bossTongue.tip.clone(), V(0, 0.5, 0), 6, 2, BOSS_BLOOD);
+    this.ctx.bus.emit(Events.HitMarker, { lethal: this.tongueHp <= 0 });
+    if (this.tongueHp > 0) return;
+    // Shot off: it pulls back, hurt
+    this.drops.burst(this.bossTongue.tip.clone(), V(0, 1, 0), 30, 3, BOSS_BLOOD);
+    this.ctx.audio.squelchPop();
+    this.retract(this.bossTongue);
+    this.boss.hp -= 4;
+    this.stagger();
+  }
+
+  private stagger(): void {
+    this.move = 'stagger';
+    this.moveT = 0;
+    this.ctx.audio.giantRoar(0.9, this.player.position.distanceTo(this.boss.at));
+    this.shake = Math.max(this.shake, 0.4);
   }
 
   private wakeBoss(): void {
@@ -1029,37 +1876,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.audio.stopTrackMusic(1.5);
     this.ctx.audio.startBossMusic();
     this.setObjective('KILL IT');
-    this.bossFireT = 2.0;
+    this.move = 'idle';
+    this.moveT = -0.5;
     this.lightning(1);
-  }
-
-  private boltFrom(i: number, spread: number): void {
-    const b = this.boss;
-    const p = this.player;
-    const from = b.muzzle(i);
-    const target = p.camera.position.clone().add(V(0, -0.35, 0));
-    const lead = from.distanceTo(target) / 24;
-    target.addScaledVector(p.velocity, lead * 0.35);
-    const dir = target.sub(from).normalize();
-    dir.x += (Math.random() - 0.5) * spread * 2;
-    dir.y += (Math.random() - 0.5) * spread;
-    dir.z += (Math.random() - 0.5) * spread * 2;
-    this.bolts.fire(from, dir.normalize().multiplyScalar(24), 'enemy');
-    b.kick[i] = 1;
-    this.ctx.audio.alienBolt(from.distanceTo(p.position));
-  }
-
-  private boltFan(k: number): void {
-    const b = this.boss;
-    if (!b.alive) return;
-    for (const i of [0, 1]) {
-      const from = b.muzzle(i);
-      const dir = this.player.camera.position.clone().sub(from).normalize();
-      dir.applyAxisAngle(V(0, 1, 0), k * 0.13 + (i ? 0.04 : -0.04));
-      this.bolts.fire(from, dir.multiplyScalar(19), 'enemy');
-      b.kick[i] = 1;
-    }
-    if (k === 0) this.ctx.audio.alienBolt(b.at.distanceTo(this.player.position));
   }
 
   private hurtBoss(dmg: number, point: THREE.Vector3, dir: THREE.Vector3, head: boolean): void {
@@ -1073,7 +1892,17 @@ export class Level16Scene extends CombatScene<Level16Data> {
     b.hp = 0;
     b.alive = false;
     this.hud.setBoss(null, 0);
-    this.bolts.clear();
+    this.bossAcid.clear();
+    for (const m of this.markers) {
+      m.land = -1;
+      m.mesh.visible = false;
+    }
+    this.retract(this.bossTongue);
+    if (this.grabbed) {
+      this.grabbed = false;
+      this.player.stunned = !!this.heldBy;
+      this.hud.setPrompt(null);
+    }
     this.ctx.audio.giantRoar(1.2, this.player.position.distanceTo(b.at));
     this.later(0.9, () => this.ctx.audio.giantFall());
     this.later(1.1, () => (this.shake = Math.max(this.shake, 0.9)));
@@ -1088,91 +1917,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.allCols = [];
     });
     this.later(2.5, () => {
-      this.setObjective('TAKE ITS CANNON');
+      this.setObjective('TAKE ITS CANNONS');
       this.hint('GO TO THE END OF ONE OF ITS ARMS', 5);
     });
   }
 
-  // ============================================================ shots
-
-  private fireGoo(): void {
-    const p = this.player;
-    const from = this.blaster.muzzleWorld();
-    const dir = p.camera.getWorldDirection(new THREE.Vector3());
-    const hit = this.trace(p.camera.position, dir, 120, true);
-    const aimAt = hit ? hit.point : p.camera.position.clone().addScaledVector(dir, 120);
-    const v = aimAt.sub(from).normalize();
-    v.x += (Math.random() - 0.5) * 0.02;
-    v.y += (Math.random() - 0.5) * 0.02 + 0.015;
-    v.z += (Math.random() - 0.5) * 0.02;
-    this.goo.fire(from, v.normalize().multiplyScalar(36), 'player', 3);
-    this.ctx.audio.gooShot();
-    this.gooLight.position.copy(from);
-    this.gooLight.intensity = 14;
-    this.shake = Math.max(this.shake, 0.12);
-    this.ctx.bus.emit(Events.Sound, { position: p.position.clone(), radius: 30, kind: 'gunshot' });
-  }
-
-  private updateShots(dt: number): void {
-    const p = this.player;
-    const seg = new THREE.Vector3();
-    this.bolts.update(dt, this.t, (_s, a, b) => {
-      seg.subVectors(b, a);
-      const len = seg.length();
-      if (len < 1e-5) return false;
-      seg.divideScalar(len);
-      if (p.alive) {
-        const c = p.position.clone().add(V(0, 0.95, 0));
-        const t = THREE.MathUtils.clamp(c.clone().sub(a).dot(seg), 0, len);
-        const near = a.clone().addScaledVector(seg, t);
-        if (Math.abs(near.x - c.x) < 0.36 && Math.abs(near.z - c.z) < 0.36 && Math.abs(near.y - c.y) < 0.9) {
-          this.burstBlue(near, seg.clone().negate(), 16);
-          this.shake = Math.max(this.shake, 0.45);
-          p.hit(BOSS_NAME, a.clone());
-          return true;
-        }
-      }
-      const h = this.trace(a, seg, len, false);
-      if (h) {
-        this.burstBlue(h.point, h.normal, 14);
-        this.ctx.audio.electricCrackle(h.point.distanceTo(p.position));
-        return true;
-      }
-      return false;
-    });
-    this.goo.update(dt, this.t, (s, a, b) => {
-      seg.subVectors(b, a);
-      const len = seg.length();
-      if (len < 1e-5) return false;
-      seg.divideScalar(len);
-      const h = this.trace(a, seg, len, true);
-      if (!h) return false;
-      this.gooHit(s, h, seg);
-      return true;
-    });
-  }
-
-  private gooHit(s: GlowShot, h: Hit, dir: THREE.Vector3): void {
-    this.drops.burst(h.point, h.normal, 18, 3.2, GOO);
-    this.ctx.audio.gooSplat(h.point.distanceTo(this.player.position));
-    if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, s.damage, h.point, dir);
-    else if (h.kind === 'boss') this.hurtBoss(s.damage * 0.9, h.point, dir, !!h.head);
-    else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage, h.point, dir);
-    else this.decals.place('blood', h.point, h.normal, 0.35);
-  }
-
-  private burstBlue(at: THREE.Vector3, n: THREE.Vector3, count: number): void {
-    this.drops.burst(at, n, count, 3.5, 0x6ad8ff);
-    this.particles.electricSparks(at, 6);
-  }
-
   // ============================================================ ballistics
 
-  /**
-   * What's first along a ray, within `far`: the ground (marched, the
-   * terrain's too big to raycast), a tree trunk or rock, the level's meshes,
-   * and (with `creatures`) the hounds, the maws and the big one.
-   */
   private trace(o: THREE.Vector3, dir: THREE.Vector3, far: number, creatures: boolean): Hit | null {
     let best: Hit | null = null;
     {
@@ -1237,8 +1988,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     if (creatures) {
       this.raycaster.far = best ? best.dist : far;
-      const targets: THREE.Object3D[] = (this.houndHits as THREE.Object3D[]).concat(this.trapHits);
+      const held = this.holding;
+      const targets: THREE.Object3D[] = (this.houndHits as THREE.Object3D[]).filter((m) => !held || !held.hitboxes.includes(m as THREE.Mesh)).concat(this.trapHits);
       if (this.boss.alive) targets.push(...this.boss.hitMeshes);
+      if (this.tongueHit.visible) targets.push(this.tongueHit);
       const c = this.raycaster.intersectObjects(targets, false)[0];
       if (c) {
         const hound = c.object.userData.hound as Hound | undefined;
@@ -1247,7 +2000,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           dist: c.distance,
           point: c.point.clone(),
           normal: dir.clone().negate(),
-          kind: hound ? 'hound' : trap ? 'trap' : 'boss',
+          kind: hound ? 'hound' : trap ? 'trap' : c.object.userData.tongue ? 'tongue' : 'boss',
           hound,
           trap,
           head: !!c.object.userData.head
@@ -1265,6 +2018,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, dmg * (h.head ? 1.6 : 1), h.point, dir);
     else if (h.kind === 'boss') this.hurtBoss(dmg, h.point, dir, !!h.head);
     else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, dmg, h.point, dir);
+    else if (h.kind === 'tongue') this.hurtTongue(dmg);
     else {
       const tint = h.kind === 'terrain' ? 0xc8c49a : h.kind === 'trunk' ? 0x5a4a40 : 0xa8a49a;
       this.particles.concreteChips(h.point, h.normal, tint);
@@ -1293,17 +2047,17 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
     }
     if (best < 0) {
-      if (!this.heldBy) this.hud.setPrompt(null);
+      if (!this.promptBusy) this.hud.setPrompt(null);
       return;
     }
-    this.hud.setPrompt('[ E ] TAKE THE CANNON');
+    this.hud.setPrompt('[ E ] TAKE ITS CANNONS');
     if (this.ctx.input.wasPressed('KeyE')) this.startHarvest(best);
   }
 
   private startHarvest(i: number): void {
     this.phase = 'harvest';
     this.phaseT = 0;
-    this.harvestArm = i;
+    this.harvestOrder = [i, 1 - i];
     this.hud.setPrompt(null);
     this.player.cinematic = true;
     this.cinema(true);
@@ -1315,146 +2069,169 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.knife.stow = 1;
     this.harvestFrom.p.copy(this.player.camera.position);
     this.harvestFrom.q.copy(this.player.camera.quaternion);
-    // His right hand comes up open, the blaster's cannon not on it yet (the real one goes on)
-    this.blaster.stow = 1;
-    this.blaster.grip = 0;
-    this.blaster.open = 1;
-    this.blaster.gun.root.visible = false;
-    this.blaster.pose = { p: V(0.17, -0.27, -0.44), r: new THREE.Euler(0.18, 0.08, -0.12) };
-    this.severed = null;
+    for (const arm of [this.acidArm, this.grabArm]) {
+      arm.stow = 1;
+      arm.grip = 0;
+      arm.open = 1;
+      arm.gun.root.visible = false;
+      arm.pose = { p: V(0.2, -0.3, -0.5), r: new THREE.Euler(0.25, 0.12, -0.1) };
+    }
+    this.fallen = [null, null];
+    this.fallV = [0, 0];
+  }
+
+  /** The blaster that the cannon off boss arm i goes on: its right arm's (the acid) on his right. */
+  private armFor(i: number): AlienBlaster {
+    return i === 0 ? this.acidArm : this.grabArm;
   }
 
   /**
-   * Down on one knee by the end of its arm. His left hand takes hold of the
-   * cannon-head; his right saws through the wrist with the karambit, and it
-   * comes away in his hand. Up on his feet; his right hand up, open; the
-   * left lines the cannon up and slides it back onto his forearm, over his
-   * hand, and lets go; the feelers close round his arm, it shudders, his
-   * fingers close inside it, the light in its mouth comes up.
+   * Both cannons. Down on one knee by the end of one arm: his left hand
+   * holds the cannon-head, the karambit saws through the wrist, and it drops.
+   * Then the other arm, the same. Up on his feet, both hands out, open: the
+   * two heads on the ground twitch, then spring up and onto his forearms, his
+   * right and his left, and their feelers close round them.
    */
   private updateHarvest(dt: number): void {
     const t = this.phaseT;
     const b = this.boss;
-    const i = this.harvestArm;
     const cam = this.player.camera;
     const H = this.hands;
-    const head = b.arms[i].head.root;
-    const wrist = b.wrist(i);
     const pp = this.player.position;
-    // ---- The camera: down beside the wrist, then up again looking at his arm
-    const away = V(pp.x - wrist.x, 0, pp.z - wrist.z).normalize();
-    const side = V(-away.z, 0, away.x);
-    const kneel = wrist.clone().addScaledVector(away, 0.85).addScaledVector(side, 0.2).add(V(0, 0.65, 0));
-    kneel.y = Math.max(kneel.y, groundY(kneel.x, kneel.z) + 0.75);
-    const lookAt = this.severed ? wrist.clone() : head.localToWorld(V(0, 0, 0.2));
+    const [ia, ib] = this.harvestOrder;
+    // ---- Where the camera is: by the first wrist, then the second, then standing
+    const kneelAt = (i: number): { p: THREE.Vector3; look: THREE.Vector3 } => {
+      const w = b.wrist(i);
+      const away = V(pp.x - w.x, 0, pp.z - w.z).normalize();
+      if (away.lengthSq() < 0.5) away.set(0, 0, 1);
+      const side = V(-away.z, 0, away.x);
+      const p = w.clone().addScaledVector(away, 0.85).addScaledVector(side, 0.2).add(V(0, 0.65, 0));
+      p.y = Math.max(p.y, groundY(p.x, p.z) + 0.75);
+      const head = this.fallen[i] ?? b.arms[i].head.root;
+      return { p, look: this.fallen[i] ? w : head.localToWorld(V(0, 0, 0.2)) };
+    };
+    const A = kneelAt(ia);
+    const B = kneelAt(ib);
     const kIn = smooth(t / 1.0);
-    const kOut = smooth((t - 2.7) / 0.8);
+    const kMove = smooth((t - 2.8) / 0.9);
+    const kOut = smooth((t - 5.6) / 0.8);
     const stand = pp.clone().add(V(0, 1.63, 0));
-    cam.position.lerpVectors(this.harvestFrom.p, kneel, kIn).lerp(stand, kOut);
-    const qLook = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, lookAt, V(0, 1, 0)));
-    const yaw = Math.atan2(-away.x, -away.z);
-    const qArm = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.32, yaw, 0, 'YXZ'));
-    cam.quaternion.copy(this.harvestFrom.q).slerp(qLook, kIn).slerp(qArm, kOut);
+    cam.position.lerpVectors(this.harvestFrom.p, A.p, kIn).lerp(B.p, kMove).lerp(stand, kOut);
+    const look = (at: THREE.Vector3): THREE.Quaternion => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, at, V(0, 1, 0)));
+    // Standing: looking down at the two heads lying in front of him
+    const mid = (this.fallen[0] && this.fallen[1] ? this.fallen[0].position.clone().lerp(this.fallen[1].position, 0.5) : b.wrist(0).lerp(b.wrist(1), 0.5)).setY(pp.y);
+    const yaw = Math.atan2(-(mid.x - pp.x), -(mid.z - pp.z));
+    const qStand = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.42 + 0.2 * smooth((t - 6.6) / 0.6), yaw, 0, 'YXZ'));
+    cam.quaternion.copy(this.harvestFrom.q).slerp(look(A.look), kIn).slerp(look(B.look), kMove).slerp(qStand, kOut);
     cam.updateMatrixWorld(true);
-    // ---- The left hand: in to the cannon and holding it
-    H.leftRoot.visible = t > 0.45 && t < 5.1;
-    let closed = smooth((t - 0.85) / 0.2);
-    const restL = V(-0.24, -0.5, -0.3);
-    if (t < 2.55) {
-      const grabAt = cam.worldToLocal(head.localToWorld(V(0.0, -0.04, 0.3)));
-      H.leftHand.position.lerpVectors(restL, grabAt, smooth((t - 0.45) / 0.45));
-      H.leftHand.rotation.set(-0.7, 0.5, -0.9);
-      if (t > 1.1) H.leftHand.position.x += Math.sin(t * 9) * 0.004;
-    }
-    // ---- The knife: up, sawing at the wrist (1.1–2.5), away
-    const kUp = smooth((t - 0.8) / 0.35) * (1 - smooth((t - 2.55) / 0.35));
-    H.knifeRoot.visible = kUp > 0.01;
-    const wC = cam.worldToLocal(wrist.clone());
-    const k = 0.46 / Math.max(0.3, -wC.z);
-    const cx = wC.x * k;
-    const cy = wC.y * k;
-    const saw = t > 1.1 && t < 2.5 ? Math.sin((t - 1.1) * 11) : 0;
-    const hand = H.knifeHand;
-    hand.position.set(cx + 0.09 + saw * 0.07, cy + 0.02 + saw * 0.025, -0.46).lerp(V(0.25, -0.55, -0.3), 1 - kUp);
-    hand.rotation.set(-0.5 + saw * 0.12, 0.35, 0.9 + saw * 0.3);
-    if (t > 1.1 && t < 2.5 && Math.floor((t - dt - 1.1) / 0.28) !== Math.floor((t - 1.1) / 0.28)) {
-      this.drops.burst(wrist, away.clone().setY(0.7), 14, 2.6, BOSS_BLOOD);
-      this.ctx.audio.fleshHit();
-      this.shake = Math.max(this.shake, 0.2);
-    }
-    // ---- 2.55: through. It comes away in his left hand
-    if (t >= 2.55 && !this.severed) {
-      this.severed = b.sever(i, this.scene);
-      H.leftHand.attach(this.severed);
-      this.drops.burst(wrist, away.clone().setY(1), 40, 4, BOSS_BLOOD);
-      this.ctx.audio.squelchPop();
-      this.ctx.audio.knifeStab();
-      this.shake = Math.max(this.shake, 0.6);
-    }
-    const piece = this.severed;
-    if (piece && t < 3.5) {
-      // Lifted up into view, twitching
-      H.leftHand.position.lerp(V(-0.05, -0.24, -0.52), Math.min(1, dt * 3.5));
-      H.leftHand.rotation.x += (-0.3 - H.leftHand.rotation.x) * Math.min(1, dt * 3);
-      H.leftHand.rotation.y += (Math.PI * 0.5 + 0.2 - H.leftHand.rotation.y) * Math.min(1, dt * 3);
-      H.leftHand.rotation.z += (-0.2 - H.leftHand.rotation.z) * Math.min(1, dt * 3);
-      piece.rotation.z += Math.sin(t * 23) * 0.01;
-    }
-    // ---- His right hand up, open
-    if (t > 2.9) this.blaster.stow = Math.max(0, 1 - smooth((t - 2.9) / 0.6));
-    // ---- 3.5–4.6: lined up in front of his hand, then pushed back over it onto the forearm
-    if (piece && t >= 3.5 && piece.parent === H.leftHand) {
-      cam.attach(piece);
-      this.slideFrom.p.copy(piece.position);
-      this.slideFrom.q.copy(piece.quaternion);
-      this.slideFrom.s.copy(piece.scale);
-    }
-    if (piece && t >= 3.5 && t < 4.6) {
-      const kS = smooth((t - 3.5) / 1.0);
-      this.blaster.hand.updateMatrix();
-      const seat = new THREE.Object3D();
-      this.blaster.seat(seat);
-      seat.updateMatrix();
-      const m = this.blaster.hand.matrix.clone().multiply(seat.matrix);
-      const tp = new THREE.Vector3();
-      const tq = new THREE.Quaternion();
-      const ts = new THREE.Vector3();
-      m.decompose(tp, tq, ts);
-      const line = smooth(kS / 0.5);
-      const push = smooth((kS - 0.4) / 0.6);
-      const ahead = tp.clone().add(V(0, 0, 0.3).applyQuaternion(tq));
-      piece.position.lerpVectors(this.slideFrom.p, ahead, line).lerp(tp, push);
-      piece.quaternion.copy(this.slideFrom.q).slerp(tq, line);
-      piece.scale.lerpVectors(this.slideFrom.s, ts, kS);
-      // The left hand with it, on the barrel
-      H.leftHand.position.copy(piece.position).add(V(0, -0.07, 0.35).applyQuaternion(piece.quaternion));
-      closed = 1 - smooth((kS - 0.85) / 0.15);
-    }
-    if (piece && t >= 4.6 && piece.visible) {
-      // On: the blaster's own (the same thing, in its place) takes over
-      piece.visible = false;
-      this.blaster.gun.root.visible = true;
-      this.ctx.audio.squelchPop();
-      this.ctx.audio.groan(0.6);
-      this.ctx.audio.electricCrackle(0);
-      this.shake = Math.max(this.shake, 0.6);
-    }
-    if (t >= 4.6 && t < 5.1) H.leftHand.position.lerp(V(-0.3, -0.7, -0.2), Math.min(1, dt * 6));
-    // ---- It takes hold
-    if (t > 2.9) {
-      this.blaster.grip = smooth((t - 4.6) / 1.0);
-      this.blaster.open = 1 - smooth((t - 4.9) / 0.4);
-      this.blaster.tremor = t > 4.6 ? Math.max(0, 1 - (t - 4.6) / 1.4) : 0;
-      if (t > 5.8 && t - dt <= 5.8) {
-        this.blaster.stow = 0;
-        this.blaster.fire();
-        this.ctx.audio.electricCrackle(0);
+    // ---- The two cuts: the same each time, at 0 and at 2.8 seconds
+    const cut = (i: number, t0: number): number => {
+      const tt = t - t0;
+      if (tt < 0 || tt > 2.8) return 0;
+      const head = b.arms[i].head.root;
+      const wrist = b.wrist(i);
+      const away = V(pp.x - wrist.x, 0, pp.z - wrist.z).normalize();
+      // His left hand on the cannon
+      if (!this.fallen[i]) {
+        const grabAt = cam.worldToLocal(head.localToWorld(V(0.0, -0.04, 0.3)));
+        H.leftHand.position.lerpVectors(V(-0.24, -0.5, -0.3), grabAt, smooth((tt - 0.45) / 0.45));
+        H.leftHand.rotation.set(-0.7, 0.5, -0.9);
+      } else H.leftHand.position.lerp(V(-0.26, -0.6, -0.25), Math.min(1, dt * 6));
+      // The karambit sawing
+      const kUp = smooth((tt - 0.8) / 0.35) * (1 - smooth((tt - 2.55) / 0.3));
+      const wC = cam.worldToLocal(wrist.clone());
+      const k = 0.46 / Math.max(0.3, -wC.z);
+      const saw = tt > 1.1 && tt < 2.5 ? Math.sin((tt - 1.1) * 11) : 0;
+      H.knifeHand.position.set(wC.x * k + 0.09 + saw * 0.07, wC.y * k + 0.02 + saw * 0.025, -0.46).lerp(V(0.25, -0.55, -0.3), 1 - kUp);
+      H.knifeHand.rotation.set(-0.5 + saw * 0.12, 0.35, 0.9 + saw * 0.3);
+      if (tt > 1.1 && tt < 2.5 && Math.floor((tt - dt - 1.1) / 0.28) !== Math.floor((tt - 1.1) / 0.28)) {
+        this.drops.burst(wrist, away.clone().setY(0.7), 14, 2.6, BOSS_BLOOD);
+        this.ctx.audio.fleshHit();
+        this.shake = Math.max(this.shake, 0.2);
       }
-      if (t > 4.7 && t < 5.6 && Math.random() < 0.3) this.drops.burst(this.blaster.muzzleWorld(), V(0, 0.5, 0), 2, 1, GOO);
-      this.blaster.update(dt, this.player);
+      // Through: it drops
+      if (tt >= 2.55 && !this.fallen[i]) {
+        this.fallen[i] = b.sever(i, this.scene);
+        this.drops.burst(wrist, away.clone().setY(1), 40, 4, BOSS_BLOOD);
+        this.ctx.audio.squelchPop();
+        this.ctx.audio.knifeStab();
+        this.shake = Math.max(this.shake, 0.6);
+      }
+      return kUp;
+    };
+    const k1 = cut(ia, 0);
+    const k2 = cut(ib, 2.8);
+    H.knifeRoot.visible = Math.max(k1, k2) > 0.01;
+    H.leftRoot.visible = (t > 0.45 && t < 2.75) || (t > 3.25 && t < 5.55);
+    const closed = (t > 0.85 && t < 2.6) || (t > 3.65 && t < 5.4) ? 1 : 0;
+    // ---- The heads, once off: down onto the ground, twitching
+    for (const i of [0, 1]) {
+      const f = this.fallen[i];
+      if (!f || f.parent !== this.scene) continue;
+      const gy = groundY(f.position.x, f.position.z) + 0.14;
+      if (f.position.y > gy) {
+        this.fallV[i] -= 14 * dt;
+        f.position.y = Math.max(gy, f.position.y + this.fallV[i] * dt);
+      }
+      f.rotation.z += Math.sin(t * (17 + i * 5)) * 0.015;
+    }
+    // ---- His hands out, open (6.0); the heads leap onto his forearms (6.7–7.4)
+    if (t > 5.9) {
+      for (const arm of [this.acidArm, this.grabArm]) arm.stow = Math.max(0, 1 - smooth((t - 5.9) / 0.6));
+    }
+    for (const i of [0, 1]) {
+      const f = this.fallen[i];
+      const arm = this.armFor(i);
+      if (!f) continue;
+      const t0 = 6.7 + i * 0.15;
+      if (t >= t0 && f.parent === this.scene) {
+        cam.attach(f);
+        this.leapFrom[i] = { p: f.position.clone(), q: f.quaternion.clone(), s: f.scale.clone() };
+        this.ctx.audio.squelchPop();
+        this.ctx.audio.kickWhoosh();
+      }
+      if (t >= t0 && f.visible && this.leapFrom[i]) {
+        const kL = smooth((t - t0) / 0.6);
+        arm.hand.updateMatrix();
+        const seat = new THREE.Object3D();
+        arm.seat(seat);
+        seat.updateMatrix();
+        const m = arm.hand.matrix.clone().multiply(seat.matrix);
+        const tp = new THREE.Vector3();
+        const tq = new THREE.Quaternion();
+        const ts = new THREE.Vector3();
+        m.decompose(tp, tq, ts);
+        const L = this.leapFrom[i];
+        f.position.lerpVectors(L.p, tp, kL).add(V(0, Math.sin(kL * Math.PI) * 0.35, 0));
+        f.quaternion.copy(L.q).slerp(tq, kL);
+        f.scale.lerpVectors(L.s, ts, kL);
+        if (kL >= 1) {
+          f.visible = false;
+          arm.gun.root.visible = true;
+          this.ctx.audio.squelchPop();
+          this.ctx.audio.groan(0.6);
+          this.ctx.audio.electricCrackle(0);
+          this.shake = Math.max(this.shake, 0.6);
+        }
+      }
+      // It takes hold
+      const tg = t0 + 0.6;
+      arm.grip = smooth((t - tg) / 1.0);
+      arm.open = t > 5.8 ? 1 - smooth((t - tg - 0.3) / 0.4) : 1;
+      arm.tremor = t > tg ? Math.max(0, 1 - (t - tg) / 1.4) : 0;
+      if (t > tg && t < tg + 1 && Math.random() < 0.25) this.drops.burst(arm.muzzleWorld(), V(0, 0.5, 0), 2, 1, KIND_GLOW[arm.kind]);
+    }
+    if (t > 8.5 && t - dt <= 8.5) {
+      this.acidArm.recoil = 1;
+      this.grabArm.recoil = 1;
+      this.ctx.audio.electricCrackle(0);
+    }
+    if (t > 5.8) {
+      this.acidArm.update(dt, this.player);
+      this.grabArm.update(dt, this.player);
     }
     H.update(closed);
-    if (t > 6.5) this.endHarvest();
+    if (t > 9.0) this.endHarvest();
   }
 
   private endHarvest(): void {
@@ -1469,12 +2246,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.cinema(false);
     this.hands.knifeRoot.visible = false;
     this.hands.leftRoot.visible = false;
-    this.blaster.grip = 1;
-    this.blaster.open = 0;
-    this.blaster.tremor = 0;
-    this.blaster.pose = null;
-    this.blaster.gun.root.visible = true;
-    if (this.severed) this.severed.visible = false;
+    for (const arm of [this.acidArm, this.grabArm]) {
+      arm.grip = 1;
+      arm.open = 0;
+      arm.tremor = 0;
+      arm.pose = null;
+      arm.gun.root.visible = true;
+    }
+    for (const f of this.fallen) if (f) f.visible = false;
     const a = this.arsenal;
     a.hasBlaster = true;
     a.knifeWanted = true;
@@ -1485,7 +2264,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     a.showInventory();
     this.ctx.audio.itemGet();
     this.setObjective('FIND THE EXIT PORTAL — THE CAVE');
-    this.hint('ALIEN BLASTER — HOLD [LMB] · [5] TO SWITCH TO IT', 6);
+    this.hint('[LMB] GRABBER — HOLD TO KEEP HOLD, SWING, LET GO TO THROW · [RMB] ACID · [5] ALIEN ARMS', 8);
     this.ctx.audio.portalHum();
     this.ctx.audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.5, 3);
     this.later(2.5, () => this.spawnPack(this.packs[3]));
@@ -1554,7 +2333,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   // ============================================================ the atmosphere
 
-  /** A lightning flash somewhere off in the clouds; thunder after it. */
   private lightning(strength = 0.7): void {
     this.flash = strength;
     const a = Math.random() * Math.PI * 2;
@@ -1586,7 +2364,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hemi.intensity += (Level16Scene.HEMI * dark + fl * 2.5 - this.hemi.intensity) * Math.min(1, dt * 8 + fl);
     this.moon.intensity += (Level16Scene.MOON * (cave ? 0 : uw ? 0.3 : 1) + fl * 4 - this.moon.intensity) * Math.min(1, dt * 8 + fl);
     L.sky.uniforms.uFlash.value = fl;
-    // The suit's lamp: on in the water and in the cave
     const lampWant = (uw || cave) && p.alive ? 1 : 0;
     this.lampOn += (lampWant - this.lampOn) * Math.min(1, dt * 4);
     this.lamp.intensity = 70 * this.lampOn;
@@ -1597,7 +2374,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     L.sky.uniforms.uT.value = this.t;
     for (const [i, s] of L.specimens.entries()) s.rotation.y = Math.sin(this.t * 0.4 + i) * 0.4;
     L.glowMats.forEach((m, i) => (m.emissiveIntensity = (m.userData.base ??= m.emissiveIntensity) * (0.75 + 0.25 * Math.sin(this.t * (0.8 + i * 0.3) + i))));
-    // The forest: near versions close by, far ones further off, nothing lost in the haze
     const px = p.camera.position.x;
     const pz = p.camera.position.z;
     for (const c of L.chunks) {
@@ -1633,14 +2409,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     cam.rotation.y += (Math.random() - 0.5) * s;
   }
 
-  // ------------------------------------------------------------ timers
-
   private timers: { at: number; fn: () => void }[] = [];
   private later(sec: number, fn: () => void): void {
     this.timers.push({ at: this.t + sec, fn });
   }
-
-  // ------------------------------------------------------------ input
 
   private onClick(): void {
     if (this.dead) this.restart();

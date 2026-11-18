@@ -128,7 +128,8 @@ export function wetFlesh(repeat = 2, opts: { clearcoat?: number; rough?: number 
     clearcoatRoughness: 0.16,
     sheen: 0.4,
     sheenColor: new THREE.Color(0xff9ab0),
-    sheenRoughness: 0.5
+    sheenRoughness: 0.5,
+    side: THREE.DoubleSide
   });
 }
 
@@ -287,7 +288,38 @@ export interface CannonParts {
 
 let cannonSkin: THREE.MeshPhysicalMaterial | null = null;
 const veinGlow = new THREE.MeshStandardMaterial({ color: 0x163050, emissive: 0x3ab0ff, emissiveIntensity: 1.6, roughness: 0.3 });
-const spotGlow = new THREE.MeshBasicMaterial({ color: 0x8ae4ff, toneMapped: false });
+
+/** Which of the two the cannon is: the acid-spitter or the grabber. */
+export type AlienKind = 'acid' | 'grabber';
+/** Each one's light: acid a sick yellow-green, the grabber a hot magenta. */
+export const KIND_GLOW: Record<AlienKind, number> = { acid: 0xa8ff2a, grabber: 0xff3ac8 };
+const kindMats = new Map<AlienKind, { vein: THREE.MeshStandardMaterial; spot: THREE.MeshBasicMaterial }>();
+function kindMat(k: AlienKind): { vein: THREE.MeshStandardMaterial; spot: THREE.MeshBasicMaterial } {
+  let m = kindMats.get(k);
+  if (!m) {
+    const c = new THREE.Color(KIND_GLOW[k]);
+    m = {
+      vein: new THREE.MeshStandardMaterial({ color: c.clone().multiplyScalar(0.15), emissive: c, emissiveIntensity: 1.5, roughness: 0.3 }),
+      spot: new THREE.MeshBasicMaterial({ color: c.clone().lerp(new THREE.Color(0xffffff), 0.35), toneMapped: false })
+    };
+    kindMats.set(k, m);
+  }
+  return m;
+}
+
+/** The grabber's tongue-tip: a small round mouth of teeth, opening forward (+Z). */
+export function grabberHead(): { group: THREE.Group; flare: THREE.Group } {
+  if (!cannonSkin) cannonSkin = wetFlesh(1.2);
+  const g = new THREE.Group();
+  const mo = mouth(0.11, 0.12, cannonSkin, { teeth: 12, glow: KIND_GLOW.grabber, lip: 0x7a1a4a, inner: 0xd060a0 });
+  g.add(mo.group);
+  const bulb = new THREE.SphereGeometry(0.1, 16, 12);
+  bulb.scale(1, 1, 1.3);
+  bulb.translate(0, 0, -0.14);
+  paint(bulb, solid(0x8a2a5a));
+  g.add(new THREE.Mesh(bulb, cannonSkin));
+  return { group: g, flare: mo.flare };
+}
 
 /**
  * The cannon-head: from the cuff at its back (the origin) to the lips of
@@ -296,9 +328,10 @@ const spotGlow = new THREE.MeshBasicMaterial({ color: 0x8ae4ff, toneMapped: fals
  * mouth with a blue core; at the back a fleshy cuff, and feelers that curl
  * back from it to grip.
  */
-export function alienCannon(): CannonParts {
+export function alienCannon(kind: AlienKind = 'acid'): CannonParts {
   if (!cannonSkin) cannonSkin = wetFlesh(1.2);
   const skin = cannonSkin;
+  const km = kindMat(kind);
   const root = new THREE.Group();
   const L = 0.62;
   const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0.01, L * 0.35), new THREE.Vector3(0, -0.005, L * 0.7), new THREE.Vector3(0, 0, L)]);
@@ -330,24 +363,35 @@ export function alienCannon(): CannonParts {
       const r = prof(u, a) * 0.99;
       pts.push(new THREE.Vector3(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, c.z));
     }
-    root.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.0055, 6), veinGlow));
+    root.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.0055, 6), km.vein));
   }
   for (let k = 0; k < 12; k++) {
     const a = (k / 12) * Math.PI * 2 + 0.2;
     const u = 0.62 + (k % 3) * 0.08;
     const c = curve.getPointAt(u);
     const r = prof(u, a);
-    const s = new THREE.Mesh(new THREE.SphereGeometry(0.006 + (k % 2) * 0.004, 8, 6), spotGlow);
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.006 + (k % 2) * 0.004, 8, 6), km.spot);
     s.position.set(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, c.z);
     root.add(s);
   }
-  const mo = mouth(0.13, 0.16, skin, { teeth: 16, glow: 0x5ad8ff, lip: 0x4a0e22, inner: 0xc05070 });
+  const mo = mouth(0.13, 0.16, skin, { teeth: 16, glow: KIND_GLOW[kind], lip: 0x4a0e22, inner: 0xc05070 });
+  // The grabber's tongue, coiled up in its throat
+  if (kind === 'grabber') {
+    const coil: THREE.Vector3[] = [];
+    for (let i = 0; i <= 24; i++) {
+      const a = i * 0.7;
+      coil.push(new THREE.Vector3(Math.cos(a) * 0.05, Math.sin(a) * 0.05, L - 0.02 + i * 0.004));
+    }
+    const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coil), 48, 0.018, 8);
+    paint(tg, solid(0xc04a8a));
+    root.add(new THREE.Mesh(tg, skin));
+  }
   mo.group.position.set(0, 0, L + 0.07);
   root.add(mo.group);
   const muzzle = new THREE.Object3D();
   muzzle.position.set(0, 0, L + 0.1);
   root.add(muzzle);
-  const glow = glowSprite(0x4ac8ff, 0.42, 0.6);
+  const glow = glowSprite(KIND_GLOW[kind], 0.42, 0.6);
   glow.position.set(0, 0, L + 0.02);
   root.add(glow);
   const cuffPts = [new THREE.Vector2(0.06, -0.02), new THREE.Vector2(0.095, -0.01), new THREE.Vector2(0.105, 0.03), new THREE.Vector2(0.095, 0.06)];
@@ -652,6 +696,12 @@ export class Hound {
   deadT = 0;
   bit = false;
   growlT = 4 + Math.random() * 5;
+  /** In the grabber's mouth: kicking. */
+  held = false;
+  /** Melted away (acid): sinks into the ground instead of falling over. */
+  melted = false;
+  /** Spin while it's swung or thrown. */
+  readonly spin = new THREE.Vector3();
   air = 0;
   airV = 0;
 
@@ -760,10 +810,28 @@ export class Hound {
     });
     const gape = this.state === 'lunge' ? 1.35 : this.alive ? 1 + Math.sin(t * 9 + ph) * 0.08 : 0.85;
     this.jaw.scale.set(gape, gape, 1);
+    if (this.held) {
+      // Kicking in the air, twisting
+      for (const l of this.legs) {
+        l.hip.rotation.x = Math.sin(t * 22 + (l.front ? 0 : 2) + l.side) * 0.9;
+        l.knee.rotation.x = 0.6 + Math.sin(t * 19 + l.side) * 0.5;
+      }
+      this.body.rotation.z = Math.sin(t * 7) * 0.6;
+      this.jaw.scale.set(1.4, 1.4, 1);
+    }
     if (!this.alive) {
-      const k = smooth(this.deadT / 0.5);
-      this.body.rotation.z = k * 1.45;
-      this.body.position.y = 0.72 - k * 0.42;
+      if (this.melted) {
+        // Slumps and sinks into the acid, shrinking as it goes
+        const k = smooth(this.deadT / 2.2);
+        this.body.rotation.z = smooth(this.deadT / 0.4) * 0.5;
+        this.body.position.y = 0.72 - k * 0.9;
+        this.body.scale.set(1 + k * 0.25, 1 - k * 0.7, 1 - k * 0.2);
+        if (this.deadT > 2.4) this.group.visible = false;
+      } else {
+        const k = smooth(this.deadT / 0.5);
+        this.body.rotation.z = k * 1.45;
+        this.body.position.y = 0.72 - k * 0.42;
+      }
     }
   }
 }
@@ -1107,7 +1175,7 @@ export class SpiderBoss {
       const wrist = new THREE.Group();
       wrist.position.set(0, 0, AL - 0.05);
       limb.add(wrist);
-      const head = alienCannon();
+      const head = alienCannon(s < 0 ? 'acid' : 'grabber');
       // Its size in the world is what goes on his forearm: the body's scale undone
       head.root.scale.setScalar(1 / 1.3);
       for (const t of head.tendrils) t.scale.setScalar(0.4);

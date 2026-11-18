@@ -205,8 +205,8 @@ function baseY(x: number, z: number): number {
     const step = 3.6;
     const t = r / step;
     const f = t - Math.floor(t);
-    r = (Math.floor(t) + smoothstep(0.5, 0.88, f)) * step;
-    r += ridged(x * 0.08, z * 0.08) * 4 * smoothstep(0, 5, w);
+    r = (Math.floor(t) + smoothstep(0.25, 0.95, f)) * step;
+    r += ridged(x * 0.06, z * 0.06) * 2.5 * smoothstep(0, 6, w);
     h += Math.min(80, r);
   }
   // Flattened: the station's pad, the meadow, the clearing, the cave's mouth
@@ -391,30 +391,67 @@ function spongeBump(): THREE.CanvasTexture {
   return t;
 }
 
+/** Value noise that wraps every `P` cells: a texture made from it tiles with no seam. */
+function periodicNoise(x: number, y: number, P: number): number {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const m = (a: number): number => ((a % P) + P) % P;
+  const a = hash(m(xi), m(yi));
+  const b = hash(m(xi + 1), m(yi));
+  const c = hash(m(xi), m(yi + 1));
+  const d = hash(m(xi + 1), m(yi + 1));
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function periodicFbm(x: number, y: number, P: number, oct = 5): number {
+  let s = 0;
+  let amp = 0.5;
+  let f = 1;
+  for (let i = 0; i < oct; i++) {
+    s += periodicNoise(x * f, y * f, P * f) * amp;
+    f *= 2;
+    amp *= 0.5;
+  }
+  return s;
+}
+
+/** Rock: seamless, strata and grain and lichen-ish blotches — a height map of it for its bump. */
+function rockPixels(S: number): Float32Array {
+  const out = new Float32Array(S * S);
+  for (let j = 0; j < S; j++)
+    for (let i = 0; i < S; i++) {
+      const u = (i / S) * 8;
+      const v = (j / S) * 8;
+      const big = periodicFbm(u, v, 8);
+      const strata = Math.sin((j / S) * Math.PI * 2 * 6 + big * 5) * 0.5 + 0.5;
+      const grain = periodicFbm(u * 4, v * 4, 32, 3);
+      out[j * S + i] = big * 0.55 + strata * 0.2 + grain * 0.3;
+    }
+  return out;
+}
+let rockPx: Float32Array | null = null;
 function rockTexture(): THREE.CanvasTexture {
   const S = 256;
+  rockPx ??= rockPixels(S);
   const c = makeCanvas(S, S);
   const g = c.getContext('2d')!;
-  g.fillStyle = '#6e6a5e';
-  g.fillRect(0, 0, S, S);
-  for (let k = 0; k < 3000; k++) {
-    const v = 70 + Math.random() * 80;
-    g.fillStyle = `rgba(${v},${v * 0.95},${v * 0.82},0.35)`;
-    g.fillRect(Math.random() * S, Math.random() * S, 2 + Math.random() * 5, 1 + Math.random() * 3);
+  const img = g.createImageData(S, S);
+  for (let k = 0; k < S * S; k++) {
+    const h = rockPx[k];
+    const v = 70 + h * 120;
+    img.data[k * 4] = v * 1.02;
+    img.data[k * 4 + 1] = v * 0.97;
+    img.data[k * 4 + 2] = v * 0.86;
+    img.data[k * 4 + 3] = 255;
   }
-  for (let k = 0; k < 40; k++) {
-    g.strokeStyle = 'rgba(30,28,22,0.5)';
-    g.lineWidth = 1 + Math.random() * 2;
-    g.beginPath();
-    let x = Math.random() * S;
-    let y = Math.random() * S;
-    g.moveTo(x, y);
-    for (let s = 0; s < 6; s++) g.lineTo((x += (Math.random() - 0.5) * 40), (y += Math.random() * 25));
-    g.stroke();
-  }
+  g.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
 }
 
@@ -448,6 +485,8 @@ export interface Level16Data extends CombatLevel {
   trapSpots: THREE.Vector3[];
   /** Trees standing round the big one's clearing, on their own (not instanced): it can rip them up. */
   arenaTrees: { group: THREE.Group; x: number; z: number }[];
+  /** The low fog lying along the canyon floor (its clock, and the colour it's tinted). */
+  groundFog: THREE.ShaderMaterial;
   /** The cave's rock: only drawn once he's near the north end. */
   cave: THREE.Mesh;
   /** Glowing things (fungus, bulbs, crystals) whose light pulses. */
@@ -511,6 +550,7 @@ export class Level16Builder {
       trapSpots: this.traps,
       cave: this.caveMesh!,
       arenaTrees: this.arenaTrees,
+      groundFog: this.buildGroundFog(),
       glowMats: this.glowMats
     };
   }
@@ -598,7 +638,7 @@ export class Level16Builder {
         const slope = Math.hypot(H(i + 1, j) - H(i - 1, j), H(i, j + 1) - H(i, j - 1)) / (2 * step);
         const m = Math.max(0, Math.min(1, 0.5 + fbm(x * 0.05, z * 0.05) * 1.4));
         c.copy(sponge).lerp(moss, m * 0.6);
-        c.lerp(rock, smoothstep(0.6, 1.2, slope));
+        c.lerp(rock, smoothstep(0.35, 1.5, slope + fbm(x * 0.15, z * 0.15) * 0.45));
         c.lerp(rockDark, smoothstep(2, 14, outside(x, z)) * 0.7);
         if (y < WATER_Y - 0.3 && inLake(x, z)) c.lerp(bed, 0.8);
         for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r) c.lerp(bed, 0.6);
@@ -888,7 +928,7 @@ export class Level16Builder {
         const y = bot + (top - bot) * v;
         // Strata (ledges), blocks standing proud, cracks between them
         const strata = Math.sin(y * 2.6 + fbm(x * 0.15, 1) * 3) * 0.18;
-        const block = (ridged(x * 0.35, y * 0.5) - 0.5) * 0.9;
+        const block = (fbm(x * 0.3, y * 0.45) * 0.5 + (ridged(x * 0.2, y * 0.3) - 0.5) * 0.25) * 0.9;
         const crack = Math.pow(1 - Math.abs(noise(x * 0.7, 9)), 8) * -0.4;
         const lean = (v - 0.5) * -0.45;
         pos.push(x, y, zc + 0.35 + strata + block + crack + lean + (j === ny ? -0.4 : 0));
@@ -918,23 +958,25 @@ export class Level16Builder {
    */
   private buildRocks(): void {
     const shapes = [0, 1, 2].map((v) => {
-      const g = new THREE.CylinderGeometry(0.35 + v * 0.1, 1.2, 5 + v * 1.5, 9, 14);
+      let g: THREE.BufferGeometry = new THREE.IcosahedronGeometry(1.3, 3);
+      g.deleteAttribute('uv');
+      g.deleteAttribute('normal');
+      g = mergeVertices(g);
       const p = g.getAttribute('position') as THREE.BufferAttribute;
       const q = new THREE.Vector3();
+      const H = 1.5 + v * 0.45;
       for (let i = 0; i < p.count; i++) {
         q.fromBufferAttribute(p, i);
-        const y = q.y / (5 + v * 1.5) + 0.5;
-        const a = Math.atan2(q.z, q.x);
-        // Facets: the radius stepped by angle; ridged noise breaking it up; a lean
-        const facet = 1 + 0.25 * Math.abs(Math.sin(a * (3 + v) + y * 2 + v));
-        const jag = 0.75 + 0.6 * ridged(a * 1.3 + v * 7, y * 3 + v);
-        q.x *= facet * jag;
-        q.z *= facet * jag * (0.7 + v * 0.1);
-        q.x += y * y * (0.8 - v * 0.4);
-        q.y += Math.sin(a * 5 + v) * 0.12 * (1 - y);
+        // Lumpy, with flattish faces broken off it; taller than wide, broad at the foot
+        const n = 1 + fbm(q.x * 0.9 + v * 5, q.z * 0.9 + q.y * 0.7) * 0.35 + (ridged(q.x * 1.6 + v, q.y * 1.6 + q.z) - 0.5) * 0.12;
+        q.multiplyScalar(n);
+        const foot = 1 + Math.max(0, -q.y) * 0.25;
+        q.x *= foot;
+        q.z *= foot * (0.75 + v * 0.1);
+        q.y = q.y * H + 1.3 * H * 0.75;
+        q.x += Math.max(0, q.y) * 0.08 * (v - 1);
         p.setXYZ(i, q.x, q.y, q.z);
       }
-      g.translate(0, (5 + v * 1.5) / 2 - 0.4, 0);
       g.computeVertexNormals();
       return g;
     });
@@ -954,7 +996,7 @@ export class Level16Builder {
         if (z < MASSIF.z1 + 4 && z > MASSIF.z0 - 6) continue;
         const cx = valleyX(z);
         const hw = halfWidth(z);
-        for (let k = 0; k < 2; k++) {
+        for (let k = 0; k < (Math.random() < 0.5 ? 1 : 2); k++) {
           const off = hw + 0.5 + Math.random() * (k ? 14 : 4);
           const x = cx + side * off;
           if (outside(x, z) < -1) continue;
@@ -1117,6 +1159,50 @@ export class Level16Builder {
     this.instanced(stalk.stalk, stalkMat, bulbsA.concat(bulbsB), 'any');
     this.instanced(stalk.bulbs, bulbCyan, bulbsA, 'any');
     this.instanced(stalk.bulbs, bulbPink, bulbsB, 'any');
+    // ---- On the ground: pebbles and stones, old bones, clusters of glowing fungus caps
+    {
+      const pebble = new THREE.DodecahedronGeometry(0.12, 0);
+      const pebbles: Inst[] = [];
+      const bones: Inst[] = [];
+      const caps: Inst[] = [];
+      for (let k = 0; k < 4000; k++) {
+        const z = -160 + Math.random() * 310;
+        const x = valleyX(z) + (Math.random() - 0.5) * 2 * (halfWidth(z) + 2);
+        if (inLake(x, z) || outside(x, z) > 1 || Math.hypot(x, z - 134.5) < 9) continue;
+        const y = groundY(x, z);
+        const s = 0.4 + Math.pow(Math.random(), 2) * 2.2;
+        pebbles.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(x, y + 0.02 * s, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * 3, Math.random() * 3, Math.random() * 3)), new THREE.Vector3(s, s * 0.6, s * (0.7 + Math.random() * 0.5))) });
+        if (k % 14 === 0) {
+          const b = new THREE.Matrix4().compose(new THREE.Vector3(x + 0.5, y + 0.03, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 + (Math.random() - 0.5) * 0.3, 0, Math.random() * 6.28)), new THREE.Vector3(1, 0.6 + Math.random() * 0.8, 1));
+          bones.push({ m: b });
+        }
+        if (k % 9 === 0 && clear(x, z)) {
+          for (let c = 0; c < 4; c++) {
+            const cx = x + (Math.random() - 0.5) * 0.5;
+            const cz = z + (Math.random() - 0.5) * 0.5;
+            const cs = 0.5 + Math.random() * 0.9;
+            caps.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(cx, groundY(cx, cz), cz), new THREE.Quaternion(), new THREE.Vector3(cs, cs, cs)) });
+          }
+        }
+      }
+      this.instanced(pebble, this.rockMat, pebbles, 'near');
+      const bone = new THREE.CapsuleGeometry(0.03, 0.35, 3, 8);
+      const boneMat = new THREE.MeshStandardMaterial({ color: 0xd8d0b8, roughness: 0.6 });
+      this.instanced(bone, boneMat, bones, 'near');
+      // A fungus cap: a stem and a domed cap that glows underneath
+      const stem = new THREE.CylinderGeometry(0.012, 0.018, 0.12, 6);
+      stem.translate(0, 0.06, 0);
+      const cap = new THREE.SphereGeometry(0.05, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+      cap.scale(1, 0.6, 1);
+      cap.translate(0, 0.12, 0);
+      const fungus = mergeGeometries([stem.toNonIndexed(), cap.toNonIndexed()].map((g) => {
+        g.deleteAttribute('uv');
+        return g;
+      }), false)!;
+      const capMat = new THREE.MeshStandardMaterial({ color: 0x302040, emissive: 0x9a50ff, emissiveIntensity: 1.2, roughness: 0.5 });
+      this.glowMats.push(capMat);
+      this.instanced(fungus, capMat, caps, 'near');
+    }
   }
 
   // ------------------------------------------------------------- the survey station
@@ -1145,7 +1231,28 @@ export class Level16Builder {
       return o;
     };
     // Floor, ceiling, walls (the north one round the door)
-    box(x1 - x0, 0.1, z1 - z0, 0, -0.05, (z0 + z1) / 2, dark);
+    {
+      const gc = makeCanvas(256, 256);
+      const gg = gc.getContext('2d')!;
+      gg.fillStyle = '#2a2f34';
+      gg.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 256; i += 16) {
+        gg.fillStyle = 'rgba(0,0,0,0.55)';
+        gg.fillRect(i, 0, 3, 256);
+        gg.fillRect(0, i, 256, 3);
+        gg.fillStyle = 'rgba(160,170,180,0.18)';
+        gg.fillRect(i + 3, 0, 1, 256);
+      }
+      for (let k = 0; k < 400; k++) {
+        gg.fillStyle = `rgba(${120 + Math.random() * 60},${110 + Math.random() * 40},90,0.12)`;
+        gg.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 6, 1 + Math.random() * 2);
+      }
+      const gt = new THREE.CanvasTexture(gc);
+      gt.wrapS = gt.wrapT = THREE.RepeatWrapping;
+      gt.repeat.set(4, 3.5);
+      gt.colorSpace = THREE.SRGBColorSpace;
+      box(x1 - x0, 0.1, z1 - z0, 0, -0.03, (z0 + z1) / 2, new THREE.MeshStandardMaterial({ map: gt, roughness: 0.55, metalness: 0.6 }));
+    }
     box(x1 - x0 + 0.4, 0.15, z1 - z0 + 0.4, 0, h + 0.075, (z0 + z1) / 2, wallMat);
     box(0.2, h, z1 - z0, x0 - 0.1, h / 2, (z0 + z1) / 2, wallMat, true);
     box(0.2, h, z1 - z0, x1 + 0.1, h / 2, (z0 + z1) / 2, wallMat, true);
@@ -1348,6 +1455,7 @@ export class Level16Builder {
     const crateM = new THREE.MeshStandardMaterial({ color: 0x5a6070, roughness: 0.6, metalness: 0.3 });
     box(0.8, 0.6, 0.6, x1 - 0.7, 0.3, z1 - 0.45, crateM, true);
     box(0.6, 0.45, 0.5, x1 - 0.75, 0.825, z1 - 0.45, crateM);
+    this.stationDetail(g, { dark, steel, yellow, wallMat });
     // ---- Outside: a roof unit, an antenna mast, a beacon
     box(1.6, 0.6, 1.2, 1.4, h + 0.45, 135.5, dark);
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 3, 8), steel);
@@ -1360,6 +1468,216 @@ export class Level16Builder {
       if ((o as THREE.Mesh).isMesh) this.shootables.push(o);
     });
     return { slab, collider, button: new THREE.Vector3(1.55, fy + 1.34, z0 + 0.13), buttonMat, light };
+  }
+
+  /**
+   * The rest of the station: a locker with a spare helmet, a folding cot, a
+   * desk with a laptop, papers and a mug, a whiteboard of sketches of the
+   * things outside, the canyon map pinned up, cable trays and conduit along
+   * the ceiling, a vent, a first-aid box, signs.
+   */
+  private stationDetail(g: THREE.Group, M: { dark: THREE.Material; steel: THREE.Material; yellow: THREE.Material; wallMat: THREE.Material }): void {
+    const { x0, x1, z0, z1, h } = BUILDING;
+    const fy = g.position.y;
+    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, ry = 0): THREE.Mesh => {
+      const o = new THREE.Mesh(geo, m);
+      o.position.set(x, y, z);
+      o.rotation.y = ry;
+      g.add(o);
+      return o;
+    };
+    const canvasMat = (w: number, hh: number, draw: (c: CanvasRenderingContext2D) => void, basic = false): THREE.Material => {
+      const c = makeCanvas(w, hh);
+      draw(c.getContext('2d')!);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return basic ? new THREE.MeshBasicMaterial({ map: t, toneMapped: false }) : new THREE.MeshStandardMaterial({ map: t, roughness: 0.8 });
+    };
+    // ---- Locker in the north-west corner, a helmet on top
+    const lockerM = new THREE.MeshStandardMaterial({ color: 0x4a5a6a, roughness: 0.5, metalness: 0.5 });
+    add(new THREE.BoxGeometry(0.6, 1.9, 0.5), lockerM, x0 + 0.42, 0.95, z0 + 0.38);
+    for (let k = 0; k < 4; k++) add(new THREE.BoxGeometry(0.4, 0.015, 0.01), M.dark, x0 + 0.42, 1.55 + k * 0.04, z0 + 0.635);
+    add(new THREE.BoxGeometry(0.02, 0.18, 0.03), M.steel, x0 + 0.66, 1.0, z0 + 0.64);
+    const helm = add(new THREE.SphereGeometry(0.16, 20, 14), new THREE.MeshStandardMaterial({ color: 0xc0c4c8, roughness: 0.35, metalness: 0.3 }), x0 + 0.42, 2.06, z0 + 0.38);
+    helm.scale.set(1, 1.1, 1.05);
+    const vis = add(new THREE.SphereGeometry(0.13, 20, 10, -0.9, 1.8, 0.9, 0.9), new THREE.MeshStandardMaterial({ color: 0xd99a22, roughness: 0.1, metalness: 1 }), x0 + 0.42, 2.05, z0 + 0.42);
+    vis.rotation.y = 0;
+    this.collide(x0, fy, z0, x0 + 0.75, fy + 1.9, z0 + 0.65);
+    // ---- A folding cot on the west side, a rumpled blanket on it
+    const cotX = -2.15;
+    const cotZ = 134.3;
+    add(new THREE.BoxGeometry(0.72, 0.05, 1.85), new THREE.MeshStandardMaterial({ color: 0x3a4a3a, roughness: 0.9 }), cotX, 0.42, cotZ);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.015, 0.015, 0.42, 6), M.steel, cotX + sx * 0.33, 0.21, cotZ + sz * 0.85);
+    const blanket = new THREE.PlaneGeometry(0.76, 1.1, 10, 12);
+    blanket.rotateX(-Math.PI / 2);
+    const bp = blanket.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < bp.count; i++) bp.setY(i, Math.max(0, Math.sin(bp.getX(i) * 9 + bp.getZ(i) * 5) * 0.03 + Math.cos(bp.getZ(i) * 7) * 0.025) + 0.01);
+    blanket.computeVertexNormals();
+    add(blanket, new THREE.MeshStandardMaterial({ color: 0x8a4a2a, roughness: 0.95, side: THREE.DoubleSide }), cotX, 0.45, cotZ + 0.3);
+    add(new THREE.BoxGeometry(0.5, 0.1, 0.32), new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.95 }), cotX, 0.5, cotZ - 0.7);
+    this.collide(cotX - 0.36, fy, cotZ - 0.93, cotX + 0.36, fy + 0.45, cotZ + 0.93);
+    // ---- A desk on the east side: laptop, papers, a mug, a lamp
+    const dx = 2.05;
+    const dz = 135.4;
+    add(new THREE.BoxGeometry(1.2, 0.04, 0.62), new THREE.MeshStandardMaterial({ color: 0x5a5048, roughness: 0.6 }), dx, 0.76, dz);
+    for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.74, 0.58), M.dark, dx + sx * 0.56, 0.37, dz);
+    this.collide(dx - 0.6, fy, dz - 0.31, dx + 0.6, fy + 0.78, dz + 0.31);
+    add(new THREE.BoxGeometry(0.34, 0.015, 0.24), M.dark, dx - 0.15, 0.79, dz + 0.05);
+    const lid = add(new THREE.BoxGeometry(0.34, 0.22, 0.012), M.dark, dx - 0.15, 0.9, dz - 0.07);
+    lid.rotation.x = -0.25;
+    const scr = add(
+      new THREE.PlaneGeometry(0.31, 0.19),
+      canvasMat(256, 160, (c) => {
+        c.fillStyle = '#04120c';
+        c.fillRect(0, 0, 256, 160);
+        c.fillStyle = '#4dff8a';
+        c.font = '11px monospace';
+        ['SURVEY LOG 0417', 'DRONE-2 SIGNAL LOST', 'BIO-SIGNS: CANYON N', 'PACK SIZE: 6+', 'DO NOT GO OUT ALONE'].forEach((s, i) => c.fillText(s, 10, 22 + i * 18));
+        c.strokeStyle = '#4dff8a';
+        c.beginPath();
+        for (let x = 0; x < 256; x += 3) c.lineTo(x, 135 + Math.sin(x * 0.2) * 10 * Math.sin(x * 0.03));
+        c.stroke();
+      }, true),
+      dx - 0.15,
+      0.9,
+      dz - 0.063
+    );
+    scr.rotation.x = -0.25;
+    const paperM = new THREE.MeshStandardMaterial({ color: 0xeeeae0, roughness: 0.9 });
+    for (let k = 0; k < 4; k++) {
+      const pp = add(new THREE.PlaneGeometry(0.21, 0.29), paperM, dx + 0.3 + (k % 2) * 0.05, 0.783 + k * 0.002, dz + 0.05 - k * 0.03);
+      pp.rotation.set(-Math.PI / 2, 0, (k - 1.5) * 0.3);
+    }
+    const mug = add(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 16, 1, true), new THREE.MeshStandardMaterial({ color: 0x2a6a9a, roughness: 0.4, side: THREE.DoubleSide }), dx + 0.45, 0.83, dz - 0.18);
+    void mug;
+    add(new THREE.CircleGeometry(0.035, 12), new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.2 }), dx + 0.45, 0.865, dz - 0.18).rotation.x = -Math.PI / 2;
+    const lamp = add(new THREE.CylinderGeometry(0.012, 0.012, 0.35, 6), M.steel, dx - 0.5, 0.95, dz + 0.2);
+    lamp.rotation.z = 0.3;
+    add(new THREE.ConeGeometry(0.07, 0.09, 14, 1, true), M.yellow, dx - 0.44, 1.12, dz + 0.2).rotation.z = Math.PI + 0.6;
+    // ---- A whiteboard west of the door: sketches of the hounds, the big one, notes
+    add(new THREE.BoxGeometry(1.5, 0.95, 0.03), M.steel, -2.4, 1.6, z0 + 0.03);
+    add(
+      new THREE.PlaneGeometry(1.42, 0.87),
+      canvasMat(512, 312, (c) => {
+        c.fillStyle = '#f2f2ee';
+        c.fillRect(0, 0, 512, 312);
+        c.strokeStyle = '#2244aa';
+        c.lineWidth = 3;
+        // A hound: a body, legs, the round mouth with teeth
+        c.beginPath();
+        c.ellipse(120, 120, 70, 30, 0, 0, Math.PI * 2);
+        c.moveTo(70, 140);
+        c.lineTo(60, 200);
+        c.moveTo(95, 145);
+        c.lineTo(100, 205);
+        c.moveTo(150, 145);
+        c.lineTo(140, 205);
+        c.moveTo(175, 140);
+        c.lineTo(185, 200);
+        c.stroke();
+        c.beginPath();
+        c.arc(215, 105, 30, 0, Math.PI * 2);
+        c.stroke();
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2;
+          c.beginPath();
+          c.moveTo(215 + Math.cos(a) * 30, 105 + Math.sin(a) * 30);
+          c.lineTo(215 + Math.cos(a) * 16, 105 + Math.sin(a) * 16);
+          c.stroke();
+        }
+        c.fillStyle = '#cc2222';
+        c.font = 'bold 22px Arial';
+        c.fillText('NO EYES??', 160, 50);
+        c.fillStyle = '#2244aa';
+        c.font = '18px Arial';
+        c.fillText('hunt in packs - 5/6', 40, 250);
+        c.fillText('hear vibration?', 40, 275);
+        c.fillStyle = '#cc2222';
+        c.fillText('the BIG one - N. canyon', 300, 210);
+        c.fillText('DO NOT approach', 300, 236);
+        c.strokeStyle = '#cc2222';
+        c.beginPath();
+        c.ellipse(390, 120, 80, 40, 0, 0, Math.PI * 2);
+        for (let k = 0; k < 6; k++) {
+          c.moveTo(330 + k * 25, 150);
+          c.lineTo(315 + k * 28, 190);
+        }
+        c.stroke();
+      }),
+      -2.4,
+      1.6,
+      z0 + 0.05
+    );
+    // ---- The canyon map pinned up over the bench
+    add(
+      new THREE.PlaneGeometry(0.5, 0.7),
+      canvasMat(200, 280, (c) => {
+        c.fillStyle = '#d8d0b0';
+        c.fillRect(0, 0, 200, 280);
+        c.strokeStyle = '#6a5a3a';
+        c.lineWidth = 2;
+        c.beginPath();
+        for (let y = 0; y <= 280; y += 6) c.lineTo(100 + Math.sin(y * 0.03) * 40 - 25, y);
+        c.stroke();
+        c.beginPath();
+        for (let y = 0; y <= 280; y += 6) c.lineTo(100 + Math.sin(y * 0.03) * 40 + 25, y);
+        c.stroke();
+        c.fillStyle = '#cc2222';
+        c.font = 'bold 14px Arial';
+        c.fillText('X', 92, 20);
+        c.fillText('BASE', 80, 270);
+        c.fillStyle = '#2a8a4a';
+        c.fillRect(70, 140, 60, 18);
+      }),
+      1.1,
+      1.55,
+      z1 - 0.02,
+      Math.PI
+    );
+    // ---- Overhead: cable trays and conduit the length of the room, a vent
+    for (const sx of [-1, 1]) {
+      add(new THREE.BoxGeometry(0.3, 0.04, z1 - z0 - 0.2), M.steel, sx * 2.6, h - 0.15, (z0 + z1) / 2);
+      for (let k = 0; k < 4; k++) {
+        const cab = add(new THREE.CylinderGeometry(0.015, 0.015, z1 - z0 - 0.2, 6), new THREE.MeshStandardMaterial({ color: [0x1a1a1a, 0xaa2222, 0x2244aa, 0xd8b21c][k], roughness: 0.6 }), sx * 2.6 - 0.1 + k * 0.06, h - 0.11, (z0 + z1) / 2);
+        cab.rotation.x = Math.PI / 2;
+      }
+    }
+    const pipe = add(new THREE.CylinderGeometry(0.05, 0.05, x1 - x0 - 0.2, 10), M.steel, 0, h - 0.3, z1 - 0.3);
+    pipe.rotation.z = Math.PI / 2;
+    add(
+      new THREE.PlaneGeometry(0.6, 0.4),
+      canvasMat(120, 80, (c) => {
+        c.fillStyle = '#3a4048';
+        c.fillRect(0, 0, 120, 80);
+        c.fillStyle = '#101418';
+        for (let y = 8; y < 76; y += 9) c.fillRect(8, y, 104, 5);
+      }),
+      1.6,
+      h - 0.005,
+      133
+    ).rotation.x = Math.PI / 2;
+    // ---- A first-aid box and signs by the door
+    add(new THREE.BoxGeometry(0.34, 0.26, 0.1), new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.5 }), x1 - 0.3, 1.5, z0 + 0.06);
+    add(new THREE.BoxGeometry(0.06, 0.18, 0.01), new THREE.MeshStandardMaterial({ color: 0xcc1111 }), x1 - 0.3, 1.5, z0 + 0.115);
+    add(new THREE.BoxGeometry(0.18, 0.06, 0.01), new THREE.MeshStandardMaterial({ color: 0xcc1111 }), x1 - 0.3, 1.5, z0 + 0.115);
+    add(
+      new THREE.PlaneGeometry(0.42, 0.3),
+      canvasMat(210, 150, (c) => {
+        c.fillStyle = '#f2c400';
+        c.fillRect(0, 0, 210, 150);
+        c.fillStyle = '#111';
+        c.font = 'bold 22px Arial';
+        c.textAlign = 'center';
+        c.fillText('WARNING', 105, 40);
+        c.font = 'bold 15px Arial';
+        c.fillText('HOSTILE FAUNA', 105, 75);
+        c.fillText('SUIT SEALED AT', 105, 105);
+        c.fillText('ALL TIMES', 105, 128);
+      }),
+      -0.9,
+      2.0,
+      z0 + 0.012
+    );
   }
 
   // ------------------------------------------------------------- the crashed drone and its tablet
@@ -1664,6 +1982,68 @@ export class Level16Builder {
     return { obj: tab, at: new THREE.Vector3(x, y, z), beacon };
   }
 
+  /**
+   * Fog lying low along the canyon floor: big soft billows a few metres off
+   * the ground, drifting, thickest in the hollows, fading out as he comes
+   * up close to one so he walks into the haze rather than through a card.
+   */
+  private buildGroundFog(): THREE.ShaderMaterial {
+    const pts: number[] = [];
+    const sizes: number[] = [];
+    const seeds: number[] = [];
+    for (let k = 0; k < 900; k++) {
+      const z = -205 + Math.random() * 355;
+      const x = valleyX(z) + (Math.random() - 0.5) * 2 * (halfWidth(z) + 6);
+      if (inCave(x, z)) continue;
+      const y = groundY(x, z) + 0.6 + Math.random() * 2.2;
+      pts.push(x, y, z);
+      sizes.push(9 + Math.random() * 12);
+      seeds.push(Math.random() * 100);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    geo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+    geo.setAttribute('seed', new THREE.Float32BufferAttribute(seeds, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uT: { value: 0 }, uColor: { value: new THREE.Color(0x3a2a52) }, uScale: { value: 600 }, uAlpha: { value: 0.16 } },
+      vertexShader: `
+        attribute float size; attribute float seed;
+        uniform float uT; uniform float uScale;
+        varying float vA; varying float vSeed;
+        void main(){
+          vec3 p = position + vec3(sin(uT * 0.05 + seed) * 2.0, sin(uT * 0.13 + seed * 2.0) * 0.3, cos(uT * 0.04 + seed) * 2.0);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          float d = -mv.z;
+          vA = smoothstep(2.0, 9.0, d) * (1.0 - smoothstep(110.0, 170.0, d));
+          vSeed = seed;
+          gl_PointSize = min(size * uScale / max(d, 0.1), 1024.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 uColor; uniform float uAlpha; uniform float uT;
+        varying float vA; varying float vSeed;
+        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+        void main(){
+          vec2 q = gl_PointCoord * 2.0 - 1.0;
+          float r = length(q);
+          if (r > 1.0) discard;
+          float wisp = n(q * 2.5 + vSeed + uT * 0.03) * 0.6 + n(q * 5.0 - vSeed) * 0.4;
+          float a = (1.0 - smoothstep(0.2, 1.0, r)) * (0.5 + 0.5 * wisp) * uAlpha * vA;
+          gl_FragColor = vec4(uColor, a);
+        }`,
+      transparent: true,
+      depthWrite: false,
+      fog: false
+    });
+    const fog = new THREE.Points(geo, mat);
+    fog.frustumCulled = false;
+    fog.renderOrder = 5;
+    this.group.add(fog);
+    return mat;
+  }
+
   // ------------------------------------------------------------- the sky
 
   /**
@@ -1698,9 +2078,12 @@ export class Level16Builder {
           // The aurora: a faint cyan curtain
           float au = smoothstep(0.6, 0.0, abs(d.y - 0.32 - sin(d.x * 6.0 + uT * 0.05) * 0.05)) * smoothstep(-0.2, 0.6, d.x) * smoothstep(0.3, -0.6, d.z);
           c += vec3(0.05, 0.35, 0.45) * au * (0.4 + 0.6 * fb(vec2(d.x * 20.0, uT * 0.03))) * 0.5;
-          vec2 sp = vec2(atan(d.z, d.x) * 200.0, d.y * 260.0);
-          float st = step(0.996, h(floor(sp))) * smoothstep(0.02, 0.25, up) * (1.0 - bank);
-          c += vec3(st) * (0.5 + 0.5 * h(floor(sp) + 3.0));
+          vec3 sq = d * 210.0;
+          vec3 sc = floor(sq);
+          float sr = fract(sin(dot(sc, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+          float sd = length(fract(sq) - 0.5);
+          float st = step(0.9965, sr) * smoothstep(0.32, 0.08, sd) * smoothstep(0.02, 0.25, up) * (1.0 - bank);
+          c += vec3(st) * (0.5 + 0.5 * fract(sr * 97.0));
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
@@ -2352,25 +2735,16 @@ function frondTexture(): THREE.CanvasTexture {
 /** Rock's bump: cracks and grain. */
 function rockBump(): THREE.CanvasTexture {
   const S = 256;
+  rockPx ??= rockPixels(S);
   const c = makeCanvas(S, S);
   const g = c.getContext('2d')!;
-  g.fillStyle = '#808080';
-  g.fillRect(0, 0, S, S);
-  for (let k = 0; k < 2500; k++) {
-    const v = 90 + Math.random() * 90;
-    g.fillStyle = `rgba(${v},${v},${v},0.4)`;
-    g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 4, 1 + Math.random() * 3);
+  const img = g.createImageData(S, S);
+  for (let k = 0; k < S * S; k++) {
+    const v = rockPx[k] * 255;
+    img.data[k * 4] = img.data[k * 4 + 1] = img.data[k * 4 + 2] = v;
+    img.data[k * 4 + 3] = 255;
   }
-  for (let k = 0; k < 50; k++) {
-    g.strokeStyle = 'rgba(10,10,10,0.8)';
-    g.lineWidth = 1 + Math.random() * 2;
-    g.beginPath();
-    let x = Math.random() * S;
-    let y = Math.random() * S;
-    g.moveTo(x, y);
-    for (let s = 0; s < 6; s++) g.lineTo((x += (Math.random() - 0.5) * 40), (y += Math.random() * 25));
-    g.stroke();
-  }
+  g.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;

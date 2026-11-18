@@ -2448,7 +2448,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const fl = cave || uw ? 0 : this.flash;
     const want = uw ? Level16Scene.FOG_WATER : cave ? Level16Scene.FOG_CAVE : Level16Scene.FOG_AIR;
     fog.color.lerp(want, uw ? 1 : Math.min(1, dt * 3));
-    const dens = uw ? 0.13 : cave ? 0.05 : 0.022;
+    const dens = uw ? 0.13 : cave ? 0.05 : 0.03;
+    L.groundFog.uniforms.uT.value = this.t;
+    L.groundFog.uniforms.uScale.value = Math.max(window.innerHeight, 400) * 0.75;
+    L.groundFog.uniforms.uAlpha.value = cave || uw ? 0 : 0.16;
     fog.density = uw ? dens : fog.density + (dens - fog.density) * Math.min(1, dt * 3);
     this.murk.style.opacity = uw ? '1' : '0';
     const dark = uw ? 0.5 : cave ? 0.18 : 1;

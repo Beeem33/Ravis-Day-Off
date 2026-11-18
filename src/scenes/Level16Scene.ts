@@ -21,8 +21,10 @@ import {
   DENS,
   CAVE_MOUTH_Z,
   LAKE_BED,
-  CEIL_Y
+  CEIL_Y,
+  inChasm
 } from '../environment/Level16Builder';
+import { Level16CaveBuilder, caveGround, caveSolid, caveConfine, type CaveExtras } from '../environment/Level16CaveBuilder';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -68,6 +70,24 @@ import { Colognes } from '../entities/Colognes';
  */
 
 type Phase = 'play' | 'intro' | 'harvest' | 'end';
+
+/**
+ * The world the scene plays in, asked through here so the one scene can play
+ * both parts of the level: the canyon (part one) and the cave (part two).
+ */
+interface World16 {
+  groundY(x: number, z: number): number;
+  inLake(x: number, z: number): boolean;
+  inCave(x: number, z: number): boolean;
+  outside(x: number, z: number): number;
+  /** Inside rock at this point (the cave's walls and roof, for shots). */
+  solid(x: number, y: number, z: number): boolean;
+  /** Pushed back inside the walls (the cave's): true if it had to be. */
+  confine(p: THREE.Vector3, r: number): boolean;
+}
+const CANYON: World16 = { groundY, inLake, inCave, outside, solid: () => false, confine: () => false };
+const CAVE: World16 = { groundY: caveGround, inLake: () => false, inCave: () => true, outside: () => -1, solid: caveSolid, confine: caveConfine };
+const W: World16 = { ...CANYON };
 type BossMove = 'idle' | 'mortar' | 'spray' | 'grab' | 'tree' | 'stagger';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
@@ -315,6 +335,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private acidLight!: THREE.PointLight;
   private portalLight!: THREE.PointLight;
   private lamp!: THREE.SpotLight;
+  private lampSpill!: THREE.PointLight;
   private lampOn = 0;
   private hasTablet = false;
   private harvested = false;
@@ -366,7 +387,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private static readonly HEMI = 1.35;
   private static readonly MOON = 2.6;
 
-  constructor(ctx: GameContext, private from = 0) {
+  constructor(
+    ctx: GameContext,
+    private from = 0,
+    /** 1 the canyon; 2 the cave. */
+    private part: 1 | 2 = 1
+  ) {
     super(ctx);
   }
 
@@ -379,12 +405,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
     RaviVisual.dressBody = dressSuitBody;
     this.scene.background = new THREE.Color(0x000000);
     this.scene.fog = new THREE.FogExp2(Level16Scene.FOG_AIR.getHex(), 0.022);
-    this.level = new Level16Builder().build();
+    Object.assign(W, this.part === 2 ? CAVE : CANYON);
+    this.level = this.part === 2 ? new Level16CaveBuilder().build() : new Level16Builder().build();
     const L = this.level;
     this.scene.add(L.group);
     // The trees round the clearing stand in the way until they're torn up
     for (const t of L.arenaTrees) {
-      const c: Collider = { box: new THREE.Box3(V(t.x - 0.4, groundY(t.x, t.z) - 1, t.z - 0.4), V(t.x + 0.4, groundY(t.x, t.z) + 5, t.z + 0.4)) };
+      const c: Collider = { box: new THREE.Box3(V(t.x - 0.4, W.groundY(t.x, t.z) - 1, t.z - 0.4), V(t.x + 0.4, W.groundY(t.x, t.z) + 5, t.z + 0.4)) };
       L.colliders.push(c);
       this.treeCols.push(c);
       this.treeUsed.push(false);
@@ -401,7 +428,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const data: number[][] = [];
       for (let i = 0; i < nx; i++) {
         const col: number[] = [];
-        for (let j = 0; j < nz; j++) col.push(groundY(X0 + i * es, Z1 - j * es));
+        for (let j = 0; j < nz; j++) col.push(W.groundY(X0 + i * es, Z1 - j * es));
         data.push(col);
       }
       this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Heightfield(data, { elementSize: es }) });
@@ -417,13 +444,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     for (let i = 0; i < 32; i++) this.nearPool.push({ box: new THREE.Box3() });
 
-    this.checkpoint = Math.min(this.from, 4);
+    this.checkpoint = Math.min(this.from, this.part === 2 ? 1 : 5);
     const start = this.checkpointPose(this.checkpoint);
     this.player = new FPSPlayer(start.pos.clone(), start.yaw, input, audio, bus);
     // Lighter gravity out here: higher, floatier jumps
     this.player.gravity = 10.5;
     this.player.jumpSpeed = 5.4;
-    this.player.ground = groundY;
+    this.player.ground = (x, z) => W.groundY(x, z);
     this.player.camera.far = 1300;
     this.player.camera.updateProjectionMatrix();
     this.scene.add(this.player.camera);
@@ -478,13 +505,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.moon.position.set(280, 210, 40);
     this.scene.add(this.hemi, this.moon, this.moon.target);
     this.lamp = new THREE.SpotLight(0xe8f4ff, 0, 40, 0.55, 0.5, 1.2);
-    this.lamp.position.set(0.18, -0.12, 0.05);
-    this.lamp.target.position.set(0.05, -0.15, -8);
+    // Out past his hands, so it lights what's ahead and not his own arms a foot from it
+    this.lamp.position.set(0.05, 0.02, -0.95);
+    this.lamp.target.position.set(0.02, -0.4, -9);
     this.player.camera.add(this.lamp, this.lamp.target);
+    // The lamp's spill back on his own arms: soft, and only a metre
+    this.lampSpill = new THREE.PointLight(0xdfe8ff, 0, 1.6, 1.2);
+    this.lampSpill.position.set(0, 0.25, -0.15);
+    this.player.camera.add(this.lampSpill);
     this.acidLight = new THREE.PointLight(ACID, 0, 9, 1.6);
     this.scene.add(this.acidLight);
     this.portalLight = new THREE.PointLight(0x6ae0ff, 6, 30, 1.3);
-    this.portalLight.position.copy(L.portal.at).add(V(0, 2.6, 1.5));
+    // Part one's is out in front of the cave's mouth, lighting the arch and not the way in
+    this.portalLight.position.copy(L.portal.at).add(this.part === 1 ? V(0, 3.2, 7) : V(0, 2.6, 1.5));
+    if (this.part === 1) this.portalLight.distance = 55;
     this.scene.add(this.portalLight);
 
     this.acidShots = new GlowShots(ACID, 0.09, ACID_G, 0.3, 30);
@@ -499,7 +533,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.scene.add(this.tongueHit);
 
     // ---- The big one, waiting in its clearing; the packs; the maws
-    this.boss = new SpiderBoss(groundY);
+    this.boss = new SpiderBoss((x, z) => W.groundY(x, z));
     this.scene.add(this.boss.group);
     this.boss.place(ARENA.x, ARENA.z - 8, 0);
     const at = (z: number, dx: number): { x: number; z: number } => ({ x: valleyX(z) + dx, z });
@@ -523,7 +557,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     ];
     this.introDone = this.checkpoint > 0;
     // The dead explorer's cologne
-    Colognes.place(this.scene, 'maw', L.note.cologne, 0.6, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
+    if (this.part === 1)
+      Colognes.place(this.scene, 'maw', L.note.cologne, 0.6, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     const done = [this.checkpoint >= 1, this.checkpoint >= 3, this.checkpoint >= 4];
     // (the first is the hill's pack: the cutscene brings those, so it's always "spawned")
     done.forEach((d, i) => (this.packs[i].spawned = this.packs[i].spawned || d));
@@ -531,7 +566,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const m = new MawTrap();
       // Sat on the ground, tilted to its slope, not half sunk in it
       const e = 0.5;
-      const n = V(groundY(s.x - e, s.z) - groundY(s.x + e, s.z), 2 * e, groundY(s.x, s.z - e) - groundY(s.x, s.z + e)).normalize();
+      const n = V(W.groundY(s.x - e, s.z) - W.groundY(s.x + e, s.z), 2 * e, W.groundY(s.x, s.z - e) - W.groundY(s.x, s.z + e)).normalize();
       m.group.quaternion.setFromUnitVectors(V(0, 1, 0), n).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.random() * 6.28));
       m.group.position.set(s.x, s.y + 0.1, s.z);
       this.scene.add(m.group);
@@ -549,17 +584,19 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.swimArms = new SwimArms(this.player.camera);
     this.panic = new PanicArms(this.player.camera);
     this.bubbles = new AcidBubbles(this.scene, {
-      inWater: inLake,
-      bed: (x, z) => Math.max(LAKE_BED - 0.4, groundY(x, z)),
+      inWater: (x, z) => W.inLake(x, z),
+      bed: (x, z) => Math.max(LAKE_BED - 0.4, W.groundY(x, z)),
       // Under the massif the water runs right up to the rock
       top: (x, z) => (x > MASSIF.x0 && x < MASSIF.x1 && z > MASSIF.z0 && z < MASSIF.z1 ? CEIL_Y : WATER_Y)
     });
     this.keyMarks = { door: Level16Scene.keyMarker(), tablet: Level16Scene.keyMarker() };
     this.scene.add(this.keyMarks.door, this.keyMarks.tablet);
-    if (this.checkpoint >= 1) {
+    if (this.checkpoint >= 1 || this.part === 2) {
       this.openDoor(true);
       this.takeTablet(true);
     }
+    if (this.part === 2) this.setupCave();
+    else if (this.checkpoint >= 5) this.pastTheBoss();
 
     this.unsubs.push(
       bus.on(Events.Resize, () => {
@@ -609,7 +646,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
   }
 
   private checkpointPose(c: number): { pos: THREE.Vector3; yaw: number } {
-    const at = (x: number, z: number, yaw: number): { pos: THREE.Vector3; yaw: number } => ({ pos: V(x, groundY(x, z), z), yaw });
+    const at = (x: number, z: number, yaw: number): { pos: THREE.Vector3; yaw: number } => ({ pos: V(x, W.groundY(x, z), z), yaw });
+    if (this.part === 2) return c >= 1 ? at(6, -54, 0) : this.level.start;
     switch (c) {
       case 1:
         return at(MEADOW.x - 2, MEADOW.z - 2, 0.2);
@@ -619,6 +657,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
         return at(0, -60, 0);
       case 4:
         return at(valleyX(-80), -80, 0);
+      case 5:
+        return at(valleyX(-142), -142, 0);
       default:
         return this.level.start;
     }
@@ -704,10 +744,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const a = this.arsenal;
 
     const pos = p.position;
-    const lake = inLake(pos.x, pos.z);
+    const lake = W.inLake(pos.x, pos.z);
     p.swimming = p.alive && this.phase === 'play' && lake && pos.y < WATER_Y - SWIM_DEPTH && !this.heldBy && !this.grabbed;
     p.swimTop = WATER_Y - 1.45;
-    this.underwater = inLake(p.camera.position.x, p.camera.position.z) && p.camera.position.y < WATER_Y - 0.02;
+    this.underwater = W.inLake(p.camera.position.x, p.camera.position.z) && p.camera.position.y < WATER_Y - 0.02;
     if (p.swimming && !this.swimHinted) {
       this.swimHinted = true;
       this.ctx.audio.splash(true);
@@ -790,6 +830,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateAcid(dt);
     this.updateHarvestPrompt();
     this.updateNote();
+    if (this.part === 2) this.updateCave(dt);
     if (this.phase === 'play') this.maybeIntro();
     if (this.phase === 'intro') this.updateIntro(dt);
     if (this.phase === 'harvest') this.updateHarvest(dt);
@@ -798,7 +839,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateHints(dt);
 
     this.updateAtmosphere(dt);
-    this.drops.update(dt, groundY);
+    this.drops.update(dt, (x, z) => W.groundY(x, z));
     this.hud.setHealth(p.health, p.regenProgress);
     this.updateDebris(dt);
     for (let i = this.ragdolls.length - 1; i >= 0; i--) {
@@ -830,7 +871,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
             if (Math.hypot(t.x - p.x, t.z - p.z) > 6 + t.r) continue;
             const c = this.nearPool[n++];
             const r = t.r * 0.85;
-            const y = groundY(t.x, t.z);
+            const y = W.groundY(t.x, t.z);
             c.box.min.set(t.x - r, y - 1, t.z - r);
             c.box.max.set(t.x + r, y + t.h, t.z + r);
             this.nearCols.push(c);
@@ -844,7 +885,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     if (!p.alive) return;
     const pos = p.position;
-    if (inCave(pos.x, pos.z) || outside(pos.x, pos.z) < 2.5) {
+    if (this.part === 2) {
+      W.confine(pos, 0.38);
+      return;
+    }
+    if (W.inCave(pos.x, pos.z) || W.outside(pos.x, pos.z) < 2.5) {
       this.lastInside.copy(pos);
       return;
     }
@@ -926,7 +971,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (this.doorT < 3) {
       this.doorT += dt;
       const k = smooth((this.doorT - 0.6) / 2.2);
-      d.slab.position.y = groundY(0, 134.5) + k * 2.45;
+      d.slab.position.y = W.groundY(0, 134.5) + k * 2.45;
       if (k > 0.9) d.collider.disabled = true;
       if (this.doorT < 0.6) this.shake = Math.max(this.shake, 0.15);
     }
@@ -939,7 +984,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.setPrompt(null);
     if (instant) {
       this.doorT = 3;
-      d.slab.position.y = groundY(0, 134.5) + 2.45;
+      d.slab.position.y = W.groundY(0, 134.5) + 2.45;
       d.collider.disabled = true;
       return;
     }
@@ -1076,7 +1121,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (!pk.at.length) return; // nothing to bring (and nothing to screech from)
     pk.at.forEach((s, i) => {
       const h = new Hound();
-      h.group.position.set(s.x, groundY(s.x, s.z), s.z);
+      h.group.position.set(s.x, W.groundY(s.x, s.z), s.z);
       h.yaw = Math.atan2(this.player.position.x - s.x, this.player.position.z - s.z);
       h.group.rotation.y = h.yaw;
       h.state = 'lurk';
@@ -1103,7 +1148,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           // Still flying when it died: it lands
           fv.y -= 18 * dt;
           g.addScaledVector(fv, dt);
-          const gy = groundY(g.x, g.z);
+          const gy = W.groundY(g.x, g.z);
           if (g.y <= gy) {
             g.y = gy;
             this.flung.delete(h);
@@ -1112,7 +1157,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.knock.multiplyScalar(Math.exp(-4 * dt));
           g.x += h.knock.x * dt;
           g.z += h.knock.z * dt;
-          g.y = groundY(g.x, g.z);
+          g.y = W.groundY(g.x, g.z);
         }
         h.animate(dt, this.t);
         continue;
@@ -1137,7 +1182,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
             fv.multiplyScalar(0.5);
           }
         }
-        const gy = groundY(g.x, g.z);
+        const gy = W.groundY(g.x, g.z);
         if (g.y <= gy) {
           g.y = gy;
           const sp = fv.length();
@@ -1230,6 +1275,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
       g.x += h.vel.x * dt;
       g.z += h.vel.z * dt;
+      W.confine(g, 0.5);
       if (h.airV !== 0 || h.air > 0) {
         h.air += h.airV * dt;
         h.airV -= 16 * dt;
@@ -1238,8 +1284,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.airV = 0;
         }
       }
-      let gy = groundY(g.x, g.z);
-      if (inLake(g.x, g.z)) gy = Math.max(gy, WATER_Y - 0.55);
+      let gy = W.groundY(g.x, g.z);
+      if (W.inLake(g.x, g.z)) gy = Math.max(gy, WATER_Y - 0.55);
       g.y = gy + h.air;
       h.group.rotation.y = h.yaw;
       h.animate(dt, this.t);
@@ -1375,7 +1421,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         // Out in front of him, where he looks: swung round as he turns
         const dir = p.camera.getWorldDirection(new THREE.Vector3());
         const want = p.camera.position.clone().addScaledVector(dir, 4.2);
-        want.y = Math.max(want.y - 0.6, groundY(want.x, want.z) + 0.2);
+        want.y = Math.max(want.y - 0.6, W.groundY(want.x, want.z) + 0.2);
         const g = hd.group.position;
         this.holdPrev.copy(g);
         g.lerp(want, Math.min(1, dt * 12));
@@ -1527,7 +1573,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   /** A pool of acid where something came down: lying on the ground, whatever its shape. */
   private spawnPuddle(x: number, z: number, r: number, enemy: boolean, life = 6): void {
-    if (inLake(x, z) && groundY(x, z) < WATER_Y) return;
+    if (W.inLake(x, z) && W.groundY(x, z) < WATER_Y) return;
     const pd = this.puddles.reduce((a, b) => (b.life < a.life ? b : a));
     pd.x = x;
     pd.z = z;
@@ -1541,12 +1587,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     for (let i = 0; i < pos.count; i++) {
       const px = x + (uv.getX(i) * 2 - 1) * r;
       const pz = z - (uv.getY(i) * 2 - 1) * r;
-      pos.setXYZ(i, px, groundY(px, pz) + 0.06, pz);
+      pos.setXYZ(i, px, W.groundY(px, pz) + 0.06, pz);
     }
     pos.needsUpdate = true;
     pd.mesh.geometry.computeBoundingSphere();
     pd.mesh.visible = true;
-    this.drops.burst(V(x, groundY(x, z) + 0.1, z), V(0, 1, 0), 16, 3, ACID);
+    this.drops.burst(V(x, W.groundY(x, z) + 0.1, z), V(0, 1, 0), 16, 3, ACID);
     this.ctx.audio.gooSplat(Math.hypot(x - this.player.position.x, z - this.player.position.z));
   }
 
@@ -1578,7 +1624,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     for (let i = 0; i < pos.count; i++) {
       const px = x + (uv.getX(i) * 2 - 1) * r;
       const pz = z - (uv.getY(i) * 2 - 1) * r;
-      pos.setXYZ(i, px, groundY(px, pz) + 0.035, pz);
+      pos.setXYZ(i, px, W.groundY(px, pz) + 0.035, pz);
     }
     geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ color, alphaMap: Level16Scene.poolTex, transparent: true, opacity: 0.92, roughness: 0.08, metalness: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
@@ -1617,7 +1663,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     m.t = 0;
     m.land = land;
     m.r = r;
-    m.mesh.position.set(x, groundY(x, z) + 0.12, z);
+    m.mesh.position.set(x, W.groundY(x, z) + 0.12, z);
     m.mesh.visible = true;
   }
 
@@ -1654,7 +1700,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           return true;
         }
       }
-      if (b.y < groundY(b.x, b.z)) {
+      if (b.y < W.groundY(b.x, b.z)) {
         this.spawnPuddle(b.x, b.z, 1.9, true, shot.damage);
         return true;
       }
@@ -1703,7 +1749,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         continue;
       }
       const r = pd.r * 0.82;
-      if (Math.random() < dt * 3) this.drops.burst(V(pd.x + (Math.random() - 0.5) * pd.r, groundY(pd.x, pd.z) + 0.1, pd.z + (Math.random() - 0.5) * pd.r), V(0, 1, 0), 2, 0.8, ACID);
+      if (Math.random() < dt * 3) this.drops.burst(V(pd.x + (Math.random() - 0.5) * pd.r, W.groundY(pd.x, pd.z) + 0.1, pd.z + (Math.random() - 0.5) * pd.r), V(0, 1, 0), 2, 0.8, ACID);
       // Hounds that step in it are done for
       for (const h of this.hounds) {
         if (!h.alive || h.held || this.flung.has(h)) continue;
@@ -1721,7 +1767,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         }
       }
       // Its acid burns him
-      if (pd.enemy && p.alive && Math.hypot(pp.x - pd.x, pp.z - pd.z) < r && pp.y - groundY(pp.x, pp.z) < 0.4) inAcid = pd;
+      if (pd.enemy && p.alive && Math.hypot(pp.x - pd.x, pp.z - pd.z) < r && pp.y - W.groundY(pp.x, pp.z) < 0.4) inAcid = pd;
     }
     if (inAcid) {
       this.burnT += dt;
@@ -1790,7 +1836,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.bossVel.lerp(want, Math.min(1, dt * 1.5));
     b.at.x += this.bossVel.x * dt;
     b.at.z += this.bossVel.z * dt;
-    b.at.y = groundY(b.at.x, b.at.z);
+    b.at.y = W.groundY(b.at.x, b.at.z);
     // Faces him (or, reaching for a tree, the tree)
     let faceAt = pp;
     if (this.tree && this.tree.stage !== 'drag') faceAt = this.bossTongue.tip;
@@ -1957,9 +2003,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
       T.state = 'out';
       T.len = 0;
       this.tongueHp = 99;
-      const grabAt = V(t.x, groundY(t.x, t.z) + 2.2, t.z);
+      const grabAt = V(t.x, W.groundY(t.x, t.z) + 2.2, t.z);
       T.dir.copy(grabAt).sub(T.from).normalize();
-      this.tree = { i: best, stage: 'reach', t: 0, from: V(t.x, groundY(t.x, t.z), t.z), to: new THREE.Vector3(), dir: new THREE.Vector3(), hit: false };
+      this.tree = { i: best, stage: 'reach', t: 0, from: V(t.x, W.groundY(t.x, t.z), t.z), to: new THREE.Vector3(), dir: new THREE.Vector3(), hit: false };
       this.ctx.audio.giantRoar(0.6, d);
     }
   }
@@ -1967,7 +2013,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   /** One glob of acid on a high arc from the acid arm to (x, z), landing in `tf` seconds; a ring there till it does. */
   private lob(x: number, z: number, r: number, tf: number, life = 6, ring = true): void {
     const from = this.boss.muzzle(0);
-    const y = groundY(x, z);
+    const y = W.groundY(x, z);
     const v = V((x - from.x) / tf, (y - from.y) / tf + 0.5 * ACID_G * tf, (z - from.z) / tf);
     // (the shot's 'damage' is how long the pool it leaves lasts)
     this.bossAcid.fire(from, v, 'enemy', life);
@@ -2019,7 +2065,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const yaw = Math.atan2(tr.dir.x, tr.dir.z);
       g.rotation.set(0, 0, 0);
       g.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0)).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, k * Math.PI * 0.5)));
-      g.position.y = groundY(tr.from.x, tr.from.z) + k * 0.35;
+      g.position.y = W.groundY(tr.from.x, tr.from.z) + k * 0.35;
       T.tip.copy(tr.from).add(V(0, 2.2 * (1 - k) + 0.4 * k, 0));
       T.len = T.tip.distanceTo(T.from);
       if (tr.t > 0.45) {
@@ -2043,7 +2089,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.treeR += (THREE.MathUtils.clamp(pd, 6, 18) - this.treeR) * Math.min(1, dt * 0.8);
       const R = THREE.MathUtils.lerp(tr.dir.z, this.treeR + 2.5 * Math.sin(tr.t * 0.9), Math.min(1, tr.t / 1.2));
       const base = V(b.at.x + Math.sin(turn) * R, 0, b.at.z + Math.cos(turn) * R);
-      base.y = groundY(base.x, base.z) + 0.35;
+      base.y = W.groundY(base.x, base.z) + 0.35;
       const tan = V(Math.cos(turn), 0, -Math.sin(turn)).multiplyScalar(tr.dir.y);
       g.position.copy(base);
       g.quaternion.setFromUnitVectors(V(0, 1, 0), tan.clone().negate());
@@ -2057,7 +2103,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const rel = V(pp.x - base.x, 0, pp.z - base.z);
       const behind = -rel.dot(tan);
       const radial = Math.abs(rel.x * tan.z - rel.z * tan.x);
-      const lowEnough = pp.y - groundY(pp.x, pp.z) < (behind > 3.2 ? 1.6 : 0.85);
+      const lowEnough = pp.y - W.groundY(pp.x, pp.z) < (behind > 3.2 ? 1.6 : 0.85);
       if (this.t - this.treeHitT > 1.2 && p.alive && behind > -0.6 && behind < 5.8 && radial < 1.1 && lowEnough) {
         this.treeHitT = this.t;
         p.hit('A TREE', base.clone());
@@ -2308,7 +2354,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     g.rotation.x += e.gunSpin.x * dt;
     g.rotation.y += e.gunSpin.y * dt;
     g.rotation.z += e.gunSpin.z * dt;
-    const floor = groundY(g.position.x, g.position.z) + 0.06;
+    const floor = W.groundY(g.position.x, g.position.z) + 0.06;
     if (g.position.y <= floor) {
       g.position.y = floor;
       e.gunDown = true;
@@ -2338,7 +2384,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const side = new THREE.Vector3().crossVectors(F, V(0, 1, 0)).normalize();
     const lips = M.clone().addScaledVector(F, 0.85);
     const cam = lips.clone().addScaledVector(F, 3.3).addScaledVector(side, 2.5);
-    cam.y = Math.max(groundY(cam.x, cam.z) + 1.0, lips.y + 0.1);
+    cam.y = Math.max(W.groundY(cam.x, cam.z) + 1.0, lips.y + 0.1);
     const look = lips.clone().addScaledVector(F, 0.9).sub(cam);
     p.position.copy(cam).add(V(0, -p.eyeHeight, 0));
     p.yaw = Math.atan2(-look.x, -look.z);
@@ -2459,17 +2505,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
         const x = o.x + dir.x * tt;
         const y = o.y + dir.y * tt;
         const z = o.z + dir.z * tt;
-        if (y < groundY(x, z)) {
+        if (y < W.groundY(x, z) || W.solid(x, y, z)) {
           let lo = prev;
           let hi = tt;
           for (let k = 0; k < 8; k++) {
             const m = (lo + hi) / 2;
-            if (o.y + dir.y * m < groundY(o.x + dir.x * m, o.z + dir.z * m)) hi = m;
+            const mx = o.x + dir.x * m;
+            const my = o.y + dir.y * m;
+            const mz = o.z + dir.z * m;
+            if (my < W.groundY(mx, mz) || W.solid(mx, my, mz)) hi = m;
             else lo = m;
           }
           const pt = o.clone().addScaledVector(dir, hi);
           const e = 0.3;
-          const n = V(groundY(pt.x - e, pt.z) - groundY(pt.x + e, pt.z), 2 * e, groundY(pt.x, pt.z - e) - groundY(pt.x, pt.z + e)).normalize();
+          const n = V(W.groundY(pt.x - e, pt.z) - W.groundY(pt.x + e, pt.z), 2 * e, W.groundY(pt.x, pt.z - e) - W.groundY(pt.x, pt.z + e)).normalize();
           best = { dist: hi, point: pt, normal: n, kind: 'terrain' };
           break;
         }
@@ -2494,7 +2543,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         const h = (along - Math.sqrt(t.r * t.r - perp * perp)) / hd;
         if (h < 0 || h >= bestT) continue;
         const y = o.y + dir.y * h;
-        const gy = groundY(t.x, t.z);
+        const gy = W.groundY(t.x, t.z);
         if (y < gy || y > gy + t.h) continue;
         bestT = h;
         bt = t;
@@ -2645,7 +2694,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (away.lengthSq() < 0.5) away.set(0, 0, 1);
       const side = V(-away.z, 0, away.x);
       const p = w.clone().addScaledVector(away, 0.6).addScaledVector(side, 0.15).add(V(0, 0.6, 0));
-      p.y = Math.max(p.y, groundY(p.x, p.z) + 0.75);
+      p.y = Math.max(p.y, W.groundY(p.x, p.z) + 0.75);
       const head = this.fallen[i] ?? b.arms[i].head.root;
       return { p, look: this.fallen[i] ? w : head.localToWorld(V(0, 0, 0.2)) };
     };
@@ -2707,7 +2756,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     for (const i of [0, 1]) {
       const f = this.fallen[i];
       if (!f || f.parent !== this.scene) continue;
-      const gy = groundY(f.position.x, f.position.z) + 0.14;
+      const gy = W.groundY(f.position.x, f.position.z) + 0.14;
       if (f.position.y > gy) {
         this.fallV[i] -= 14 * dt;
         f.position.y = Math.max(gy, f.position.y + this.fallV[i] * dt);
@@ -2819,14 +2868,137 @@ export class Level16Scene extends CombatScene<Level16Data> {
     u.uT.value = this.t;
     u.uK.value += ((on ? 1 : 0.2) - u.uK.value) * Math.min(1, dt * 1.5);
     this.portalLight.intensity = 4 + 30 * u.uK.value + Math.sin(this.t * 3) * 3;
-    if (!this.caveHinted && this.player.position.z < CAVE_MOUTH_Z + 4 && this.phase === 'play') {
-      this.caveHinted = true;
-      this.hint(on ? 'THE SIGNAL IS COMING FROM INSIDE' : 'THE PORTAL IS DEAD — SOMETHING HAS TO WAKE IT', 6);
+    if (this.part === 1) {
+      this.updateCaveMouth();
+      return;
     }
     if (!on || this.phase !== 'play' || !this.player.alive) return;
     const d = Math.hypot(this.player.position.x - P.at.x, this.player.position.z - P.at.z);
     if (d < 2.3) this.finish();
   }
+
+  /**
+   * The cave's mouth at the end of the canyon: shut till he has the big
+   * one's cannons; then in he goes, and the rest of the level loads (part two).
+   */
+  private updateCaveMouth(): void {
+    const P = this.level.portal;
+    const L = this.level;
+    L.caveGate.disabled = this.harvested;
+    const d = Math.hypot(this.player.position.x - P.at.x, this.player.position.z - P.at.z);
+    if (!this.caveHinted && d < 7 && this.phase === 'play') {
+      this.caveHinted = true;
+      this.hint(this.harvested ? 'THE SIGNAL IS COMING FROM INSIDE' : 'SOMETHING IN THERE KNOWS THE WAY OUT — BUT NOT WITHOUT WHAT THE BIG ONE CARRIES', 6);
+    }
+    if (!this.harvested || this.phase !== 'play' || !this.player.alive || d > 2.6) return;
+    this.phase = 'end';
+    this.player.cinematic = true;
+    this.cinema(true);
+    this.fadeEl.style.transition = 'opacity 1.1s';
+    this.fadeEl.style.background = '#000';
+    this.fadeEl.style.opacity = '1';
+    this.ctx.audio.stopTrackMusic(1);
+    this.later(1.3, () => this.ctx.bus.emit(Events.Level16Cave));
+  }
+
+  /** The big one's arms on his: both cannons, out. */
+  private giveArms(): void {
+    for (const arm of [this.acidArm, this.grabArm]) {
+      arm.grip = 1;
+      arm.open = 0;
+      arm.tremor = 0;
+      arm.pose = null;
+      arm.gun.root.visible = true;
+    }
+    const a = this.arsenal;
+    a.hasBlaster = true;
+    a.knifeWanted = true;
+    a.knifeActive = true;
+    a.side = 'blaster';
+    a.sideWant = 'blaster';
+    a.knifeStow = 0;
+  }
+
+  /** Starting past the clearing (the chasm's checkpoint): the big one's dead and its cannons are his. */
+  private pastTheBoss(): void {
+    this.scene.remove(this.boss.group);
+    this.boss.alive = false;
+    this.boss.deadT = 99;
+    this.harvested = true;
+    this.giveArms();
+    this.packs[3].spawned = true;
+    this.setObjective('CROSS THE CHASM — THE CAVE');
+  }
+
+  /** Part two: in the cave, already armed, the big one long behind him; its packs, its eggs, its drips. */
+  private setupCave(): void {
+    const C = this.level as Level16Data & Partial<CaveExtras>;
+    this.introDone = true;
+    this.scene.remove(this.boss.group);
+    this.boss.alive = false;
+    this.boss.deadT = 99;
+    this.harvested = true;
+    this.giveArms();
+    this.packs = (C.packs ?? []).map((p) => ({ trigger: p.trigger, at: p.at, spawned: false }));
+    this.setObjective('FIND THE PORTAL — FOLLOW THE TRACKER [M]');
+    // The eggs' glow on the rock round them: a few warm lights among the clusters
+    (C.eggs ?? []).filter((_, i) => i % 6 === 2).slice(0, 7).forEach((e) => {
+      const l = new THREE.PointLight(0xff7a3a, 2.2, 8, 1.6);
+      l.position.copy(e.at);
+      this.scene.add(l);
+    });
+    this.later(2, () => this.hint('THE EGGS ON THE WALLS — [E] TO EAT ONE: IT HEALS', 6));
+  }
+
+  /** The cave's eggs (E: eaten, he heals) and its drips. */
+  private updateCave(dt: number): void {
+    const C = this.level as Level16Data & Partial<CaveExtras>;
+    const p = this.player;
+    const eye = p.camera.position;
+    let near: CaveExtras['eggs'][number] | null = null;
+    let nd = 1.9;
+    for (const e of C.eggs ?? []) {
+      if (e.eaten) {
+        // Burst: collapsing, gone
+        const s = e.mesh.scale.x;
+        if (s > 0.01) e.mesh.scale.setScalar(Math.max(0, s - dt * 3));
+        continue;
+      }
+      e.mesh.children[1]?.scale.setScalar(0.9 + 0.12 * Math.sin(this.t * 2.5 + e.at.x));
+      const d = e.at.distanceTo(eye);
+      if (d < nd) {
+        nd = d;
+        near = e;
+      }
+    }
+    if (near && this.playable && !this.promptBusy) {
+      this.hud.setPrompt('[ E ] EAT THE EGG');
+      if (this.ctx.input.wasPressed('KeyE')) {
+        near.eaten = true;
+        this.drops.burst(near.at, V(0, 0.6, 0), 24, 2.2, 0xffa060);
+        this.ctx.audio.squelchPop();
+        this.later(0.25, () => this.ctx.audio.gulp(0));
+        p.health = Math.min(p.maxHealth, p.health + 2);
+        this.shake = Math.max(this.shake, 0.15);
+        this.hud.setPrompt(null);
+      }
+    } else if (!near && this.cavePrompt) this.hud.setPrompt(null);
+    this.cavePrompt = !!near;
+    // Drips off the roof, splashing into the puddles under them
+    for (const d of C.drips ?? []) {
+      d.t -= dt;
+      if (d.t > 0) continue;
+      d.t = d.every;
+      this.drops.burst(d.top, V(0, -0.1, 0), 1, 0.05, 0x9ad8ff);
+      const fall = Math.sqrt((2 * Math.max(0.1, d.top.y - d.floor)) / 14);
+      this.later(fall, () => {
+        this.drops.burst(V(d.top.x, d.floor + 0.05, d.top.z), V(0, 1, 0), 4, 0.9, 0x9ad8ff);
+        const dist = Math.hypot(d.top.x - p.position.x, d.top.z - p.position.z);
+        if (dist < 14) this.ctx.audio.drip(dist);
+      });
+    }
+  }
+  private cavePrompt = false;
 
   private finish(): void {
     this.phase = 'end';
@@ -2848,8 +3020,17 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player.position;
     if (!this.player.alive || this.phase !== 'play') return;
     let c = this.checkpoint;
+    if (this.part === 2) {
+      if (c < 1 && p.z < -50) this.checkpoint = 1;
+      return;
+    }
+    if (inChasm(p.x, p.z) && p.y < -1) {
+      this.player.kill('THE CHASM');
+      return;
+    }
+    if (c < 5 && this.harvested && p.z < -138) c = 5;
     if (c < 2 && this.hasTablet && p.z < CLIFF_Z - 2 && p.y > 3.8) c = 2;
-    if (c < 3 && p.z < MASSIF.z0 - 14 && !inLake(p.x, p.z)) c = 3;
+    if (c < 3 && p.z < MASSIF.z0 - 14 && !W.inLake(p.x, p.z)) c = 3;
     if (c !== this.checkpoint) this.checkpoint = c;
   }
 
@@ -2859,7 +3040,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.hintEl.style.opacity = '0';
     }
-    if (this.phase !== 'play') return;
+    if (this.phase !== 'play' || this.part === 2) return;
+    if (!this.chasmHinted && this.harvested && p.z < -141) {
+      this.chasmHinted = true;
+      this.hint('TOO FAR TO JUMP — SHOTGUN [2], JUMP, THEN A PRESSURE SHOT [RMB] LOOKING DOWN AND BACK', 9);
+    }
     if (!this.cliffHinted && this.hasTablet && p.z < CLIFF_Z + 7 && p.z > CLIFF_Z && p.y < 3) {
       this.cliffHinted = true;
       this.hint('TOO HIGH TO CLIMB — SHOTGUN [2], JUMP, LOOK STRAIGHT DOWN AND [RMB] A PRESSURE SHOT', 9);
@@ -2886,7 +3071,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     const fog = this.scene.fog as THREE.FogExp2;
     const uw = this.underwater;
-    const cave = inCave(p.camera.position.x, p.camera.position.z);
+    const cave = W.inCave(p.camera.position.x, p.camera.position.z);
     this.flashT -= dt;
     if (this.flashT <= 0) {
       this.flashT = 9 + Math.random() * 14;
@@ -2902,13 +3087,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
     L.groundFog.uniforms.uAlpha.value = cave || uw ? 0 : 0.16;
     fog.density = uw ? dens : fog.density + (dens - fog.density) * Math.min(1, dt * 3);
     this.murk.style.opacity = uw ? '1' : '0';
-    const dark = uw ? 0.5 : cave ? 0.18 : 1;
+    const dark = uw ? 0.5 : this.part === 2 ? 0.3 : cave ? 0.18 : 1;
     this.hemi.intensity += (Level16Scene.HEMI * dark + fl * 2.5 - this.hemi.intensity) * Math.min(1, dt * 8 + fl);
     this.moon.intensity += (Level16Scene.MOON * (cave ? 0 : uw ? 0.3 : 1) + fl * 4 - this.moon.intensity) * Math.min(1, dt * 8 + fl);
     L.sky.uniforms.uFlash.value = fl;
     const lampWant = (uw || cave) && p.alive ? 1 : 0;
     this.lampOn += (lampWant - this.lampOn) * Math.min(1, dt * 4);
     this.lamp.intensity = 70 * this.lampOn;
+    this.lampSpill.intensity = 1.4 * this.lampOn;
     this.underLoop?.set(uw ? 1 : 0);
     L.water.uniforms.uT.value = this.t;
     L.water.uniforms.fogColor.value.copy(fog.color);
@@ -2924,7 +3110,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const d = Math.hypot(s.center.x - px, s.center.z - pz) - s.radius;
       c.mesh.visible = d < 150 && (c.lod === 'any' || (c.lod === 'near' ? d < 26 : d >= 26));
     }
-    L.cave.visible = pz < -100;
     this.bubbleT -= dt;
     if (this.bubbleT <= 0) {
       this.bubbleT = 0.12;
@@ -2975,7 +3160,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     p.cinematic = true;
     this.cinema(true);
     this.hud.setPrompt(null);
-    const top = V(HILL.x, groundY(HILL.x, HILL.z), HILL.z);
+    const top = V(HILL.x, W.groundY(HILL.x, HILL.z), HILL.z);
     const toward = V(p.position.x - top.x, 0, p.position.z - top.z).normalize();
     const away = toward.clone().negate();
     const side = V(-toward.z, 0, toward.x);
@@ -2984,7 +3169,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     alpha.group.scale.setScalar(1.8);
     alpha.hp = 9;
     const at = top.clone().addScaledVector(toward, 0.8);
-    alpha.group.position.set(at.x, groundY(at.x, at.z), at.z);
+    alpha.group.position.set(at.x, W.groundY(at.x, at.z), at.z);
     alpha.yaw = Math.atan2(toward.x, toward.z);
     alpha.group.rotation.y = alpha.yaw;
     alpha.state = 'lurk';
@@ -3007,7 +3192,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const lat = (inRow - 2) * (2.3 + wave * 0.5) + (Math.random() - 0.5) * 1.4;
       const to = top.clone().addScaledVector(away, 1.4 + wave * 1.6 + Math.random() * 0.8).addScaledVector(side, lat);
       const from = to.clone().addScaledVector(away, 7 + wave * 4);
-      h.group.position.set(from.x, groundY(from.x, from.z), from.z);
+      h.group.position.set(from.x, W.groundY(from.x, from.z), from.z);
       h.yaw = alpha.yaw;
       h.group.rotation.y = h.yaw;
       h.state = 'lurk';
@@ -3099,7 +3284,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         g.x += dx * sp * dt;
         g.z += dz * sp * dt;
       }
-      g.y = groundY(g.x, g.z);
+      g.y = W.groundY(g.x, g.z);
       h.speed = go ? sp : 0;
     };
     I.pack.forEach((m, i) => {
@@ -3110,7 +3295,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const k = smooth((t - m.at) / 1.2);
       const g = m.h.group.position;
       g.lerpVectors(m.from, m.to, k);
-      g.y = groundY(g.x, g.z);
+      g.y = W.groundY(g.x, g.z);
       m.h.speed = k > 0 && k < 1 ? 3 : 0;
       if (k > 0.5 && t - dt < m.at + 0.6 && t >= m.at + 0.6 && i % 4 === 0) this.ctx.audio.houndScreech(14 + i);
     });
@@ -3131,7 +3316,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.intro = null;
     for (const m of I.pack) {
       const g = m.h.group.position;
-      g.y = groundY(g.x, g.z);
+      g.y = W.groundY(g.x, g.z);
     }
     for (const h of [I.alpha, ...I.pack.map((m) => m.h)]) {
       h.state = 'run';
@@ -3210,8 +3395,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (e.code === 'Escape' && this.phase === 'end') this.ctx.bus.emit(Events.ReturnToMenu);
   }
 
+  private chasmHinted = false;
+
   private restart(): void {
-    this.ctx.bus.emit(Events.RestartLevel16, { checkpoint: this.checkpoint });
+    this.ctx.bus.emit(this.part === 2 ? Events.RestartLevel16b : Events.RestartLevel16, { checkpoint: this.checkpoint });
   }
 
   render(renderer: THREE.WebGLRenderer): void {

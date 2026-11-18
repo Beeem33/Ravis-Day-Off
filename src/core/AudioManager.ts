@@ -5474,6 +5474,14 @@ export class AudioManager {
     for (let i = 0; i < 4; i++) this.partial(out, { at: 0.1 + Math.random() * D * 0.7, D: 0.05, type: 'sine', f: 160 + Math.random() * 90, f1: 260 + Math.random() * 80, gain: 0.08, attack: 0.004 });
   }
 
+  /** A drop of water landing in a puddle, in a cave: a small bright plip with the echo of the place. */
+  drip(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.12, 0.6);
+    const f = 900 + Math.random() * 700;
+    this.partial(out, { D: 0.07, type: 'sine', f, f1: f * 2.1, gain: 0.5, attack: 0.002 });
+  }
+
   /** Its jaws snapping shut: a heavy wet crunch. */
   houndBite(dist = 0): void {
     if (!this.ctx) return;

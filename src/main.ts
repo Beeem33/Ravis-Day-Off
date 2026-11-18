@@ -156,6 +156,12 @@ bus.on(Events.Level15Complete, () => {
 bus.on<{ checkpoint?: number }>(Events.RestartLevel16, (p) => {
   engine.setScene(new Level16Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 16 — THE FAR SIDE');
 });
+bus.on(Events.Level16Cave, () => {
+  engine.setScene(new Level16Scene(ctx, 0, 2), 'LEVEL 16 PART 2 — THE CAVE');
+});
+bus.on<{ checkpoint?: number }>(Events.RestartLevel16b, (p) => {
+  engine.setScene(new Level16Scene(ctx, p?.checkpoint ?? 0, 2), 'LEVEL 16 PART 2 — THE CAVE');
+});
 bus.on(Events.Level16Complete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
@@ -202,7 +208,8 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   level13: () => ({ scene: new Level13Scene(ctx), title: 'LEVEL 13 — THE UNDERWORKS' }),
   level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' }),
   level15: () => ({ scene: new Level15Scene(ctx), title: 'LEVEL 15 — THE PORTAL ROOM' }),
-  level16: () => ({ scene: new Level16Scene(ctx), title: 'LEVEL 16 — THE FAR SIDE' })
+  level16: () => ({ scene: new Level16Scene(ctx), title: 'LEVEL 16 — THE FAR SIDE' }),
+  level16b: () => ({ scene: new Level16Scene(ctx, 0, 2), title: 'LEVEL 16 PART 2 — THE CAVE' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

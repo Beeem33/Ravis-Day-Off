@@ -96,15 +96,22 @@ export function valleyX(z: number): number {
 
 export const ARENA = new THREE.Vector3(valleyX(-105), 0, -105);
 export const MEADOW = new THREE.Vector3(valleyX(92) + 6, 0, 92);
-/** The cave in the north wall, its floor, and the way in to the cavern at the back. */
-const CAVE_X = valleyX(-152);
-export const CAVE_Y = 6.2;
-const CAVE_PATH: [number, number][] = [[CAVE_X, -150], [CAVE_X, -168], [CAVE_X - 7, -176], [CAVE_X - 7, -186], [CAVE_X - 3, -192]];
-const CAVE_HALF = 3.1;
-export const CAVERN = { x: CAVE_X - 3, z: -201, r: 10 };
-export const PORTAL = new THREE.Vector3(CAVERN.x, CAVE_Y, CAVERN.z - 3);
-/** Where the cave's roof starts (the canyon's end wall). */
-export const CAVE_MOUTH_Z = -161;
+/**
+ * Past the big one: a chasm right across the canyon, far too deep to fall
+ * into, and pillars of rock standing up out of it — too far apart to jump
+ * between without the pressure shotgun. Then a ledge, and the cave.
+ */
+export const CHASM = { z0: -191.5, z1: -147, floor: -30 };
+export const PILLARS = [
+  [-158.5, 0, 6.0, 2.5],
+  [-168, -15, 7.2, 2.6],
+  [-177, 8, 8.0, 2.7]
+].map(([z, dx, y, r]) => ({ x: valleyX(z) + dx, z, y, r }));
+export const LEDGE_Y = 8.6;
+/** The cave in the canyon's end wall: part two is in it. */
+export const CAVE_MOUTH_Z = -203;
+const CAVE_X = valleyX(CAVE_MOUTH_Z);
+export const CAVE_Y = LEDGE_Y;
 
 /** The canyon's half-width at z: wide where there's somewhere to be, narrow between. */
 function halfWidth(z: number): number {
@@ -118,7 +125,7 @@ function halfWidth(z: number): number {
 /** How far outside the canyon floor (x, z) is: > 0 up the walls. */
 export function outside(x: number, z: number): number {
   const d = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4;
-  return Math.max(d, -160 - z, z - 150);
+  return Math.max(d, -206 - z, z - 150);
 }
 
 function pathDist(x: number, z: number, path: [number, number][] = PATH): number {
@@ -144,14 +151,15 @@ export function inLake(x: number, z: number): boolean {
   return inA || inB || inPassage(x, z);
 }
 
-/** In the cave (its way in, or the cavern), and how far in from its wall. */
-export function caveDepth(x: number, z: number): number {
-  if (z > -146) return -1;
-  const d = Math.min(pathDist(x, z, CAVE_PATH) - CAVE_HALF, Math.hypot(x - CAVERN.x, z - CAVERN.z) - CAVERN.r);
-  return -d;
-}
+/** Just inside the cave's mouth. */
 export function inCave(x: number, z: number): boolean {
-  return z < CAVE_MOUTH_Z + 1 && caveDepth(x, z) > 0;
+  return z < CAVE_MOUTH_Z + 0.5 && z > CAVE_MOUTH_Z - 9 && Math.abs(x - CAVE_X) < 3.4;
+}
+
+/** Over the chasm (not on a pillar). */
+export function inChasm(x: number, z: number): boolean {
+  if (z >= CHASM.z1 || z <= CHASM.z0) return false;
+  return !PILLARS.some((p) => Math.hypot(x - p.x, z - p.z) < p.r);
 }
 
 /** Decorative ponds: shallow, glowing, bubbling (placed along the canyon's middle). */
@@ -221,7 +229,7 @@ function baseY(x: number, z: number): number {
       1 - smoothstep(30, 40, Math.hypot(x - ARENA.x, z - ARENA.z)),
       1 - smoothstep(6, 12, Math.abs(z - CLIFF_Z)),
       z < 6 && z > -64 && Math.abs(x) < 36 ? 1 : 0,
-      1 - smoothstep(10, 18, Math.hypot(x - CAVE_X, z + 152))
+      z < -140 ? 1 : 0
     );
   h += Math.max(0, fbm(x * 0.022 + 7, z * 0.022 - 3)) * 9 * (1 - keep);
   // Outcrops: steep, their tops broken
@@ -233,7 +241,7 @@ function baseY(x: number, z: number): number {
   }
   // The canyon walls: terraced, ledges and sheer steps, broken along their crests
   const d = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4;
-  const ends = Math.max(0, z - 150) + Math.max(0, -160 - z);
+  const ends = Math.max(0, z - 150) + Math.max(0, -206 - z);
   const w = Math.max(d, ends);
   if (w > 0) {
     let r = w * 2.6 + w * w * 0.12;
@@ -252,7 +260,6 @@ function baseY(x: number, z: number): number {
   flat(0, 134.5, 12, 0.6);
   flat(MEADOW.x, MEADOW.z, 20, 0.4);
   flat(ARENA.x, ARENA.z, 30, 5.3);
-  flat(CAVE_X, -152, 9, CAVE_Y);
   // The hill, after the flattening: it stands at the near edge of the meadow, its foot short of the drone
   const dh = Math.hypot(x - HILL.x, z - HILL.z);
   if (dh < HILL.r) h += HILL.h * 0.5 * (1 + Math.cos((Math.PI * dh) / HILL.r));
@@ -261,8 +268,16 @@ function baseY(x: number, z: number): number {
 
 /** The ground's height at (x, z). */
 export function groundY(x: number, z: number): number {
-  if (inCave(x, z)) return CAVE_Y + fbm(x * 0.4, z * 0.4) * 0.12;
+  if (inCave(x, z)) return CAVE_Y + fbm(x * 0.4, z * 0.4) * 0.06;
   let h = baseY(x, z);
+  // The chasm, its pillars, and the ledge beyond it (the canyon's walls still rise either side)
+  if (z < CHASM.z1 + 0.01) {
+    const wall = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4 > 0;
+    if (z <= CHASM.z0) return Math.max(h, LEDGE_Y + fbm(x * 0.3, z * 0.3) * 0.12);
+    for (const p of PILLARS) if (Math.hypot(x - p.x, z - p.z) < p.r) return p.y + 0.07;
+    if (!wall) return CHASM.floor + fbm(x * 0.1, z * 0.1) * 3;
+    return h;
+  }
   const lakeEdge = (x0: number, x1: number, z0: number, z1: number, ramp: number): number => {
     const dx = Math.max(x0 - x, 0, x - x1);
     const dz = Math.max(z0 - z, 0, z - z1);
@@ -287,11 +302,6 @@ export function groundY(x: number, z: number): number {
     h -= 1.1 * (1 - smoothstep(p.r * 0.5, p.r + 0.8, d));
   }
   return h;
-}
-
-/** The surface over the cave (what the rock above it comes up to). */
-export function roofY(x: number, z: number): number {
-  return baseY(x, z);
 }
 
 const pondY = new Map<object, number>();
@@ -527,8 +537,9 @@ export interface Level16Data extends CombatLevel {
   arenaTrees: { group: THREE.Group; x: number; z: number }[];
   /** The low fog lying along the canyon floor (its clock, and the colour it's tinted). */
   groundFog: THREE.ShaderMaterial;
+  /** At the cave's mouth: shut till he has what the big one carried. */
+  caveGate: Collider;
   /** The cave's rock: only drawn once he's near the north end. */
-  cave: THREE.Mesh;
   /** Glowing things (fungus, bulbs, crystals) whose light pulses. */
   glowMats: THREE.MeshStandardMaterial[];
 }
@@ -551,7 +562,7 @@ export class Level16Builder {
   private chunks: Level16Data['chunks'] = [];
   private glowMats: THREE.MeshStandardMaterial[] = [];
   private traps: THREE.Vector3[] = [];
-  private caveMesh: THREE.Mesh | null = null;
+  private caveGate: Collider | null = null;
   private arenaTrees: Level16Data['arenaTrees'] = [];
 
   build(): Level16Data {
@@ -566,7 +577,8 @@ export class Level16Builder {
     const sky = this.buildSky();
     const door = this.buildStation();
     const tablet = this.buildDrone();
-    const portal = this.buildCave();
+    const portal = this.buildCaveMouth();
+    this.buildChasm();
     this.buildDens();
     const note = this.buildExplorer();
     const map = this.buildMap();
@@ -591,7 +603,7 @@ export class Level16Builder {
       chunks: this.chunks,
       trapSpots: this.traps,
       note,
-      cave: this.caveMesh!,
+      caveGate: this.caveGate!,
       arenaTrees: this.arenaTrees,
       groundFog: this.buildGroundFog(),
       glowMats: this.glowMats
@@ -635,7 +647,7 @@ export class Level16Builder {
   /** Where the maws lie: on the way, in among the trees and in the open, none where he has to stand still. */
   private trapSpots(): THREE.Vector3[] {
     const out: THREE.Vector3[] = [];
-    const zs = [118, 104, 84, 70, 58, 46, 40, 22, 16, -66, -78, -90, -122, -134, -146];
+    const zs = [118, 104, 84, 70, 58, 46, 40, 22, 16, -66, -78, -90, -122, -134];
     zs.forEach((z, i) => {
       const x = valleyX(z) + (hash(i, 9) - 0.5) * 16;
       if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 14 || Math.hypot(x, z - 134) < 14) return;
@@ -686,6 +698,7 @@ export class Level16Builder {
         c.lerp(rock, smoothstep(0.35, 1.5, slope + fbm(x * 0.15, z * 0.15) * 0.45));
         c.lerp(rockDark, smoothstep(2, 14, outside(x, z)) * 0.7);
         if (y < WATER_Y - 0.3 && inLake(x, z)) c.lerp(bed, 0.8);
+        if (y < 0 && z < CHASM.z1 && z > CHASM.z0) c.lerp(rockDark, 0.7);
         for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r) c.lerp(bed, 0.6);
         col[k * 3] = c.r;
         col[k * 3 + 1] = c.g;
@@ -1099,7 +1112,7 @@ export class Level16Builder {
       if (z < MASSIF.z1 + 4 && z > MASSIF.z0 - 4 && Math.abs(x) < 42) return false;
       if (x > POOL_B.x0 - 4 && x < POOL_B.x1 + 4 && z > POOL_B.z0 - 6 && z < POOL_B.z1) return false;
       if (x > POOL_A.x0 - 3 && x < POOL_A.x1 + 3 && z > POOL_A.z0 && z < POOL_A.z1 + 3) return false;
-      if (z < -124 && Math.abs(x - CAVE_X) < 18) return false;
+      if (z < -142) return false;
       for (const p of PONDS) if (Math.hypot(x - p.x, z - p.z) < p.r + 2) return false;
       for (const o of OUTCROPS) if (Math.hypot(x - o.x, z - o.z) < o.r * 0.9) return false;
       if (outside(x, z) > 1) return false;
@@ -2333,188 +2346,140 @@ export class Level16Builder {
     return { mat, planets };
   }
 
-  // ------------------------------------------------------------- the cave and the portal
+  // ------------------------------------------------------------- the chasm and the cave's mouth
 
   /**
-   * The cave in the canyon's north wall. A way in, winding, wide enough for
-   * two; at the back of it a cavern, domed, crystals glowing in its walls,
-   * and the exit portal standing on a plinth in the middle of it. Walls and
-   * roof of rock on a grid of 1 m cells, as the passage under the massif,
-   * the roof coming up to the mountain's own surface above it.
+   * The pillars, as rock: tall columns from far down in the chasm up to
+   * their tops (the ground's own slope does the standing on); a mist lying
+   * in the chasm so it looks as deep as it is.
    */
-  private buildCave(): Level16Data['portal'] {
+  private chasmGlow = new THREE.MeshStandardMaterial({ color: 0x2a6a5a, emissive: 0x5affc0, emissiveIntensity: 2.2, roughness: 0.5 });
+
+  private buildChasm(): void {
+    this.glowMats.push(this.chasmGlow);
+    for (const p of PILLARS) {
+      const H = p.y - CHASM.floor + 2;
+      const geo = new THREE.CylinderGeometry(p.r * 1.06, p.r * 1.5, H, 28, 24, false);
+      const pa = geo.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i);
+        const y = pa.getY(i);
+        const z = pa.getZ(i);
+        const top = y > H / 2 - 0.01;
+        if (top) continue;
+        const k = 1 + (fbm(x * 0.6 + p.z, y * 0.15 + z * 0.6) * 0.25 + (ridged(x * 0.4, y * 0.3 + z) - 0.5) * 0.12) * Math.min(1, (H / 2 - y) / 1.5);
+        pa.setXYZ(i, x * k, y, z * k);
+      }
+      geo.deleteAttribute('uv');
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, this.rockMat);
+      m.position.set(p.x, p.y + 0.07 - H / 2, p.z);
+      this.group.add(m);
+      this.shootables.push(m);
+      // Moss and a few tufts on top
+      const moss = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.02, 28), new THREE.MeshStandardMaterial({ color: 0x4a6a3a, roughness: 0.95 }));
+      moss.rotation.x = -Math.PI / 2;
+      moss.position.set(p.x, p.y + 0.075, p.z);
+      this.group.add(moss);
+      // Glowing caps round its rim and a light over it: something to aim for in the dark
+      const capGeo = new THREE.SphereGeometry(1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+      const n = 16;
+      const caps = new THREE.InstancedMesh(capGeo, this.chasmGlow, n);
+      const m4 = new THREE.Matrix4();
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + hash(k, p.z) * 0.3;
+        const rr = p.r * (0.86 + hash(k, 3) * 0.1);
+        const s = 0.07 + hash(k, 5) * 0.09;
+        m4.compose(
+          new THREE.Vector3(p.x + Math.cos(a) * rr, p.y + 0.07, p.z + Math.sin(a) * rr),
+          new THREE.Quaternion(),
+          new THREE.Vector3(s * 1.4, s * 0.7, s * 1.4)
+        );
+        caps.setMatrixAt(k, m4);
+      }
+      this.group.add(caps);
+      const lamp = new THREE.PointLight(0x5affc0, 5, 11, 1.4);
+      lamp.position.set(p.x, p.y + 1.6, p.z);
+      this.group.add(lamp);
+    }
+    // The mist down in it
+    const mist = new THREE.Mesh(
+      new THREE.PlaneGeometry(90, CHASM.z1 - CHASM.z0 + 6),
+      new THREE.MeshBasicMaterial({ color: 0x1a1226, transparent: true, opacity: 0.82, depthWrite: false })
+    );
+    mist.rotation.x = -Math.PI / 2;
+    mist.position.set(valleyX((CHASM.z0 + CHASM.z1) / 2), -8, (CHASM.z0 + CHASM.z1) / 2);
+    this.group.add(mist);
+  }
+
+  /**
+   * The cave's mouth in the canyon's end wall: an arch of broken rock, a
+   * short way in going dark, crystals glowing at its edges. Part two is in
+   * there. Shut (a gate he can't see) till he has the big one's cannons.
+   */
+  private buildCaveMouth(): Level16Data['portal'] {
     const rock = this.rockMat;
-    const isCave = (x: number, z: number): boolean => inCave(x, z);
-    const ceilAt = (x: number, z: number): number => {
-      const d = Math.hypot(x - CAVERN.x, z - CAVERN.z);
-      const dome = d < CAVERN.r ? 9 * Math.sqrt(Math.max(0, 1 - (d / (CAVERN.r + 1.5)) ** 2)) : 0;
-      return CAVE_Y + Math.max(5.2, dome) + fbm(x * 0.3, z * 0.3) * 0.5;
-    };
-    const geos: THREE.BufferGeometry[] = [];
-    const gx0 = Math.floor(CAVE_X - 22);
-    const gx1 = Math.ceil(CAVE_X + 12);
-    const gz0 = -214;
-    const gz1 = -146;
-    const cell = (i: number, j: number): boolean => isCave(i + 0.5, j + 0.5);
-    for (let j = gz0; j < gz1; j++)
-      for (let i = gx0; i < gx1; i++) {
-        const x = i + 0.5;
-        const z = j + 0.5;
-        const top = roofY(x, z);
-        if (cell(i, j)) {
-          // The roof: from the ceiling up to the mountain's surface, if there's mountain over it
-          const c = ceilAt(x, z);
-          if (top > c + 0.3 && z < CAVE_MOUTH_Z) {
-            const g = new THREE.BoxGeometry(1, top - c, 1, 2, Math.min(3, Math.max(1, Math.round((top - c) / 2))), 2);
-            g.translate(x, (top + c) / 2, z);
-            geos.push(g);
-            this.collide(i, c, j, i + 1, top, j + 1);
-          }
-          continue;
-        }
-        // A wall cell: next to the cave, up to the surface (and inside the mountain only)
-        let next = false;
-        for (const [a, b] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) if (cell(i + a, j + b)) next = true;
-        if (!next) continue;
-        const wt = Math.max(Math.min(top - 0.25, ceilAt(x, z) + 1.5), CAVE_Y + 0.8);
-        const g = new THREE.BoxGeometry(1, wt - (CAVE_Y - 1), 1, 2, Math.min(6, Math.max(1, Math.round((wt - CAVE_Y) / 1.5))), 2);
-        g.translate(x, (wt + CAVE_Y - 1) / 2, z);
-        geos.push(g);
-        this.collide(i, CAVE_Y - 1, j, i + 1, wt, j + 1);
-      }
-    // Roughen it all: displaced by world-position noise, so neighbouring boxes move together
-    const merged = mergeGeometries(geos.map((g) => g.toNonIndexed()), false)!;
-    const p = merged.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < p.count; i++) {
-      const x = p.getX(i);
-      const y = p.getY(i);
-      const z = p.getZ(i);
-      const d = (ridged(x * 0.22 + y * 0.15, z * 0.22 - y * 0.12) - 0.45) * 1.7 + (ridged(x * 0.8 + y * 0.4, z * 0.8 - y * 0.3) - 0.45) * 0.5;
-      const e = (ridged(z * 0.25 + 3, x * 0.25 + y * 0.2) - 0.45) * 1.4;
-      p.setXYZ(i, x + d, y + (d + e) * 0.35, z + e);
-    }
-    merged.deleteAttribute('uv');
-    merged.computeVertexNormals();
-    const caveMesh = new THREE.Mesh(merged, rock);
-    this.group.add(caveMesh);
-    this.shootables.push(caveMesh);
-    this.caveMesh = caveMesh;
-    // Crystals in the walls: clusters of glowing shards, violet and cyan
-    const crystalV = new THREE.MeshStandardMaterial({ color: 0x2a1040, emissive: 0xa050ff, emissiveIntensity: 1.6, roughness: 0.15, metalness: 0.2 });
-    const crystalC = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x40d8ff, emissiveIntensity: 1.4, roughness: 0.15, metalness: 0.2 });
-    this.glowMats.push(crystalV, crystalC);
-    const shard = new THREE.OctahedronGeometry(0.2, 0);
-    shard.scale(0.6, 2.4, 0.6);
-    const shardsV: Inst[] = [];
-    const shardsC: Inst[] = [];
-    const q = new THREE.Quaternion();
-    for (let k = 0; k < 400 && shardsV.length + shardsC.length < 170; k++) {
-      const a = Math.random() * 6.28;
-      const z = CAVE_MOUTH_Z - 2 - Math.random() * 50;
-      // Out from the middle of the way to its wall
-      const mx = z < -194 ? CAVERN.x : z < -180 ? CAVE_X - 7 : z < -170 ? CAVE_X - 3.5 : CAVE_X;
-      let x = mx + Math.cos(a) * 12;
-      let zz = z + Math.sin(a) * 12;
-      for (let s = 0; s < 40; s++) {
-        const t = s / 40;
-        const tx = mx + (x - mx) * t;
-        const tz = z + (zz - z) * t;
-        if (!isCave(tx, tz)) {
-          x = tx;
-          zz = tz;
-          break;
-        }
-      }
-      if (isCave(x, zz)) continue;
-      const y = CAVE_Y + Math.random() * 4;
-      const n = 2 + Math.floor(Math.random() * 4);
-      const list = Math.random() < 0.6 ? shardsV : shardsC;
-      for (let c = 0; c < n; c++) {
-        q.setFromEuler(new THREE.Euler((Math.random() - 0.5) * 1.6, Math.random() * 6, (Math.random() - 0.5) * 1.6));
-        const s = 0.5 + Math.random() * 1.2;
-        list.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(x + (Math.random() - 0.5) * 0.5, y + (Math.random() - 0.5) * 0.4, zz + (Math.random() - 0.5) * 0.5), q, new THREE.Vector3(s, s, s)) });
-      }
-    }
-    this.instanced(shard, crystalV, shardsV);
-    this.instanced(shard, crystalC, shardsC);
-    // Stalactites from the cavern's roof
-    const tite = new THREE.ConeGeometry(0.25, 2.2, 7, 4);
-    tite.rotateX(Math.PI);
-    tite.translate(0, -1.1, 0);
-    const tites: Inst[] = [];
-    for (let k = 0; k < 60; k++) {
-      const a = Math.random() * 6.28;
-      const r = Math.random() * CAVERN.r * 0.9;
-      const x = CAVERN.x + Math.cos(a) * r;
-      const z = CAVERN.z + Math.sin(a) * r;
-      if (Math.hypot(x - PORTAL.x, z - PORTAL.z) < 3.5) continue;
-      const s = 0.5 + Math.random() * 1.2;
-      tites.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(x, ceilAt(x, z) + 0.2, z), q.identity(), new THREE.Vector3(s, s, s)) });
-    }
-    this.instanced(tite, rock, tites);
-    // ---- The mouth: an arch of broken rock round it, and crags either side
-    {
-      const arch = new THREE.TorusGeometry(4.6, 1.5, 14, 40, Math.PI);
-      const ap = arch.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < ap.count; i++) {
-        const x = ap.getX(i);
-        const y = ap.getY(i);
-        const z = ap.getZ(i);
-        const k = 1 + (ridged(x * 0.5 + 4, y * 0.5 + z) - 0.45) * 0.9;
-        ap.setXYZ(i, x * (0.95 + 0.1 * k), y * k, z * k * 1.4);
-      }
-      arch.deleteAttribute('uv');
-      arch.computeVertexNormals();
-      const am = new THREE.Mesh(arch, rock);
-      am.position.set(CAVE_X, CAVE_Y - 0.8, CAVE_MOUTH_Z + 0.8);
-      am.scale.set(1, 1.25, 1);
-      this.group.add(am);
-      this.shootables.push(am);
-      for (const s of [-1, 1]) this.collide(CAVE_X + s * 4.6 - 1.6, CAVE_Y - 1, CAVE_MOUTH_Z - 1.2, CAVE_X + s * 4.6 + 1.6, CAVE_Y + 6, CAVE_MOUTH_Z + 2.8);
-    }
-    // ---- The portal: a ring of dark metal on a plinth, in the middle of the cavern
     const y = CAVE_Y;
     const g = new THREE.Group();
-    g.position.set(PORTAL.x, y, PORTAL.z);
+    g.position.set(CAVE_X, y, CAVE_MOUTH_Z);
     this.group.add(g);
-    const metal = new THREE.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.35, metalness: 0.8 });
-    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.6, 0.5, 40), metal);
-    plinth.position.y = 0.25;
-    g.add(plinth);
-    for (const s of [-1, 1]) {
-      const upr = new THREE.Mesh(new THREE.BoxGeometry(0.5, 5.5, 0.7), metal);
-      upr.position.set(s * 2.9, 2.9, 0);
-      g.add(upr);
+    const arch = new THREE.TorusGeometry(4.2, 1.5, 14, 40, Math.PI);
+    const ap = arch.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < ap.count; i++) {
+      const x = ap.getX(i);
+      const yy = ap.getY(i);
+      const z = ap.getZ(i);
+      const k = 1 + (ridged(x * 0.5 + 4, yy * 0.5 + z) - 0.45) * 0.8;
+      ap.setXYZ(i, x * (0.95 + 0.1 * k), yy * k, z * k * 1.4);
     }
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.25, 16, 64), metal);
-    ring.position.y = 3.0;
-    g.add(ring);
-    const disc = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uK: { value: 0.25 } },
-      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `
-        uniform float uT; uniform float uK; varying vec2 vUv;
-        float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float n(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
-        void main(){
-          vec2 p = vUv * 2.0 - 1.0; float r = length(p); if (r > 1.0) discard;
-          float a = atan(p.y, p.x); float sw = a + 3.0 / (r + 0.3) - uT * 1.4;
-          float v = n(vec2(cos(sw), sin(sw)) * 2.5 + vec2(r * 4.0 - uT, 0.0));
-          vec3 c = mix(vec3(0.05, 0.15, 0.3), vec3(0.6, 0.95, 1.0), smoothstep(0.3, 0.9, v));
-          c += vec3(0.8, 1.0, 1.0) * pow(1.0 - r, 5.0);
-          gl_FragColor = vec4(c * (0.3 + uK), smoothstep(1.0, 0.85, r) * (0.4 + 0.6 * uK));
-        }`,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-    const dm = new THREE.Mesh(new THREE.CircleGeometry(2.3, 48), disc);
-    dm.position.y = 3.0;
-    g.add(dm);
-    this.collide(PORTAL.x - 3.3, y, PORTAL.z - 0.5, PORTAL.x - 2.6, y + 5.6, PORTAL.z + 0.5);
-    this.collide(PORTAL.x + 2.6, y, PORTAL.z - 0.5, PORTAL.x + 3.3, y + 5.6, PORTAL.z + 0.5);
-    return { group: g, disc, at: new THREE.Vector3(PORTAL.x, y + 0.5, PORTAL.z) };
+    arch.deleteAttribute('uv');
+    arch.computeVertexNormals();
+    const am = new THREE.Mesh(arch, rock);
+    am.position.set(0, -0.8, 0.6);
+    am.scale.set(1, 1.25, 1);
+    g.add(am);
+    this.shootables.push(am);
+    // The way in: a hollow going back into the rock and into the dark
+    const tunnel = new THREE.CylinderGeometry(3.4, 3.4, 10, 24, 6, true, -Math.PI / 2, Math.PI);
+    tunnel.rotateX(Math.PI / 2);
+    tunnel.rotateZ(Math.PI / 2);
+    const tp = tunnel.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < tp.count; i++) {
+      const k = 1 + fbm(tp.getX(i) * 0.5, tp.getY(i) * 0.5 + tp.getZ(i) * 0.3) * 0.2;
+      tp.setXYZ(i, tp.getX(i) * k, Math.max(0, tp.getY(i) * k), tp.getZ(i));
+    }
+    tunnel.computeVertexNormals();
+    const tm = new THREE.Mesh(tunnel, new THREE.MeshStandardMaterial({ map: rock.map, color: 0x5a5650, roughness: 0.6, side: THREE.DoubleSide }));
+    tm.position.set(0, -0.05, -5);
+    g.add(tm);
+    const back = new THREE.Mesh(new THREE.CircleGeometry(3.6, 24), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    back.position.set(0, 1.5, -9.8);
+    g.add(back);
+    // Darker the further in: veils of black, so the way in reads as going on into the dark
+    const veil = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false });
+    for (const z of [-2.5, -4.5, -6.5, -8.5]) {
+      const v = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 6.4), veil);
+      v.position.set(0, 2.6, z);
+      g.add(v);
+    }
+    const crystal = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x40d8ff, emissiveIntensity: 1.4, roughness: 0.15 });
+    this.glowMats.push(crystal);
+    for (let k = 0; k < 14; k++) {
+      const s = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), crystal);
+      s.scale.set(0.6, 2.2 + Math.random(), 0.6);
+      const side = k % 2 ? 1 : -1;
+      s.position.set(side * (2.6 + Math.random() * 0.6), 0.3 + Math.random() * 2.5, -1 - Math.random() * 6);
+      s.rotation.set((Math.random() - 0.5) * 1.2, Math.random() * 3, side * 0.5);
+      g.add(s);
+    }
+    // Walls of the way in, and the end of it; the gate across its mouth
+    this.collide(CAVE_X - 4.6, y - 1, CAVE_MOUTH_Z - 11, CAVE_X - 3.2, y + 6, CAVE_MOUTH_Z + 1);
+    this.collide(CAVE_X + 3.2, y - 1, CAVE_MOUTH_Z - 11, CAVE_X + 4.6, y + 6, CAVE_MOUTH_Z + 1);
+    this.collide(CAVE_X - 4.6, y - 1, CAVE_MOUTH_Z - 12, CAVE_X + 4.6, y + 6, CAVE_MOUTH_Z - 10);
+    this.caveGate = this.collide(CAVE_X - 3.3, y - 1, CAVE_MOUTH_Z - 0.4, CAVE_X + 3.3, y + 6, CAVE_MOUTH_Z + 0.2);
+    // (the scene's portal hooks: a disc to drive, nothing to show)
+    const disc = new THREE.ShaderMaterial({ uniforms: { uT: { value: 0 }, uK: { value: 0 } } });
+    return { group: g, disc, at: new THREE.Vector3(CAVE_X, y + 0.5, CAVE_MOUTH_Z - 2.5) };
   }
 
   // ------------------------------------------------------------- the tracker's map
@@ -2537,6 +2502,7 @@ export class Level16Builder {
         let gg: number;
         let b: number;
         if (inCave(x, z)) [r, gg, b] = [40, 60, 90];
+        else if (inChasm(x, z) && groundY(x, z) < 0) [r, gg, b] = [8, 6, 12];
         else if (inLake(x, z) && groundY(x, z) < WATER_Y) [r, gg, b] = [60, 240, 90];
         else if (z < MASSIF.z1 && z > MASSIF.z0 && Math.abs(x) < 40) [r, gg, b] = [120, 112, 104];
         else {

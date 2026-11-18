@@ -108,6 +108,10 @@ export const Events = {
   Level15Complete: 'level15-complete',
   /** {checkpoint: number} — Level 16 again: 0 the station, 1 the tracker, 2 over the cliff, 3 past the water, 4 the big one. */
   RestartLevel16: 'restart-level16',
+  /** Into the cave at the end of the canyon: part two. */
+  Level16Cave: 'level16-cave',
+  /** {checkpoint: number} — Level 16 part two again: 0 the cave's mouth, 1 past the first chamber. */
+  RestartLevel16b: 'restart-level16b',
   /** Through the exit portal: to be continued. */
   Level16Complete: 'level16-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
@@ -135,7 +139,8 @@ export const LEVELS = [
   { id: 'level13', n: '13', name: 'THE UNDERWORKS', blurb: 'Down the tube, through the sewers, across the walkways over the abyss' },
   { id: 'level14', n: '14', name: 'THE LABORATORY', blurb: 'The report, the scientists, the rocket and the hallway' },
   { id: 'level15', n: '15', name: 'THE PORTAL ROOM', blurb: 'The suit, the three buttons, the Atom Warper' },
-  { id: 'level16', n: '16', name: 'THE FAR SIDE', blurb: 'The station, the tracker, the water, and the thing with the arms' }
+  { id: 'level16', n: '16', name: 'THE FAR SIDE', blurb: 'The station, the tracker, the water, and the thing with the arms' },
+  { id: 'level16b', n: '16 PT 2', name: 'THE CAVE', blurb: 'Eggs on the walls, things in the holes, and the way out' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

@@ -262,6 +262,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
   /** Its grabber has him: presses of F so far. */
   private grabbed = false;
   private presses = 0;
+  /** Didn't break free: up to its mouth, in, and eaten. */
+  private eating: { t: number; from: THREE.Vector3; done: boolean } | null = null;
+  private eatFade: HTMLElement | null = null;
+  private wasSwimming = false;
   private tree: { i: number; stage: 'reach' | 'wrap' | 'fall' | 'drag'; t: number; from: THREE.Vector3; to: THREE.Vector3; dir: THREE.Vector3; hit: boolean } | null = null;
   private treeCols: Collider[] = [];
   private treeUsed: boolean[] = [];
@@ -521,6 +525,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   exit(): void {
     RaviVisual.dressArms = null;
     RaviVisual.dressBody = null;
+    this.eatFade?.remove();
     this.visor?.dispose();
     this.swimArms?.dispose();
     this.bubbles?.dispose();
@@ -647,7 +652,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const wantTablet = this.hasTablet && free && input.isDown('KeyM') && !this.drink.engaged;
     if (input.wasPressed('KeyG') && free && !a.reloading && !this.knife.busy && !wantTablet) this.drink.start();
     if (!p.alive) this.drink.abort();
-    const busy = this.phase !== 'play' || p.swimming || this.drink.engaged || this.tablet.up > 0.05 || wantTablet;
+    const busy = this.phase !== 'play' || p.swimming || !!this.eating || this.drink.engaged || this.tablet.up > 0.05 || wantTablet;
     a.preUpdate(dt, input, { canSwitch: free && !this.knife.busy, busy, hold: this.phase === 'harvest' });
     const aiming = !busy && input.rightHeld && input.pointerLocked && this.playable && !a.reloading && !a.switching && !a.pressureArmed;
     p.aiming = aiming;
@@ -659,6 +664,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     this.updateTraps(dt);
     this.updateBossGrip(dt);
+    this.updateEat(dt);
     this.floorBody.position.set(0, groundY(pos.x, pos.z), 0);
 
     // ---- Weapons: the guns, the knife, or the two alien arms
@@ -688,7 +694,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.drink.update(dt, p);
     this.tablet.update(dt, wantTablet, pos, p.yaw, L.portal.at, p.bob);
     this.swimArms.update(dt, p.swimming && p.alive, p.velocity.length());
-    this.visor.update(dt, p.sprinting || p.swimming ? 1 : 0);
+    this.visor.update(dt, p.sprinting || p.swimming ? 1 : 0, p.lastMouseDX, p.lastMouseDY, p.bob.phase * Math.min(1, p.bob.amount * 1.5));
+    // Up out of the lake: water running down the visor
+    if (this.wasSwimming && !p.swimming && p.alive) this.visor.splash();
+    this.wasSwimming = p.swimming;
     this.visor.visible = p.alive; // the death camera is out of his head
     this.bubbles.update(dt, pos);
     this.updateMarkers();
@@ -1623,7 +1632,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const aimGrab = this.bossTongue.state !== 'idle' ? this.bossTongue.tip.clone() : p.camera.position.clone();
     b.update(dt, this.bossVel, [aimAcid, aimGrab]);
     // He's in its way: it shoves him off
-    if (dist < 3.4 && p.alive && !this.grabbed) {
+    if (dist < 3.4 && p.alive && !this.grabbed && !this.eating) {
       p.launch(V(to.x, 0.35, to.z).normalize(), 7);
       if (this.t - this.lastStomp > 1.2) {
         this.lastStomp = this.t;
@@ -1692,7 +1701,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           T.dir.lerp(want2, turn).normalize();
           T.tip.addScaledVector(T.dir, (enraged ? 10.5 : 8.5) * dt);
           T.len = T.tip.distanceTo(T.from);
-          if (T.tip.distanceTo(p.camera.position) < 1.1) this.seize();
+          if (T.tip.distanceTo(p.camera.position) < 1.1 && !this.eating) this.seize();
           else if (T.len > 34 || this.moveT > 7) this.retract(T);
         }
         if (T.state === 'idle' && !this.grabbed) this.startMove('idle');
@@ -1923,18 +1932,80 @@ export class Level16Scene extends CombatScene<Level16Data> {
       p.launch(to.clone().negate().setY(0.4).normalize(), 6);
       this.stagger();
     } else if (d < 4.2) {
-      // Into its mouth: bitten, and spat back out
-      this.grabbed = false;
-      p.stunned = !!this.heldBy;
-      this.hud.setPrompt(null);
-      this.retract(T);
+      // He didn't get free: up to its mouth, and in
+      this.startEat();
+    }
+  }
+
+  /** Lifted off his feet on the tongue and turned to face its mouth, which opens wide. */
+  private startEat(): void {
+    const p = this.player;
+    this.grabbed = false;
+    this.hud.setPrompt(null);
+    p.stunned = true;
+    p.cinematic = true;
+    p.velocity.set(0, 0, 0);
+    this.eating = { t: 0, from: p.camera.position.clone(), done: false };
+    this.ctx.audio.giantRoar(1, 3);
+    this.shake = Math.max(this.shake, 0.6);
+    if (!this.eatFade) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;inset:0;pointer-events:none;opacity:0;z-index:5;background:radial-gradient(ellipse at 50% 50%, rgba(90,0,10,0.75) 0%, rgba(20,0,2,0.97) 60%, #000 100%);';
+      this.ctx.uiRoot.appendChild(el);
+      this.eatFade = el;
+    }
+  }
+
+  private updateEat(dt: number): void {
+    const e = this.eating;
+    if (!e) return;
+    const p = this.player;
+    const b = this.boss;
+    const T = this.bossTongue;
+    e.t += dt;
+    const t = e.t;
+    // Its mouth, and the way it faces
+    const M = b.mouthCore.getWorldPosition(new THREE.Vector3());
+    const C = b.body.getWorldPosition(new THREE.Vector3());
+    const F = M.clone().sub(C).normalize();
+    const lipFront = M.clone().addScaledVector(F, 1.7);
+    const throat = M.clone().addScaledVector(F, -0.5);
+    let eye: THREE.Vector3;
+    if (t < 1.4) {
+      // Up off the ground and round to face it, the mouth stretching open
+      const k = smooth(t / 1.4);
+      eye = e.from.clone().lerp(lipFront, k);
+      eye.y += Math.sin(k * Math.PI) * 0.7;
+      b.gape = k;
+      this.shake = Math.max(this.shake, 0.15);
+    } else {
+      // In past the lips, into the dark
+      const k = smooth((t - 1.4) / 0.55);
+      eye = lipFront.clone().lerp(throat, k);
+      b.gape = t < 1.9 ? 1 : Math.max(0, 1 - (t - 1.9) * 7);
+    }
+    if (this.eatFade) this.eatFade.style.opacity = String(Math.min(1, smooth((t - 1.35) / 0.5)));
+    // Where he is, and looking straight into it
+    const look = (t < 1.4 ? M : throat.clone().addScaledVector(F, -2)).clone().sub(eye);
+    p.position.copy(eye).add(V(0, -p.eyeHeight, 0));
+    p.yaw = Math.atan2(-look.x, -look.z);
+    p.pitch = Math.atan2(look.y, Math.hypot(look.x, look.z));
+    T.tip.copy(eye).add(V(0, -0.45, 0));
+    T.len = T.tip.distanceTo(T.from);
+    // The jaws close
+    if (!e.done && t >= 1.9) {
+      e.done = true;
       this.ctx.audio.houndBite(0);
-      this.ctx.audio.giantRoar(0.7, d);
-      this.shake = Math.max(this.shake, 1);
-      p.hit(BOSS_NAME, b.at.clone());
-      p.hit(BOSS_NAME, b.at.clone());
-      p.launch(to.clone().negate().setY(0.5).normalize(), 10);
-      this.startMove('idle');
+      this.ctx.audio.squelchPop();
+      this.ctx.audio.bodyThud(0);
+      this.later(0.12, () => this.ctx.audio.houndBite(0));
+      this.later(0.3, () => this.ctx.audio.giantRoar(0.6, 2));
+      this.shake = Math.max(this.shake, 1.4);
+      this.drops.burst(M.clone(), F.clone().setY(0.4), 40, 3.5, BOSS_BLOOD);
+      this.retract(T);
+      // Dead where he is, in it: no body left lying on the ground
+      p.deathHandler = { begin: () => true, update: () => {} };
+      p.kill(BOSS_NAME, M);
     }
   }
 

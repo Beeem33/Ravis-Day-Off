@@ -133,6 +133,32 @@ export function dressSuitBody(rig: RaviRig): void {
   lamp.rotation.x = Math.PI / 2;
   lamp.position.set(0.15, 0.06, 0.06);
   helmet.add(lamp);
+  const lamp2 = lamp.clone();
+  lamp2.position.x = -0.15;
+  helmet.add(lamp2);
+  // A rim round the visor, comm pucks over the ears, a chin vent, an antenna
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.158, 0.012, 8, 40, Math.PI * 1.25), ringMat);
+  rim.rotation.set(0, 0, Math.PI * 0.62);
+  rim.position.set(0, 0.015, 0.075);
+  rim.scale.set(1, 0.82, 1);
+  helmet.add(rim);
+  for (const s of [-1, 1]) {
+    const puck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.04, 20), white);
+    puck.rotation.z = Math.PI / 2;
+    puck.position.set(s * 0.178, 0, -0.01);
+    helmet.add(puck);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.012, 16), ringMat);
+    cap.rotation.z = Math.PI / 2;
+    cap.position.set(s * 0.2, 0, -0.01);
+    helmet.add(cap);
+  }
+  const vent = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.03), skin);
+  vent.position.set(0, -0.12, 0.14);
+  helmet.add(vent);
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.006, 0.16, 6), ringMat);
+  antenna.position.set(-0.19, 0.1, -0.03);
+  antenna.rotation.z = 0.15;
+  helmet.add(antenna);
   helmet.position.set(head.x, head.y + 0.11, head.z + 0.01);
   wearOn(rig, 'head', helmet);
   // The pack on his back (-Z): a rounded slab with a dark panel and two hoses

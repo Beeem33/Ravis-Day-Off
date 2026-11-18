@@ -1008,6 +1008,8 @@ export class SpiderBoss {
   static readonly A = 2.4;
   static readonly B = 3.1;
   severed = -1;
+  /** 0..1: the mouth stretched open wide (to take something in). */
+  gape = 0;
 
   constructor(private ground: (x: number, z: number) => number) {
     const flesh = wetFlesh(3);
@@ -1347,7 +1349,7 @@ export class SpiderBoss {
       (h.glow.material as THREE.SpriteMaterial).opacity = 0.4 + 0.25 * f;
       h.flare.scale.setScalar(1 + this.kick[i] * 0.3);
     });
-    this.mouthFlare.scale.setScalar(1 + Math.sin(this.t * 3) * 0.06);
+    this.mouthFlare.scale.setScalar((1 + Math.sin(this.t * 3) * 0.06) * (1 + this.gape * 0.85));
   }
 
   private layLegs(): void {

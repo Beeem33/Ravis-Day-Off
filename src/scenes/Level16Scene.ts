@@ -1451,7 +1451,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   // ============================================================ acid
 
   private buildPools(): void {
-    for (let i = 0; i < 36; i++) {
+    for (let i = 0; i < 150; i++) {
       const mat = puddleMaterial(Math.random() * 40);
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2, 10, 10), mat);
       mesh.frustumCulled = false;
@@ -1583,7 +1583,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       return true;
     });
     // ---- Its globs: on him, or on the ground
-    this.bossAcid.update(dt, this.t, (_s, a, b) => {
+    this.bossAcid.update(dt, this.t, (shot, a, b) => {
       seg.subVectors(b, a);
       const len = seg.length();
       if (len < 1e-5) return false;
@@ -1601,7 +1601,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         }
       }
       if (b.y < groundY(b.x, b.z)) {
-        this.spawnPuddle(b.x, b.z, 1.9, true);
+        this.spawnPuddle(b.x, b.z, 1.9, true, shot.damage);
         return true;
       }
       return false;
@@ -1722,7 +1722,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     to.normalize();
     const enraged = b.hp < b.maxHp * 0.5;
     // ---- Moving: circling him, standing still while it reaches
-    const still = this.move === 'grab' || this.move === 'tree' || this.move === 'stagger' || (this.move === 'spray' && this.moveT < 1);
+    const still = this.move === 'grab' || this.move === 'tree' || this.move === 'stagger' || this.move === 'spray';
     this.bossSideT -= dt;
     if (this.bossSideT <= 0) {
       this.bossSideT = 4 + Math.random() * 4;
@@ -1789,24 +1789,27 @@ export class Level16Scene extends CombatScene<Level16Data> {
         break;
       }
       case 'spray': {
-        // A roar, the arm up, and a whole field of it at once round him: get clear
-        if (this.moveShots === 0 && this.moveT > 0.9) {
-          const n = enraged ? 24 : 18;
-          const R = enraged ? 9.5 : 8;
-          this.lob(pp.x, pp.z, 1.9, 1.9);
-          for (let k = 1; k < n; k++) {
-            const a = (k / n) * Math.PI * 2 * 2.3 + Math.random() * 0.4;
-            const r = R * Math.sqrt(k / n) + (Math.random() - 0.5);
-            this.lob(pp.x + Math.cos(a) * r, pp.z + Math.sin(a) * r, 1.8 + Math.random() * 0.4, 1.9);
+        // Arc after arc of it, out from its feet toward him, each wider than the last; the near ones dry first,
+        // so the way out is over the wave toward the tip (a pressure shot)
+        const S = this.spray;
+        const gap = enraged ? 0.32 : 0.38;
+        if (this.moveShots < S.arcs && this.moveT >= 0.7 + this.moveShots * gap) {
+          const k = this.moveShots;
+          const r = 4 + k * S.step;
+          const w = 0.22 + k * 0.1;
+          const n = Math.max(2, Math.ceil((2 * w * r) / 2.2) + 1);
+          for (let j = 0; j < n; j++) {
+            const a = S.base - w + (2 * w * j) / (n - 1);
+            this.lob(S.o.x + Math.sin(a) * r, S.o.z + Math.cos(a) * r, 1.6, 0.9, 1.9 + k * 0.05, false);
           }
-          this.moveShots = n;
-          this.shake = Math.max(this.shake, 0.4);
-          if (!this.sprayHinted) {
+          this.moveShots++;
+          this.shake = Math.max(this.shake, 0.2);
+          if (k === 0 && !this.sprayHinted) {
             this.sprayHinted = true;
-            this.hint('GET OUT OF THE RINGS — A PRESSURE SHOT [2]+[RMB] CARRIES YOU CLEAR', 5);
+            this.hint('A WAVE OF ACID — JUMP IT WITH A PRESSURE SHOT, TOWARD WHERE IT STARTED (IT DRIES THERE FIRST)', 6);
           }
         }
-        if (this.moveT > 3.4) this.startMove('idle');
+        if (this.moveShots >= S.arcs && this.moveT > 0.7 + S.arcs * gap + 1.4) this.startMove('idle');
         break;
       }
       case 'grab': {
@@ -1833,6 +1836,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
   private sprayHinted = false;
+  private treeHitT = -10;
+  private treeR = 12;
+  /** The spray: where it comes from, which way, how many arcs. */
+  private spray = { o: new THREE.Vector3(), base: 0, arcs: 6, step: 2.4 };
   private grabHinted = false;
 
   private startMove(m: BossMove): void {
@@ -1842,7 +1849,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const b = this.boss;
     const T = this.bossTongue;
     const d = this.player.position.distanceTo(b.at);
-    if (m === 'spray') this.ctx.audio.giantRoar(0.8, d);
+    if (m === 'spray') {
+      this.ctx.audio.giantRoar(0.8, d);
+      const pp = this.player.position;
+      this.spray.o.copy(b.at);
+      this.spray.base = Math.atan2(pp.x - b.at.x, pp.z - b.at.z);
+      this.spray.arcs = THREE.MathUtils.clamp(Math.ceil((d + 6 - 4) / 2.4), 4, 9);
+      // Far off, the arcs further apart: it still reaches past him
+      this.spray.step = Math.max(2.4, (d + 6 - 4) / (this.spray.arcs - 1));
+    }
     if (m === 'grab') {
       T.from.copy(b.muzzle(1));
       T.tip.copy(T.from);
@@ -1896,12 +1911,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
   }
 
   /** One glob of acid on a high arc from the acid arm to (x, z), landing in `tf` seconds; a ring there till it does. */
-  private lob(x: number, z: number, r: number, tf: number): void {
+  private lob(x: number, z: number, r: number, tf: number, life = 6, ring = true): void {
     const from = this.boss.muzzle(0);
     const y = groundY(x, z);
     const v = V((x - from.x) / tf, (y - from.y) / tf + 0.5 * ACID_G * tf, (z - from.z) / tf);
-    this.bossAcid.fire(from, v, 'enemy');
-    this.mark(x, z, r, tf);
+    // (the shot's 'damage' is how long the pool it leaves lasts)
+    this.bossAcid.fire(from, v, 'enemy', life);
+    if (ring) this.mark(x, z, r, tf);
     this.boss.kick[0] = 1;
     this.ctx.audio.gooShot();
   }
@@ -1955,38 +1971,57 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (tr.t > 0.45) {
         tr.stage = 'drag';
         tr.t = 0;
-        this.ctx.audio.bigEngineDrive(2.5, 0);
+        // Round it, the way that brings it to him soonest
+        const a0 = Math.atan2(tr.from.x - b.at.x, tr.from.z - b.at.z);
+        const ap = Math.atan2(this.player.position.x - b.at.x, this.player.position.z - b.at.z);
+        tr.dir.set(a0, Math.sin(ap - a0) >= 0 ? 1 : -1, Math.min(14, Math.hypot(tr.from.x - b.at.x, tr.from.z - b.at.z)));
+        this.treeR = tr.dir.z;
+        this.ctx.audio.bigEngineDrive(5, 0);
       }
     } else {
-      // Dragged along the ground, through him if he's still there
-      const step = 10 * dt;
-      const left = tr.to.clone().sub(g.position).setY(0);
-      const go = Math.min(step, left.length());
-      g.position.addScaledVector(tr.dir, go);
-      g.position.y = groundY(g.position.x, g.position.z) + 0.35;
-      T.tip.copy(g.position).add(V(0, 0.4, 0));
+      // Swung round and round it on the end of the tongue, trailing; the circle drawing in and out
+      // (tr.dir holds: x the angle it started at, y the way round, z the radius it started at)
+      const enraged = b.hp < b.maxHp * 0.5;
+      const w = (enraged ? 1.55 : 1.2) * Math.min(1, tr.t / 0.8);
+      const turn = tr.dir.x + tr.dir.y * (tr.t * w - (w * Math.min(tr.t, 0.8)) / 2);
+      // Out to where he is, give or take, so it comes round through him
+      const pd = Math.hypot(this.player.position.x - b.at.x, this.player.position.z - b.at.z);
+      this.treeR += (THREE.MathUtils.clamp(pd, 6, 18) - this.treeR) * Math.min(1, dt * 0.8);
+      const R = THREE.MathUtils.lerp(tr.dir.z, this.treeR + 2.5 * Math.sin(tr.t * 0.9), Math.min(1, tr.t / 1.2));
+      const base = V(b.at.x + Math.sin(turn) * R, 0, b.at.z + Math.cos(turn) * R);
+      base.y = groundY(base.x, base.z) + 0.35;
+      const tan = V(Math.cos(turn), 0, -Math.sin(turn)).multiplyScalar(tr.dir.y);
+      g.position.copy(base);
+      g.quaternion.setFromUnitVectors(V(0, 1, 0), tan.clone().negate());
+      T.tip.copy(base).add(V(0, 0.4, 0));
       T.len = T.tip.distanceTo(T.from);
-      if (Math.random() < 0.5) this.particles.dust(g.position.clone(), 1.5);
+      if (Math.random() < 0.6) this.particles.dust(base.clone(), 1.5);
       if (Math.random() < 0.3) this.shake = Math.max(this.shake, 0.15);
-      // What it sweeps over: a band across the way, the trunk 0.8 high
+      // What it sweeps over: the trunk (0.8 high) and the crown behind it
       const p = this.player;
       const pp = p.position;
-      const rel = V(pp.x - g.position.x, 0, pp.z - g.position.z);
-      const along = rel.dot(tr.dir);
-      const across = Math.abs(rel.x * tr.dir.z - rel.z * tr.dir.x);
-      if (!tr.hit && p.alive && Math.abs(along) < 0.9 && across < 3.6 && pp.y - groundY(pp.x, pp.z) < 0.85) {
-        tr.hit = true;
-        p.hit('A TREE', g.position.clone());
-        p.launch(V(tr.dir.x, 0.6, tr.dir.z).normalize(), 9);
+      const rel = V(pp.x - base.x, 0, pp.z - base.z);
+      const behind = -rel.dot(tan);
+      const radial = Math.abs(rel.x * tan.z - rel.z * tan.x);
+      const lowEnough = pp.y - groundY(pp.x, pp.z) < (behind > 3.2 ? 1.6 : 0.85);
+      if (this.t - this.treeHitT > 1.2 && p.alive && behind > -0.6 && behind < 5.8 && radial < 1.1 && lowEnough) {
+        this.treeHitT = this.t;
+        p.hit('A TREE', base.clone());
+        p.launch(V(tan.x, 0.6, tan.z).normalize(), 9);
         this.shake = Math.max(this.shake, 0.8);
         this.ctx.audio.bodyThud(0);
       }
       for (const h of this.hounds) {
         if (!h.alive) continue;
-        const r2 = V(h.group.position.x - g.position.x, 0, h.group.position.z - g.position.z);
-        if (Math.abs(r2.dot(tr.dir)) < 0.9 && Math.abs(r2.x * tr.dir.z - r2.z * tr.dir.x) < 3.6) this.hurtHound(h, 9, h.group.position.clone().add(V(0, 0.6, 0)), tr.dir);
+        const r2 = V(h.group.position.x - base.x, 0, h.group.position.z - base.z);
+        const bh = -r2.dot(tan);
+        if (bh > -0.6 && bh < 5.8 && Math.abs(r2.x * tan.z - r2.z * tan.x) < 1.2) {
+          h.knock.copy(tan).multiplyScalar(9);
+          this.hurtHound(h, 99, h.group.position.clone().add(V(0, 0.6, 0)), tan);
+        }
       }
-      if (go < step * 0.5) {
+      // A turn and a half, then let go: it rolls away and lies there
+      if (tr.t * w > Math.PI * 3) {
         this.retract(T);
         this.tree = null;
         this.startMove('idle');

@@ -16,6 +16,7 @@ import {
   MASSIF,
   ARENA,
   MEADOW,
+  PONDS,
   HILL,
   DENS,
   CAVE_MOUTH_Z,
@@ -524,7 +525,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     // The dead explorer's cologne
     Colognes.place(this.scene, 'maw', L.note.cologne, 0.6, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     const done = [this.checkpoint >= 1, this.checkpoint >= 3, this.checkpoint >= 4];
-    done.forEach((d, i) => (this.packs[i].spawned = d));
+    // (the first is the hill's pack: the cutscene brings those, so it's always "spawned")
+    done.forEach((d, i) => (this.packs[i].spawned = this.packs[i].spawned || d));
     for (const s of L.trapSpots) {
       const m = new MawTrap();
       // Sat on the ground, tilted to its slope, not half sunk in it
@@ -1071,6 +1073,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   private spawnPack(pk: Pack): void {
     pk.spawned = true;
+    if (!pk.at.length) return; // nothing to bring (and nothing to screech from)
     pk.at.forEach((s, i) => {
       const h = new Hound();
       h.group.position.set(s.x, groundY(s.x, s.z), s.z);
@@ -2959,7 +2962,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   // ============================================================ the pack on the hill
 
-  private intro: { t: number; alpha: Hound; pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3 }[]; q0: THREE.Quaternion } | null = null;
+  private intro: { t: number; alpha: Hound; pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3; at: number }[]; q0: THREE.Quaternion } | null = null;
   private introDone = false;
 
   /** Out of the station, a few steps: up on the hill ahead, one of them. */
@@ -2989,13 +2992,21 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.scene.add(alpha.group);
     this.hounds.push(alpha);
     this.houndHits.push(...alpha.hitboxes);
-    // Five more behind the hill, out of sight, to come up over it
-    const pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
-    for (let i = 0; i < 5; i++) {
+    // A horde behind the hill, out of sight, to come up over it in waves: the first five
+    // full-grown, the rest the pack's runts (smaller, and one good hit each), from further back
+    const pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3; at: number }[] = [];
+    const N = 18;
+    for (let i = 0; i < N; i++) {
       const h = new Hound();
-      const lat = (i - 2) * 2.2 + (i % 2 ? 0.6 : -0.6);
-      const to = top.clone().addScaledVector(away, 1.6 + (i % 2) * 0.8).addScaledVector(side, lat);
-      const from = to.clone().addScaledVector(away, 7);
+      const wave = i < 5 ? 0 : 1 + Math.floor((i - 5) / 5);
+      if (i >= 5) {
+        h.group.scale.setScalar(0.72 + Math.random() * 0.18);
+        h.hp = 1;
+      }
+      const inRow = i < 5 ? i : (i - 5) % 5;
+      const lat = (inRow - 2) * (2.3 + wave * 0.5) + (Math.random() - 0.5) * 1.4;
+      const to = top.clone().addScaledVector(away, 1.4 + wave * 1.6 + Math.random() * 0.8).addScaledVector(side, lat);
+      const from = to.clone().addScaledVector(away, 7 + wave * 4);
       h.group.position.set(from.x, groundY(from.x, from.z), from.z);
       h.yaw = alpha.yaw;
       h.group.rotation.y = h.yaw;
@@ -3004,7 +3015,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.scene.add(h.group);
       this.hounds.push(h);
       this.houndHits.push(...h.hitboxes);
-      pack.push({ h, from, to });
+      pack.push({ h, from, to, at: 2.9 + wave * 0.45 + inRow * 0.14 + Math.random() * 0.1 });
     }
     this.intro = { t: 0, alpha, pack, q0: p.camera.quaternion.clone() };
     this.ctx.audio.stopTrackMusic(1.5);
@@ -3024,11 +3035,16 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const cam = p.camera;
     const a = I.alpha;
     cam.position.copy(p.position).add(V(0, 1.63, 0));
+    // On it; then, as they come, back to take in the lot of them pouring down the hill
     const look = a.group.position.clone().add(V(0, 0.95 * a.group.scale.x, 0));
+    const mid = new THREE.Vector3();
+    for (const m of I.pack) mid.add(m.h.group.position);
+    mid.divideScalar(I.pack.length).add(V(0, 0.6, 0));
+    look.lerp(mid, smooth((t - 5.2) / 0.8) * 0.6);
     const qLook = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, look, V(0, 1, 0)));
     cam.quaternion.copy(I.q0).slerp(qLook, smooth(t / 1.2));
-    // Zoom in on it; out again as they come
-    const fov = 74 - 58 * smooth((t - 1.0) / 1.8) * (1 - smooth((t - 5.6) / 0.5));
+    // Zoom in on it; out again, wide, as they come
+    const fov = 74 - 58 * smooth((t - 1.0) / 1.8) + 30 * smooth((t - 5.2) / 0.8) + 28 * smooth((t - 6.9) / 0.5);
     if (Math.abs(cam.fov - fov) > 0.01) {
       cam.fov = fov;
       cam.updateProjectionMatrix();
@@ -3038,20 +3054,75 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (t > 2.0 && t - dt <= 2.0) this.ctx.audio.houndScreech(6);
     if (t > 2.6 && t - dt <= 2.6) this.lightning(1);
     // The others up over the crest behind it
+    const pp = p.position;
+    // The line across the valley from him to the hill, and its side-to-side
+    const ax = HILL.x - pp.x;
+    const az = HILL.z - pp.z;
+    const al = Math.hypot(ax, az) || 1;
+    const sx = -az / al;
+    const sz = ax / al;
+    const charge = (h: Hound, sp: number, lane: number): void => {
+      // Down the hill at him, flat out, each fanning out to its own lane so they come as a line,
+      // not a column; and stop short (control comes back before they reach him)
+      const g = h.group.position;
+      let dx = pp.x + sx * lane - g.x;
+      let dz = pp.z + sz * lane - g.z;
+      const d = Math.hypot(dx, dz) || 1;
+      dx /= d;
+      dz /= d;
+      // Round the acid ponds, not through them (they would sink out of sight): slide along the edge
+      for (const pd of PONDS) {
+        const ox = g.x - pd.x;
+        const oz = g.z - pd.z;
+        const od = Math.hypot(ox, oz);
+        if (od > pd.r + 2.5 || od < 0.01) continue;
+        const nx = ox / od;
+        const nz = oz / od;
+        const k = 1 - Math.max(0, (od - pd.r) / 2.5);
+        const inward = dx * nx + dz * nz;
+        if (inward < 0) {
+          dx -= nx * inward * k;
+          dz -= nz * inward * k;
+        }
+        if (od < pd.r + 0.5) {
+          dx += nx * 0.6;
+          dz += nz * 0.6;
+        }
+        const n = Math.hypot(dx, dz) || 1;
+        dx /= n;
+        dz /= n;
+      }
+      h.yaw = Math.atan2(dx, dz);
+      h.group.rotation.y = h.yaw;
+      const go = d > 7;
+      if (go) {
+        g.x += dx * sp * dt;
+        g.z += dz * sp * dt;
+      }
+      g.y = groundY(g.x, g.z);
+      h.speed = go ? sp : 0;
+    };
     I.pack.forEach((m, i) => {
-      const k = smooth((t - 3.0 - i * 0.32) / 1.3);
+      if (t > 5.4) {
+        charge(m.h, 9 + (i % 4) * 0.5, (((i * 5) % 9) - 4) * 2.6 + (i >= 9 ? 1.3 : 0));
+        return;
+      }
+      const k = smooth((t - m.at) / 1.2);
       const g = m.h.group.position;
       g.lerpVectors(m.from, m.to, k);
       g.y = groundY(g.x, g.z);
       m.h.speed = k > 0 && k < 1 ? 3 : 0;
-      if (k > 0.5 && t - dt < 3.0 + i * 0.32 + 0.66 && t >= 3.0 + i * 0.32 + 0.66 && i % 2 === 0) this.ctx.audio.houndScreech(14);
+      if (k > 0.5 && t - dt < m.at + 0.6 && t >= m.at + 0.6 && i % 4 === 0) this.ctx.audio.houndScreech(14 + i);
     });
     if (t > 5.3 && t - dt <= 5.3) {
       a.state = 'lunge';
       this.ctx.audio.houndScreech(2);
-      this.shake = Math.max(this.shake, 0.5);
+      this.later(0.25, () => this.ctx.audio.houndScreech(8));
+      this.later(0.5, () => this.ctx.audio.houndScreech(12));
+      this.shake = Math.max(this.shake, 0.6);
     }
-    if (t > 6.1) this.endIntro();
+    if (t > 5.4) charge(a, 9.5, 0);
+    if (t > 7.3) this.endIntro();
   }
 
   private endIntro(): void {
@@ -3059,7 +3130,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (!I) return;
     this.intro = null;
     for (const m of I.pack) {
-      m.h.group.position.copy(m.to).setY(groundY(m.to.x, m.to.z));
+      const g = m.h.group.position;
+      g.y = groundY(g.x, g.z);
     }
     for (const h of [I.alpha, ...I.pack.map((m) => m.h)]) {
       h.state = 'run';

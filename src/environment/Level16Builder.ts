@@ -165,7 +165,7 @@ export const PONDS: { x: number; z: number; r: number }[] = [
 
 /** Outcrops: steep humps of broken rock standing up from the floor, to go round. */
 /** The hill up the canyon from the station, where the pack first shows itself. */
-export const HILL = { x: valleyX(111) + 3, z: 111, r: 14, h: 6.5 };
+export const HILL = { x: valleyX(104) - 6, z: 104, r: 12, h: 7.5 };
 
 /**
  * The hounds' dens: holes in the foot of the canyon wall a pack comes out of.
@@ -249,12 +249,13 @@ function baseY(x: number, z: number): number {
     const k = 1 - smoothstep(r * 0.6, r, Math.hypot(x - cx2, z - cz));
     h = h + (y - h) * k;
   };
-  const dh = Math.hypot(x - HILL.x, z - HILL.z);
-  if (dh < HILL.r) h += HILL.h * 0.5 * (1 + Math.cos((Math.PI * dh) / HILL.r));
   flat(0, 134.5, 12, 0.6);
   flat(MEADOW.x, MEADOW.z, 20, 0.4);
   flat(ARENA.x, ARENA.z, 30, 5.3);
   flat(CAVE_X, -152, 9, CAVE_Y);
+  // The hill, after the flattening: it stands at the near edge of the meadow, its foot short of the drone
+  const dh = Math.hypot(x - HILL.x, z - HILL.z);
+  if (dh < HILL.r) h += HILL.h * 0.5 * (1 + Math.cos((Math.PI * dh) / HILL.r));
   return h;
 }
 
@@ -1079,6 +1080,15 @@ export class Level16Builder {
     const clear = (x: number, z: number): boolean => {
       if (Math.hypot(x, z - 134) < 16) return false;
       if (Math.hypot(x - HILL.x, z - HILL.z) < HILL.r * 0.9) return false;
+      // The view from the station door up to the hill: nothing in the way when the pack shows itself
+      {
+        const ax = 0;
+        const az = 130;
+        const bx = HILL.x - ax;
+        const bz = HILL.z - az;
+        const u = Math.max(0, Math.min(1, ((x - ax) * bx + (z - az) * bz) / (bx * bx + bz * bz)));
+        if (Math.hypot(x - ax - bx * u, z - az - bz * u) < 8) return false;
+      }
       if (DENS.some((d) => Math.hypot(d.mouth.x - x, d.mouth.z - z) < 5)) return false;
       if (Math.hypot(x - EXPLORER.x, z - EXPLORER.z) < 3) return false;
       if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 21) return false;

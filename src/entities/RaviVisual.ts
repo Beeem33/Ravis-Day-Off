@@ -131,6 +131,8 @@ export class RaviVisual {
    * dresses each new arms rig (see SuitDress).
    */
   static dressArms: ((rig: RaviRig) => void) | null = null;
+  /** The same for his whole body (the ragdoll when he dies): null is his own clothes. */
+  static dressBody: ((rig: RaviRig) => void) | null = null;
 
   static get ready(): boolean {
     return RaviVisual.ok;

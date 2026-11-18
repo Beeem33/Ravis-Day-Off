@@ -269,6 +269,8 @@ export class RaviRagdoll implements DeathHandler {
 
   private build(): void {
     const rig = RaviVisual.rig('body');
+    // In whatever the level has him wearing
+    RaviVisual.dressBody?.(rig);
     rig.root.position.set(0, PARK_Y, 0);
     rig.root.visible = false;
     this.o.scene.add(rig.root);

@@ -103,6 +103,9 @@ export class FPSPlayer {
    * `swimTop` is the highest his feet can float (head just out of the surface).
    */
   swimming = false;
+  /** Pull of gravity (m/s²) and the speed a jump leaves the ground at: a level on another world changes them. */
+  gravity = GRAVITY;
+  jumpSpeed = JUMP_SPEED;
   swimTop = Infinity;
 
   /**
@@ -339,12 +342,12 @@ export class FPSPlayer {
         this.velocity.x += f.x * 3.2;
         this.velocity.z += f.z * 3.2;
       } else {
-        this.velocity.y = JUMP_SPEED;
+        this.velocity.y = this.jumpSpeed;
       }
       this.grounded = false;
     }
     if (this.vaultTimer > 0) this.vaultTimer -= dt;
-    this.velocity.y -= GRAVITY * dt;
+    this.velocity.y -= this.gravity * dt;
 
     // ---- Move with collision (axis separated, with step-up on X/Z)
     const bx = this.boost.x;

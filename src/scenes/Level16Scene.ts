@@ -16,7 +16,9 @@ import {
   MASSIF,
   ARENA,
   MEADOW,
-  CAVE_MOUTH_Z
+  CAVE_MOUTH_Z,
+  LAKE_BED,
+  CEIL_Y
 } from '../environment/Level16Builder';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { CombatScene } from './CombatScene';
@@ -34,6 +36,11 @@ import { dressSuit } from '../entities/SuitDress';
 import { Hound, SpiderBoss, MawTrap, GlowShots, Droplets, grabberHead, wetFlesh, KIND_GLOW, type GlowShot } from '../entities/AlienCreatures';
 import { AlienBlaster } from '../entities/AlienBlaster';
 import { TrackerTablet } from '../entities/TrackerTablet';
+import { SwimArms } from '../entities/SwimArms';
+import { dressSuitBody } from '../entities/SuitDress';
+import { HelmetVisor } from '../ui/HelmetVisor';
+import { AcidBubbles } from '../fx/AcidBubbles';
+import { Controls } from '../core/Controls';
 import type { Enemy } from '../entities/Enemy';
 
 /**
@@ -216,6 +223,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private acidArm!: AlienBlaster;
   private grabArm!: AlienBlaster;
   private tablet!: TrackerTablet;
+  /** Looking out through his helmet's visor. */
+  private visor!: HelmetVisor;
+  /** His arms doing the breaststroke in the lake. */
+  private swimArms!: SwimArms;
+  private bubbles!: AcidBubbles;
+  /** A floating key over the door button and over the tracker, until each is used. */
+  private keyMarks: { door: THREE.Sprite; tablet: THREE.Sprite } | null = null;
   private hands!: HarvestHands;
   private hud!: FPSHUD;
   private phase: Phase = 'play';
@@ -325,6 +339,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
   enter(): void {
     const { bus, input, audio } = this.ctx;
     RaviVisual.dressArms = dressSuit;
+    // ...and all of him, for when he dies out here
+    RaviVisual.dressBody = dressSuitBody;
     this.scene.background = new THREE.Color(0x000000);
     this.scene.fog = new THREE.FogExp2(Level16Scene.FOG_AIR.getHex(), 0.022);
     this.level = new Level16Builder().build();
@@ -352,6 +368,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.checkpoint = Math.min(this.from, 4);
     const start = this.checkpointPose(this.checkpoint);
     this.player = new FPSPlayer(start.pos.clone(), start.yaw, input, audio, bus);
+    // Lighter gravity out here: higher, floatier jumps
+    this.player.gravity = 10.5;
+    this.player.jumpSpeed = 5.4;
     this.player.ground = groundY;
     this.player.camera.far = 1300;
     this.player.camera.updateProjectionMatrix();
@@ -457,6 +476,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.setCounter(null);
     this.hud.setAmmo(...a.ammoReadout());
     this.buildUI();
+    // The HUD from the start: his health, and the prompts (it used to stay hidden until the boss fight's cutscene)
+    this.hud.show();
+    this.visor = new HelmetVisor(this.ctx.uiRoot);
+    this.swimArms = new SwimArms(this.player.camera);
+    this.bubbles = new AcidBubbles(this.scene, {
+      inWater: inLake,
+      bed: (x, z) => Math.max(LAKE_BED - 0.4, groundY(x, z)),
+      // Under the massif the water runs right up to the rock
+      top: (x, z) => (x > MASSIF.x0 && x < MASSIF.x1 && z > MASSIF.z0 && z < MASSIF.z1 ? CEIL_Y : WATER_Y)
+    });
+    this.keyMarks = { door: Level16Scene.keyMarker(), tablet: Level16Scene.keyMarker() };
+    this.scene.add(this.keyMarks.door, this.keyMarks.tablet);
     if (this.checkpoint >= 1) {
       this.openDoor(true);
       this.takeTablet(true);
@@ -489,6 +520,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   exit(): void {
     RaviVisual.dressArms = null;
+    RaviVisual.dressBody = null;
+    this.visor?.dispose();
+    this.swimArms?.dispose();
+    this.bubbles?.dispose();
     this.ctx.audio.stopTrackMusic(0.8);
     this.ctx.audio.stopBossMusic(0.5);
     this.underLoop?.stop();
@@ -652,6 +687,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.setPressure(a.pressureArmed ? a.pressure : null);
     this.drink.update(dt, p);
     this.tablet.update(dt, wantTablet, pos, p.yaw, L.portal.at, p.bob);
+    this.swimArms.update(dt, p.swimming && p.alive, p.velocity.length());
+    this.visor.update(dt, p.sprinting || p.swimming ? 1 : 0);
+    this.visor.visible = p.alive; // the death camera is out of his head
+    this.bubbles.update(dt, pos);
+    this.updateMarkers();
     if (this.phase === 'play') {
       const targetFov = 74 - a.zoomFov;
       if (Math.abs(p.camera.fov - targetFov) > 0.01) {
@@ -726,6 +766,57 @@ export class Level16Scene extends CombatScene<Level16Data> {
     p.velocity.x = 0;
     p.velocity.z = 0;
     p.boost.set(0, 0, 0);
+  }
+
+  // ============================================================ the markers
+
+  /** A key, floating: "E" in a rounded box with a little arrow under it, always drawn on top. */
+  private static keyMarker(): THREE.Sprite {
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 160;
+    const g = c.getContext('2d')!;
+    const key = Controls.label('E');
+    g.fillStyle = 'rgba(10, 14, 12, 0.75)';
+    g.strokeStyle = '#7dffb0';
+    g.lineWidth = 6;
+    g.beginPath();
+    g.roundRect(14, 10, 100, 100, 18);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#e8fff0';
+    g.font = `bold ${key.length > 2 ? 34 : 64}px "Courier New", monospace`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(key, 64, 62);
+    g.fillStyle = '#7dffb0';
+    g.beginPath();
+    g.moveTo(44, 122);
+    g.lineTo(84, 122);
+    g.lineTo(64, 150);
+    g.closePath();
+    g.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    s.renderOrder = 999;
+    s.scale.set(0.32, 0.4, 1);
+    s.visible = false;
+    return s;
+  }
+
+  /** Over the door button until it's pressed, over the tracker until it's picked up, when he's near enough to see them. */
+  private updateMarkers(): void {
+    const m = this.keyMarks;
+    if (!m) return;
+    const L = this.level;
+    const eye = this.player.camera.position;
+    const bob = Math.sin(this.t * 3) * 0.04;
+    m.door.position.copy(L.door.button).add(V(0, 0.32 + bob, 0));
+    m.door.visible = this.doorT < 0 && this.playable && eye.distanceTo(L.door.button) < 10;
+    m.tablet.position.copy(L.tablet.at).add(V(0, 0.75 + bob, 0));
+    m.tablet.scale.set(0.42, 0.52, 1);
+    m.tablet.visible = !this.hasTablet && this.playable && eye.distanceTo(L.tablet.at) < 18;
   }
 
   // ============================================================ the station

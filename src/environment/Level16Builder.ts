@@ -1365,42 +1365,293 @@ export class Level16Builder {
   // ------------------------------------------------------------- the crashed drone and its tablet
 
   private buildDrone(): Level16Data['tablet'] {
+    const V = (a: number, b: number, c: number): THREE.Vector3 => new THREE.Vector3(a, b, c);
     const x = MEADOW.x;
     const z = MEADOW.z;
     const y = groundY(x, z);
+    // Where it ended up, and the way it came in (from the +x+z side, ploughing toward −x−z)
+    const dx = x + 1.6;
+    const dz = z - 0.8;
+    const dirX = 0.555;
+    const dirZ = 0.832;
     const g = new THREE.Group();
-    g.position.set(x + 1.6, y, z - 0.8);
-    g.rotation.set(0.12, 0.6, 0.18);
+    g.position.set(dx, groundY(dx, dz) + 0.08, dz);
+    g.rotation.set(0.14, 0.6, 0.2);
     this.group.add(g);
-    const shell = new THREE.MeshStandardMaterial({ color: 0xd8dcd8, roughness: 0.4, metalness: 0.3 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x23272b, roughness: 0.5, metalness: 0.6 });
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 24, 16), shell);
-    body.scale.set(1.3, 0.55, 1.0);
-    body.position.y = 0.2;
-    g.add(body);
-    for (let k = 0; k < 4; k++) {
-      const a = (k / 4) * Math.PI * 2 + 0.78;
-      const armM = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.08), dark);
-      armM.position.set(Math.cos(a) * 0.7, 0.25, Math.sin(a) * 0.7);
-      armM.rotation.y = -a;
-      if (k === 1) armM.rotation.z = 0.5;
-      g.add(armM);
-      const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.02, 20), dark);
-      rotor.position.set(Math.cos(a) * 1.15, k === 1 ? 0.55 : 0.3, Math.sin(a) * 1.15);
-      rotor.rotation.z = k === 1 ? 0.6 : 0.05;
-      g.add(rotor);
+
+    // ---- materials
+    const decal = (() => {
+      const c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 128;
+      const x2 = c.getContext('2d')!;
+      x2.fillStyle = '#dfe3e0';
+      x2.fillRect(0, 0, 256, 128);
+      x2.fillStyle = '#e8641c';
+      x2.fillRect(0, 74, 256, 16);
+      x2.fillStyle = '#23272b';
+      x2.font = 'bold 34px "Courier New", monospace';
+      x2.fillText('SURVEY-07', 26, 50);
+      x2.font = 'bold 14px "Courier New", monospace';
+      x2.fillText('DEEP FIELD RECON  //  DO NOT TOUCH', 18, 112);
+      // Scorched and scraped
+      for (let i = 0; i < 26; i++) {
+        x2.fillStyle = `rgba(20, 16, 12, ${0.15 + Math.random() * 0.4})`;
+        x2.beginPath();
+        x2.ellipse(150 + Math.random() * 110, Math.random() * 128, 6 + Math.random() * 30, 3 + Math.random() * 12, Math.random() * 3, 0, Math.PI * 2);
+        x2.fill();
+      }
+      x2.strokeStyle = 'rgba(40,40,40,0.6)';
+      x2.lineWidth = 1.5;
+      for (let i = 0; i < 12; i++) {
+        x2.beginPath();
+        const sx = Math.random() * 256;
+        x2.moveTo(sx, Math.random() * 128);
+        x2.lineTo(sx + 30 + Math.random() * 40, Math.random() * 128);
+        x2.stroke();
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    const shell = new THREE.MeshStandardMaterial({ color: 0xffffff, map: decal, roughness: 0.42, metalness: 0.25 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xd8dcd8, roughness: 0.42, metalness: 0.25 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1e2226, roughness: 0.45, metalness: 0.6 });
+    const carbon = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.35, metalness: 0.4 });
+    const orange = new THREE.MeshStandardMaterial({ color: 0xe8641c, roughness: 0.5, metalness: 0.2 });
+    const glassM = new THREE.MeshStandardMaterial({ color: 0x0b1a2a, roughness: 0.05, metalness: 0.8, emissive: 0x05121e });
+    const burnt = new THREE.MeshStandardMaterial({ color: 0x1a1612, roughness: 0.9, metalness: 0.1 });
+    const add = (m: THREE.Mesh, parent: THREE.Object3D = g): THREE.Mesh => {
+      m.castShadow = true;
+      parent.add(m);
+      return m;
+    };
+
+    // ---- the fuselage: a rounded body, darker belly, a stripe round it, a sensor dome (cracked) on top
+    const body = add(new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 18), shell));
+    body.scale.set(1.35, 0.5, 0.95);
+    body.position.y = 0.26;
+    body.rotation.y = Math.PI / 2;
+    const belly = add(new THREE.Mesh(new THREE.SphereGeometry(0.47, 28, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), dark));
+    belly.scale.set(1.32, 0.42, 0.92);
+    belly.position.y = 0.24;
+    const stripe = add(new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 8, 40), orange));
+    stripe.rotation.x = Math.PI / 2;
+    stripe.scale.set(1.35, 0.95, 1);
+    stripe.position.y = 0.25;
+    const dome = add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), glassM));
+    dome.position.set(0.12, 0.47, 0);
+    // The crack across it, and the hole punched in the shell beside it
+    const crack = add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.006, 0.012), new THREE.MeshBasicMaterial({ color: 0xbfe8ff })));
+    crack.position.set(0.12, 0.6, 0.02);
+    crack.rotation.set(0, 0.7, 0.3);
+    const hole = add(new THREE.Mesh(new THREE.CircleGeometry(0.11, 10), burnt));
+    hole.position.set(-0.32, 0.45, 0.12);
+    hole.rotation.set(-Math.PI / 2 + 0.4, 0, 0.3);
+    // Wires hanging out of it, still sparking (the beacon is on the tail fin)
+    const wireMat = [new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6 }), new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.6 })];
+    for (let i = 0; i < 4; i++) {
+      const pts = [V(-0.32, 0.45, 0.12), V(-0.36 - i * 0.03, 0.52 + i * 0.02, 0.18 + i * 0.03), V(-0.42 - i * 0.05, 0.4, 0.26 + i * 0.04)];
+      add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 0.006, 5), wireMat[i % 2]));
     }
+    // A tail fin with the beacon on it
+    const fin = add(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.22, 0.3), white));
+    fin.position.set(-0.62, 0.42, 0);
+    fin.rotation.z = -0.25;
     const beacon = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff3020, emissiveIntensity: 2.5 });
-    const bl = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), beacon);
-    bl.position.y = 0.52;
-    g.add(bl);
-    // A scorched furrow behind it
-    const scorch = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 6), new THREE.MeshBasicMaterial({ color: 0x1a1810, transparent: true, opacity: 0.6, depthWrite: false }));
-    scorch.rotation.x = -Math.PI / 2;
-    scorch.rotation.z = 0.6;
-    scorch.position.set(x + 3.2, y + 0.04, z + 1.6);
-    this.group.add(scorch);
-    // The tablet, face up in the sponge beside it, its screen lit
+    const bl = add(new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), beacon));
+    bl.position.set(-0.66, 0.55, 0);
+    // Antenna whip, bent
+    const ant = add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(0.4, 0.4, -0.1), V(0.48, 0.7, -0.14), V(0.62, 0.86, -0.08)]), 10, 0.008, 5), dark));
+    ant.castShadow = false;
+
+    // ---- four arms with motors, props and guards; one snapped off
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+      const ax = Math.cos(a);
+      const az = Math.sin(a);
+      const snapped = k === 1;
+      const len = snapped ? 0.42 : 0.82;
+      const arm = add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, len, 10), carbon));
+      arm.position.set(ax * (0.42 + len / 2), 0.28, az * (0.42 + len / 2));
+      arm.rotation.set(0, -a, Math.PI / 2);
+      if (snapped) {
+        // The splintered end
+        const end = add(new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.1, 6), carbon));
+        end.position.set(ax * (0.42 + len + 0.03), 0.28, az * (0.42 + len + 0.03));
+        end.rotation.set(0, -a, -Math.PI / 2);
+        continue;
+      }
+      const mx = ax * 1.28;
+      const mz = az * 1.28;
+      const motor = add(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.13, 16), dark));
+      motor.position.set(mx, 0.33, mz);
+      const cap = add(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.04, 12), orange));
+      cap.position.set(mx, 0.41, mz);
+      // Two-blade prop, one of them bent down
+      for (const s of [0, 1]) {
+        const blade = add(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.008, 0.055), carbon));
+        const ba = a * 1.7 + s * Math.PI;
+        blade.position.set(mx + Math.cos(ba) * 0.17, 0.43, mz + Math.sin(ba) * 0.17);
+        blade.rotation.set(k === 2 && s ? 0.5 : 0.08, -ba, k === 2 && s ? -0.35 : 0);
+      }
+      // The guard ring (squashed on the one that hit first)
+      const guard = add(new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.016, 6, 36), white));
+      guard.rotation.x = Math.PI / 2;
+      guard.position.set(mx, 0.36, mz);
+      if (k === 0) guard.scale.set(1, 0.7, 1);
+    }
+    // ---- landing skids
+    for (const s of [-1, 1]) {
+      const skid = add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(-0.45, -0.02, s * 0.38), V(0, -0.05, s * 0.4), V(0.5, 0.02, s * 0.36)]), 12, 0.022, 6), dark));
+      skid.castShadow = true;
+      for (const u of [-0.25, 0.25]) {
+        const leg = add(new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.22, 6), dark));
+        leg.position.set(u, 0.08, s * 0.32);
+        leg.rotation.x = s * 0.35;
+      }
+    }
+    // ---- the camera gimbal, torn half off and hanging under the nose
+    const gimbal = add(new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), dark));
+    gimbal.position.set(0.55, 0.06, 0.12);
+    const lens = add(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.05, 14), glassM));
+    lens.position.set(0.63, 0.04, 0.16);
+    lens.rotation.z = Math.PI / 2 - 0.4;
+
+    // ---- the furrow it ploughed: dark scorched soil, banks of churned earth both sides
+    const trailLen = 17;
+    const segs = 44;
+    // Across the furrow: outer edge, bank top, furrow side, floor, floor, side, bank, edge
+    const across = [-1.5, -1.0, -0.62, -0.2, 0.2, 0.62, 1.0, 1.5];
+    const lift = [0.01, 0.32, 0.07, 0.025, 0.025, 0.07, 0.32, 0.01];
+    const cols = [0x8a7c52, 0x8e6a42, 0x5c412a, 0x33251a, 0x33251a, 0x5c412a, 0x8e6a42, 0x8a7c52].map((h) => new THREE.Color(h));
+    const pos: number[] = [];
+    const col: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    const sideX = dirZ;
+    const sideZ = -dirX;
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const along = 0.6 + t * trailLen;
+      // Wide and deep where it came to rest, a skid mark where it first touched
+      const w = 0.95 * (1 - t * 0.62) + 0.05 * Math.sin(t * 23);
+      const deep = 1 - t * 0.7;
+      const cxp = dx + dirX * along + Math.sin(t * 9) * 0.12 * t;
+      const czp = dz + dirZ * along;
+      for (let j = 0; j < across.length; j++) {
+        const o = across[j] * w;
+        const px = cxp + sideX * o;
+        const pz = czp + sideZ * o;
+        const bank = j === 1 || j === 6 ? lift[j] * deep * (0.75 + 0.5 * Math.abs(Math.sin(t * 31 + j))) : lift[j];
+        pos.push(px, groundY(px, pz) + bank, pz);
+        const c = cols[j].clone();
+        // Fading out toward the far (first-touch) end
+        c.lerp(cols[0], (j === 0 || j === 7 ? 0 : t * 0.5) + Math.random() * 0.08);
+        col.push(c.r, c.g, c.b);
+        uv.push(j / (across.length - 1), along / 2);
+      }
+    }
+    const row = across.length;
+    for (let i = 0; i < segs; i++)
+      for (let j = 0; j < row - 1; j++) {
+        const a0 = i * row + j;
+        const b0 = a0 + row;
+        idx.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1);
+      }
+    const furrowGeo = new THREE.BufferGeometry();
+    furrowGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    furrowGeo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    furrowGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    furrowGeo.setIndex(idx);
+    furrowGeo.computeVertexNormals();
+    // Grain in the soil: clods and streaks along the line of travel
+    const soil = (() => {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 256;
+      const x2 = c.getContext('2d')!;
+      x2.fillStyle = '#c8c8c8';
+      x2.fillRect(0, 0, 128, 256);
+      for (let i = 0; i < 900; i++) {
+        const v = 120 + Math.floor(Math.random() * 120);
+        x2.fillStyle = `rgb(${v},${v},${v})`;
+        x2.fillRect(Math.random() * 128, Math.random() * 256, 1 + Math.random() * 3, 2 + Math.random() * 9);
+      }
+      x2.strokeStyle = 'rgba(40,40,40,0.5)';
+      for (let i = 0; i < 26; i++) {
+        x2.lineWidth = 1 + Math.random() * 2;
+        const sx = Math.random() * 128;
+        x2.beginPath();
+        x2.moveTo(sx, 0);
+        x2.lineTo(sx + (Math.random() - 0.5) * 10, 256);
+        x2.stroke();
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      return t;
+    })();
+    const furrow = new THREE.Mesh(furrowGeo, new THREE.MeshStandardMaterial({ vertexColors: true, map: soil, bumpMap: soil, bumpScale: 0.6, roughness: 0.95 }));
+    furrow.receiveShadow = true;
+    this.group.add(furrow);
+    // A burn under where it lies
+    const burn = new THREE.Mesh(
+      new THREE.CircleGeometry(1.9, 28),
+      new THREE.MeshBasicMaterial({ color: 0x0c0907, transparent: true, opacity: 0.4, depthWrite: false })
+    );
+    burn.rotation.x = -Math.PI / 2;
+    burn.position.set(dx, groundY(dx, dz) + 0.03, dz);
+    this.group.add(burn);
+    // Clods thrown out along the banks, bigger near the end of it
+    const clodMat = new THREE.MeshStandardMaterial({ color: 0x7a5a38, roughness: 1, flatShading: true });
+    const clodGeo = new THREE.DodecahedronGeometry(1, 0);
+    for (let i = 0; i < 70; i++) {
+      const t = Math.pow(Math.random(), 1.4);
+      const along = 0.4 + t * trailLen;
+      const side = (Math.random() < 0.5 ? -1 : 1) * (1.0 + Math.random() * 1.2) * (1 - t * 0.5);
+      const px = dx + dirX * along + sideX * side;
+      const pz = dz + dirZ * along + sideZ * side;
+      const s = (0.05 + Math.random() * 0.13) * (1.2 - t * 0.6);
+      const clod = new THREE.Mesh(clodGeo, clodMat);
+      clod.scale.set(s, s * 0.7, s * (0.8 + Math.random() * 0.5));
+      clod.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      clod.position.set(px, groundY(px, pz) + s * 0.4, pz);
+      clod.castShadow = true;
+      this.group.add(clod);
+    }
+    // Embers still glowing in the deepest part of it
+    const ember = new THREE.MeshStandardMaterial({ color: 0x220800, emissive: 0xff5a10, emissiveIntensity: 1.6 });
+    for (let i = 0; i < 12; i++) {
+      const along = 0.5 + Math.random() * 3.5;
+      const side = (Math.random() - 0.5) * 0.8;
+      const px = dx + dirX * along + sideX * side;
+      const pz = dz + dirZ * along + sideZ * side;
+      const e = new THREE.Mesh(clodGeo, ember);
+      e.scale.setScalar(0.01 + Math.random() * 0.014);
+      e.position.set(px, groundY(px, pz) + 0.05, pz);
+      this.group.add(e);
+    }
+    // Bits of it along the way: the snapped arm with its motor, a guard ring, a blade, a panel
+    const bits = new THREE.Group();
+    this.group.add(bits);
+    const bit = (m: THREE.Mesh, along: number, side: number, h: number, rot: [number, number, number]): void => {
+      const px = dx + dirX * along + sideX * side;
+      const pz = dz + dirZ * along + sideZ * side;
+      m.position.set(px, groundY(px, pz) + h, pz);
+      m.rotation.set(...rot);
+      m.castShadow = true;
+      bits.add(m);
+    };
+    bit(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.45, 10), carbon), 6.5, 1.1, 0.05, [Math.PI / 2, 0.3, 0.6]);
+    bit(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.13, 16), dark), 6.8, 1.35, 0.07, [0.4, 0, 1.2]);
+    bit(new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.016, 6, 36), white), 10.5, -1.4, 0.1, [1.2, 0.4, 0.2]);
+    bit(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.008, 0.055), carbon), 3.2, -1.2, 0.02, [0, 1.1, 0]);
+    bit(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.008, 0.055), carbon), 13.5, 0.9, 0.02, [0, -0.4, 0.1]);
+    const panel = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8, 0, 1.4, 0, 1.0), white);
+    panel.material = white;
+    bit(panel, 8.4, 0.3, 0.05, [2.2, 0.5, 0.3]);
+
+    // ---- the tablet, face up in the sponge beside it, its screen lit
     const tab = new THREE.Group();
     tab.position.set(x, y + 0.03, z);
     tab.rotation.set(-Math.PI / 2 + 0.1, 0, 0.5);

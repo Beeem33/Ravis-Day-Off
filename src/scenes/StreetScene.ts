@@ -1597,7 +1597,7 @@ export class StreetScene implements GameScene {
    * head goes into the wheel, bounces off it and drops back onto it, his
    * arms gone loose. And that's him.
    */
-  private crashHead(): void {
+  private crashHead(why = 'YOU CRASHED'): void {
     if (this.phase !== 'drive') return;
     this.smash = { t: 0, hit: false };
     // Stopped dead against it
@@ -1606,7 +1606,7 @@ export class StreetScene implements GameScene {
     this.flipT = -1;
     this.ctx.audio.carCrash(0, true);
     this.shake = 1.2;
-    this.fail('YOU CRASHED', 'now');
+    this.fail(why, 'now');
   }
 
   /** Ravi's ragdoll, ready for being thrown out of the car (built now so its model is warm), in a world whose floor is the road. */
@@ -1636,9 +1636,9 @@ export class StreetScene implements GameScene {
    * windscreen head first, in a burst of glass, and down the road on it,
    * the death camera coming up out of his eyes to look down on where he lands.
    */
-  private eject(speed: number): void {
+  private eject(speed: number, why = 'YOU CRASHED'): void {
     if (this.phase !== 'drive' || !this.raviRagdoll || !this.ejectRoad) {
-      this.crashHead();
+      this.crashHead(why);
       return;
     }
     const p = this.player;
@@ -1686,7 +1686,7 @@ export class StreetScene implements GameScene {
     this.leanK = 0;
     this.flipT = -1;
     this.player.velocity.multiplyScalar(0.08);
-    this.fail('YOU CRASHED', 'now');
+    this.fail(why, 'now');
   }
 
   /** He's dead: the game's death, the try-again card the one thing left on screen. */
@@ -3114,7 +3114,8 @@ export class StreetScene implements GameScene {
       }
       audio.ricochet(1.5);
       if (this.hp <= 0) {
-        this.fail('THE HELICOPTER GOT YOU', 'now');
+        // Hit, and the car's out of control: he dies the way he would going into a car — out through the windscreen
+        this.eject(Math.max(22, this.player.speed), 'THE HELICOPTER GOT YOU');
         return;
       }
     } else {

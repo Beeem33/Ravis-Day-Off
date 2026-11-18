@@ -8,8 +8,10 @@ import type { ParticleManager } from '../fx/ParticleManager';
  * seconds — his lane, that far up the road at his speed — and a red ring
  * goes down on the road there the moment it leaves the tube, a column of
  * red light standing up out of it so it reads from far up the road: that
- * is the warning. It flies straight to the ring and goes off on it, or on
- * anything it meets on the way. Ravi in the ring, or in its path, is dead.
+ * is the warning. It goes the long way round to the ring — two to four
+ * loop-the-loops, each one tipped a different way, unwinding as it comes
+ * in — and dives onto it, going off on it, or on anything it meets on the
+ * way. Ravi in the ring, or in its path, is dead.
  *
  * One draw for the bodies, one for the flames, one for the rings, one for
  * the columns; the
@@ -29,6 +31,12 @@ interface Missile {
   dir: THREE.Vector3;
   t: number;
   T: number;
+  /** Its loop-the-loops: how many, how big, and the plane they're in (along its line, and `w` across it). */
+  loops: number;
+  R: number;
+  along: THREE.Vector3;
+  w: THREE.Vector3;
+  wob: number;
 }
 
 /** What a missile can hit on its way: Ravi's car, a traffic car (its id), or nothing. */
@@ -50,6 +58,7 @@ export class StreetMissiles {
   private readonly s = new THREE.Vector3();
   private readonly a = new THREE.Vector3();
   private readonly b = new THREE.Vector3();
+  private readonly a2 = new THREE.Vector3();
   private t = 0;
 
   constructor(
@@ -125,7 +134,20 @@ export class StreetMissiles {
     }
     this.rings.renderOrder = 2;
     for (let i = 0; i < POOL; i++) {
-      this.list.push({ alive: false, from: new THREE.Vector3(), aim: new THREE.Vector3(), pos: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, 1), t: 0, T: 1 });
+      this.list.push({
+        alive: false,
+        from: new THREE.Vector3(),
+        aim: new THREE.Vector3(),
+        pos: new THREE.Vector3(),
+        dir: new THREE.Vector3(0, 0, 1),
+        t: 0,
+        T: 1,
+        loops: 2,
+        R: 3,
+        along: new THREE.Vector3(),
+        w: new THREE.Vector3(),
+        wob: 0
+      });
     }
   }
 
@@ -146,6 +168,17 @@ export class StreetMissiles {
     m.pos.copy(from);
     m.t = 0;
     m.T = T;
+    // Its loops: a random number of them, big enough that they really go round (faster
+    // round the loop than along the line), in a plane tipped at random off the vertical
+    m.along.subVectors(aim, from);
+    const dist = m.along.length();
+    m.along.normalize();
+    m.loops = 2 + Math.floor(Math.random() * 3);
+    m.R = Math.min(7, Math.max(2.4, (dist / (Math.PI * 2 * m.loops)) * (1.25 + Math.random() * 0.4)));
+    const up = new THREE.Vector3(0, 1, 0).addScaledVector(m.along, -m.along.y).normalize();
+    const tip = (Math.random() - 0.5) * 1.6;
+    m.w.copy(up).applyAxisAngle(m.along, tip);
+    m.wob = Math.random() * Math.PI * 2;
   }
 
   /**
@@ -168,6 +201,17 @@ export class StreetMissiles {
       m.pos.lerpVectors(m.from, m.aim, k);
       // A little arc up off the launcher and down onto the ring
       m.pos.y += Math.sin(Math.PI * k) * 0.8;
+      // The loop-the-loops: round and round in their plane over the first three quarters,
+      // easing in off the launcher and unwinding to nothing so it still comes down on the ring
+      const env = Math.min(1, k / 0.12) * (1 - smooth((k - 0.55) / 0.35));
+      if (env > 0) {
+        const th = Math.PI * 2 * m.loops * Math.min(1, k / 0.8);
+        const R = m.R * env;
+        m.pos.addScaledVector(m.along, R * Math.sin(th)).addScaledVector(m.w, R * (1 - Math.cos(th)));
+        // ...and a wobble off to the side, so no two look alike
+        this.a2.crossVectors(m.along, m.w).multiplyScalar(Math.sin(th * 0.5 + m.wob) * R * 0.35);
+        m.pos.add(this.a2);
+      }
       // Its nose: the way it is going, as seen from a car doing Ravi's speed
       const v = this.b.copy(m.pos).sub(prev).divideScalar(dt).sub(raviVel);
       if (v.lengthSq() > 1e-4) m.dir.copy(v).normalize();
@@ -244,4 +288,9 @@ export class StreetMissiles {
     this.park(i);
     this.onBurst?.(m.pos.clone(), hit);
   }
+}
+
+function smooth(x: number): number {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
 }

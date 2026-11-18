@@ -42,6 +42,7 @@ import { HelmetVisor } from '../ui/HelmetVisor';
 import { AcidBubbles } from '../fx/AcidBubbles';
 import { Controls } from '../core/Controls';
 import type { Enemy } from '../entities/Enemy';
+import { HoundRagdoll } from '../entities/HoundRagdoll';
 
 /**
  * Level16Scene — the far side.
@@ -240,6 +241,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private hounds: Hound[] = [];
   private houndHits: THREE.Mesh[] = [];
   private flung = new Map<Hound, THREE.Vector3>();
+  private ragdolls: HoundRagdoll[] = [];
+  /** Hounds that have been in acid: when they first touched it. Three seconds and they're gone. */
+  private acidFuse = new Map<Hound, number>();
+  private bloodPools: { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial; r: number; t: number }[] = [];
   private packs: Pack[] = [];
   private traps: MawTrap[] = [];
   private trapHits: THREE.Mesh[] = [];
@@ -358,9 +363,25 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.treeUsed.push(false);
     }
     this.world = this.createPhysicsWorld(L.colliders);
-    this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
-    this.floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-    this.world.addBody(this.floorBody);
+    // Lighter gravity out here for everything that falls, as for him
+    this.world.gravity.set(0, -12, 0);
+    {
+      const es = 2;
+      const X0 = -150;
+      const Z1 = 165;
+      const nx = 151;
+      const nz = 200;
+      const data: number[][] = [];
+      for (let i = 0; i < nx; i++) {
+        const col: number[] = [];
+        for (let j = 0; j < nz; j++) col.push(groundY(X0 + i * es, Z1 - j * es));
+        data.push(col);
+      }
+      this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Heightfield(data, { elementSize: es }) });
+      this.floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+      this.floorBody.position.set(X0, 0, Z1);
+      this.world.addBody(this.floorBody);
+    }
     for (const t of L.trunks) {
       const k = `${Math.floor(t.x / 8)},${Math.floor(t.z / 8)}`;
       let a = this.trunkGrid.get(k);
@@ -665,7 +686,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateTraps(dt);
     this.updateBossGrip(dt);
     this.updateEat(dt);
-    this.floorBody.position.set(0, groundY(pos.x, pos.z), 0);
 
     // ---- Weapons: the guns, the knife, or the two alien arms
     const sideOut = a.knifeActive;
@@ -728,6 +748,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.drops.update(dt, groundY);
     this.hud.setHealth(p.health, p.regenProgress);
     this.updateDebris(dt);
+    for (let i = this.ragdolls.length - 1; i >= 0; i--) {
+      this.ragdolls[i].update(dt);
+      if (this.ragdolls[i].done) this.ragdolls.splice(i, 1);
+    }
+    this.updateBloodPools(dt);
     this.decals.update(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
@@ -975,6 +1000,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (m.hp > 0) return;
     m.state = 'dead';
     m.stateT = 0;
+    this.bloodPool(m.group.position.x, m.group.position.z, 1.4, 0x5a0a18);
     const i = this.trapHits.indexOf(m.hitbox);
     if (i >= 0) this.trapHits.splice(i, 1);
     if (this.heldBy === m) this.release();
@@ -1017,6 +1043,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       h.stateT += dt;
       if (!h.alive) {
         h.deadT += dt;
+        if (h.ragdoll) continue;
         const fv = this.flung.get(h);
         if (fv) {
           // Still flying when it died: it lands
@@ -1051,7 +1078,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
         for (const o of this.hounds) {
           if (o === h || !o.alive || o.held) continue;
           if (o.group.position.distanceTo(g) < 1.3) {
-            this.hurtHound(o, 2.5, o.group.position.clone().add(V(0, 0.7, 0)), fv.clone().normalize());
+            o.knock.copy(fv).setY(0).multiplyScalar(0.8);
+            this.hurtHound(o, 99, o.group.position.clone().add(V(0, 0.7, 0)), fv.clone().normalize());
             fv.multiplyScalar(0.5);
           }
         }
@@ -1186,6 +1214,17 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (h.held) this.dropHeld(false);
     h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(acid ? 0 : 3 + Math.min(dmg, 4));
     this.drops.burst(point, V(0, 1, 0), acid ? 24 : 30, acid ? 2 : 4, acid ? ACID : ALIEN_BLOOD);
+    this.acidFuse.delete(h);
+    if (!acid) {
+      const fv = this.flung.get(h);
+      this.flung.delete(h);
+      const v = fv ? fv.clone() : h.knock.clone().multiplyScalar(0.6).add(V(0, 1.5 + Math.min(dmg, 6) * 0.15, 0)).add(h.vel.clone().multiplyScalar(0.4));
+      h.group.rotation.x = 0;
+      h.group.rotation.z = 0;
+      const rd = new HoundRagdoll(this.world, h, v);
+      rd.onRest = (at) => this.bloodPool(at.x, at.z, 1.1 + Math.random() * 0.5, 0x6a7a12);
+      this.ragdolls.push(rd);
+    } else this.bloodPool(h.group.position.x, h.group.position.z, 1.3, 0x7ab01a);
     if (this.t - this.lastGrowl > 1) {
       this.lastGrowl = this.t;
       this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
@@ -1294,13 +1333,17 @@ export class Level16Scene extends CombatScene<Level16Data> {
         this.grabArm.recoil = Math.max(this.grabArm.recoil, 0.4);
         // Swung into the others
         const sp = this.holdVel.length();
-        if (sp > 5)
+        if (sp > 3.5)
           for (const o of this.hounds) {
             if (o === hd || !o.alive || o.held) continue;
-            if (o.group.position.distanceTo(g) < 1.4) {
-              this.hurtHound(o, 2, o.group.position.clone().add(V(0, 0.7, 0)), this.holdVel.clone().normalize());
-              this.hurtHound(hd, 1, g.clone().add(V(0, 0.7, 0)), this.holdVel.clone().normalize().negate());
-              this.shake = Math.max(this.shake, 0.3);
+            if (o.group.position.distanceTo(g) < 1.5) {
+              // Knocked flying with the swing
+              const d = this.holdVel.clone().setY(0).normalize();
+              o.knock.copy(d).multiplyScalar(Math.min(14, sp * 1.2));
+              this.hurtHound(o, 99, o.group.position.clone().add(V(0, 0.7, 0)), d);
+              this.hurtHound(hd, 1, g.clone().add(V(0, 0.7, 0)), d.clone().negate());
+              this.ctx.audio.bodyThud(0);
+              this.shake = Math.max(this.shake, 0.35);
             }
           }
       }
@@ -1453,6 +1496,67 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.ctx.audio.gooSplat(Math.hypot(x - this.player.position.x, z - this.player.position.z));
   }
 
+  private static poolTex: THREE.CanvasTexture | null = null;
+  private bloodPool(x: number, z: number, r: number, color: number): void {
+    if (!Level16Scene.poolTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#fff';
+      for (let k = 0; k < 14; k++) {
+        const a = Math.random() * 6.28;
+        const d = Math.random() * 30;
+        g.beginPath();
+        g.ellipse(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, 18 + Math.random() * 22, 14 + Math.random() * 18, Math.random() * 3, 0, Math.PI * 2);
+        g.fill();
+      }
+      for (let k = 0; k < 20; k++) {
+        g.beginPath();
+        const a = Math.random() * 6.28;
+        g.arc(64 + Math.cos(a) * (40 + Math.random() * 18), 64 + Math.sin(a) * (40 + Math.random() * 18), 2 + Math.random() * 5, 0, Math.PI * 2);
+        g.fill();
+      }
+      Level16Scene.poolTex = new THREE.CanvasTexture(c);
+    }
+    const geo = new THREE.PlaneGeometry(2, 2, 8, 8);
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const px = x + (uv.getX(i) * 2 - 1) * r;
+      const pz = z - (uv.getY(i) * 2 - 1) * r;
+      pos.setXYZ(i, px, groundY(px, pz) + 0.035, pz);
+    }
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({ color, alphaMap: Level16Scene.poolTex, transparent: true, opacity: 0.92, roughness: 0.08, metalness: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = 2;
+    mesh.scale.setScalar(0.01);
+    this.scene.add(mesh);
+    this.bloodPools.push({ mesh, mat, r, t: 0 });
+    if (this.bloodPools.length > 40) {
+      const old = this.bloodPools.shift()!;
+      this.scene.remove(old.mesh);
+      old.mesh.geometry.dispose();
+      old.mat.dispose();
+    }
+  }
+
+  /** Spreading out from the middle (the geometry's in world space, so it grows about its own centre). */
+  private updateBloodPools(dt: number): void {
+    for (const b of this.bloodPools) {
+      if (b.t >= 3) continue;
+      b.t += dt;
+      const k = Math.min(1, b.t / 3);
+      const s = 0.15 + 0.85 * (1 - Math.pow(1 - k, 2));
+      const pos = b.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      b.mesh.geometry.computeBoundingSphere();
+      const c = b.mesh.geometry.boundingSphere!.center;
+      b.mesh.position.set(c.x * (1 - s), 0, c.z * (1 - s));
+      b.mesh.scale.set(s, 1, s);
+      void pos;
+    }
+  }
+
   private mark(x: number, z: number, r: number, land: number): void {
     const m = this.markers.find((k) => k.land < 0);
     if (!m) return;
@@ -1514,6 +1618,23 @@ export class Level16Scene extends CombatScene<Level16Data> {
         m.mesh.visible = false;
       }
     }
+    // ---- Melting: smoking, slowing, three seconds from the first touch
+    for (const [h, t0] of this.acidFuse) {
+      if (!h.alive) {
+        this.acidFuse.delete(h);
+        continue;
+      }
+      const g = h.group.position;
+      const k = (this.t - t0) / 3;
+      h.speed *= Math.exp(-dt * (1 + k * 3));
+      if (Math.random() < dt * 6) this.particles.smokeColumn(g.clone().add(V(0, 0.5, 0)), 0.35, 1);
+      if (Math.random() < dt * 5) this.drops.burst(g.clone().add(V(0, 0.6, 0)), V(0, 1, 0), 3, 1.2, ACID);
+      if (this.hissT <= 0) {
+        this.hissT = 0.45;
+        this.ctx.audio.fireCrackle(g.distanceTo(pp));
+      }
+      if (k >= 1) this.hurtHound(h, 999, g.clone().add(V(0, 0.5, 0)), V(0, 1, 0), true);
+    }
     // ---- The pools: eat what's in them, then dry up
     this.hissT -= dt;
     let inAcid: Puddle | null = null;
@@ -1529,19 +1650,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
       const r = pd.r * 0.82;
       if (Math.random() < dt * 3) this.drops.burst(V(pd.x + (Math.random() - 0.5) * pd.r, groundY(pd.x, pd.z) + 0.1, pd.z + (Math.random() - 0.5) * pd.r), V(0, 1, 0), 2, 0.8, ACID);
-      // Hounds melt
+      // Hounds that step in it are done for
       for (const h of this.hounds) {
         if (!h.alive || h.held || this.flung.has(h)) continue;
         const g = h.group.position;
         if (Math.hypot(g.x - pd.x, g.z - pd.z) > r + 0.3) continue;
-        h.speed *= Math.exp(-dt * 2);
-        if (Math.random() < dt * 5) this.particles.smokeColumn(g.clone().add(V(0, 0.4, 0)), 0.3, 1);
-        if (Math.random() < dt * 4) this.drops.burst(g.clone().add(V(0, 0.5, 0)), V(0, 1, 0), 3, 1.2, ACID);
-        this.hurtHound(h, 1.6 * dt, g.clone().add(V(0, 0.5, 0)), V(0, 1, 0), true);
-        if (this.hissT <= 0) {
-          this.hissT = 0.5;
-          this.ctx.audio.fireCrackle(g.distanceTo(pp));
-        }
+        if (!this.acidFuse.has(h)) this.acidFuse.set(h, this.t);
       }
       // Maws in it die
       for (const m of this.traps) {
@@ -1569,7 +1683,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
 
   private acidHit(s: GlowShot, h: Hit, dir: THREE.Vector3): void {
     this.drops.burst(h.point, h.normal, 14, 2.6, ACID);
-    if (h.kind === 'hound' && h.hound) this.hurtHound(h.hound, s.damage, h.point, dir, true);
+    if (h.kind === 'hound' && h.hound) {
+      if (!this.acidFuse.has(h.hound)) this.acidFuse.set(h.hound, this.t - 0.5);
+      this.hurtHound(h.hound, s.damage, h.point, dir, true);
+    }
     else if (h.kind === 'boss') this.hurtBoss(s.damage * 2, h.point, dir, !!h.head);
     else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage * 2, h.point, dir);
     else if (h.kind === 'tongue') this.hurtTongue(3);
@@ -2242,6 +2359,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.fallV = [0, 0];
   }
 
+  /**
+   * A hand target (camera space) brought back within his reach: no further
+   * from that shoulder than his arm goes, and kept out in front of the lens.
+   */
+  private static reach(v: THREE.Vector3, side: number): THREE.Vector3 {
+    const sh = V(0.19 * side, -0.27, 0.02);
+    const d = v.clone().sub(sh);
+    if (d.length() > 0.56) d.setLength(0.56);
+    const out = sh.add(d);
+    out.z = Math.min(out.z, -0.28);
+    out.y = Math.min(out.y, -0.08);
+    return out;
+  }
+
   /** The blaster that the cannon off boss arm i goes on: its right arm's (the acid) on his right. */
   private armFor(i: number): AlienBlaster {
     return i === 0 ? this.acidArm : this.grabArm;
@@ -2267,7 +2398,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const away = V(pp.x - w.x, 0, pp.z - w.z).normalize();
       if (away.lengthSq() < 0.5) away.set(0, 0, 1);
       const side = V(-away.z, 0, away.x);
-      const p = w.clone().addScaledVector(away, 0.85).addScaledVector(side, 0.2).add(V(0, 0.65, 0));
+      const p = w.clone().addScaledVector(away, 0.6).addScaledVector(side, 0.15).add(V(0, 0.6, 0));
       p.y = Math.max(p.y, groundY(p.x, p.z) + 0.75);
       const head = this.fallen[i] ?? b.arms[i].head.root;
       return { p, look: this.fallen[i] ? w : head.localToWorld(V(0, 0, 0.2)) };
@@ -2296,7 +2427,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       // His left hand on the cannon
       if (!this.fallen[i]) {
         const grabAt = cam.worldToLocal(head.localToWorld(V(0.0, -0.04, 0.3)));
-        H.leftHand.position.lerpVectors(V(-0.24, -0.5, -0.3), grabAt, smooth((tt - 0.45) / 0.45));
+        H.leftHand.position.lerpVectors(V(-0.24, -0.5, -0.3), Level16Scene.reach(grabAt, -1), smooth((tt - 0.45) / 0.45));
         H.leftHand.rotation.set(-0.7, 0.5, -0.9);
       } else H.leftHand.position.lerp(V(-0.26, -0.6, -0.25), Math.min(1, dt * 6));
       // The karambit sawing
@@ -2304,7 +2435,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const wC = cam.worldToLocal(wrist.clone());
       const k = 0.46 / Math.max(0.3, -wC.z);
       const saw = tt > 1.1 && tt < 2.5 ? Math.sin((tt - 1.1) * 11) : 0;
-      H.knifeHand.position.set(wC.x * k + 0.09 + saw * 0.07, wC.y * k + 0.02 + saw * 0.025, -0.46).lerp(V(0.25, -0.55, -0.3), 1 - kUp);
+      H.knifeHand.position.copy(Level16Scene.reach(V(wC.x * k + 0.09 + saw * 0.07, wC.y * k + 0.02 + saw * 0.025, -0.46), 1)).lerp(V(0.25, -0.55, -0.3), 1 - kUp);
       H.knifeHand.rotation.set(-0.5 + saw * 0.12, 0.35, 0.9 + saw * 0.3);
       if (tt > 1.1 && tt < 2.5 && Math.floor((tt - dt - 1.1) / 0.28) !== Math.floor((tt - 1.1) / 0.28)) {
         this.drops.burst(wrist, away.clone().setY(0.7), 14, 2.6, BOSS_BLOOD);

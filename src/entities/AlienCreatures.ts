@@ -679,11 +679,13 @@ function houndLeg(skin: THREE.Material, front: boolean): { hip: THREE.Group; kne
 export class Hound {
   readonly group = new THREE.Group();
   readonly hitboxes: THREE.Mesh[] = [];
-  private body = new THREE.Group();
-  private legs: { hip: THREE.Group; knee: THREE.Group; paw: THREE.Group; front: boolean; side: number }[] = [];
+  readonly body = new THREE.Group();
+  readonly legs: { hip: THREE.Group; knee: THREE.Group; paw: THREE.Group; front: boolean; side: number }[] = [];
+  /** A ragdoll has it now (physics poses it, not animate()). */
+  ragdoll = false;
   private tail: THREE.Group[] = [];
   private jaw: THREE.Group;
-  private neck = new THREE.Group();
+  readonly neck = new THREE.Group();
   hp = 3;
   alive = true;
   state: 'lurk' | 'run' | 'lunge' | 'recover' | 'dead' = 'lurk';
@@ -782,6 +784,7 @@ export class Hound {
   }
 
   animate(dt: number, t: number): void {
+    if (this.ragdoll) return;
     const run = Math.min(1, this.speed / 7);
     this.ph += dt * (4 + this.speed * 1.8);
     const ph = this.ph;

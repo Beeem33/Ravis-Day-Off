@@ -19,8 +19,8 @@ function materials(): { M: SuitMats; skin: THREE.MeshStandardMaterial; shell: TH
   if (!mats) {
     mats = suitMaterials();
     // The pieces' own materials expect vertex colours their geometry carries; the rig's don't
-    skinMat = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.62, metalness: 0.12, bumpMap: mats.under.bumpMap, bumpScale: 0.5 });
-    shellMat = new THREE.MeshPhysicalMaterial({ color: 0xb4b9bf, roughness: 0.44, metalness: 0.1, clearcoat: 0.35, clearcoatRoughness: 0.3 });
+    skinMat = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.62, metalness: 0.12, bumpMap: mats.under.bumpMap, bumpScale: 0.5, side: THREE.DoubleSide });
+    shellMat = new THREE.MeshPhysicalMaterial({ color: 0xb4b9bf, roughness: 0.44, metalness: 0.1, clearcoat: 0.35, clearcoatRoughness: 0.3, side: THREE.DoubleSide });
   }
   return { M: mats, skin: skinMat!, shell: shellMat! };
 }

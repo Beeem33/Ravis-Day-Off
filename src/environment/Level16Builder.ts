@@ -3,6 +3,7 @@ import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferG
 import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
 import { makeCanvas } from './Level8Builder';
+import { suitModel } from '../entities/FieldSuit';
 
 /**
  * Level16Builder — the far side of the Atom Warper.
@@ -163,8 +164,42 @@ export const PONDS: { x: number; z: number; r: number }[] = [
 ].map(([z, dx, r]) => ({ x: valleyX(z) + dx, z, r }));
 
 /** Outcrops: steep humps of broken rock standing up from the floor, to go round. */
+/** The hill up the canyon from the station, where the pack first shows itself. */
+export const HILL = { x: valleyX(111) + 3, z: 111, r: 14, h: 6.5 };
+
+/**
+ * The hounds' dens: holes in the foot of the canyon wall a pack comes out of.
+ * Each: its mouth on the canyon floor, which way it faces (yaw), and a point
+ * a little way inside it.
+ */
+export interface Den {
+  mouth: THREE.Vector3;
+  inner: THREE.Vector3;
+  yaw: number;
+}
+export const DENS: Den[] = [
+  [8, 1],
+  [-72, -1],
+  [-134, 1],
+  [-153, -1]
+].map(([z, side]) => {
+  // Out from the middle to the wall's foot
+  const cx = valleyX(z);
+  let x = cx;
+  for (let d = 0; d < 60; d += 0.5) {
+    x = cx + side * d;
+    if (outside(x, z) > -0.6) break;
+  }
+  const yaw = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+  const inward = side;
+  return { mouth: new THREE.Vector3(x - side * 1.2, 0, z), inner: new THREE.Vector3(x + inward * 0.6, 0, z), yaw };
+});
+
+/** Where the dead explorer lies (near the den the north pack comes out of). */
+export const EXPLORER = new THREE.Vector3(valleyX(-64) - 10, 0, -64);
+
 export const OUTCROPS: { x: number; z: number; r: number; h: number }[] = [
-  [114, 9, 6, 8],
+  [121, 17, 6, 8],
   [76, -11, 7.5, 10],
   [52, 12, 6.5, 8],
   [12, -16, 6, 7],
@@ -214,6 +249,8 @@ function baseY(x: number, z: number): number {
     const k = 1 - smoothstep(r * 0.6, r, Math.hypot(x - cx2, z - cz));
     h = h + (y - h) * k;
   };
+  const dh = Math.hypot(x - HILL.x, z - HILL.z);
+  if (dh < HILL.r) h += HILL.h * 0.5 * (1 + Math.cos((Math.PI * dh) / HILL.r));
   flat(0, 134.5, 12, 0.6);
   flat(MEADOW.x, MEADOW.z, 20, 0.4);
   flat(ARENA.x, ARENA.z, 30, 5.3);
@@ -483,6 +520,8 @@ export interface Level16Data extends CombatLevel {
   chunks: { mesh: THREE.InstancedMesh; lod: 'near' | 'far' | 'any' }[];
   /** Where the maws lie in wait. */
   trapSpots: THREE.Vector3[];
+  /** The dead explorer's note, on the ground by his hand; and where his cologne lies. */
+  note: { at: THREE.Vector3; obj: THREE.Object3D; cologne: THREE.Vector3 };
   /** Trees standing round the big one's clearing, on their own (not instanced): it can rip them up. */
   arenaTrees: { group: THREE.Group; x: number; z: number }[];
   /** The low fog lying along the canyon floor (its clock, and the colour it's tinted). */
@@ -527,6 +566,8 @@ export class Level16Builder {
     const door = this.buildStation();
     const tablet = this.buildDrone();
     const portal = this.buildCave();
+    this.buildDens();
+    const note = this.buildExplorer();
     const map = this.buildMap();
     return {
       group: this.group,
@@ -548,6 +589,7 @@ export class Level16Builder {
       specimens: this.specimens,
       chunks: this.chunks,
       trapSpots: this.traps,
+      note,
       cave: this.caveMesh!,
       arenaTrees: this.arenaTrees,
       groundFog: this.buildGroundFog(),
@@ -596,6 +638,8 @@ export class Level16Builder {
     zs.forEach((z, i) => {
       const x = valleyX(z) + (hash(i, 9) - 0.5) * 16;
       if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 14 || Math.hypot(x, z - 134) < 14) return;
+      if (Math.hypot(x - HILL.x, z - HILL.z) < HILL.r + 2) return;
+      if (DENS.some((d) => Math.hypot(d.mouth.x - x, d.mouth.z - z) < 6)) return;
       if (OUTCROPS.some((o) => Math.hypot(x - o.x, z - o.z) < o.r + 2)) return;
       if (PONDS.some((p) => Math.hypot(x - p.x, z - p.z) < p.r + 2)) return;
       out.push(new THREE.Vector3(x, groundY(x, z), z));
@@ -1034,6 +1078,9 @@ export class Level16Builder {
   private buildForest(): void {
     const clear = (x: number, z: number): boolean => {
       if (Math.hypot(x, z - 134) < 16) return false;
+      if (Math.hypot(x - HILL.x, z - HILL.z) < HILL.r * 0.9) return false;
+      if (DENS.some((d) => Math.hypot(d.mouth.x - x, d.mouth.z - z) < 5)) return false;
+      if (Math.hypot(x - EXPLORER.x, z - EXPLORER.z) < 3) return false;
       if (Math.hypot(x - MEADOW.x, z - MEADOW.z) < 21) return false;
       if (Math.hypot(x - ARENA.x, z - ARENA.z) < 31) return false;
       // (a clear strip along the foot of the cliff, so it can be seen and got at)
@@ -1468,6 +1515,114 @@ export class Level16Builder {
       if ((o as THREE.Mesh).isMesh) this.shootables.push(o);
     });
     return { slab, collider, button: new THREE.Vector3(1.55, fy + 1.34, z0 + 0.13), buttonMat, light };
+  }
+
+  /**
+   * The dens: a hole in the foot of the wall, a ragged arch of rock round it,
+   * black inside; gnawed bones strewn in front, the ground there churned.
+   */
+  private buildDens(): void {
+    const dark = new THREE.MeshBasicMaterial({ color: 0x020103, side: THREE.BackSide });
+    const boneMat = new THREE.MeshStandardMaterial({ color: 0xd2c8ac, roughness: 0.6 });
+    for (const d of DENS) {
+      const g = new THREE.Group();
+      const y = groundY(d.mouth.x, d.mouth.z);
+      g.position.set(d.mouth.x, y - 0.3, d.mouth.z);
+      g.rotation.y = d.yaw;
+      this.group.add(g);
+      // Into the wall is local −Z
+      const arch = new THREE.TorusGeometry(1.9, 0.75, 12, 30, Math.PI);
+      const ap = arch.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < ap.count; i++) {
+        const x = ap.getX(i);
+        const yy = ap.getY(i);
+        const z = ap.getZ(i);
+        const k = 1 + (ridged(x * 0.7 + d.mouth.z, yy * 0.7 + z) - 0.45) * 0.7;
+        ap.setXYZ(i, x * (0.95 + 0.08 * k), yy * k, z * k * 1.5);
+      }
+      arch.deleteAttribute('uv');
+      arch.computeVertexNormals();
+      const am = new THREE.Mesh(arch, this.rockMat);
+      am.scale.set(1, 1.15, 1);
+      g.add(am);
+      this.shootables.push(am);
+      const hole = new THREE.Mesh(new THREE.SphereGeometry(1.75, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2), dark);
+      hole.rotation.x = -Math.PI / 2;
+      hole.scale.set(1, 1.4, 1.15);
+      hole.position.set(0, 0.2, -0.3);
+      g.add(hole);
+      const floor = new THREE.Mesh(new THREE.CircleGeometry(1.6, 20), new THREE.MeshBasicMaterial({ color: 0x030204 }));
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(0, 0.32, -1.0);
+      floor.scale.set(1, 1.6, 1);
+      g.add(floor);
+      for (let k = 0; k < 9; k++) {
+        const b = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.3 + Math.random() * 0.3, 3, 8), boneMat);
+        const bx = (Math.random() - 0.5) * 3;
+        const bz = 0.6 + Math.random() * 2.2;
+        const wp = new THREE.Vector3(bx, 0, bz).applyAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw).add(d.mouth);
+        b.position.set(bx, groundY(wp.x, wp.z) - y + 0.33, bz);
+        b.rotation.set(Math.PI / 2, Math.random() * 3, Math.random() * 3);
+        g.add(b);
+      }
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), boneMat);
+      skull.scale.set(1, 0.8, 1.3);
+      skull.position.set(0.6, 0.42, 1.0);
+      g.add(skull);
+      // Not a way in for him: a block just inside the arch
+      const inside = d.mouth.clone().add(new THREE.Vector3(0, 0, -0.9).applyAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw));
+      this.collide(inside.x - 1.4, y - 1, inside.z - 1.4, inside.x + 1.4, y + 3.5, inside.z + 1.4);
+    }
+  }
+
+  /**
+   * Someone who came through before him: a body in a suit like his, on its
+   * back on the sponge, the visor cracked, dried blood under it, things from
+   * its pack scattered — and a sheet of paper by its hand.
+   */
+  private buildExplorer(): Level16Data['note'] {
+    const x = EXPLORER.x;
+    const z = EXPLORER.z;
+    const y = groundY(x, z);
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = 0.9;
+    this.group.add(g);
+    const body = suitModel([]);
+    // On his back, one knee up a little, rolled slightly
+    body.rotation.set(-Math.PI / 2 + 0.06, 0, 0.12);
+    body.position.set(0, 0.16, 0.9);
+    g.add(body);
+    body.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) this.shootables.push(o);
+    });
+    // Dried blood under him, dark and spread
+    const stain = new THREE.Mesh(new THREE.CircleGeometry(1.2, 24), new THREE.MeshStandardMaterial({ color: 0x2a0606, roughness: 0.4, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }));
+    stain.rotation.x = -Math.PI / 2;
+    stain.position.set(0.1, 0.04, 0.2);
+    stain.scale.set(1, 1.5, 1);
+    g.add(stain);
+    // Things from his pack: a torch, a canteen, a cracked tablet, a flare burnt out
+    const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.6, metalness: 0.4 });
+    const torch = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.2, 10), new THREE.MeshStandardMaterial({ color: 0xe0b020, roughness: 0.5 }));
+    torch.rotation.set(Math.PI / 2, 0, 0.7);
+    torch.position.set(0.8, 0.05, -0.2);
+    const canteen = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.18, 16), dark);
+    canteen.rotation.set(Math.PI / 2, 0, -0.4);
+    canteen.position.set(-0.7, 0.07, 0.6);
+    const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 8), new THREE.MeshStandardMaterial({ color: 0x8a1a10, roughness: 0.7 }));
+    flare.rotation.set(Math.PI / 2, 0, 1.4);
+    flare.position.set(0.3, 0.03, 1.9);
+    g.add(torch, canteen, flare);
+    // The note: a sheet of paper, weighted with a stone
+    const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.21, 0.29), new THREE.MeshStandardMaterial({ color: 0xe8e2d0, roughness: 0.9, side: THREE.DoubleSide }));
+    paper.rotation.set(-Math.PI / 2, 0, 0.4);
+    paper.position.set(0.65, 0.05, 0.55);
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.06, 0), this.rockMat);
+    stone.position.set(0.7, 0.08, 0.5);
+    g.add(paper, stone);
+    g.updateMatrixWorld(true);
+    return { at: paper.getWorldPosition(new THREE.Vector3()), obj: paper, cologne: new THREE.Vector3(-0.55, 0.04, -0.15).applyMatrix4(g.matrixWorld) };
   }
 
   /**

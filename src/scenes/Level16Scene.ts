@@ -16,6 +16,8 @@ import {
   MASSIF,
   ARENA,
   MEADOW,
+  HILL,
+  DENS,
   CAVE_MOUTH_Z,
   LAKE_BED,
   CEIL_Y
@@ -43,6 +45,7 @@ import { AcidBubbles } from '../fx/AcidBubbles';
 import { Controls } from '../core/Controls';
 import type { Enemy } from '../entities/Enemy';
 import { HoundRagdoll } from '../entities/HoundRagdoll';
+import { Colognes } from '../entities/Colognes';
 
 /**
  * Level16Scene — the far side.
@@ -60,7 +63,7 @@ import { HoundRagdoll } from '../entities/HoundRagdoll';
  *  5. The cave in the canyon's end wall, and the portal at the back of it.
  */
 
-type Phase = 'play' | 'harvest' | 'end';
+type Phase = 'play' | 'intro' | 'harvest' | 'end';
 type BossMove = 'idle' | 'mortar' | 'spray' | 'grab' | 'tree' | 'stagger';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
@@ -476,13 +479,27 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.scene.add(this.boss.group);
     this.boss.place(ARENA.x, ARENA.z - 8, 0);
     const at = (z: number, dx: number): { x: number; z: number } => ({ x: valleyX(z) + dx, z });
+    void at;
+    // Out of a den: in a bunch just inside its mouth
+    const den = (i: number, n: number): { x: number; z: number }[] => {
+      const d = DENS[i];
+      const side = V(Math.cos(d.yaw), 0, -Math.sin(d.yaw));
+      const out = V(Math.sin(d.yaw), 0, Math.cos(d.yaw));
+      return Array.from({ length: n }, (_, k) => {
+        const p = d.inner.clone().addScaledVector(side, (k - (n - 1) / 2) * 0.7).addScaledVector(out, -(k % 2) * 0.6);
+        return { x: p.x, z: p.z };
+      });
+    };
     this.packs = [
-      { trigger: 121, at: [at(104, -4), at(110, 10), at(98, 4)], spawned: false },
-      { trigger: 26, at: [at(8, -12), at(6, 12), at(2, -4), at(14, 16)], spawned: false, needs: 'tablet' },
-      { trigger: -60, at: [at(-72, -12), at(-74, 6), at(-80, -2), at(-68, 14)], spawned: false },
-      { trigger: 999, at: [at(-134, -14), at(-136, 12), at(-140, -4), at(-142, 6), at(-130, 18), at(-128, -18)], spawned: false, needs: 'harvest' },
-      { trigger: -146, at: [at(-154, -8), at(-156, 8), at(-153, 0), at(-150, 12)], spawned: false, needs: 'harvest' }
+      { trigger: 121, at: [], spawned: true },
+      { trigger: 26, at: den(0, 4), spawned: false, needs: 'tablet' },
+      { trigger: -60, at: den(1, 4), spawned: false },
+      { trigger: 999, at: den(2, 6), spawned: false, needs: 'harvest' },
+      { trigger: -146, at: den(3, 4), spawned: false, needs: 'harvest' }
     ];
+    this.introDone = this.checkpoint > 0;
+    // The dead explorer's cologne
+    Colognes.place(this.scene, 'maw', L.note.cologne, 0.6, () => (this.player && this.player.alive && !this.player.cinematic ? this.player.camera : null));
     const done = [this.checkpoint >= 1, this.checkpoint >= 3, this.checkpoint >= 4];
     done.forEach((d, i) => (this.packs[i].spawned = d));
     for (const s of L.trapSpots) {
@@ -544,6 +561,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   }
 
   exit(): void {
+    this.closeNote();
     RaviVisual.dressArms = null;
     RaviVisual.dressBody = null;
     this.eatFade?.remove();
@@ -739,6 +757,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateTongues(dt);
     this.updateAcid(dt);
     this.updateHarvestPrompt();
+    this.updateNote();
+    if (this.phase === 'play') this.maybeIntro();
+    if (this.phase === 'intro') this.updateIntro(dt);
     if (this.phase === 'harvest') this.updateHarvest(dt);
     this.updatePortal(dt);
     this.updateCheckpoints();
@@ -2749,7 +2770,179 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (this.dead) this.restart();
   }
 
+  // ============================================================ the pack on the hill
+
+  private intro: { t: number; alpha: Hound; pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3 }[]; q0: THREE.Quaternion } | null = null;
+  private introDone = false;
+
+  /** Out of the station, a few steps: up on the hill ahead, one of them. */
+  private maybeIntro(): void {
+    if (this.introDone || this.doorT < 3 || !this.player.alive || this.player.position.z > 128.5) return;
+    this.introDone = true;
+    const p = this.player;
+    this.phase = 'intro';
+    this.phaseT = 0;
+    p.cinematic = true;
+    this.cinema(true);
+    this.hud.setPrompt(null);
+    const top = V(HILL.x, groundY(HILL.x, HILL.z), HILL.z);
+    const toward = V(p.position.x - top.x, 0, p.position.z - top.z).normalize();
+    const away = toward.clone().negate();
+    const side = V(-toward.z, 0, toward.x);
+    // The big one on the crest, facing him
+    const alpha = new Hound();
+    alpha.group.scale.setScalar(1.8);
+    alpha.hp = 9;
+    const at = top.clone().addScaledVector(toward, 0.8);
+    alpha.group.position.set(at.x, groundY(at.x, at.z), at.z);
+    alpha.yaw = Math.atan2(toward.x, toward.z);
+    alpha.group.rotation.y = alpha.yaw;
+    alpha.state = 'lurk';
+    alpha.stateT = -1e9;
+    this.scene.add(alpha.group);
+    this.hounds.push(alpha);
+    this.houndHits.push(...alpha.hitboxes);
+    // Five more behind the hill, out of sight, to come up over it
+    const pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
+    for (let i = 0; i < 5; i++) {
+      const h = new Hound();
+      const lat = (i - 2) * 2.2 + (i % 2 ? 0.6 : -0.6);
+      const to = top.clone().addScaledVector(away, 1.6 + (i % 2) * 0.8).addScaledVector(side, lat);
+      const from = to.clone().addScaledVector(away, 7);
+      h.group.position.set(from.x, groundY(from.x, from.z), from.z);
+      h.yaw = alpha.yaw;
+      h.group.rotation.y = h.yaw;
+      h.state = 'lurk';
+      h.stateT = -1e9;
+      this.scene.add(h.group);
+      this.hounds.push(h);
+      this.houndHits.push(...h.hitboxes);
+      pack.push({ h, from, to });
+    }
+    this.intro = { t: 0, alpha, pack, q0: p.camera.quaternion.clone() };
+    this.ctx.audio.stopTrackMusic(1.5);
+  }
+
+  /**
+   * He looks up: the thing on the crest. The view closes in on it, standing
+   * there, its mouth working; thunder; then heads come up over the hill
+   * behind it, five of them. It screams, and they all come down at him.
+   */
+  private updateIntro(dt: number): void {
+    const I = this.intro;
+    if (!I) return;
+    I.t += dt;
+    const t = I.t;
+    const p = this.player;
+    const cam = p.camera;
+    const a = I.alpha;
+    cam.position.copy(p.position).add(V(0, 1.63, 0));
+    const look = a.group.position.clone().add(V(0, 0.95 * a.group.scale.x, 0));
+    const qLook = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, look, V(0, 1, 0)));
+    cam.quaternion.copy(I.q0).slerp(qLook, smooth(t / 1.2));
+    // Zoom in on it; out again as they come
+    const fov = 74 - 58 * smooth((t - 1.0) / 1.8) * (1 - smooth((t - 5.6) / 0.5));
+    if (Math.abs(cam.fov - fov) > 0.01) {
+      cam.fov = fov;
+      cam.updateProjectionMatrix();
+    }
+    // It stands there; its mouth working, the head lifting
+    a.speed = 0;
+    if (t > 2.0 && t - dt <= 2.0) this.ctx.audio.houndScreech(6);
+    if (t > 2.6 && t - dt <= 2.6) this.lightning(1);
+    // The others up over the crest behind it
+    I.pack.forEach((m, i) => {
+      const k = smooth((t - 3.0 - i * 0.32) / 1.3);
+      const g = m.h.group.position;
+      g.lerpVectors(m.from, m.to, k);
+      g.y = groundY(g.x, g.z);
+      m.h.speed = k > 0 && k < 1 ? 3 : 0;
+      if (k > 0.5 && t - dt < 3.0 + i * 0.32 + 0.66 && t >= 3.0 + i * 0.32 + 0.66 && i % 2 === 0) this.ctx.audio.houndScreech(14);
+    });
+    if (t > 5.3 && t - dt <= 5.3) {
+      a.state = 'lunge';
+      this.ctx.audio.houndScreech(2);
+      this.shake = Math.max(this.shake, 0.5);
+    }
+    if (t > 6.1) this.endIntro();
+  }
+
+  private endIntro(): void {
+    const I = this.intro;
+    if (!I) return;
+    this.intro = null;
+    for (const m of I.pack) {
+      m.h.group.position.copy(m.to).setY(groundY(m.to.x, m.to.z));
+    }
+    for (const h of [I.alpha, ...I.pack.map((m) => m.h)]) {
+      h.state = 'run';
+      h.stateT = 0;
+    }
+    const p = this.player;
+    const cam = p.camera;
+    const e = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
+    p.yaw = e.y;
+    p.pitch = e.x;
+    cam.fov = 74;
+    cam.updateProjectionMatrix();
+    p.cinematic = false;
+    this.phase = 'play';
+    this.phaseT = 0;
+    this.cinema(false);
+    this.setObjective('KILL THE PACK');
+    this.ctx.audio.startTrackMusic('audio/dark-amb.mp3', 0, 0, 0.5, 2);
+    this.later(9, () => {
+      if (this.phase === 'play') this.setObjective(this.hasTablet ? 'FOLLOW THE TRACKER — HOLD [M]' : 'INVESTIGATE THE CRASHED DRONE');
+    });
+  }
+
+  // ============================================================ the explorer's note
+
+  private noteEl: HTMLElement | null = null;
+
+  /** By the body: E to read what he wrote; E again (or walking off) to put it down. */
+  private updateNote(): void {
+    const N = this.level.note;
+    const p = this.player;
+    const near = this.playable && p.position.distanceTo(N.at) < 2.2;
+    if (this.noteEl) {
+      if (!near || this.ctx.input.wasPressed('KeyE')) this.closeNote();
+      return;
+    }
+    if (!near) return;
+    if (!this.promptBusy) this.hud.setPrompt('[ E ] READ THE NOTE');
+    if (this.ctx.input.wasPressed('KeyE')) this.openNote();
+  }
+
+  private openNote(): void {
+    this.ctx.audio.pocket();
+    const el = document.createElement('div');
+    el.style.cssText =
+      'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-1.5deg);width:min(520px,86vw);padding:30px 34px;background:#e9e2cf;' +
+      'color:#2a2418;font:17px/1.55 "Segoe Print","Bradley Hand","Comic Sans MS",cursive;box-shadow:0 10px 40px rgba(0,0,0,.7);z-index:20;pointer-events:none;' +
+      'background-image:repeating-linear-gradient(transparent 0 25px, rgba(60,90,140,.18) 25px 26px)';
+    el.innerHTML = `
+      <div style="font-weight:bold;margin-bottom:6px">SURVEY TEAM 2 — LOG, by hand (the tablet's dead)</div>
+      <div><b>Day 9.</b> Lost the drone over the north canyon. The hounds took Marek at the meadow. They don't see. They <i>hear</i> you. They live in holes in the canyon walls and they come out all at once.</div>
+      <div style="margin-top:8px"><b>Day 11.</b> The portal signal's real. It's past the big one, the thing with the arms. One arm spits acid. The other one reaches for you. Don't let it.</div>
+      <div style="margin-top:8px"><b>Day 12.</b> Can't feel my legs. The suit keeps telling me my heart rate like that's going to help.</div>
+      <div style="margin-top:8px">If you're reading this: stay out of the green. Stay away from the holes. And take the bottle in my pocket — it's the only thing on this planet that doesn't smell like the inside of a mouth.</div>
+      <div style="margin-top:14px;font-size:13px;opacity:.6">[ ${'E'} ] put it down</div>`;
+    this.ctx.uiRoot.appendChild(el);
+    this.noteEl = el;
+    this.hud.setPrompt(null);
+  }
+
+  private closeNote(): void {
+    this.noteEl?.remove();
+    this.noteEl = null;
+  }
+
   private onKey(e: KeyboardEvent): void {
+    if (e.code === 'Enter' && this.phase === 'intro') {
+      this.endIntro();
+      return;
+    }
     if (this.dead) {
       if (e.code === 'Escape') this.ctx.bus.emit(Events.ReturnToMenu);
       else if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') this.restart();

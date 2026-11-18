@@ -31,7 +31,8 @@ export type CologneId =
   | 'haheed'
   | 'microsuf'
   | 'pubjae'
-  | 'odore';
+  | 'odore'
+  | 'maw';
 
 export interface CologneInfo {
   id: CologneId;
@@ -57,7 +58,8 @@ export const COLOGNES: CologneInfo[] = [
   { id: 'haheed', name: 'Journey of Haheed', level: 'Level 11', note: 'Jet fuel, duty-free, and a long journey somewhere warm.' },
   { id: 'microsuf', name: 'Microsuf', level: 'Level 12', note: 'Fresh install, warm plastic, and a forced restart.' },
   { id: 'pubjae', name: 'Pubjae', level: 'Level 13', note: 'Gunpowder, a frying pan, and a winner winner.' },
-  { id: 'odore', name: 'Odoré', level: 'Level 14', note: 'It smells exactly like the word "Odoré" sounds.' }
+  { id: 'odore', name: 'Odoré', level: 'Level 14', note: 'It smells exactly like the word "Odoré" sounds.' },
+  { id: 'maw', name: 'Musk of the Maw', level: 'Level 16', note: 'Wet sponge, acid rain, and something with no eyes, very close.' }
 ];
 
 const KEY = 'ravi.colognes';
@@ -882,6 +884,30 @@ function drawLabel(id: CologneId): HTMLCanvasElement {
           g.fillRect(x - 5, 122, 10, 18);
         }
       });
+    case 'maw':
+      return canvas(240, 200, (g, W, H) => {
+        g.fillStyle = '#0a0610';
+        g.fillRect(0, 0, W, H);
+        // A green planet, a ring of fangs round it
+        g.fillStyle = '#3aa020';
+        g.beginPath();
+        g.arc(W / 2, 74, 34, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#0a0610';
+        g.beginPath();
+        g.arc(W / 2, 74, 18, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#e8dfc2';
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2;
+          g.beginPath();
+          g.moveTo(W / 2 + Math.cos(a) * 30, 74 + Math.sin(a) * 30);
+          g.lineTo(W / 2 + Math.cos(a + 0.12) * 18, 74 + Math.sin(a + 0.12) * 18);
+          g.lineTo(W / 2 + Math.cos(a + 0.26) * 30, 74 + Math.sin(a + 0.26) * 30);
+          g.fill();
+        }
+        centred(g, ['MUSK OF', 'THE MAW'], W / 2, 140, 30, `700 26px ${SERIF}`, '#b8ff5a');
+      });
     case 'odore':
       return canvas(240, 170, (g, W, H) => {
         g.clearRect(0, 0, W, H);
@@ -1140,6 +1166,36 @@ function buildBottle(id: CologneId, label: HTMLCanvasElement): THREE.Group {
       strap.position.y = 0.078;
       strap.rotation.z = Math.PI;
       add(strap);
+      break;
+    }
+    case 'maw': {
+      // A squat flask of acid-green glass, a cap like a fanged mouth
+      add(
+        lathe(
+          [
+            [0, 0],
+            [0.036, 0.001],
+            [0.048, 0.02],
+            [0.05, 0.05],
+            [0.04, 0.07],
+            [0.016, 0.078],
+            [0, 0.078]
+          ],
+          M.glass(0x6adf2a, 0.82),
+          32
+        )
+      );
+      add(wrapLabel(tex, 0.0505, 0.032, 0.022, 1.6));
+      const flesh = std({ color: 0x6a1a32, roughness: 0.3, metalness: 0.1 });
+      add(cyl(0.014, 0.016, 0.01, flesh, 0.078, 16));
+      add(cyl(0.022, 0.018, 0.022, flesh, 0.088, 20));
+      const tooth = std({ color: 0xe8dfc2, roughness: 0.3 });
+      for (let k = 0; k < 8; k++) {
+        const t = new THREE.Mesh(new THREE.ConeGeometry(0.003, 0.012, 5), tooth);
+        const a = (k / 8) * Math.PI * 2;
+        t.position.set(Math.cos(a) * 0.016, 0.104, Math.sin(a) * 0.016);
+        add(t);
+      }
       break;
     }
     case 'odore': {

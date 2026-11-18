@@ -96,7 +96,8 @@ const smooth = (x: number): number => {
   return k * k * (3 - 2 * k);
 };
 const SWIM_DEPTH = 1.25;
-const HOUND_SPEED = 6.9;
+/** Under his sprint (6.6), over his walk: he can get away, but not by strolling. */
+const HOUND_SPEED = 4.8;
 const BOSS_NAME = 'THE MAW';
 const ALIEN_BLOOD = 0x9ad02a;
 const BOSS_BLOOD = 0x9a2a6a;
@@ -3101,6 +3102,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     L.water.uniforms.fogDensity.value = fog.density;
     L.sky.uniforms.uT.value = this.t;
     for (const [i, s] of L.specimens.entries()) s.rotation.y = Math.sin(this.t * 0.4 + i) * 0.4;
+    L.station.update(this.t, dt, p.camera.position);
     L.glowMats.forEach((m, i) => (m.emissiveIntensity = (m.userData.base ??= m.emissiveIntensity) * (0.75 + 0.25 * Math.sin(this.t * (0.8 + i * 0.3) + i))));
     const px = p.camera.position.x;
     const pz = p.camera.position.z;
@@ -3180,7 +3182,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     // A horde behind the hill, out of sight, to come up over it in waves: the first five
     // full-grown, the rest the pack's runts (smaller, and one good hit each), from further back
     const pack: { h: Hound; from: THREE.Vector3; to: THREE.Vector3; at: number }[] = [];
-    const N = 18;
+    const N = 4;
     for (let i = 0; i < N; i++) {
       const h = new Hound();
       const wave = i < 5 ? 0 : 1 + Math.floor((i - 5) / 5);
@@ -3190,7 +3192,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
       }
       const inRow = i < 5 ? i : (i - 5) % 5;
       const lat = (inRow - 2) * (2.3 + wave * 0.5) + (Math.random() - 0.5) * 1.4;
-      const to = top.clone().addScaledVector(away, 1.4 + wave * 1.6 + Math.random() * 0.8).addScaledVector(side, lat);
+      // Up onto the crest itself, either side of it, against the sky
+      const to = top.clone().addScaledVector(away, 0.2 + wave * 1.6 + Math.random() * 0.4).addScaledVector(side, lat);
       const from = to.clone().addScaledVector(away, 7 + wave * 4);
       h.group.position.set(from.x, W.groundY(from.x, from.z), from.z);
       h.yaw = alpha.yaw;
@@ -3289,7 +3292,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     };
     I.pack.forEach((m, i) => {
       if (t > 5.4) {
-        charge(m.h, 9 + (i % 4) * 0.5, (((i * 5) % 9) - 4) * 2.6 + (i >= 9 ? 1.3 : 0));
+        charge(m.h, 3.2 + (i % 2) * 0.3, (i - 1.5) * 3.2);
         return;
       }
       const k = smooth((t - m.at) / 1.2);
@@ -3306,7 +3309,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.later(0.5, () => this.ctx.audio.houndScreech(12));
       this.shake = Math.max(this.shake, 0.6);
     }
-    if (t > 5.4) charge(a, 9.5, 0);
+    if (t > 5.4) charge(a, 3.5, 0);
     if (t > 7.3) this.endIntro();
   }
 

@@ -181,6 +181,7 @@ export class Level16CaveBuilder {
       mapCanvas: this.buildMap(),
       mapBounds: { x0: -30, x1: 30, z0: -160, z1: 12 },
       specimens: [],
+      station: { update: () => {} },
       chunks: [],
       trapSpots: traps,
       note: { at: far.clone(), obj: new THREE.Object3D(), cologne: far.clone() },

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { furnishStation, RECEIVER, type StationAnim } from './Level16Station';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
@@ -173,7 +174,17 @@ export const PONDS: { x: number; z: number; r: number }[] = [
 
 /** Outcrops: steep humps of broken rock standing up from the floor, to go round. */
 /** The hill up the canyon from the station, where the pack first shows itself. */
-export const HILL = { x: valleyX(104) - 6, z: 104, r: 12, h: 7.5 };
+export const HILL = { x: valleyX(96) - 8, z: 96, r: 11, h: 7.5 };
+
+/** How far (x, z) is from the line of sight between the station's door and the hill's crest. */
+function offSightline(x: number, z: number): number {
+  const ax = 0;
+  const az = 128;
+  const bx = HILL.x;
+  const bz = HILL.z;
+  const t = Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (z - az) * (bz - az)) / ((bx - ax) ** 2 + (bz - az) ** 2)));
+  return Math.hypot(x - (ax + (bx - ax) * t), z - (az + (bz - az) * t));
+}
 
 /**
  * The hounds' dens: holes in the foot of the canyon wall a pack comes out of.
@@ -228,6 +239,8 @@ function baseY(x: number, z: number): number {
       1 - smoothstep(20, 28, Math.hypot(x - MEADOW.x, z - MEADOW.z)),
       1 - smoothstep(30, 40, Math.hypot(x - ARENA.x, z - ARENA.z)),
       1 - smoothstep(6, 12, Math.abs(z - CLIFF_Z)),
+      // Nothing rolling up between the door and the hill: the pack on its crest has to be seen
+      1 - smoothstep(5, 11, offSightline(x, z)),
       z < 6 && z > -64 && Math.abs(x) < 36 ? 1 : 0,
       z < -140 ? 1 : 0
     );
@@ -527,6 +540,8 @@ export interface Level16Data extends CombatLevel {
   mapCanvas: HTMLCanvasElement;
   mapBounds: { x0: number; x1: number; z0: number; z1: number };
   specimens: THREE.Object3D[];
+  /** The station's moving parts: the receiver settling, the console's screen, the steam off the coffee. */
+  station: StationAnim;
   /** The forest's instanced chunks: near and far versions, for showing by distance. */
   chunks: { mesh: THREE.InstancedMesh; lod: 'near' | 'far' | 'any' }[];
   /** Where the maws lie in wait. */
@@ -558,6 +573,7 @@ export class Level16Builder {
   private trunks: TreeTrunk[] = [];
   private bubbleSpots: Level16Data['bubbleSpots'] = [];
   private specimens: THREE.Object3D[] = [];
+  private stationAnim: StationAnim = { update: () => {} };
   private rockMat!: THREE.MeshStandardMaterial;
   private chunks: Level16Data['chunks'] = [];
   private glowMats: THREE.MeshStandardMaterial[] = [];
@@ -587,7 +603,8 @@ export class Level16Builder {
       colliders: this.colliders,
       shootables: this.shootables,
       glassPanes: [],
-      start: { pos: new THREE.Vector3(0, groundY(0, 136.6), 136.6), yaw: 0 },
+      // On the receiver's pad, where the warp put him
+      start: { pos: new THREE.Vector3(RECEIVER.x, groundY(RECEIVER.x, RECEIVER.z) + 0.13, RECEIVER.z), yaw: 0 },
       door,
       tablet,
       portal,
@@ -600,6 +617,7 @@ export class Level16Builder {
       mapCanvas: map,
       mapBounds: { x0: -70, x1: 70, z0: -212, z1: 150 },
       specimens: this.specimens,
+      station: this.stationAnim,
       chunks: this.chunks,
       trapSpots: this.traps,
       note,
@@ -1338,8 +1356,7 @@ export class Level16Builder {
       box(0.04, h, 0.06, x0 + 0.02, h / 2, z, dark);
       box(0.04, h, 0.06, x1 - 0.02, h / 2, z, dark);
     }
-    // A strip light, and the light itself
-    box(2.6, 0.06, 0.2, 0, h - 0.04, (z0 + z1) / 2, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xe8f4ff, emissiveIntensity: 2 }));
+    // The room's light (its fitting is the furniture's)
     const light = new THREE.PointLight(0xdfeeff, 6, 10, 1.4);
     light.position.set(0, fy + h - 0.4, (z0 + z1) / 2);
     this.group.add(light);
@@ -1381,151 +1398,16 @@ export class Level16Builder {
     const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.07), new THREE.MeshBasicMaterial({ map: pt }));
     plate.position.set(1.55, 1.58, z0 + 0.115);
     g.add(plate);
-    // ---- Specimen jars down the east wall: alien parts in glowing fluid
-    const glass = new THREE.MeshStandardMaterial({ color: 0xbfe0e8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.25, depthWrite: false });
-    const fluid = new THREE.MeshStandardMaterial({ color: 0x1a6a2a, emissive: 0x30c050, emissiveIntensity: 0.7, transparent: true, opacity: 0.55, depthWrite: false });
-    const flesh = new THREE.MeshStandardMaterial({ color: 0x8a5a6a, roughness: 0.5 });
-    const fleshB = new THREE.MeshStandardMaterial({ color: 0x6a6a8a, roughness: 0.45 });
-    box(0.7, 0.9, 4.2, x1 - 0.45, 0.45, 134.5, dark, true);
-    for (let k = 0; k < 4; k++) {
-      const z = 132.9 + k * 1.05;
-      const jx = x1 - 0.45;
-      const jar = new THREE.Group();
-      jar.position.set(jx, 0.9, z);
-      g.add(jar);
-      jar.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.05, 20), steel));
-      const gl = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.62, 20, 1, true), glass);
-      gl.position.y = 0.33;
-      const fl = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.55, 20), fluid);
-      fl.position.y = 0.3;
-      fl.renderOrder = 2;
-      const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.06, 20), steel);
-      lid.position.y = 0.66;
-      jar.add(gl, fl, lid);
-      // What's in it
-      const spec = new THREE.Group();
-      spec.position.y = 0.32;
-      jar.add(spec);
-      if (k === 0) {
-        // A coiled tentacle with suckers
-        const pts: THREE.Vector3[] = [];
-        for (let s = 0; s < 30; s++) {
-          const a = s * 0.45;
-          pts.push(new THREE.Vector3(Math.cos(a) * (0.11 - s * 0.003), -0.2 + s * 0.014, Math.sin(a) * (0.11 - s * 0.003)));
-        }
-        spec.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.025, 8), flesh));
-      } else if (k === 1) {
-        // An eye, big, a slit pupil
-        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 24, 16), new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.3 }));
-        const iris = new THREE.Mesh(new THREE.CircleGeometry(0.06, 20), new THREE.MeshStandardMaterial({ color: 0xc87a10, emissive: 0x402000 }));
-        iris.position.z = 0.119;
-        const pupil = new THREE.Mesh(new THREE.PlaneGeometry(0.012, 0.09), new THREE.MeshBasicMaterial({ color: 0x000000 }));
-        pupil.position.z = 0.121;
-        eye.add(iris, pupil);
-        eye.rotation.y = 0.7;
-        spec.add(eye);
-        this.specimens.push(eye);
-      } else if (k === 2) {
-        // A claw: three hooked segments
-        for (let s = 0; s < 3; s++) {
-          const c = new THREE.Mesh(new THREE.ConeGeometry(0.03 - s * 0.006, 0.14, 8), fleshB);
-          c.position.set(0, -0.15 + s * 0.12, 0.02 * s);
-          c.rotation.x = 0.4 + s * 0.35;
-          spec.add(c);
-        }
-      } else {
-        // A lump of something with veins
-        const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.11, 3), flesh);
-        const p = lump.geometry.getAttribute('position') as THREE.BufferAttribute;
-        for (let i = 0; i < p.count; i++) {
-          const v = new THREE.Vector3().fromBufferAttribute(p, i);
-          v.multiplyScalar(1 + fbm(v.x * 18, v.y * 18 + v.z * 9) * 0.3);
-          p.setXYZ(i, v.x, v.y * 1.3, v.z);
-        }
-        lump.geometry.computeVertexNormals();
-        spec.add(lump);
-        this.specimens.push(lump);
-      }
-      // A label
-      const lc = makeCanvas(128, 32);
-      const lg = lc.getContext('2d')!;
-      lg.fillStyle = '#efece0';
-      lg.fillRect(0, 0, 128, 32);
-      lg.fillStyle = '#222';
-      lg.font = 'bold 14px monospace';
-      lg.fillText(`SPC-${(410 + k * 7).toString()}-${'ABCD'[k]}`, 8, 21);
-      const lt = new THREE.CanvasTexture(lc);
-      lt.colorSpace = THREE.SRGBColorSpace;
-      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.05), new THREE.MeshBasicMaterial({ map: lt }));
-      label.position.set(-0.225, 0.08, 0);
-      label.rotation.y = -Math.PI / 2;
-      jar.add(label);
-    }
-    // ---- Rock samples on shelves along the west wall
-    const rockMat = this.rockMat;
-    for (const y of [0.7, 1.3, 1.9]) {
-      box(0.45, 0.04, 3.4, x0 + 0.25, y, 134.2, steel);
-      for (let k = 0; k < 6; k++) {
-        const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.06 + Math.random() * 0.07, 1), k % 3 === 0 ? new THREE.MeshStandardMaterial({ color: 0x4a2a5a, emissive: 0x401060, emissiveIntensity: 0.5, roughness: 0.4 }) : rockMat);
-        r.position.set(x0 + 0.25, y + 0.1, 132.8 + k * 0.55);
-        r.rotation.set(Math.random() * 3, Math.random() * 3, 0);
-        g.add(r);
-        const tag = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.03, 0.07), new THREE.MeshStandardMaterial({ color: 0xe8e4d8 }));
-        tag.position.set(x0 + 0.47, y + 0.03, 132.8 + k * 0.55);
-        g.add(tag);
-      }
-    }
-    for (const s of [-1, 1]) box(0.04, 1.95, 0.04, x0 + 0.25 + s * 0.2, 0.975, 132.5, steel);
-    this.collide(x0, fy, 132.4, x0 + 0.5, fy + 2, 136);
-    // ---- The bench at the south wall: microscope, a screen, a rack of sample tubes
-    box(2.6, 0.06, 0.7, -0.6, 0.9, z1 - 0.4, dark, true);
-    box(2.5, 0.85, 0.05, -0.6, 0.45, z1 - 0.1, dark);
-    const scr = makeCanvas(256, 160);
-    {
-      const sg = scr.getContext('2d')!;
-      sg.fillStyle = '#04100a';
-      sg.fillRect(0, 0, 256, 160);
-      sg.strokeStyle = '#4dff8a';
-      sg.lineWidth = 2;
-      sg.beginPath();
-      for (let x = 0; x < 256; x += 2) sg.lineTo(x, 80 + Math.sin(x * 0.08) * 30 * Math.sin(x * 0.013));
-      sg.stroke();
-      sg.fillStyle = '#4dff8a';
-      sg.font = '12px monospace';
-      sg.fillText('ATMOS 0.71 bar  O2 19.8%', 8, 18);
-      sg.fillText('SAMPLE 4C — LIVE TISSUE', 8, 148);
-    }
-    const st = new THREE.CanvasTexture(scr);
-    st.colorSpace = THREE.SRGBColorSpace;
-    box(0.66, 0.42, 0.04, -1.3, 1.25, z1 - 0.22, dark);
-    const face = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.36), new THREE.MeshBasicMaterial({ map: st, toneMapped: false }));
-    face.position.set(-1.3, 1.25, z1 - 0.245);
-    face.rotation.y = Math.PI;
-    g.add(face);
-    // Microscope
-    const mic = new THREE.Group();
-    mic.position.set(0, 0.93, z1 - 0.45);
-    g.add(mic);
-    const micM = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.4 });
-    const mb = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.2), micM);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.26, 0.05), micM);
-    arm.position.set(0, 0.14, 0.06);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.16, 12), dark);
-    tube.position.set(0, 0.24, 0.0);
-    tube.rotation.x = -0.4;
-    mic.add(mb, arm, tube);
-    // ---- A generator in the corner, piped to the ceiling; crates
-    box(1.0, 1.3, 0.9, x0 + 0.7, 0.65, z1 - 0.7, new THREE.MeshStandardMaterial({ color: 0x3a5a3a, roughness: 0.6, metalness: 0.4 }), true);
-    for (let k = 0; k < 4; k++) box(0.9, 0.04, 0.02, x0 + 0.7, 0.4 + k * 0.2, z1 - 1.16, dark);
-    for (const dx of [-0.25, 0.25]) {
-      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, h - 1.3, 10), steel);
-      pipe.position.set(x0 + 0.7 + dx, 1.3 + (h - 1.3) / 2, z1 - 0.7);
-      g.add(pipe);
-    }
-    const crateM = new THREE.MeshStandardMaterial({ color: 0x5a6070, roughness: 0.6, metalness: 0.3 });
-    box(0.8, 0.6, 0.6, x1 - 0.7, 0.3, z1 - 0.45, crateM, true);
-    box(0.6, 0.45, 0.5, x1 - 0.75, 0.825, z1 - 0.45, crateM);
-    this.stationDetail(g, { dark, steel, yellow, wallMat });
+    // ---- Everything in it: the receiver he arrives on, the console, the furniture, the meal
+    const furn = furnishStation(
+      g,
+      (ax, ay, az, bx, by, bz) => this.collide(ax, fy + ay, az, bx, fy + by, bz),
+      BUILDING
+    );
+    this.specimens.push(...furn.specimens);
+    this.stationAnim = furn.anim;
+    // The pad he stands on, a step up
+    this.collide(RECEIVER.x - 1.05, fy - 0.1, RECEIVER.z - 1.05, RECEIVER.x + 1.05, fy + 0.122, RECEIVER.z + 1.05);
     // ---- Outside: a roof unit, an antenna mast, a beacon
     box(1.6, 0.6, 1.2, 1.4, h + 0.45, 135.5, dark);
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 3, 8), steel);
@@ -1646,216 +1528,6 @@ export class Level16Builder {
     g.add(paper, stone);
     g.updateMatrixWorld(true);
     return { at: paper.getWorldPosition(new THREE.Vector3()), obj: paper, cologne: new THREE.Vector3(-0.55, 0.04, -0.15).applyMatrix4(g.matrixWorld) };
-  }
-
-  /**
-   * The rest of the station: a locker with a spare helmet, a folding cot, a
-   * desk with a laptop, papers and a mug, a whiteboard of sketches of the
-   * things outside, the canyon map pinned up, cable trays and conduit along
-   * the ceiling, a vent, a first-aid box, signs.
-   */
-  private stationDetail(g: THREE.Group, M: { dark: THREE.Material; steel: THREE.Material; yellow: THREE.Material; wallMat: THREE.Material }): void {
-    const { x0, x1, z0, z1, h } = BUILDING;
-    const fy = g.position.y;
-    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, ry = 0): THREE.Mesh => {
-      const o = new THREE.Mesh(geo, m);
-      o.position.set(x, y, z);
-      o.rotation.y = ry;
-      g.add(o);
-      return o;
-    };
-    const canvasMat = (w: number, hh: number, draw: (c: CanvasRenderingContext2D) => void, basic = false): THREE.Material => {
-      const c = makeCanvas(w, hh);
-      draw(c.getContext('2d')!);
-      const t = new THREE.CanvasTexture(c);
-      t.colorSpace = THREE.SRGBColorSpace;
-      return basic ? new THREE.MeshBasicMaterial({ map: t, toneMapped: false }) : new THREE.MeshStandardMaterial({ map: t, roughness: 0.8 });
-    };
-    // ---- Locker in the north-west corner, a helmet on top
-    const lockerM = new THREE.MeshStandardMaterial({ color: 0x4a5a6a, roughness: 0.5, metalness: 0.5 });
-    add(new THREE.BoxGeometry(0.6, 1.9, 0.5), lockerM, x0 + 0.42, 0.95, z0 + 0.38);
-    for (let k = 0; k < 4; k++) add(new THREE.BoxGeometry(0.4, 0.015, 0.01), M.dark, x0 + 0.42, 1.55 + k * 0.04, z0 + 0.635);
-    add(new THREE.BoxGeometry(0.02, 0.18, 0.03), M.steel, x0 + 0.66, 1.0, z0 + 0.64);
-    const helm = add(new THREE.SphereGeometry(0.16, 20, 14), new THREE.MeshStandardMaterial({ color: 0xc0c4c8, roughness: 0.35, metalness: 0.3 }), x0 + 0.42, 2.06, z0 + 0.38);
-    helm.scale.set(1, 1.1, 1.05);
-    const vis = add(new THREE.SphereGeometry(0.13, 20, 10, -0.9, 1.8, 0.9, 0.9), new THREE.MeshStandardMaterial({ color: 0xd99a22, roughness: 0.1, metalness: 1 }), x0 + 0.42, 2.05, z0 + 0.42);
-    vis.rotation.y = 0;
-    this.collide(x0, fy, z0, x0 + 0.75, fy + 1.9, z0 + 0.65);
-    // ---- A folding cot on the west side, a rumpled blanket on it
-    const cotX = -2.15;
-    const cotZ = 134.3;
-    add(new THREE.BoxGeometry(0.72, 0.05, 1.85), new THREE.MeshStandardMaterial({ color: 0x3a4a3a, roughness: 0.9 }), cotX, 0.42, cotZ);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) add(new THREE.CylinderGeometry(0.015, 0.015, 0.42, 6), M.steel, cotX + sx * 0.33, 0.21, cotZ + sz * 0.85);
-    const blanket = new THREE.PlaneGeometry(0.76, 1.1, 10, 12);
-    blanket.rotateX(-Math.PI / 2);
-    const bp = blanket.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < bp.count; i++) bp.setY(i, Math.max(0, Math.sin(bp.getX(i) * 9 + bp.getZ(i) * 5) * 0.03 + Math.cos(bp.getZ(i) * 7) * 0.025) + 0.01);
-    blanket.computeVertexNormals();
-    add(blanket, new THREE.MeshStandardMaterial({ color: 0x8a4a2a, roughness: 0.95, side: THREE.DoubleSide }), cotX, 0.45, cotZ + 0.3);
-    add(new THREE.BoxGeometry(0.5, 0.1, 0.32), new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.95 }), cotX, 0.5, cotZ - 0.7);
-    this.collide(cotX - 0.36, fy, cotZ - 0.93, cotX + 0.36, fy + 0.45, cotZ + 0.93);
-    // ---- A desk on the east side: laptop, papers, a mug, a lamp
-    const dx = 2.05;
-    const dz = 135.4;
-    add(new THREE.BoxGeometry(1.2, 0.04, 0.62), new THREE.MeshStandardMaterial({ color: 0x5a5048, roughness: 0.6 }), dx, 0.76, dz);
-    for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.74, 0.58), M.dark, dx + sx * 0.56, 0.37, dz);
-    this.collide(dx - 0.6, fy, dz - 0.31, dx + 0.6, fy + 0.78, dz + 0.31);
-    add(new THREE.BoxGeometry(0.34, 0.015, 0.24), M.dark, dx - 0.15, 0.79, dz + 0.05);
-    const lid = add(new THREE.BoxGeometry(0.34, 0.22, 0.012), M.dark, dx - 0.15, 0.9, dz - 0.07);
-    lid.rotation.x = -0.25;
-    const scr = add(
-      new THREE.PlaneGeometry(0.31, 0.19),
-      canvasMat(256, 160, (c) => {
-        c.fillStyle = '#04120c';
-        c.fillRect(0, 0, 256, 160);
-        c.fillStyle = '#4dff8a';
-        c.font = '11px monospace';
-        ['SURVEY LOG 0417', 'DRONE-2 SIGNAL LOST', 'BIO-SIGNS: CANYON N', 'PACK SIZE: 6+', 'DO NOT GO OUT ALONE'].forEach((s, i) => c.fillText(s, 10, 22 + i * 18));
-        c.strokeStyle = '#4dff8a';
-        c.beginPath();
-        for (let x = 0; x < 256; x += 3) c.lineTo(x, 135 + Math.sin(x * 0.2) * 10 * Math.sin(x * 0.03));
-        c.stroke();
-      }, true),
-      dx - 0.15,
-      0.9,
-      dz - 0.063
-    );
-    scr.rotation.x = -0.25;
-    const paperM = new THREE.MeshStandardMaterial({ color: 0xeeeae0, roughness: 0.9 });
-    for (let k = 0; k < 4; k++) {
-      const pp = add(new THREE.PlaneGeometry(0.21, 0.29), paperM, dx + 0.3 + (k % 2) * 0.05, 0.783 + k * 0.002, dz + 0.05 - k * 0.03);
-      pp.rotation.set(-Math.PI / 2, 0, (k - 1.5) * 0.3);
-    }
-    const mug = add(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 16, 1, true), new THREE.MeshStandardMaterial({ color: 0x2a6a9a, roughness: 0.4, side: THREE.DoubleSide }), dx + 0.45, 0.83, dz - 0.18);
-    void mug;
-    add(new THREE.CircleGeometry(0.035, 12), new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.2 }), dx + 0.45, 0.865, dz - 0.18).rotation.x = -Math.PI / 2;
-    const lamp = add(new THREE.CylinderGeometry(0.012, 0.012, 0.35, 6), M.steel, dx - 0.5, 0.95, dz + 0.2);
-    lamp.rotation.z = 0.3;
-    add(new THREE.ConeGeometry(0.07, 0.09, 14, 1, true), M.yellow, dx - 0.44, 1.12, dz + 0.2).rotation.z = Math.PI + 0.6;
-    // ---- A whiteboard west of the door: sketches of the hounds, the big one, notes
-    add(new THREE.BoxGeometry(1.5, 0.95, 0.03), M.steel, -2.4, 1.6, z0 + 0.03);
-    add(
-      new THREE.PlaneGeometry(1.42, 0.87),
-      canvasMat(512, 312, (c) => {
-        c.fillStyle = '#f2f2ee';
-        c.fillRect(0, 0, 512, 312);
-        c.strokeStyle = '#2244aa';
-        c.lineWidth = 3;
-        // A hound: a body, legs, the round mouth with teeth
-        c.beginPath();
-        c.ellipse(120, 120, 70, 30, 0, 0, Math.PI * 2);
-        c.moveTo(70, 140);
-        c.lineTo(60, 200);
-        c.moveTo(95, 145);
-        c.lineTo(100, 205);
-        c.moveTo(150, 145);
-        c.lineTo(140, 205);
-        c.moveTo(175, 140);
-        c.lineTo(185, 200);
-        c.stroke();
-        c.beginPath();
-        c.arc(215, 105, 30, 0, Math.PI * 2);
-        c.stroke();
-        for (let k = 0; k < 12; k++) {
-          const a = (k / 12) * Math.PI * 2;
-          c.beginPath();
-          c.moveTo(215 + Math.cos(a) * 30, 105 + Math.sin(a) * 30);
-          c.lineTo(215 + Math.cos(a) * 16, 105 + Math.sin(a) * 16);
-          c.stroke();
-        }
-        c.fillStyle = '#cc2222';
-        c.font = 'bold 22px Arial';
-        c.fillText('NO EYES??', 160, 50);
-        c.fillStyle = '#2244aa';
-        c.font = '18px Arial';
-        c.fillText('hunt in packs - 5/6', 40, 250);
-        c.fillText('hear vibration?', 40, 275);
-        c.fillStyle = '#cc2222';
-        c.fillText('the BIG one - N. canyon', 300, 210);
-        c.fillText('DO NOT approach', 300, 236);
-        c.strokeStyle = '#cc2222';
-        c.beginPath();
-        c.ellipse(390, 120, 80, 40, 0, 0, Math.PI * 2);
-        for (let k = 0; k < 6; k++) {
-          c.moveTo(330 + k * 25, 150);
-          c.lineTo(315 + k * 28, 190);
-        }
-        c.stroke();
-      }),
-      -2.4,
-      1.6,
-      z0 + 0.05
-    );
-    // ---- The canyon map pinned up over the bench
-    add(
-      new THREE.PlaneGeometry(0.5, 0.7),
-      canvasMat(200, 280, (c) => {
-        c.fillStyle = '#d8d0b0';
-        c.fillRect(0, 0, 200, 280);
-        c.strokeStyle = '#6a5a3a';
-        c.lineWidth = 2;
-        c.beginPath();
-        for (let y = 0; y <= 280; y += 6) c.lineTo(100 + Math.sin(y * 0.03) * 40 - 25, y);
-        c.stroke();
-        c.beginPath();
-        for (let y = 0; y <= 280; y += 6) c.lineTo(100 + Math.sin(y * 0.03) * 40 + 25, y);
-        c.stroke();
-        c.fillStyle = '#cc2222';
-        c.font = 'bold 14px Arial';
-        c.fillText('X', 92, 20);
-        c.fillText('BASE', 80, 270);
-        c.fillStyle = '#2a8a4a';
-        c.fillRect(70, 140, 60, 18);
-      }),
-      1.1,
-      1.55,
-      z1 - 0.02,
-      Math.PI
-    );
-    // ---- Overhead: cable trays and conduit the length of the room, a vent
-    for (const sx of [-1, 1]) {
-      add(new THREE.BoxGeometry(0.3, 0.04, z1 - z0 - 0.2), M.steel, sx * 2.6, h - 0.15, (z0 + z1) / 2);
-      for (let k = 0; k < 4; k++) {
-        const cab = add(new THREE.CylinderGeometry(0.015, 0.015, z1 - z0 - 0.2, 6), new THREE.MeshStandardMaterial({ color: [0x1a1a1a, 0xaa2222, 0x2244aa, 0xd8b21c][k], roughness: 0.6 }), sx * 2.6 - 0.1 + k * 0.06, h - 0.11, (z0 + z1) / 2);
-        cab.rotation.x = Math.PI / 2;
-      }
-    }
-    const pipe = add(new THREE.CylinderGeometry(0.05, 0.05, x1 - x0 - 0.2, 10), M.steel, 0, h - 0.3, z1 - 0.3);
-    pipe.rotation.z = Math.PI / 2;
-    add(
-      new THREE.PlaneGeometry(0.6, 0.4),
-      canvasMat(120, 80, (c) => {
-        c.fillStyle = '#3a4048';
-        c.fillRect(0, 0, 120, 80);
-        c.fillStyle = '#101418';
-        for (let y = 8; y < 76; y += 9) c.fillRect(8, y, 104, 5);
-      }),
-      1.6,
-      h - 0.005,
-      133
-    ).rotation.x = Math.PI / 2;
-    // ---- A first-aid box and signs by the door
-    add(new THREE.BoxGeometry(0.34, 0.26, 0.1), new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.5 }), x1 - 0.3, 1.5, z0 + 0.06);
-    add(new THREE.BoxGeometry(0.06, 0.18, 0.01), new THREE.MeshStandardMaterial({ color: 0xcc1111 }), x1 - 0.3, 1.5, z0 + 0.115);
-    add(new THREE.BoxGeometry(0.18, 0.06, 0.01), new THREE.MeshStandardMaterial({ color: 0xcc1111 }), x1 - 0.3, 1.5, z0 + 0.115);
-    add(
-      new THREE.PlaneGeometry(0.42, 0.3),
-      canvasMat(210, 150, (c) => {
-        c.fillStyle = '#f2c400';
-        c.fillRect(0, 0, 210, 150);
-        c.fillStyle = '#111';
-        c.font = 'bold 22px Arial';
-        c.textAlign = 'center';
-        c.fillText('WARNING', 105, 40);
-        c.font = 'bold 15px Arial';
-        c.fillText('HOSTILE FAUNA', 105, 75);
-        c.fillText('SUIT SEALED AT', 105, 105);
-        c.fillText('ALL TIMES', 105, 128);
-      }),
-      -0.9,
-      2.0,
-      z0 + 0.012
-    );
   }
 
   // ------------------------------------------------------------- the crashed drone and its tablet

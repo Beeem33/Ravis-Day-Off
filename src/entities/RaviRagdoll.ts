@@ -168,7 +168,7 @@ function box(w: number, h: number, d: number, m: THREE.Material, x: number, y: n
 }
 
 /** A Glock-sized pistol, muzzle down −Z, grip under the back of the slide. */
-function pistolProp(): THREE.Group {
+export function pistolProp(): THREE.Group {
   const { steel, polymer } = mats();
   const g = new THREE.Group();
   g.add(box(0.026, 0.03, 0.188, steel, 0, 0.034, -0.02)); // slide
@@ -179,7 +179,7 @@ function pistolProp(): THREE.Group {
 }
 
 /** The pump gun, as Level 4 lays it across Sanjay's lap: muzzle down −Z. */
-function shotgunProp(): THREE.Group {
+export function shotgunProp(): THREE.Group {
   const { blued, wood } = mats();
   const g = new THREE.Group();
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.021, 0.62, 10), blued);
@@ -198,7 +198,7 @@ function shotgunProp(): THREE.Group {
 }
 
 /** The agents' baked AK, muzzle down −Z (droppedAK lays it on its side; stand it back up). */
-function rifleProp(): THREE.Group {
+export function rifleProp(): THREE.Group {
   const g = droppedAK();
   const gun = g.children[0];
   if (gun) {

@@ -30,8 +30,8 @@ export class SwimArms {
     this.shown = Math.max(0, Math.min(1, this.shown + (swimming ? dt * 2.5 : -dt * 4)));
     this.root.visible = this.shown > 0.01;
     if (!this.root.visible) return;
-    // A stroke every 1.6 s treading water, every 0.95 s swimming hard
-    this.phase = (this.phase + dt / (1.6 - Math.min(0.65, speed * 0.22))) % 1;
+    // A slow stroke: every 2.7 s treading water, every 1.9 s swimming hard
+    this.phase = (this.phase + dt / (2.7 - Math.min(0.8, speed * 0.25))) % 1;
     const t = this.phase;
     // Keyframes per hand (x mirrored for the left): position in front of the camera, and the roll of the palm
     //   reach out ahead → sweep out wide → round and in under the chin → back out ahead

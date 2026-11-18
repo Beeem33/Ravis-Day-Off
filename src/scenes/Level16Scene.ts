@@ -39,6 +39,9 @@ import { Hound, SpiderBoss, MawTrap, GlowShots, Droplets, grabberHead, wetFlesh,
 import { AlienBlaster } from '../entities/AlienBlaster';
 import { TrackerTablet } from '../entities/TrackerTablet';
 import { SwimArms } from '../entities/SwimArms';
+import { PanicArms } from '../entities/PanicArms';
+import { pistolProp, shotgunProp, rifleProp } from '../entities/RaviRagdoll';
+import type { RaviRig } from '../entities/RaviVisual';
 import { dressSuitBody } from '../entities/SuitDress';
 import { HelmetVisor } from '../ui/HelmetVisor';
 import { AcidBubbles } from '../fx/AcidBubbles';
@@ -271,7 +274,27 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private grabbed = false;
   private presses = 0;
   /** Didn't break free: up to its mouth, in, and eaten. */
-  private eating: { t: number; from: THREE.Vector3; done: boolean } | null = null;
+  private eating: {
+    t: number;
+    from: THREE.Vector3;
+    /** He's dead (the very end). */
+    done: boolean;
+    /** Cut from his eyes to outside, where it's chewing on him. */
+    cut: boolean;
+    munches: number;
+    lastChew: number;
+    gun: THREE.Object3D | null;
+    gunVel: THREE.Vector3;
+    gunSpin: THREE.Vector3;
+    gunDown: boolean;
+    body: RaviRig | null;
+    scream: { set(distance: number): void; stop(): void } | null;
+    swallowed: boolean;
+  } | null = null;
+  /** His hands up in front of him, shoving at it and shaking. */
+  private panic!: PanicArms;
+  /** The tracker's up (M toggles it). */
+  private tabletOn = false;
   private eatFade: HTMLElement | null = null;
   private wasSwimming = false;
   private tree: { i: number; stage: 'reach' | 'wrap' | 'fall' | 'drag'; t: number; from: THREE.Vector3; to: THREE.Vector3; dir: THREE.Vector3; hit: boolean } | null = null;
@@ -522,6 +545,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.show();
     this.visor = new HelmetVisor(this.ctx.uiRoot);
     this.swimArms = new SwimArms(this.player.camera);
+    this.panic = new PanicArms(this.player.camera);
     this.bubbles = new AcidBubbles(this.scene, {
       inWater: inLake,
       bed: (x, z) => Math.max(LAKE_BED - 0.4, groundY(x, z)),
@@ -556,7 +580,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.player.camera.updateProjectionMatrix();
     this.fadeEl.style.transition = 'opacity 1.6s';
     this.later(0.05, () => (this.fadeEl.style.opacity = '0'));
-    this.setObjective(this.checkpoint === 0 ? 'RELEASE THE STATION DOOR' : 'FOLLOW THE TRACKER — HOLD [M]');
+    this.setObjective(this.checkpoint === 0 ? 'RELEASE THE STATION DOOR' : 'FOLLOW THE TRACKER — [M]');
     input.requestPointerLock();
   }
 
@@ -567,6 +591,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.eatFade?.remove();
     this.visor?.dispose();
     this.swimArms?.dispose();
+    this.panic?.dispose();
+    this.eating?.scream?.stop();
     this.bubbles?.dispose();
     this.ctx.audio.stopTrackMusic(0.8);
     this.ctx.audio.stopBossMusic(0.5);
@@ -688,7 +714,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
 
     const free = this.playable && input.pointerLocked && !p.swimming;
-    const wantTablet = this.hasTablet && free && input.isDown('KeyM') && !this.drink.engaged;
+    // M puts the tracker up, M again puts it away
+    if (this.hasTablet && free && !this.drink.engaged && input.wasPressed('KeyM')) this.tabletOn = !this.tabletOn;
+    if (!this.hasTablet || !free || this.drink.engaged) this.tabletOn = false;
+    const wantTablet = this.tabletOn;
     if (input.wasPressed('KeyG') && free && !a.reloading && !this.knife.busy && !wantTablet) this.drink.start();
     if (!p.alive) this.drink.abort();
     const busy = this.phase !== 'play' || p.swimming || !!this.eating || this.drink.engaged || this.tablet.up > 0.05 || wantTablet;
@@ -732,11 +761,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.drink.update(dt, p);
     this.tablet.update(dt, wantTablet, pos, p.yaw, L.portal.at, p.bob);
     this.swimArms.update(dt, p.swimming && p.alive, p.velocity.length());
+    this.panic.update(dt);
     this.visor.update(dt, p.sprinting || p.swimming ? 1 : 0, p.lastMouseDX, p.lastMouseDY, p.bob.phase * Math.min(1, p.bob.amount * 1.5));
     // Up out of the lake: water running down the visor
     if (this.wasSwimming && !p.swimming && p.alive) this.visor.splash();
     this.wasSwimming = p.swimming;
-    this.visor.visible = p.alive; // the death camera is out of his head
+    this.visor.visible = p.alive && !this.eating?.cut; // the death camera, and the last of the cutscene, are out of his head
     this.bubbles.update(dt, pos);
     this.updateMarkers();
     if (this.phase === 'play') {
@@ -946,8 +976,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (silent) return;
     this.ctx.audio.itemGet();
     this.checkpoint = Math.max(this.checkpoint, 1);
-    this.setObjective('FOLLOW THE TRACKER — HOLD [M]');
-    this.hint('HOLD [M] TO LOOK AT THE TRACKER — IT HAS A FIX ON AN EXIT PORTAL', 7);
+    this.setObjective('FOLLOW THE TRACKER — [M]');
+    this.hint('PRESS [M] TO BRING UP THE TRACKER (AND AGAIN TO PUT IT AWAY) — IT HAS A FIX ON AN EXIT PORTAL', 7);
     this.tabletHinted = 1;
   }
 
@@ -2110,15 +2140,37 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
 
-  /** Lifted off his feet on the tongue and turned to face its mouth, which opens wide. */
+  /**
+   * Eaten. First through his own eyes: the gun goes out of his hand, his
+   * hands come up shaking and he screams, as the tongue hauls him up to the
+   * mouth gaping open in front of him and in past the teeth. Then outside:
+   * his legs hanging out of its mouth, kicking, as it chews him down — mouth
+   * open, jaws shut, again and again — and swallows.
+   */
   private startEat(): void {
     const p = this.player;
     this.grabbed = false;
     this.hud.setPrompt(null);
+    this.tabletOn = false;
     p.stunned = true;
     p.cinematic = true;
     p.velocity.set(0, 0, 0);
-    this.eating = { t: 0, from: p.camera.position.clone(), done: false };
+    this.eating = {
+      t: 0,
+      from: p.camera.position.clone(),
+      done: false,
+      cut: false,
+      munches: 0,
+      lastChew: 0,
+      gun: null,
+      gunVel: V(0, 0, 0),
+      gunSpin: V(0, 0, 0),
+      gunDown: false,
+      body: null,
+      scream: null,
+      swallowed: false
+    };
+    this.cinema(true);
     this.ctx.audio.giantRoar(1, 3);
     this.shake = Math.max(this.shake, 0.6);
     if (!this.eatFade) {
@@ -2135,51 +2187,186 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const p = this.player;
     const b = this.boss;
     const T = this.bossTongue;
+    const audio = this.ctx.audio;
     e.t += dt;
     const t = e.t;
-    // Its mouth, and the way it faces
+    // Its mouth, the way it faces, and the plane of its lips
     const M = b.mouthCore.getWorldPosition(new THREE.Vector3());
     const C = b.body.getWorldPosition(new THREE.Vector3());
     const F = M.clone().sub(C).normalize();
-    const lipFront = M.clone().addScaledVector(F, 1.7);
-    const throat = M.clone().addScaledVector(F, -0.5);
-    let eye: THREE.Vector3;
-    if (t < 1.4) {
-      // Up off the ground and round to face it, the mouth stretching open
-      const k = smooth(t / 1.4);
-      eye = e.from.clone().lerp(lipFront, k);
-      eye.y += Math.sin(k * Math.PI) * 0.7;
-      b.gape = k;
-      this.shake = Math.max(this.shake, 0.15);
-    } else {
-      // In past the lips, into the dark
-      const k = smooth((t - 1.4) / 0.55);
-      eye = lipFront.clone().lerp(throat, k);
-      b.gape = t < 1.9 ? 1 : Math.max(0, 1 - (t - 1.9) * 7);
+    const lips = M.clone().addScaledVector(F, 0.85);
+    this.updateDroppedGun(dt);
+
+    if (!e.cut) {
+      // ---- through his eyes
+      const lipFront = M.clone().addScaledVector(F, 1.8);
+      let eye: THREE.Vector3;
+      if (t < 1.45) {
+        const k = smooth(t / 1.45);
+        eye = e.from.clone().lerp(lipFront, k);
+        eye.y += Math.sin(k * Math.PI) * 0.7;
+        b.gape = 0.25 + 0.75 * k;
+      } else {
+        const k = smooth((t - 1.45) / 0.5);
+        eye = lipFront.clone().lerp(lips.clone().addScaledVector(F, -0.2), k);
+        b.gape = 1;
+      }
+      this.shake = Math.max(this.shake, 0.12 + (t > 1.45 ? 0.25 : 0));
+      // The gun goes, and his hands come up
+      if (!e.gun && t > 0.2) this.dropGun();
+      this.panic.active = t > 0.25;
+      this.panic.push = Math.min(1, 0.3 + t * 0.45);
+      this.panic.fear = 1 + Math.max(0, t - 1) * 0.6;
+      if (!e.scream && t > 0.3) {
+        e.scream = audio.fallScream();
+        audio.enemyScream(1);
+      }
+      e.scream?.set(0);
+      if (this.eatFade) this.eatFade.style.opacity = String(Math.min(1, smooth((t - 1.55) / 0.4)));
+      const look = M.clone().sub(eye);
+      p.position.copy(eye).add(V(0, -p.eyeHeight, 0));
+      p.yaw = Math.atan2(-look.x, -look.z);
+      p.pitch = Math.atan2(look.y, Math.hypot(look.x, look.z));
+      T.tip.copy(eye).add(V(0, -0.45, 0));
+      T.len = T.tip.distanceTo(T.from);
+      if (t >= 2.0) this.cutToChewing(M, F);
+      return;
     }
-    if (this.eatFade) this.eatFade.style.opacity = String(Math.min(1, smooth((t - 1.35) / 0.5)));
-    // Where he is, and looking straight into it
-    const look = (t < 1.4 ? M : throat.clone().addScaledVector(F, -2)).clone().sub(eye);
-    p.position.copy(eye).add(V(0, -p.eyeHeight, 0));
-    p.yaw = Math.atan2(-look.x, -look.z);
-    p.pitch = Math.atan2(look.y, Math.hypot(look.x, look.z));
-    T.tip.copy(eye).add(V(0, -0.45, 0));
+
+    // ---- outside: chewing him down
+    const tm = t - 2.0;
+    const CHEW = 0.62;
+    const c = (tm % CHEW) / CHEW;
+    if (!e.swallowed) {
+      // Open wide... and shut
+      b.gape = c < 0.62 ? 0.2 + 0.8 * smooth(c / 0.62) : Math.max(0.12, 1 - smooth((c - 0.62) / 0.12) * 0.9);
+      const chew = Math.floor(tm / CHEW);
+      if (c > 0.72 && chew >= e.lastChew) {
+        e.lastChew = chew + 1;
+        e.munches++;
+        audio.houndBite(4);
+        audio.squelchPop();
+        if (e.munches % 2) audio.bodyThud(4);
+        this.shake = Math.max(this.shake, 0.45);
+        this.drops.burst(lips.clone(), F.clone().setY(0.5), 16, 2.6, BOSS_BLOOD);
+        this.drops.burst(lips.clone(), F.clone().setY(0.2), 8, 2, 0x8a1010);
+      }
+      // Further in with every bite; kicking, then less, then not at all
+      const ins = Math.min(1.75, 0.3 + e.munches * 0.24 + smooth(c) * 0.06);
+      this.poseEaten(e.body!, lips, F, ins, Math.max(0, 1 - e.munches / 5), t);
+      if (e.munches >= 6) {
+        // And down
+        e.swallowed = true;
+        e.body!.root.visible = false;
+        audio.squelchPop();
+        audio.giantRoar(0.9, 6);
+        this.shake = Math.max(this.shake, 0.8);
+        b.gape = 0;
+      }
+    } else {
+      b.gape = Math.max(0, b.gape - dt * 3);
+    }
+    T.tip.copy(lips);
     T.len = T.tip.distanceTo(T.from);
-    // The jaws close
-    if (!e.done && t >= 1.9) {
+    if (e.swallowed && !e.done && tm > CHEW * 6 + 1.2) {
       e.done = true;
-      this.ctx.audio.houndBite(0);
-      this.ctx.audio.squelchPop();
-      this.ctx.audio.bodyThud(0);
-      this.later(0.12, () => this.ctx.audio.houndBite(0));
-      this.later(0.3, () => this.ctx.audio.giantRoar(0.6, 2));
-      this.shake = Math.max(this.shake, 1.4);
-      this.drops.burst(M.clone(), F.clone().setY(0.4), 40, 3.5, BOSS_BLOOD);
       this.retract(T);
-      // Dead where he is, in it: no body left lying on the ground
+      // Dead where he is, in it: the camera stays out here, no body on the ground
       p.deathHandler = { begin: () => true, update: () => {} };
       p.kill(BOSS_NAME, M);
     }
+  }
+
+  /** The gun out of his hand: tumbling down past his feet to the ground. */
+  private dropGun(): void {
+    const e = this.eating!;
+    const p = this.player;
+    const kind = this.arsenal.active;
+    const prop = kind === 'pistol' ? pistolProp() : kind === 'shotgun' ? shotgunProp() : rifleProp();
+    const cam = p.camera;
+    const fwd = cam.getWorldDirection(new THREE.Vector3());
+    const right = new THREE.Vector3().crossVectors(fwd, V(0, 1, 0)).normalize();
+    prop.position.copy(cam.position).addScaledVector(fwd, 0.45).addScaledVector(right, 0.18).add(V(0, -0.32, 0));
+    prop.quaternion.copy(cam.quaternion);
+    this.scene.add(prop);
+    e.gun = prop;
+    e.gunVel.copy(fwd).multiplyScalar(0.8).add(V(0, -0.6, 0));
+    e.gunSpin.set(Math.random() * 6 - 3, Math.random() * 4 - 2, 4 + Math.random() * 3);
+    // ...and out of his hand in first person
+    this.arsenal.held.stow = 1;
+  }
+
+  private updateDroppedGun(dt: number): void {
+    const e = this.eating;
+    if (!e?.gun || e.gunDown) return;
+    const g = e.gun;
+    e.gunVel.y -= 10.5 * dt;
+    g.position.addScaledVector(e.gunVel, dt);
+    g.rotation.x += e.gunSpin.x * dt;
+    g.rotation.y += e.gunSpin.y * dt;
+    g.rotation.z += e.gunSpin.z * dt;
+    const floor = groundY(g.position.x, g.position.z) + 0.06;
+    if (g.position.y <= floor) {
+      g.position.y = floor;
+      e.gunDown = true;
+      // Down flat on its side
+      g.rotation.set(0, g.rotation.y, Math.PI / 2);
+      this.ctx.audio.clink();
+      this.ctx.audio.bodyThud(this.player.camera.position.distanceTo(g.position));
+    }
+  }
+
+  /** Cut to outside: his body, head first in its mouth, legs out; the camera off to one side of it. */
+  private cutToChewing(M: THREE.Vector3, F: THREE.Vector3): void {
+    const e = this.eating!;
+    const p = this.player;
+    e.cut = true;
+    e.scream?.stop();
+    e.scream = null;
+    // (one last one, muffled by the mouth closing on it)
+    this.ctx.audio.enemyScream(0.6);
+    this.panic.hide();
+    if (this.eatFade) this.eatFade.style.opacity = '0';
+    const body = RaviVisual.rig('body');
+    RaviVisual.dressBody?.(body);
+    this.scene.add(body.root);
+    e.body = body;
+    // The camera: out to one side of its face, a little low, looking at the mouth
+    const side = new THREE.Vector3().crossVectors(F, V(0, 1, 0)).normalize();
+    const lips = M.clone().addScaledVector(F, 0.85);
+    const cam = lips.clone().addScaledVector(F, 3.3).addScaledVector(side, 2.5);
+    cam.y = Math.max(groundY(cam.x, cam.z) + 1.0, lips.y + 0.1);
+    const look = lips.clone().addScaledVector(F, 0.9).sub(cam);
+    p.position.copy(cam).add(V(0, -p.eyeHeight, 0));
+    p.yaw = Math.atan2(-look.x, -look.z);
+    p.pitch = Math.atan2(look.y, Math.hypot(look.x, look.z));
+    this.shake = Math.max(this.shake, 0.6);
+    this.ctx.audio.houndBite(4);
+  }
+
+  /**
+   * His body, head first `ins` metres into its mouth, legs drooping out of
+   * it; `kick` 0..1 how hard his legs are going.
+   */
+  private poseEaten(rig: RaviRig, lips: THREE.Vector3, F: THREE.Vector3, ins: number, kick: number, t: number): void {
+    // Out of its mouth and sagging down under his own weight
+    const out = F.clone().add(V(0, -0.35, 0)).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), out.clone().negate());
+    // Turned onto his front, so his legs bend down the way legs do
+    q.multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI));
+    rig.root.quaternion.copy(q);
+    // His head `ins` inside the lips: the feet (model origin) that far back out along the sag
+    const jolt = Math.sin(t * 40) * 0.015 * kick;
+    rig.root.position.copy(lips).addScaledVector(out, 1.65 - ins + jolt);
+    rig.clear();
+    const k = Math.sin(t * 13);
+    rig.turn('thigh_l', [1, 0, 0], 28 * kick * k - 8);
+    rig.turn('thigh_r', [1, 0, 0], -28 * kick * k - 8);
+    rig.turn('calf_l', [1, 0, 0], -(30 + 25 * kick * Math.max(0, k)));
+    rig.turn('calf_r', [1, 0, 0], -(30 + 25 * kick * Math.max(0, -k)));
+    rig.turn('upperarm_l', [0, 0, 1], -60);
+    rig.turn('upperarm_r', [0, 0, 1], 60);
+    rig.apply();
   }
 
   private hurtTongue(dmg: number): void {

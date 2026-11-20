@@ -862,6 +862,8 @@ export class MawTrap {
   private close = 0;
   private t = Math.random() * 10;
   static readonly REACH = 0.8;
+  /** How high the mouth stands on its mound. */
+  static readonly LIFT = 0.27;
 
   constructor() {
     if (!trapSkin) {
@@ -883,7 +885,7 @@ export class MawTrap {
     this.throatGlow = new THREE.MeshStandardMaterial({ color: 0x1a0204, emissive: 0x8a1018, emissiveIntensity: 0.5, roughness: 0.4, side: THREE.BackSide });
     const throat = new THREE.Mesh(new THREE.SphereGeometry(0.5, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), this.throatGlow);
     throat.rotation.x = Math.PI;
-    throat.scale.set(1, 0.7, 1);
+    throat.scale.set(1, 0.52, 1);
     this.group.add(throat);
     const inner = new THREE.Mesh(teethRing(16, 0.42, 0.14, 0.022, 1.2, 0), toothMat);
     inner.rotation.x = -Math.PI / 2;
@@ -920,8 +922,34 @@ export class MawTrap {
       }
       this.petals.push(flap);
     }
+    // All of it up on a mound of flesh: the throat sits inside the mound, never down in the ground
+    const lift = new THREE.Group();
+    lift.position.y = MawTrap.LIFT;
+    for (const c of [...this.group.children]) lift.add(c);
+    this.group.add(lift);
+    const mound = new THREE.LatheGeometry(
+      [
+        [0.0, -0.06],
+        [1.12, -0.06],
+        [1.08, 0.0],
+        [0.98, 0.1],
+        [0.86, 0.19],
+        [0.74, 0.26],
+        [0.64, MawTrap.LIFT + 0.01]
+      ].map(([x, y]) => new THREE.Vector2(x, y)),
+      40
+    );
+    const mp = mound.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < mp.count; i++) {
+      const a = Math.atan2(mp.getZ(i), mp.getX(i));
+      const k = 1 + Math.sin(a * 5 + 0.7) * 0.06 + Math.sin(a * 11) * 0.03;
+      mp.setXYZ(i, mp.getX(i) * k, mp.getY(i), mp.getZ(i) * k);
+    }
+    mound.computeVertexNormals();
+    paint(mound, (q, _n, c) => void c.setHex(0x6a5a3a).lerp(new THREE.Color(0x9a9466), smooth(q.y / MawTrap.LIFT)));
+    this.group.add(new THREE.Mesh(mound, skin));
     this.hitbox = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 0.7, 12), new THREE.MeshBasicMaterial({ visible: false }));
-    this.hitbox.position.y = 0.3;
+    this.hitbox.position.y = 0.4;
     this.hitbox.userData.trap = this;
     this.group.add(this.hitbox);
     this.pose();
@@ -997,8 +1025,30 @@ export class SpiderBoss {
   private legs: SpiderLeg[] = [];
   private mouthFlare: THREE.Group;
   private sacs: THREE.MeshStandardMaterial;
-  readonly maxHp = 120;
-  hp = 120;
+  /** The egg sacs down its flanks: `grow` 0 just burst .. 1 ripe. */
+  readonly eggSacs: { g: THREE.Group; inner: THREE.Group; grow: number }[] = [];
+  /** 0..1: the ripe sacs swelling, about to burst (the scene sets it). */
+  swell = 0;
+
+  /** The ripe ones, how many. */
+  ripeSacs(): number {
+    return this.eggSacs.filter((s) => s.grow >= 1).length;
+  }
+
+  /** Every ripe sac bursts: where each was (world), for what comes out of it. */
+  popSacs(): THREE.Vector3[] {
+    const out: THREE.Vector3[] = [];
+    this.body.updateMatrixWorld(true);
+    for (const s of this.eggSacs) {
+      if (s.grow < 1) continue;
+      out.push(s.g.getWorldPosition(new THREE.Vector3()));
+      s.grow = 0;
+    }
+    this.swell = 0;
+    return out;
+  }
+  readonly maxHp = 320;
+  hp = 320;
   alive = true;
   deadT = 0;
   yaw = 0;
@@ -1084,12 +1134,28 @@ export class SpiderBoss {
     }
     // ---- Sacs on the flanks: swollen, glowing through the skin
     this.sacs = new THREE.MeshStandardMaterial({ color: 0xffa060, emissive: 0xff6a20, emissiveIntensity: 0.9, roughness: 0.2, transparent: true, opacity: 0.85 });
+    const curled = new THREE.MeshStandardMaterial({ color: 0x1a0a06, roughness: 0.6 });
+    const membrane = new THREE.SphereGeometry(0.24, 24, 18);
     for (const s of [-1, 1])
       for (let k = 0; k < 3; k++) {
-        const sac = new THREE.Mesh(new THREE.SphereGeometry(0.16 - k * 0.025, 18, 14), this.sacs);
-        sac.position.set(s * 1.0, -0.15 - k * 0.05, -0.8 + k * 0.45);
-        sac.scale.set(0.7, 1, 1.1);
-        this.body.add(sac);
+        const g = new THREE.Group();
+        g.position.set(s * 1.02, -0.12 - k * 0.06, -0.85 + k * 0.5);
+        const sac = new THREE.Mesh(membrane, this.sacs);
+        sac.scale.set(0.72, 0.95, 1.05);
+        sac.renderOrder = 2;
+        g.add(sac);
+        // The thing inside: a dark knot of a body and its legs folded round it
+        const inner = new THREE.Group();
+        inner.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10), curled));
+        for (let j = 0; j < 6; j++) {
+          const leg = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.01, 4, 10, Math.PI * 0.9), curled);
+          leg.rotation.set(Math.PI / 2, 0, (j / 6) * Math.PI * 2);
+          inner.add(leg);
+        }
+        inner.scale.set(0.8, 1, 1.1);
+        g.add(inner);
+        this.body.add(g);
+        this.eggSacs.push({ g, inner, grow: 1 });
       }
     // ---- The mouth: fat lips round a fanged pit, ropes of drool
     const mo = mouth(0.7, 0.9, flesh, { teeth: 26, glow: 0xff5a3a, lip: 0x7a1a2c, inner: 0xd87080 });
@@ -1261,7 +1327,15 @@ export class SpiderBoss {
   }
 
   update(dt: number, vel: THREE.Vector3, aims: (THREE.Vector3 | null)[]): void {
-    this.sacs.emissiveIntensity = this.alive ? 0.7 + 0.4 * Math.sin(this.t * 3) : Math.max(0, 0.9 - this.deadT);
+    this.sacs.emissiveIntensity = this.alive ? 0.7 + 0.4 * Math.sin(this.t * 3) + this.swell * 1.6 : Math.max(0, 0.9 - this.deadT);
+    // The sacs: growing back after they burst; the ripe ones swelling when it's about to let them go
+    for (const [i, s] of this.eggSacs.entries()) {
+      if (s.grow < 1) s.grow = Math.min(1, s.grow + dt / 18);
+      const ripe = s.grow >= 1;
+      const k = ripe ? 1 + this.swell * 0.45 + Math.sin(this.t * (6 + this.swell * 18) + i) * (0.03 + this.swell * 0.06) : smooth(s.grow) * 0.85;
+      s.g.scale.setScalar(Math.max(0.001, k));
+      s.inner.rotation.y = Math.sin(this.t * 2 + i) * (0.3 + this.swell);
+    }
     if (!this.alive) {
       this.deadT += dt;
       this.t += dt;

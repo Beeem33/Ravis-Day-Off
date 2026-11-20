@@ -62,6 +62,8 @@ export class AlienBlaster {
   open = 0;
   /** Extra shake in his arm (the graft taking; something heavy on the end of the tongue). */
   tremor = 0;
+  /** 0..1: the mouth gaping (eating something it's pulled in), the scene's to set. */
+  chomp = 0;
   /** Where the hand is while the scene has it (the graft); null for the usual place. */
   pose: { p: THREE.Vector3; r: THREE.Euler } | null = null;
   static readonly SCALE = 0.74;
@@ -137,7 +139,7 @@ export class AlienBlaster {
     const f = 0.8 + 0.2 * Math.sin(this.t * 11 + this.s) + (Math.random() - 0.5) * 0.15 + this.recoil * 1.2;
     a.core.scale.setScalar(f);
     (a.glow.material as THREE.SpriteMaterial).opacity = 0.3 + 0.2 * f;
-    const br = 1 + this.recoil * 0.25 + Math.sin(this.t * 4 + this.s) * 0.04;
+    const br = 1 + this.recoil * 0.25 + Math.sin(this.t * 4 + this.s) * 0.04 + this.chomp * 0.7;
     a.flare.scale.set(br, br, 1);
     a.tendrils.forEach((t, i) => {
       const k = smooth(this.grip * 1.5 - i * 0.06);

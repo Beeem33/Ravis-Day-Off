@@ -869,13 +869,14 @@ export class ParticleManager {
    * shooter and a little mist — so every kill reads as "bullet went
    * through" in that direction, and no two look alike.
    */
-  bloodSpray(pos: THREE.Vector3, dir: THREE.Vector3, big: boolean, floorY: number): void {
+  bloodSpray(pos: THREE.Vector3, dir: THREE.Vector3, big: boolean, floorY: number, hue = 0.995): void {
+    const lit = hue === 0.995 ? 0 : 0.12;
     const jet = (big ? 34 : 14) + Math.floor(Math.random() * 10);
     const exitSpeed = 5 + Math.random() * 3.5;
     const cone = 0.35 + Math.random() * 0.3; // per-kill variation in how tight the jet is
     const exitPos = pos.clone().addScaledVector(dir, 0.18); // start just behind the body
     for (let i = 0; i < jet; i++) {
-      const c = new THREE.Color().setHSL(0.995, 0.9, 0.1 + Math.random() * 0.2);
+      const c = new THREE.Color().setHSL(hue, 0.9, 0.1 + lit + Math.random() * 0.2);
       this.solid.spawn(
         exitPos,
         this.scatter(dir, cone, exitSpeed),
@@ -890,12 +891,12 @@ export class ParticleManager {
     // Entry splash: a few drops kicked back toward the shooter
     const back = dir.clone().negate();
     for (let i = 0; i < (big ? 8 : 4); i++) {
-      const c = new THREE.Color().setHSL(0.995, 0.9, 0.15 + Math.random() * 0.15);
+      const c = new THREE.Color().setHSL(hue, 0.9, 0.15 + lit + Math.random() * 0.15);
       this.solid.spawn(pos, this.scatter(back, 1.6, 1.8), 0.3 + Math.random() * 0.3, 0.1 + Math.random() * 0.12, c, 12, 0.8, floorY);
     }
     // Fine mist hanging at the wound, drifting with the exit direction
     for (let i = 0; i < (big ? 18 : 8); i++) {
-      const c = new THREE.Color().setHSL(0.99, 0.85, 0.22);
+      const c = new THREE.Color().setHSL(hue === 0.995 ? 0.99 : hue, 0.85, 0.22 + lit);
       this.solid.spawn(pos, this.scatter(dir, 1.8, 1.6), 0.18 + Math.random() * 0.25, 0.08, c, 5, 1.6, floorY);
     }
   }

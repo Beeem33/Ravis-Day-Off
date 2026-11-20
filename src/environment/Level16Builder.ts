@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { furnishStation, RECEIVER, type StationAnim } from './Level16Station';
+import { furnishStation, airlock, RECEIVER, type StationAnim } from './Level16Station';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Collider } from './OfficeLevelBuilder';
 import type { CombatLevel } from '../scenes/CombatScene';
@@ -109,6 +109,30 @@ export const PILLARS = [
   [-177, 8, 8.0, 2.7]
 ].map(([z, dx, y, r]) => ({ x: valleyX(z) + dx, z, y, r }));
 export const LEDGE_Y = 8.6;
+
+type Pillar = { x: number; z: number; y: number; r: number };
+/** A pillar's edge, out from its middle at angle `a`: broken, lobed, never round. */
+export function pillarEdge(p: Pillar, a: number): number {
+  return p.r * (1.04 + 0.15 * Math.sin(3 * a + p.z * 0.37) + 0.08 * Math.sin(5 * a + p.x * 0.7) + 0.04 * Math.sin(11 * a + p.z));
+}
+/** Its top: not flat — tilted a little, lumpy — but it can be stood on anywhere. */
+export function pillarTop(p: Pillar, x: number, z: number): number {
+  const dx = x - p.x;
+  const dz = z - p.z;
+  return p.y + 0.07 + dx * 0.04 * Math.sin(p.z) + dz * 0.04 * Math.cos(p.x) + fbm(x * 0.8 + 3, z * 0.8) * 0.16 - Math.hypot(dx, dz) * 0.03;
+}
+export function onPillar(p: Pillar, x: number, z: number): boolean {
+  const d = Math.hypot(x - p.x, z - p.z);
+  if (d > p.r * 1.35) return false;
+  return d < pillarEdge(p, Math.atan2(z - p.z, x - p.x));
+}
+/** The chasm's near and far edges, wandering across the canyon rather than cut straight. */
+export function chasmNear(x: number): number {
+  return CHASM.z1 + Math.sin(x * 0.21 + 1.3) * 1.1 + Math.sin(x * 0.53) * 0.5;
+}
+export function chasmFar(x: number): number {
+  return CHASM.z0 + Math.sin(x * 0.17 + 0.4) * 1.0 + Math.sin(x * 0.61 + 2) * 0.45;
+}
 /** The cave in the canyon's end wall: part two is in it. */
 export const CAVE_MOUTH_Z = -203;
 const CAVE_X = valleyX(CAVE_MOUTH_Z);
@@ -160,7 +184,8 @@ export function inCave(x: number, z: number): boolean {
 /** Over the chasm (not on a pillar). */
 export function inChasm(x: number, z: number): boolean {
   if (z >= CHASM.z1 || z <= CHASM.z0) return false;
-  return !PILLARS.some((p) => Math.hypot(x - p.x, z - p.z) < p.r);
+  if (z >= chasmNear(x) || z <= chasmFar(x)) return false;
+  return !PILLARS.some((p) => onPillar(p, x, z));
 }
 
 /** Decorative ponds: shallow, glowing, bubbling (placed along the canyon's middle). */
@@ -285,10 +310,10 @@ export function groundY(x: number, z: number): number {
   if (inCave(x, z)) return CAVE_Y + fbm(x * 0.4, z * 0.4) * 0.06;
   let h = baseY(x, z);
   // The chasm, its pillars, and the ledge beyond it (the canyon's walls still rise either side)
-  if (z < CHASM.z1 + 0.01) {
+  if (z < chasmNear(x) + 0.01) {
     const wall = Math.abs(x - valleyX(z)) - halfWidth(z) + fbm(x * 0.06, z * 0.06) * 4 > 0;
-    if (z <= CHASM.z0) return Math.max(h, LEDGE_Y + fbm(x * 0.3, z * 0.3) * 0.12);
-    for (const p of PILLARS) if (Math.hypot(x - p.x, z - p.z) < p.r) return p.y + 0.07;
+    if (z <= chasmFar(x)) return Math.max(h, LEDGE_Y + fbm(x * 0.3, z * 0.3) * 0.12);
+    for (const p of PILLARS) if (onPillar(p, x, z)) return pillarTop(p, x, z);
     if (!wall) return CHASM.floor + fbm(x * 0.1, z * 0.1) * 3;
     return h;
   }
@@ -529,7 +554,7 @@ export interface TreeTrunk {
 
 export interface Level16Data extends CombatLevel {
   start: { pos: THREE.Vector3; yaw: number };
-  door: { slab: THREE.Object3D; collider: Collider; button: THREE.Vector3; buttonMat: THREE.MeshStandardMaterial; light: THREE.PointLight };
+  door: { slab: THREE.Object3D; collider: Collider; button: THREE.Vector3; buttonMat: THREE.MeshStandardMaterial; light: THREE.PointLight; open: (k: number) => void };
   tablet: { obj: THREE.Object3D; at: THREE.Vector3; beacon: THREE.MeshStandardMaterial };
   portal: { group: THREE.Group; disc: THREE.ShaderMaterial; at: THREE.Vector3 };
   trunks: TreeTrunk[];
@@ -1082,6 +1107,32 @@ export class Level16Builder {
         }
       }
     }
+    // Out on the floor: clusters of fallen boulders, here and there across the way
+    for (let z = 120; z > -140; z -= 9) {
+      if (hash(z, 31) < 0.45) continue;
+      const hw = halfWidth(z);
+      const off = (hash(z, 32) - 0.5) * 2 * Math.max(0, hw - 7);
+      const cx = valleyX(z) + off;
+      const cz = z + (hash(z, 33) - 0.5) * 5;
+      const clear = (x: number, zz: number): boolean =>
+        Math.hypot(x, zz - 134.5) > 16 &&
+        Math.hypot(x - MEADOW.x, zz - MEADOW.z) > 16 &&
+        Math.hypot(x - ARENA.x, zz - ARENA.z) > 30 &&
+        Math.hypot(x - HILL.x, zz - HILL.z) > HILL.r + 3 &&
+        Math.abs(zz - CLIFF_Z) > 10 &&
+        !(zz < MASSIF.z1 + 6 && zz > MASSIF.z0 - 8) &&
+        !PONDS.some((p) => Math.hypot(x - p.x, zz - p.z) < p.r + 3) &&
+        !DENS.some((d) => Math.hypot(x - d.mouth.x, zz - d.mouth.z) < 7) &&
+        !this.traps.some((t) => Math.hypot(t.x - x, t.z - zz) < 3.5) &&
+        outside(x, zz) < -3;
+      const n = 2 + Math.floor(hash(z, 34) * 3);
+      for (let k = 0; k < n; k++) {
+        const x = cx + (hash(z + k, 35) - 0.5) * 4;
+        const zz = cz + (hash(z + k, 36) - 0.5) * 4;
+        if (!clear(x, zz)) continue;
+        put(x, zz, 0.7 + hash(z + k, 37) * (k === 0 ? 1.4 : 0.7), 0.35);
+      }
+    }
     // Crags on the outcrops
     for (const o of OUTCROPS)
       for (let k = 0; k < 9; k++) {
@@ -1361,28 +1412,16 @@ export class Level16Builder {
     const light = new THREE.PointLight(0xdfeeff, 6, 10, 1.4);
     light.position.set(0, fy + h - 0.4, (z0 + z1) / 2);
     this.group.add(light);
-    // ---- The door: a slab that rides up into the lintel, hazard stripes, the button by it
+    // ---- The door: an airlock — two leaves sliding apart into a housing on the inside of the wall; the button by it
     const slab = new THREE.Group();
-    slab.position.set(0, fy, z0 - 0.1);
-    this.group.add(slab);
-    const sm = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.5, 0.12), dark);
-    sm.position.y = 1.25;
-    slab.add(sm);
-    for (let k = 0; k < 5; k++) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.5, 0.01), yellow);
-      s.position.set(-0.8 + k * 0.4, 1.25, 0.065);
-      s.rotation.z = 0.4;
-      s.scale.y = 0.18;
-      s.position.y = 0.3;
-      slab.add(s);
-    }
-    const collider = this.collide(-1, fy, z0 - 0.2, 1, fy + 2.5, z0);
+    const door = airlock(g, (ax, ay, az, bx, by, bz) => this.collide(ax, fy + ay, az, bx, fy + by, bz), { z0, h });
+    const collider = this.collide(-1, fy, z0 - 0.2, 1, fy + 2.5, z0 + 0.3);
     // The button: a yellow box on the wall to the door's right, a big red mushroom on it
-    box(0.3, 0.42, 0.1, 1.55, 1.3, z0 + 0.06, yellow);
+    box(0.3, 0.42, 0.1, 2.55, 1.3, z0 + 0.06, yellow);
     const buttonMat = new THREE.MeshStandardMaterial({ color: 0x5a0a08, emissive: 0xff2a1a, emissiveIntensity: 1.2 });
     const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.06, 18), buttonMat);
     btn.rotation.x = Math.PI / 2;
-    btn.position.set(1.55, 1.34, z0 + 0.13);
+    btn.position.set(2.55, 1.34, z0 + 0.13);
     g.add(btn);
     const plateC = makeCanvas(256, 64);
     {
@@ -1397,7 +1436,7 @@ export class Level16Builder {
     const pt = new THREE.CanvasTexture(plateC);
     pt.colorSpace = THREE.SRGBColorSpace;
     const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.07), new THREE.MeshBasicMaterial({ map: pt }));
-    plate.position.set(1.55, 1.58, z0 + 0.115);
+    plate.position.set(2.55, 1.58, z0 + 0.115);
     g.add(plate);
     // ---- Everything in it: the receiver he arrives on, the console, the furniture, the meal
     const furn = furnishStation(
@@ -1420,7 +1459,7 @@ export class Level16Builder {
     g.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) this.shootables.push(o);
     });
-    return { slab, collider, button: new THREE.Vector3(1.55, fy + 1.34, z0 + 0.13), buttonMat, light };
+    return { slab, collider, button: new THREE.Vector3(2.55, fy + 1.34, z0 + 0.13), buttonMat, light, open: door.open };
   }
 
   /**
@@ -2030,18 +2069,35 @@ export class Level16Builder {
 
   private buildChasm(): void {
     this.glowMats.push(this.chasmGlow);
+    // Each pillar: a spire of rock up out of the dark, wider below, banded, its top broken and uneven
     for (const p of PILLARS) {
       const H = p.y - CHASM.floor + 2;
-      const geo = new THREE.CylinderGeometry(p.r * 1.06, p.r * 1.5, H, 28, 24, false);
+      const geo = new THREE.CylinderGeometry(1, 1, H, 56, 46, false);
       const pa = geo.getAttribute('position') as THREE.BufferAttribute;
       for (let i = 0; i < pa.count; i++) {
         const x = pa.getX(i);
         const y = pa.getY(i);
         const z = pa.getZ(i);
-        const top = y > H / 2 - 0.01;
-        if (top) continue;
-        const k = 1 + (fbm(x * 0.6 + p.z, y * 0.15 + z * 0.6) * 0.25 + (ridged(x * 0.4, y * 0.3 + z) - 0.5) * 0.12) * Math.min(1, (H / 2 - y) / 1.5);
-        pa.setXYZ(i, x * k, y, z * k);
+        const rr = Math.hypot(x, z);
+        const a = Math.atan2(z, x);
+        const edge = pillarEdge(p, a);
+        if (y > H / 2 - 1e-3) {
+          // The top (the cap's ring and its middle): the outline, and the surface he stands on
+          const wx = p.x + Math.cos(a) * edge * rr;
+          const wz = p.z + Math.sin(a) * edge * rr;
+          pa.setXYZ(i, Math.cos(a) * edge * rr, pillarTop(p, wx, wz) - (p.y + 0.07) + H / 2, Math.sin(a) * edge * rr);
+          continue;
+        }
+        const below = H / 2 - y;
+        const rough = smoothstep(0.2, 1.6, below);
+        // Wider toward its foot, lumpy, banded in strata, chunks broken out of it
+        let k = 1 + below * 0.01 + 0.22 * smoothstep(0.6, 7, below) - 0.1 * smoothstep(9, 22, below) + (fbm(a * 2.2 + p.z, y * 0.18) * 0.22 + (ridged(a * 1.6 + p.x, y * 0.32) - 0.5) * 0.16 + Math.sin(y * 2.1 + a) * 0.025) * rough;
+        if (below < 0.25) k *= 0.96 + below * 0.16;
+        const wx = p.x + Math.cos(a) * edge;
+        const wz = p.z + Math.sin(a) * edge;
+        const topHere = pillarTop(p, wx, wz) - (p.y + 0.07) + H / 2;
+        const yy = below < 0.25 ? Math.min(y, topHere - (0.25 - below) * 0.3) : y;
+        pa.setXYZ(i, Math.cos(a) * edge * k, yy, Math.sin(a) * edge * k);
       }
       geo.deleteAttribute('uv');
       geo.computeVertexNormals();
@@ -2049,31 +2105,57 @@ export class Level16Builder {
       m.position.set(p.x, p.y + 0.07 - H / 2, p.z);
       this.group.add(m);
       this.shootables.push(m);
-      // Moss and a few tufts on top
-      const moss = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.02, 28), new THREE.MeshStandardMaterial({ color: 0x4a6a3a, roughness: 0.95 }));
-      moss.rotation.x = -Math.PI / 2;
-      moss.position.set(p.x, p.y + 0.075, p.z);
-      this.group.add(moss);
-      // Glowing caps round its rim and a light over it: something to aim for in the dark
+      // On top: a few loose stones, and glowing fungus in the cracks near its edge (something to aim for in the dark)
       const capGeo = new THREE.SphereGeometry(1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
-      const n = 16;
+      const n = 14;
       const caps = new THREE.InstancedMesh(capGeo, this.chasmGlow, n);
       const m4 = new THREE.Matrix4();
       for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI * 2 + hash(k, p.z) * 0.3;
-        const rr = p.r * (0.86 + hash(k, 3) * 0.1);
-        const s = 0.07 + hash(k, 5) * 0.09;
-        m4.compose(
-          new THREE.Vector3(p.x + Math.cos(a) * rr, p.y + 0.07, p.z + Math.sin(a) * rr),
-          new THREE.Quaternion(),
-          new THREE.Vector3(s * 1.4, s * 0.7, s * 1.4)
-        );
+        const a = hash(k, p.z) * Math.PI * 2;
+        const rr = pillarEdge(p, a) * (0.7 + hash(k, 3) * 0.24);
+        const x = p.x + Math.cos(a) * rr;
+        const z = p.z + Math.sin(a) * rr;
+        const s = 0.05 + hash(k, 5) * 0.1;
+        m4.compose(new THREE.Vector3(x, pillarTop(p, x, z) - 0.01, z), new THREE.Quaternion(), new THREE.Vector3(s * 1.4, s * 0.7, s * 1.4));
         caps.setMatrixAt(k, m4);
       }
       this.group.add(caps);
-      const lamp = new THREE.PointLight(0x5affc0, 5, 11, 1.4);
-      lamp.position.set(p.x, p.y + 1.6, p.z);
-      this.group.add(lamp);
+      for (let k = 0; k < 5; k++) {
+        const a = hash(k + 20, p.x) * Math.PI * 2;
+        const rr = pillarEdge(p, a) * hash(k, 9) * 0.8;
+        const x = p.x + Math.cos(a) * rr;
+        const z = p.z + Math.sin(a) * rr;
+        const st = new THREE.Mesh(new THREE.DodecahedronGeometry(0.08 + hash(k, 11) * 0.12, 1), this.rockMat);
+        st.position.set(x, pillarTop(p, x, z) + 0.03, z);
+        st.rotation.set(hash(k, 1) * 3, hash(k, 2) * 3, 0);
+        st.scale.y = 0.6;
+        this.group.add(st);
+      }
+    }
+    // Spires that never made it up: broken stumps and needles of rock out of the dark below, well under the pillars' tops
+    for (let k = 0; k < 16; k++) {
+      const z = CHASM.z1 - 3 - hash(k, 1) * (CHASM.z1 - CHASM.z0 - 6);
+      const x = valleyX(z) + (hash(k, 2) - 0.5) * halfWidth(z) * 1.6;
+      if (PILLARS.some((p) => Math.hypot(p.x - x, p.z - z) < p.r + 2.5)) continue;
+      const top = -12 + hash(k, 3) * 8;
+      const H = top - CHASM.floor + 1;
+      const r = 0.8 + hash(k, 4) * 1.6;
+      const geo = new THREE.CylinderGeometry(r * 0.25, r, H, 18, 16, false);
+      const pa = geo.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < pa.count; i++) {
+        const xx = pa.getX(i);
+        const y = pa.getY(i);
+        const zz = pa.getZ(i);
+        const a = Math.atan2(zz, xx);
+        const kk = 1 + fbm(a * 2 + k, y * 0.2) * 0.3 + (ridged(a * 1.4, y * 0.3 + k) - 0.5) * 0.2;
+        pa.setXYZ(i, xx * kk, y + (y > H / 2 - 1e-3 ? (hash(i, k) - 0.5) * 0.8 : 0), zz * kk);
+      }
+      geo.deleteAttribute('uv');
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, this.rockMat);
+      m.position.set(x, CHASM.floor + H / 2 - 0.5, z);
+      m.rotation.set((hash(k, 5) - 0.5) * 0.25, hash(k, 6) * 6, (hash(k, 7) - 0.5) * 0.25);
+      this.group.add(m);
     }
     // The mist down in it
     const mist = new THREE.Mesh(

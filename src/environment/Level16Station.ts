@@ -16,7 +16,7 @@ import { makeCanvas } from './Level8Builder';
 
 export interface StationAnim {
   /** Every frame: `t` seconds since the level began; `eye` where he's looking from. */
-  update(t: number, dt: number, eye: THREE.Vector3): void;
+  update(t: number, dt: number, eye: THREE.Vector3, cam?: THREE.Camera): void;
 }
 
 export interface StationOut {
@@ -242,13 +242,11 @@ function drawScreen(c: CanvasRenderingContext2D, t: number): void {
   c.fillStyle = '#e8fff4';
   c.fillText('K09 - A', px + 22, 172);
   const blink = 0.75 + 0.25 * Math.sin(t * 5);
-  c.save();
-  c.shadowColor = '#4dff8a';
-  c.shadowBlur = 22;
-  c.fillStyle = `rgba(90,255,140,${blink})`;
   c.font = 'bold 48px "Courier New", monospace';
+  c.fillStyle = `rgba(90,255,140,${0.18 * blink})`;
+  for (const [ox, oy] of [[-3, 0], [3, 0], [0, -3], [0, 3]]) c.fillText('SUCCESSFUL', px + 22 + ox, 236 + oy);
+  c.fillStyle = `rgba(90,255,140,${blink})`;
   c.fillText('SUCCESSFUL', px + 22, 236);
-  c.restore();
   // A tick in a box
   c.strokeStyle = '#5aff96';
   c.lineWidth = 5;
@@ -425,12 +423,12 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
     mesh(new THREE.CylinderGeometry(0.05, 0.05, pylonTop - 0.75, 20), M.darker, 0, 0.52 + (pylonTop - 0.75) / 2, 0, p);
     const helix: THREE.Vector3[] = [];
     const turns = 34;
-    for (let i = 0; i <= turns * 16; i++) {
-      const u = i / (turns * 16);
+    for (let i = 0; i <= turns * 8; i++) {
+      const u = i / (turns * 8);
       const aa = u * turns * Math.PI * 2;
       helix.push(new THREE.Vector3(Math.cos(aa) * 0.066, 0.62 + u * (pylonTop - 1.05), Math.sin(aa) * 0.066));
     }
-    mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(helix), turns * 16, 0.009, 6), M.copper, 0, 0, 0, p);
+    mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(helix), turns * 8, 0.009, 4), M.copper, 0, 0, 0, p);
     // Glowing insulator rings up it
     for (let i = 0; i < 4; i++) {
       const ring = mesh(new THREE.TorusGeometry(0.08, 0.016, 10, 32), coilGlow, 0, 0.6 + i * ((pylonTop - 1.0) / 3), 0, p);
@@ -507,16 +505,16 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
   mesh(rbox(1.02, 0.66, 0.06, 0.02), M.darker, 0, 0, 0, monitor);
   mesh(rbox(0.3, 0.22, 0.06, 0.02), M.dark, 0, 0, -0.06, monitor);
   mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.5, 16), M.steel, 0, -0.42, -0.06, monitor);
-  const sc = makeCanvas(1024, 640);
+  const sc = makeCanvas(512, 320);
   const sctx = sc.getContext('2d')!;
+  sctx.setTransform(0.5, 0, 0, 0.5, 0, 0);
   drawScreen(sctx, 0);
   const stex = new THREE.CanvasTexture(sc);
   stex.colorSpace = THREE.SRGBColorSpace;
   stex.anisotropy = 8;
   const face = mesh(new THREE.PlaneGeometry(0.96, 0.6), new THREE.MeshBasicMaterial({ map: stex, toneMapped: false }), 0, 0, 0.031, monitor);
   void face;
-  const screenLight = new THREE.PointLight(0x6ad8ff, 1.2, 3.2, 1.6);
-  add(screenLight, 0, 1.3, 0.5, con);
+
   // A tower beside it, LEDs down its face
   const tower = add(new THREE.Group(), 0.72, 0, -0.05, con);
   mesh(rbox(0.24, 0.62, 0.5, 0.02), M.darker, 0, 0.31, 0, tower);
@@ -916,8 +914,7 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
     const shade = mesh(new THREE.ConeGeometry(0.06, 0.1, 32, 1, true), std({ color: 0xd8b21c, roughness: 0.4, metalness: 0.3, side: THREE.DoubleSide }), -0.28, 0.33, 0, lampG);
     shade.rotation.z = 2.4;
     mesh(new THREE.SphereGeometry(0.022, 16, 12), glow(0xfff0c0, 0xffe0a0, 2.5), -0.27, 0.32, 0, lampG);
-    const lampLight = new THREE.PointLight(0xffd8a0, 0.8, 2.2, 1.8);
-    add(lampLight, -0.3, 0.25, 0, lampG);
+
   }
   // ---- The meal: a plate with half a sandwich (bitten), crumbs, a fork; a mug, still steaming; a crushed chip bag
   const steamAt = new THREE.Vector3();
@@ -1338,7 +1335,7 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
       c.font = '20px Arial';
       c.fillText('ATMOSPHERE UNBREATHABLE', 210, 256);
     });
-    mesh(new THREE.PlaneGeometry(0.42, 0.3), std({ map: wp, roughness: 0.6 }), -0.9, 2.0, z0 + 0.012);
+    mesh(new THREE.PlaneGeometry(0.42, 0.3), std({ map: wp, roughness: 0.6 }), -2.75, 1.9, z0 + 0.012);
     // The canyon map pinned over the bench
     const mp = canvasTex(400, 560, (c) => {
       c.fillStyle = '#d8d0b0';
@@ -1389,8 +1386,9 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
   // =============================================================== it all moving
   let last = -1;
   const screenAt = new THREE.Vector3(CONSOLE.x, 1.3, CONSOLE.z);
+  const camDir = new THREE.Vector3();
   const anim: StationAnim = {
-    update(t, dt, eye) {
+    update(t, dt, eye, cam) {
       const near = Math.abs(eye.x - screenAt.x) < 14 && Math.abs(eye.z - screenAt.z) < 14;
       if (!near) return;
       for (const u of updates) u(t, dt, eye);
@@ -1406,13 +1404,201 @@ export function furnishStation(g: THREE.Group, solid: Solid, room: { x0: number;
       recLight.intensity = 2.2 + 0.5 * Math.sin(t * 2.2) + 18 * arrive;
       leds.forEach((m, i) => (m.emissiveIntensity = Math.sin(t * (3 + i * 1.7) + i) > -0.2 ? 1.6 : 0.1));
       // The console's face, redrawn a dozen times a second
-      if (t - last > 1 / 12 || t < last) {
+      // The console's face, redrawn eight times a second while he's close enough to read it and facing it
+      const sx = screenAt.x - eye.x;
+      const sz = screenAt.z - eye.z;
+      const facing = cam ? (cam.getWorldDirection(camDir).x * sx + camDir.z * sz) / Math.max(0.01, Math.hypot(sx, sz)) > 0.3 : true;
+      if (Math.hypot(sx, sz) < 7 && facing && (t - last > 1 / 8 || t < last)) {
         last = t;
         drawScreen(sctx, t);
         stex.needsUpdate = true;
       }
-      screenLight.intensity = 1.1 + 0.15 * Math.sin(t * 9);
+
     }
   };
   return { anim, specimens, pad: new THREE.Vector3(R.x, 0.122, R.z) };
+}
+
+// ================================================================ the airlock
+
+/**
+ * The station's door: a heavy airlock housing on the inside of the north
+ * wall round a 2 m × 2.5 m opening, its two leaves meeting in the middle at
+ * an amber seam and sliding apart into the housing either side. A hazard
+ * frame round the opening, inside and out; a beacon over it that turns and
+ * flashes while it moves; a small window in each leaf. `open(k)`: 0 shut,
+ * 1 fully open.
+ */
+export function airlock(g: THREE.Group, solid: Solid, room: { z0: number; h: number }): { open: (k: number) => void } {
+  const z0 = room.z0;
+  const D = 0.32;
+  const steel = new THREE.MeshStandardMaterial({ color: 0x3a4148, roughness: 0.42, metalness: 0.75 });
+  const housingTex = canvasTex(512, 512, (c) => {
+    c.fillStyle = '#4a525a';
+    c.fillRect(0, 0, 512, 512);
+    // Panels, their seams and bolts
+    c.strokeStyle = 'rgba(0,0,0,0.55)';
+    c.lineWidth = 4;
+    for (let y = 0; y <= 512; y += 128) {
+      c.beginPath();
+      c.moveTo(0, y);
+      c.lineTo(512, y);
+      c.stroke();
+    }
+    for (let x = 0; x <= 512; x += 256) {
+      c.beginPath();
+      c.moveTo(x, 0);
+      c.lineTo(x, 512);
+      c.stroke();
+    }
+    c.fillStyle = '#2a3036';
+    for (let y = 12; y < 512; y += 128) for (let x = 12; x < 512; x += 64) c.fillRect(x, y, 6, 6);
+    for (let k = 0; k < 500; k++) {
+      c.fillStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '0,0,0'},0.04)`;
+      c.fillRect(Math.random() * 512, Math.random() * 512, 2 + Math.random() * 20, 1 + Math.random() * 2);
+    }
+  });
+  housingTex.wrapS = housingTex.wrapT = THREE.RepeatWrapping;
+  const housingMat = new THREE.MeshStandardMaterial({ map: housingTex, roughness: 0.5, metalness: 0.6 });
+  const hz = canvasTex(64, 512, (c) => {
+    c.fillStyle = '#e0b81c';
+    c.fillRect(0, 0, 64, 512);
+    c.fillStyle = '#141414';
+    for (let y = -64; y < 512; y += 64) {
+      c.beginPath();
+      c.moveTo(0, y);
+      c.lineTo(64, y + 32);
+      c.lineTo(64, y + 64);
+      c.lineTo(0, y + 32);
+      c.fill();
+    }
+  });
+  hz.wrapT = THREE.RepeatWrapping;
+  const blk = (x0: number, y0: number, x1: number, y1: number): void => {
+    const geo = rbox(x1 - x0, y1 - y0, D, 0.03);
+    const m = new THREE.Mesh(geo, housingMat);
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, z0 + D / 2);
+    g.add(m);
+    solid(x0, y0, z0, x1, y1, z0 + D);
+  };
+  blk(-2.15, 0, -1.0, 2.5);
+  blk(1.0, 0, 2.15, 2.5);
+  blk(-2.15, 2.5, 2.15, 3.0);
+  // The hazard frame round the opening, inside face and out
+  const strip = (w: number, h: number, x: number, y: number, z: number, rot = 0, ry = 0): void => {
+    const t = hz.clone();
+    t.repeat.set(1, Math.max(1, Math.round(Math.max(w, h) / 0.35)));
+    t.needsUpdate = true;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w, h), Math.max(w, h)), new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 }));
+    m.position.set(x, y, z);
+    m.rotation.set(0, ry, rot);
+    g.add(m);
+  };
+  for (const [z, ry] of [[z0 + D + 0.004, 0], [z0 - 0.204, Math.PI]] as [number, number][]) {
+    strip(0.14, 2.5, -1.07, 1.25, z, 0, ry);
+    strip(0.14, 2.5, 1.07, 1.25, z, 0, ry);
+    strip(2.28, 0.14, 0, 2.57, z, Math.PI / 2, ry);
+  }
+  // Steel jamb faces inside the opening
+  for (const sx of [-1, 1]) {
+    const j = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.5, D + 0.2), steel);
+    j.position.set(sx * 1.03, 1.25, z0 + D / 2 - 0.1);
+    g.add(j);
+  }
+  // The beacon over it
+  const beaconMat = new THREE.MeshStandardMaterial({ color: 0x3a2400, emissive: 0xffa020, emissiveIntensity: 0.4, roughness: 0.3, transparent: true, opacity: 0.9 });
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.12, 24), beaconMat);
+  beacon.position.set(0, 2.82, z0 + D + 0.06);
+  g.add(beacon);
+  const cage = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.03, 24), steel);
+  cage.position.set(0, 2.75, z0 + D + 0.06);
+  g.add(cage);
+  // The leaves
+  const leafTex = (right: boolean): THREE.CanvasTexture =>
+    canvasTex(256, 640, (c) => {
+      c.fillStyle = '#5a636c';
+      c.fillRect(0, 0, 256, 640);
+      // A recessed panel, top and bottom
+      for (const [y, h] of [[40, 230], [330, 270]]) {
+        c.fillStyle = '#4a5259';
+        c.fillRect(24, y, 208, h);
+        c.strokeStyle = 'rgba(0,0,0,0.6)';
+        c.lineWidth = 4;
+        c.strokeRect(24, y, 208, h);
+        c.strokeStyle = 'rgba(255,255,255,0.12)';
+        c.lineWidth = 2;
+        c.strokeRect(28, y + 4, 200, h - 8);
+      }
+      // Chevrons by the meeting edge
+      c.save();
+      c.beginPath();
+      c.rect(right ? 0 : 196, 330, 60, 270);
+      c.clip();
+      c.fillStyle = '#e0b81c';
+      c.fillRect(right ? 0 : 196, 330, 60, 270);
+      c.fillStyle = '#141414';
+      for (let y = 300; y < 640; y += 40) {
+        c.beginPath();
+        c.moveTo(right ? 0 : 196, y);
+        c.lineTo(right ? 60 : 256, y + (right ? 30 : -30) + 30);
+        c.lineTo(right ? 60 : 256, y + 50);
+        c.lineTo(right ? 0 : 196, y + 20);
+        c.fill();
+      }
+      c.restore();
+      // Rivets along the edges
+      c.fillStyle = '#2c3237';
+      for (let y = 16; y < 640; y += 32) {
+        c.fillRect(8, y, 6, 6);
+        c.fillRect(242, y, 6, 6);
+      }
+      c.fillStyle = '#e8e4d0';
+      c.font = 'bold 22px Arial';
+      c.textAlign = 'center';
+      c.fillText(right ? 'AIRLOCK' : 'A-1', 128, 312);
+    });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x9ac8e0, emissive: 0x1a3040, emissiveIntensity: 0.6, roughness: 0.05, metalness: 0.2 });
+  const seam = new THREE.MeshStandardMaterial({ color: 0x3a2400, emissive: 0xffa020, emissiveIntensity: 1.4 });
+  const leaves: THREE.Group[] = [];
+  for (const sx of [-1, 1]) {
+    const leaf = new THREE.Group();
+    leaf.position.set(sx * 0.5, 0, z0 + D / 2);
+    g.add(leaf);
+    const tex = leafTex(sx > 0);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.48, 0.09), [steel, steel, steel, steel, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.65 }), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.65 })]);
+    panel.position.y = 1.24;
+    leaf.add(panel);
+    // A round porthole, its rim
+    const win = new THREE.Mesh(new THREE.CircleGeometry(0.11, 32), glassMat);
+    win.position.set(sx * -0.18, 1.72, 0.047);
+    leaf.add(win);
+    const win2 = win.clone();
+    win2.position.z = -0.047;
+    win2.rotation.y = Math.PI;
+    leaf.add(win2);
+    for (const zz of [0.05, -0.05]) {
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.018, 10, 36), steel);
+      rim.position.set(sx * -0.18, 1.72, zz);
+      leaf.add(rim);
+    }
+    // The amber seam down its meeting edge, and a grab handle
+    const sm = new THREE.Mesh(new THREE.BoxGeometry(0.025, 2.4, 0.1), seam);
+    sm.position.set(-sx * 0.495, 1.24, 0);
+    leaf.add(sm);
+    const handle = new THREE.Mesh(rbox(0.04, 0.42, 0.05, 0.015), steel);
+    handle.position.set(-sx * 0.36, 1.1, 0.07);
+    leaf.add(handle);
+    leaves.push(leaf);
+  }
+  let t = 0;
+  return {
+    open(k: number) {
+      t += 0.05;
+      leaves.forEach((l, i) => (l.position.x = (i === 0 ? -1 : 1) * (0.5 + k * 1.06)));
+      const moving = k > 0.001 && k < 0.999;
+      beaconMat.emissiveIntensity = moving ? 1.2 + 1.8 * Math.max(0, Math.sin(t * 6)) : k >= 0.999 ? 0.25 : 0.4;
+      beacon.rotation.y += moving ? 0.3 : 0;
+      seam.emissiveIntensity = k > 0.02 ? 0.3 : 1.4;
+    }
+  };
 }

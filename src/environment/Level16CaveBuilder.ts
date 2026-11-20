@@ -169,7 +169,7 @@ export class Level16CaveBuilder {
       shootables: this.shootables,
       glassPanes: [],
       start: { pos: new THREE.Vector3(0, caveGround(0, 2), 2), yaw: 0 },
-      door: { slab: new THREE.Object3D(), collider: { box: new THREE.Box3(far, far), disabled: true }, button: far.clone(), buttonMat: new THREE.MeshStandardMaterial(), light: new THREE.PointLight() },
+      door: { slab: new THREE.Object3D(), collider: { box: new THREE.Box3(far, far), disabled: true }, button: far.clone(), buttonMat: new THREE.MeshStandardMaterial(), light: new THREE.PointLight(), open: () => {} },
       tablet: { obj: new THREE.Object3D(), at: far.clone(), beacon: new THREE.MeshStandardMaterial() },
       portal,
       trunks: [],

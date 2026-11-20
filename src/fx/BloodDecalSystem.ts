@@ -36,6 +36,8 @@ export class BloodDecalSystem {
   private holeMat!: THREE.Material;
   private dripMat: THREE.Material;
   private lit: boolean;
+  /** Alien blood: yellow-green, not red. */
+  private alien: boolean;
   private decals: THREE.Mesh[] = [];
   private drips: Drip[] = [];
   private growing: Growing[] = [];
@@ -46,9 +48,10 @@ export class BloodDecalSystem {
 
   constructor(
     private scene: THREE.Scene,
-    opts: { lit?: boolean; max?: number } = {}
+    opts: { lit?: boolean; max?: number; alien?: boolean } = {}
   ) {
     this.lit = opts.lit ?? false;
+    this.alien = opts.alien ?? false;
     if (opts.max) {
       this.max = opts.max;
       this.maxDrips = Math.min(this.maxDrips, Math.round(opts.max / 3));
@@ -57,7 +60,7 @@ export class BloodDecalSystem {
     for (let i = 0; i < 2; i++) this.poolMats.push(this.makeMaterial(this.drawSplatter(i * 13 + 3, true), 0.58));
     this.holeMat = this.makeMaterial(this.drawBulletHole(), 0.9);
     this.dripMat = this.material(0.65, {
-      color: 0x5a0a0c,
+      color: this.alien ? 0x6a7a10 : 0x5a0a0c,
       transparent: true,
       opacity: 0.85,
       depthWrite: false,
@@ -112,7 +115,9 @@ export class BloodDecalSystem {
       const x = cx + Math.cos(ang) * dist;
       const y = cy + Math.sin(ang) * dist;
       const shade = 30 + rnd() * 60;
-      g.fillStyle = `rgba(${110 + shade}, ${6 + rnd() * 12}, ${8 + rnd() * 10}, ${pool ? 0.85 : 0.55 + rnd() * 0.4})`;
+      g.fillStyle = this.alien
+        ? `rgba(${80 + shade * 0.8}, ${110 + shade}, ${10 + rnd() * 20}, ${pool ? 0.85 : 0.55 + rnd() * 0.4})`
+        : `rgba(${110 + shade}, ${6 + rnd() * 12}, ${8 + rnd() * 10}, ${pool ? 0.85 : 0.55 + rnd() * 0.4})`;
       g.beginPath();
       g.ellipse(x, y, r, r * (0.5 + rnd() * 0.7), ang, 0, Math.PI * 2);
       g.fill();
@@ -120,7 +125,7 @@ export class BloodDecalSystem {
     if (!pool) {
       for (let i = 0; i < 6; i++) {
         const ang = rnd() * Math.PI * 2;
-        g.strokeStyle = `rgba(${120 + rnd() * 50}, 8, 10, ${0.5 + rnd() * 0.3})`;
+        g.strokeStyle = this.alien ? `rgba(${100 + rnd() * 40}, ${140 + rnd() * 50}, 14, ${0.5 + rnd() * 0.3})` : `rgba(${120 + rnd() * 50}, 8, 10, ${0.5 + rnd() * 0.3})`;
         g.lineWidth = 1 + rnd() * 2.5;
         g.beginPath();
         g.moveTo(cx, cy);

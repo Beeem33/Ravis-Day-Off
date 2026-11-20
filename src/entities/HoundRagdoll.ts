@@ -36,13 +36,13 @@ export class HoundRagdoll {
     hound.body.getWorldQuaternion(bodyQ);
     const q = new CANNON.Quaternion(bodyQ.x, bodyQ.y, bodyQ.z, bodyQ.w);
     const make = (shape: CANNON.Shape, mass: number, at: THREE.Vector3): CANNON.Body => {
-      const b = new CANNON.Body({ mass, shape, linearDamping: 0.15, angularDamping: 0.4 });
+      const b = new CANNON.Body({ mass, shape, linearDamping: 0.08, angularDamping: 0.12 });
       b.position.set(at.x, at.y, at.z);
       b.quaternion.copy(q);
       b.collisionFilterGroup = 2;
       b.collisionFilterMask = 1;
       b.velocity.set(vel.x + (Math.random() - 0.5), vel.y, vel.z + (Math.random() - 0.5));
-      b.angularVelocity.set((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 4);
+      b.angularVelocity.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 14);
       world.addBody(b);
       this.bodies.push(b);
       return b;

@@ -791,13 +791,16 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
    * projected onto a real surface found by raycast; if there's nothing there
    * (over the mezzanine void, say) nothing is drawn.
    */
+  /** The blood's hue for the spray (red; a level of aliens sets its own). */
+  protected bloodHue = 0.995;
+
   protected spatter(point: THREE.Vector3, dir: THREE.Vector3, big: boolean): void {
     // Cast against current matrices: update() runs before render(), so world
     // transforms are otherwise a frame stale and splatter can miss.
     this.level.group.updateMatrixWorld(true);
     const ground = this.surfaceBelow(point, 6);
     // Spray particles settle on the true surface under the wound, or never settle
-    this.particles.bloodSpray(point, dir, big, ground ? ground.point.y + 0.02 : -1);
+    this.particles.bloodSpray(point, dir, big, ground ? ground.point.y + 0.02 : -1, this.bloodHue);
 
     // The bullet carries blood THROUGH the body and throws it on whatever's
     // behind, in that direction: one main streak along the exact exit line

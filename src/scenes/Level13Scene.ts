@@ -22,6 +22,8 @@ import { yawPitchTo, wrapAngle } from './cutscene';
 import type { Enemy } from '../entities/Enemy';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { FPSHUD } from '../ui/FPSHUD';
+import { ECTerminal } from '../ui/ECTerminal';
+import { ecPhotos } from './ECPhotos';
 
 /**
  * Level13Scene — inside the Exterminator Collective.
@@ -38,7 +40,7 @@ import { FPSHUD } from '../ui/FPSHUD';
  *  4. The door at the end: a grenade planted on it, and it goes.
  */
 
-type Phase = 'tube' | 'play' | 'pickup' | 'plant' | 'done';
+type Phase = 'tube' | 'play' | 'pickup' | 'plant' | 'done' | 'terminal';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 const smooth = (x: number): number => {
@@ -574,6 +576,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     this.hud.destroy();
     hideInventory();
     this.flashPool.dispose();
+    this.terminal?.el.remove();
+    this.terminal = null;
     this.ui.remove();
   }
 
@@ -1232,7 +1236,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
       this.ctx.audio.leverThrow();
       this.later(0.6, () => this.callMover(false));
     }
-    if (this.phase === 'play') this.hud.setPrompt(this.cratePromptOn ? '[ E ] TAKE THE QUAD-BARREL' : this.liftPrompt ? this.liftPrompt : near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] PUSH THE LADDER RELEASE UP' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
+    if (this.phase === 'play') this.hud.setPrompt(this.cratePromptOn ? '[ E ] TAKE THE QUAD-BARREL' : this.liftPrompt ? this.liftPrompt : near ? '[ E ] PULL THE LEVER' : this.officePromptOn ? '[ E ] USE THE TERMINAL (EC NET)' : this.doorPromptOn ? '[ E ] PLANT THE GRENADE ON THE DOOR' : null);
   }
 
   /** The lever's done: the platform starts over to him (`instant`: already crossed, a restart past it). */
@@ -1512,15 +1516,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const L = this.level;
     const p = this.player;
     const lv = L.officeLever;
-    this.officePromptOn = this.playable && !this.ladderReleased && Math.hypot(p.position.x - lv.at.x, p.position.z - lv.at.z) < 1.5 && Math.abs(p.position.y - lv.at.y) < 0.5;
-    if (this.officePromptOn && this.ctx.input.wasPressed('KeyE')) {
-      this.releaseLadder(false);
-      this.ctx.audio.leverThrow();
-    }
-    if (this.officeLeverT >= 0 && this.officeLeverT < 1) {
-      this.officeLeverT = Math.min(1, this.officeLeverT + dt / 0.35);
-      lv.pivot.rotation.z = THREE.MathUtils.lerp(Math.PI - 0.5, 0.45, smooth(this.officeLeverT));
-    }
+    this.officePromptOn = this.playable && !this.ladderReleased && Math.hypot(p.position.x - lv.at.x, p.position.z - lv.at.z) < 1.6 && Math.abs(p.position.y - lv.at.y) < 0.5;
+    if (this.officePromptOn && this.ctx.input.wasPressed('KeyE')) this.openTerminal();
     // The ladder letting down, far below
     const dl = L.dropLadder;
     if (this.ladderDrop >= 0 && this.ladderDrop < 1) {
@@ -1534,13 +1531,43 @@ export class Level13Scene extends CombatScene<Level13Data> {
     }
   }
 
-  /** The release is pushed up: walkway 7's ladder comes down (`instant` on a restart past it). */
+  // ------------------------------------------------------------ the terminal
+
+  private terminal: ECTerminal | null = null;
+
+  /** Sat down at EC NET: the mouse let go, the intranet up; the ladder lock is in it somewhere. */
+  private openTerminal(): void {
+    this.phase = 'terminal';
+    this.officePromptOn = false;
+    this.hud.setPrompt(null);
+    this.player.aiming = false;
+    this.ctx.input.exitPointerLock();
+    this.ctx.audio.pocket();
+    this.terminal = new ECTerminal(
+      this.ctx.uiRoot,
+      ecPhotos(this.ctx.engine.renderer),
+      {
+        onDisengage: () => {
+          this.ctx.audio.lockBeep();
+          this.later(0.25, () => this.ctx.audio.leverThrow());
+          this.releaseLadder(false);
+        },
+        onClose: () => {
+          this.terminal = null;
+          if (this.phase === 'terminal') this.phase = 'play';
+        },
+        click: () => this.ctx.audio.mouseClick()
+      },
+      this.ladderReleased
+    );
+  }
+
+  /** The lock's off: walkway 7's ladder comes down (`instant` on a restart past it). */
   private releaseLadder(instant: boolean): void {
     const L = this.level;
     this.ladderReleased = true;
     if (instant) {
       this.officeLeverT = 1;
-      L.officeLever.pivot.rotation.z = 0.45;
       this.ladderDrop = 1;
       L.dropLadder.group.position.y = Y6;
       L.dropLadder.ladder.disabled = false;

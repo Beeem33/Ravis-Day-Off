@@ -2691,24 +2691,87 @@ export class Level13Builder {
     put(sodaCan(), 52.75, dt, -15.45);
     put(penCup(), 51.3, dt, -14.95);
 
-    // ---- The lever: a release box on the east wall, its handle down
-    const at = V(east, y + 1.2, -21.0);
-    this.add(M.yellow, span(east - 0.14, at.y - 0.35, at.z - 0.25, east, at.y + 0.35, at.z + 0.25));
-    this.add(M.hazard, span(east - 0.15, at.y - 0.32, at.z - 0.22, east - 0.14, at.y - 0.18, at.z + 0.22), false, 0.4);
-    const label = warnPlate('WALKWAY 7 LADDER — RELEASE', 0.9, 0.18);
-    label.rotation.y = -Math.PI / 2;
-    label.position.set(east - 0.01, at.y + 0.5, at.z);
-    this.group.add(label);
-    const pivot = new THREE.Group();
-    pivot.position.set(east - 0.16, at.y, at.z);
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8), M.steel);
-    arm.position.y = 0.22;
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), new THREE.MeshStandardMaterial({ color: 0xb8261c, roughness: 0.4 }));
-    knob.position.y = 0.46;
-    pivot.add(arm, knob);
-    pivot.rotation.z = Math.PI - 0.5;
-    this.group.add(pivot);
-    return { pivot, at: V(east - 0.6, y, at.z) };
+    // ---- The terminal: a desk against the east wall under the company's name, EC NET up on its screen.
+    // Walkway 7's ladder lock is in there now (it used to be a lever)
+    const tz = -21.0;
+    put(officeDesk(1.3), east - 0.4, y, tz, -Math.PI / 2);
+    this.solidBox(east - 0.78, y, tz - 0.65, east, y + 0.76, tz + 0.65);
+    const term = new THREE.Group();
+    term.position.set(east - 0.3, y + 0.745, tz);
+    term.rotation.y = -Math.PI / 2;
+    this.group.add(term);
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.45, metalness: 0.3 });
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.016, 0.18), dark);
+    foot.position.y = 0.008;
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.03), dark);
+    neck.position.set(0, 0.12, -0.03);
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.42, 0.04), dark);
+    bezel.position.set(0, 0.42, -0.02);
+    term.add(foot, neck, bezel);
+    const sc = makeCanvas(640, 400);
+    {
+      const g = sc.getContext('2d')!;
+      g.fillStyle = '#f3f4f1';
+      g.fillRect(0, 0, 640, 400);
+      g.fillStyle = '#1d1d1f';
+      g.fillRect(0, 0, 640, 70);
+      g.strokeStyle = '#e0302a';
+      g.lineWidth = 5;
+      g.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 6 + (i * Math.PI) / 3;
+        g.lineTo(44 + Math.cos(a) * 24, 35 + Math.sin(a) * 24);
+      }
+      g.closePath();
+      g.stroke();
+      g.fillStyle = '#e0302a';
+      g.font = 'bold 20px Arial';
+      g.textAlign = 'center';
+      g.fillText('EC', 44, 42);
+      g.textAlign = 'left';
+      g.fillStyle = '#fff';
+      g.font = 'bold 26px Arial';
+      g.fillText('EXTERMINATOR COLLECTIVE ▾', 84, 44);
+      g.fillStyle = '#222';
+      g.font = 'bold 30px Arial';
+      g.fillText('Welcome back, OPERATOR 7', 30, 130);
+      g.font = '18px Arial';
+      g.fillStyle = '#666';
+      g.fillText('EC NET · session restored', 30, 160);
+      for (let k = 0; k < 4; k++) {
+        g.fillStyle = '#fff';
+        g.fillRect(30 + (k % 2) * 295, 190 + Math.floor(k / 2) * 95, 280, 80);
+        g.strokeStyle = '#d7dad3';
+        g.lineWidth = 2;
+        g.strokeRect(30 + (k % 2) * 295, 190 + Math.floor(k / 2) * 95, 280, 80);
+        g.fillStyle = '#c4261c';
+        g.fillRect(44 + (k % 2) * 295, 206 + Math.floor(k / 2) * 95, 150, 10);
+        g.fillStyle = '#bbb';
+        g.fillRect(44 + (k % 2) * 295, 228 + Math.floor(k / 2) * 95, 230, 7);
+        g.fillRect(44 + (k % 2) * 295, 244 + Math.floor(k / 2) * 95, 190, 7);
+      }
+    }
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.385), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), toneMapped: false }));
+    (face.material as THREE.MeshBasicMaterial).map!.colorSpace = THREE.SRGBColorSpace;
+    face.position.set(0, 0.42, 0.0005);
+    term.add(face);
+    const kb = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.02, 0.14), dark);
+    kb.position.set(0, 0.01, 0.24);
+    const mouse = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.025, 0.1), dark);
+    mouse.position.set(0.3, 0.012, 0.24);
+    term.add(kb, mouse);
+    put(officeChair(), east - 1.1, y, tz + 0.8, Math.PI / 2 + 0.7);
+    // The company's name over it, and a note stuck to the wall
+    const sign = warnPlate('EXTERMINATOR COLLECTIVE — EC NET TERMINAL', 1.5, 0.2);
+    sign.rotation.y = -Math.PI / 2;
+    sign.position.set(east - 0.01, y + 1.75, tz);
+    this.group.add(sign);
+    const note = warnPlate('W7 LADDER: NO LEVER ANY MORE — USE EC NET', 0.7, 0.12);
+    note.rotation.y = -Math.PI / 2;
+    note.position.set(east - 0.012, y + 1.45, tz + 0.35);
+    note.rotation.z = 0.04;
+    this.group.add(note);
+    return { pivot: term, at: V(east - 1.3, y, tz) };
   }
 
   // -------------------------------------------------------------- walkway 7 and the door

@@ -120,6 +120,20 @@ export function caveSolid(x: number, y: number, z: number): boolean {
   return d > Math.max(half, s.w * 0.68) - 0.05;
 }
 
+/** Which way the rock faces at a point on it: the floor up, a wall in toward the passage's middle, the roof down. */
+export function caveNormal(x: number, y: number, z: number): THREE.Vector3 {
+  const { s, d } = nearest(x, z);
+  const floor = s.p.y + fbm(x * 0.35, z * 0.35) * 0.08;
+  if (d < s.w * 0.7 && y < floor + 0.25) return new THREE.Vector3(0, 1, 0);
+  const n = new THREE.Vector3(s.p.x - x, 0, s.p.z - z);
+  if (n.lengthSq() < 1e-6) n.set(0, -1, 0);
+  else n.normalize();
+  // Up toward the roof it leans over: facing down as well as in
+  const yy = (y - (s.p.y + s.h * 0.45)) / (s.h * 0.55);
+  if (yy > 0) n.multiplyScalar(Math.sqrt(Math.max(0, 1 - yy * yy))).setY(-Math.min(1, yy)).normalize();
+  return n;
+}
+
 /** Kept inside the walls (`r` his own radius): true if he had to be moved. */
 export function caveConfine(p: THREE.Vector3, r: number): boolean {
   const { s, d } = nearest(p.x, p.z);

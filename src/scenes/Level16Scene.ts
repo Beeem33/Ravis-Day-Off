@@ -25,7 +25,7 @@ import {
   inChasm,
   PILLARS
 } from '../environment/Level16Builder';
-import { Level16CaveBuilder, caveGround, caveSolid, caveConfine, type CaveExtras } from '../environment/Level16CaveBuilder';
+import { Level16CaveBuilder, caveGround, caveSolid, caveConfine, caveNormal, type CaveExtras } from '../environment/Level16CaveBuilder';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -87,9 +87,16 @@ interface World16 {
   solid(x: number, y: number, z: number): boolean;
   /** Pushed back inside the walls (the cave's): true if it had to be. */
   confine(p: THREE.Vector3, r: number): boolean;
+  /** Which way the ground or rock faces at a point on it. */
+  normal(x: number, y: number, z: number): THREE.Vector3;
 }
-const CANYON: World16 = { groundY, inLake, inCave, outside, solid: () => false, confine: () => false };
-const CAVE: World16 = { groundY: caveGround, inLake: () => false, inCave: () => true, outside: () => -1, solid: caveSolid, confine: caveConfine };
+/** The slope of a height function at (x, z). */
+function slopeNormal(f: (x: number, z: number) => number, x: number, z: number): THREE.Vector3 {
+  const e = 0.3;
+  return new THREE.Vector3(f(x - e, z) - f(x + e, z), 2 * e, f(x, z - e) - f(x, z + e)).normalize();
+}
+const CANYON: World16 = { groundY, inLake, inCave, outside, solid: () => false, confine: () => false, normal: (x, _y, z) => slopeNormal(groundY, x, z) };
+const CAVE: World16 = { groundY: caveGround, inLake: () => false, inCave: () => true, outside: () => -1, solid: caveSolid, confine: caveConfine, normal: caveNormal };
 const W: World16 = { ...CANYON };
 type BossMove = 'idle' | 'mortar' | 'spray' | 'grab' | 'tree' | 'brood' | 'stagger';
 
@@ -103,6 +110,14 @@ const SWIM_DEPTH = 1.25;
 const HOUND_SPEED = 4.8;
 /** The boss's acid pools, and the rings that warn of them: the same size. */
 const PUDDLE_R = 1.9;
+/** A hound on the grabber: how far its body stands off what it's swung into. */
+const HELD_R = 0.45;
+/** Swung into the rock this hard (m/s) it's hurt; this hard, it's dead. Nothing else kills one he's holding. */
+const SLAM_HURT = 4.5;
+const SLAM_KILL = 14;
+/** What acid turns a body as it dies in it. */
+const ACID_GREEN = new THREE.Color(0x8cff2a);
+const ACID_GLOW = new THREE.Color(0x2f8a08);
 const BOSS_NAME = 'THE MAW';
 const ALIEN_BLOOD = 0x9ad02a;
 const BOSS_BLOOD = 0x9a2a6a;
@@ -275,6 +290,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private hounds: Hound[] = [];
   private houndHits: THREE.Mesh[] = [];
   private flung = new Map<Hound, THREE.Vector3>();
+  /** Thrown off the grabber and not landed yet: it can't die of it. */
+  private thrown = new Set<Hound>();
+  /** When the last slam into the rock was (one per contact, not one a frame). */
+  private slamAt = -9;
+  private slamHinted = false;
+  /** Bodies dying in acid: going green, smoking. */
+  private greening: { root: THREE.Object3D; t: number; mats: { m: THREE.MeshStandardMaterial | THREE.MeshBasicMaterial; c0: THREE.Color; e0: THREE.Color | null }[] | null }[] = [];
   private ragdolls: HoundRagdoll[] = [];
   /** The blood's colour in the spray: theirs is yellow-green. */
   protected bloodHue = 0.2;
@@ -873,6 +895,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateBoss(dt);
     this.updateTongues(dt);
     this.updateAcid(dt);
+    this.updateGreening(dt);
     this.updateHarvestPrompt();
     this.updateNote();
     if (this.part === 2) this.updateCave(dt);
@@ -1216,6 +1239,22 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const fv = this.flung.get(h);
       if (fv) {
         fv.y -= 18 * dt;
+        // Into a wall, a rock, a trunk on the way: it hits it and drops (and if he threw it, it lives)
+        const sp0 = fv.length();
+        if (sp0 > 0.5) {
+          const d = fv.clone().divideScalar(sp0);
+          const wall = this.trace(g.clone().add(V(0, 0.6, 0)), d, sp0 * dt + HELD_R, false);
+          if (wall && Math.abs(wall.normal.y) < 0.75) {
+            const into = Math.max(0, -fv.dot(wall.normal));
+            fv.addScaledVector(wall.normal, into * 1.3).multiplyScalar(0.35);
+            g.copy(wall.point).addScaledVector(d, -HELD_R).sub(V(0, 0.6, 0));
+            if (into > 3) {
+              this.wallSplat(wall.point, wall.normal, d, into > SLAM_KILL);
+              this.ctx.audio.bodyThud(g.distanceTo(pp));
+              this.hurtHound(h, Math.max(1, into * 0.15), wall.point.clone(), d);
+            }
+          }
+        }
         g.addScaledVector(fv, dt);
         h.group.rotation.x += h.spin.x * dt;
         h.group.rotation.z += h.spin.z * dt;
@@ -1238,6 +1277,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           this.ctx.audio.bodyThud(g.distanceTo(pp));
           this.drops.burst(g.clone().add(V(0, 0.4, 0)), V(0, 1, 0), 14, 2.5, ALIEN_BLOOD);
           this.hurtHound(h, Math.max(1, sp * 0.4), g.clone().add(V(0, 0.6, 0)), fv.clone().normalize());
+          this.thrown.delete(h);
           if (h.alive) {
             h.state = 'recover';
             h.stateT = -0.8;
@@ -1347,7 +1387,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
 
-  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false): void {
+  /**
+   * `o.knock`: how hard it's thrown back if it dies (else by the damage).
+   * One on the grabber, or thrown off it and still in the air, is hurt but
+   * never killed by this: only a slam into the rock kills one he's got hold of.
+   */
+  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false, o: { knock?: number } = {}): void {
     if (!acid) {
       this.drops.burst(point, dir.clone().negate().setY(0.3), 12, 3, ALIEN_BLOOD);
       this.ctx.audio.fleshHit();
@@ -1355,6 +1400,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     if (!h.alive) return;
     h.hp -= dmg;
+    if ((h.held || this.thrown.has(h)) && h.hp < 1) h.hp = 1;
     if (!acid) this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
     if (h.hp > 0) {
       if (!acid) h.speed *= 0.4;
@@ -1368,13 +1414,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
     h.airV = 0;
     h.melted = acid;
     if (h.held) this.dropHeld(false);
-    h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(acid ? 0 : 6.5 + Math.min(dmg, 6) * 1.3);
+    h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(acid ? 0 : o.knock ?? 6.5 + Math.min(dmg, 6) * 1.3);
     this.drops.burst(point, V(0, 1, 0), acid ? 24 : 30, acid ? 2 : 4, acid ? ACID : ALIEN_BLOOD);
     this.acidFuse.delete(h);
     if (!acid) {
       const fv = this.flung.get(h);
       this.flung.delete(h);
-      const v = fv ? fv.clone() : h.knock.clone().add(V(0, 3.2 + Math.min(dmg, 6) * 0.5, 0)).add(h.vel.clone().multiplyScalar(0.5));
+      const v = fv ? fv.clone() : h.knock.clone().add(V(0, o.knock !== undefined ? 1.5 + o.knock * 0.3 : 3.2 + Math.min(dmg, 6) * 0.5, 0)).add(h.vel.clone().multiplyScalar(0.5));
       h.group.rotation.x = 0;
       h.group.rotation.z = 0;
       const rd = new HoundRagdoll(this.world, h, v);
@@ -1383,7 +1429,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
         this.groundSplat(at, 1.6 + Math.random() * 0.6, 'pool');
       };
       this.ragdolls.push(rd);
-    } else this.bloodPool(h.group.position.x, h.group.position.z, 1.3, 0x7ab01a);
+    } else {
+      // Its legs go and it falls over into it, limp, and goes green through as the acid takes it
+      this.bloodPool(h.group.position.x, h.group.position.z, 1.3, 0x7ab01a);
+      const rd = new HoundRagdoll(this.world, h, V(0, 0.3, 0).add(h.vel.clone().multiplyScalar(0.3)), 1);
+      rd.topple();
+      this.ragdolls.push(rd);
+      this.greening.push({ root: h.group, t: 0, mats: null });
+    }
     if (this.t - this.lastGrowl > 1) {
       this.lastGrowl = this.t;
       this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
@@ -1414,8 +1467,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private groundSplat(at: THREE.Vector3, size: number, kind: 'blood' | 'pool', stretch?: THREE.Vector3): void {
     if (W.inLake(at.x, at.z) || (this.part === 1 && inChasm(at.x, at.z))) return;
     const y = W.groundY(at.x, at.z);
+    if (y > at.y + 1) return;
     const e = 0.3;
     const n = V(W.groundY(at.x - e, at.z) - W.groundY(at.x + e, at.z), 2 * e, W.groundY(at.x, at.z - e) - W.groundY(at.x, at.z + e)).normalize();
+    if (n.y < 0.6) return;
     this.decals.place(kind, V(at.x, y, at.z), n, size, stretch, stretch ? 1.8 : 1);
   }
 
@@ -1439,15 +1494,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
 
-  private hurtSpider(s: Spiderling, point: THREE.Vector3, dir: THREE.Vector3, k: number): void {
+  private hurtSpider(s: Spiderling, point: THREE.Vector3, dir: THREE.Vector3, k: number, acid = false): void {
     if (!s.alive) return;
     s.alive = false;
     s.state = 'dead';
     this.ctx.bus.emit(Events.HitMarker, { lethal: true });
-    this.drops.burst(point, V(0, 1, 0), 18, 3, ALIEN_BLOOD);
-    this.ctx.audio.fleshHit();
-    this.alienSpatter(point, dir, false);
-    const v = V(dir.x, 0, dir.z).normalize().multiplyScalar(6 * k + 2.5).add(V(0, 3 + Math.random() * 2.5, 0));
+    this.drops.burst(point, V(0, 1, 0), 18, 3, acid ? ACID : ALIEN_BLOOD);
+    if (acid) {
+      this.ctx.audio.gooSplat(point.distanceTo(this.player.position));
+      this.greening.push({ root: s.group, t: 0, mats: null });
+    } else {
+      this.ctx.audio.fleshHit();
+      this.alienSpatter(point, dir, false);
+    }
+    const v = acid ? V((Math.random() - 0.5) * 1.2, 0.8, (Math.random() - 0.5) * 1.2) : V(dir.x, 0, dir.z).normalize().multiplyScalar(6 * k + 2.5).add(V(0, 3 + Math.random() * 2.5, 0));
     const rd = new SpiderlingRagdoll(this.world, s, v);
     rd.onRest = (at) => this.groundSplat(at, 0.55 + Math.random() * 0.4, 'pool');
     this.spiderRags.push(rd);
@@ -1523,7 +1583,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         for (const pd of this.puddles) {
           if (pd.life <= 0 || pd.enemy) continue;
           if (Math.hypot(g.x - pd.x, g.z - pd.z) < pd.r) {
-            this.hurtSpider(s, g.clone().add(V(0, 0.25, 0)), V(0, 1, 0), 0.3);
+            this.hurtSpider(s, g.clone().add(V(0, 0.25, 0)), V(0, 1, 0), 0.3, true);
             break;
           }
         }
@@ -1545,6 +1605,29 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (a.clone().addScaledVector(ab, u).distanceTo(e.at) < r) return e;
     }
     return null;
+  }
+
+  /**
+   * The egg the crosshair's right on (the ray from `o` along `dir` through
+   * its shell, give or take a hand's width), nearest first; none past
+   * `clear` (the first rock or body along the ray), so none behind a wall.
+   */
+  private eggUnderAim(o: THREE.Vector3, dir: THREE.Vector3, clear: number): { mesh: THREE.Object3D; at: THREE.Vector3; eaten: boolean } | null {
+    const C = this.level as Level16Data & Partial<CaveExtras>;
+    let best: { mesh: THREE.Object3D; at: THREE.Vector3; eaten: boolean } | null = null;
+    let bd = Infinity;
+    const to = new THREE.Vector3();
+    for (const e of C.eggs ?? []) {
+      if (e.eaten) continue;
+      to.subVectors(e.at, o);
+      const along = to.dot(dir);
+      if (along < 0.3 || along > Math.min(26, clear + 0.6) || along > bd) continue;
+      const r = 0.3 * e.mesh.scale.x + 0.08;
+      if (to.addScaledVector(dir, -along).length() > r) continue;
+      bd = along;
+      best = e;
+    }
+    return best;
   }
 
   /** The tongue's got an egg: off the wall, on its way in. */
@@ -1651,8 +1734,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (this.reticleT <= 0) {
       this.reticleT = 0.1;
       const cam = this.player.camera;
-      const h = this.trace(cam.position, cam.getWorldDirection(new THREE.Vector3()), 35, true);
-      this.reticleTarget = !!h && ['hound', 'spider', 'boss', 'trap', 'tongue'].includes(h.kind);
+      const dir = cam.getWorldDirection(new THREE.Vector3());
+      const h = this.trace(cam.position, dir, 35, true);
+      this.reticleTarget = (!!h && ['hound', 'spider', 'boss', 'trap', 'tongue'].includes(h.kind)) || (this.part === 2 && !!this.eggUnderAim(cam.position, dir, h ? h.dist : 35));
     }
     this.reticle.update(dt, {
       acid: this.acidArm.recoil,
@@ -1744,24 +1828,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const dir = p.camera.getWorldDirection(new THREE.Vector3());
       const aim = this.trace(p.camera.position, dir, 30, true);
       let at = aim ? aim.point : p.camera.position.clone().addScaledVector(dir, 30);
-      // In the cave: an egg near the crosshair, the tongue goes for it (and nothing else)
-      this.tongueEgg = null;
-      if (this.part === 2) {
-        const C = this.level as Level16Data & Partial<CaveExtras>;
-        let best = 0.02;
-        for (const e of C.eggs ?? []) {
-          if (e.eaten) continue;
-          const to = e.at.clone().sub(p.camera.position);
-          const d = to.length();
-          if (d > 26) continue;
-          const off = 1 - to.normalize().dot(dir);
-          if (off < best) {
-            best = off;
-            at = e.at.clone();
-            this.tongueEgg = e;
-          }
-        }
-      }
+      // In the cave: an egg he's got the crosshair right on, in plain sight (not behind rock), the tongue goes for it
+      this.tongueEgg = this.part === 2 ? this.eggUnderAim(p.camera.position, dir, aim ? aim.dist : 30) : null;
+      if (this.tongueEgg) at = this.tongueEgg.at.clone();
       T.dir.copy(at).sub(T.from).normalize();
       T.state = 'out';
       T.len = 0;
@@ -1774,17 +1843,14 @@ export class Level16Scene extends CombatScene<Level16Data> {
       T.tip.copy(T.from).addScaledVector(T.dir, T.len);
       this.grabArm.recoil = Math.max(this.grabArm.recoil, 0.6);
       const a = T.from.clone().addScaledVector(T.dir, before);
-      const locked = this.tongueEgg && !this.tongueEgg.eaten && T.len >= T.from.distanceTo(this.tongueEgg.at) - 0.25 ? this.tongueEgg : null;
-      const egg = locked ?? (this.part === 2 && !this.tongueEgg ? this.eggOnSegment(a, T.tip) : null);
-      if (this.tongueEgg && !egg) {
-        // On its way to the egg: through to it, whatever's in front
-        if (T.len > 30) T.state = 'back';
-        return;
-      }
-      this.tongueEgg = null;
-      const h = egg ? null : this.trace(a, T.dir, T.len - before, true);
-      const eggAtHit = !egg && h && this.part === 2 && (h.kind === 'terrain' || h.kind === 'world') ? this.eggOnSegment(h.point, h.point, 1.0) : null;
-      if (egg || eggAtHit) this.grabEgg((egg ?? eggAtHit)!);
+      const h = this.trace(a, T.dir, T.len - before, true);
+      // An egg it gets to before anything else in the way: the one he aimed at, or one square on its line.
+      // (Eggs sit on the rock, so the rock just behind the one he aimed at doesn't count as in the way.)
+      const reach = h ? before + h.dist : T.len;
+      const aimed = this.tongueEgg;
+      let egg = aimed && !aimed.eaten && aimed.at.distanceTo(T.from) <= reach + 0.45 ? aimed : null;
+      if (!egg && this.part === 2) egg = this.eggOnSegment(a, h ? h.point : T.tip, 0.38);
+      if (egg) this.grabEgg(egg);
       else if (h && h.kind === 'spider' && h.spider) {
         this.hurtSpider(h.spider, h.point, T.dir, 1);
         T.tip.copy(h.point);
@@ -1802,6 +1868,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         T.state = 'back';
         this.drops.burst(h.point, h.normal, 6, 1.5, 0xc04a8a);
       } else if (T.len > 26 || !lmb) T.state = 'back';
+      if (T.state !== 'out') this.tongueEgg = null;
     }
     if (this.eggGrab) this.updateEggGrab(dt);
     else if (T.state === 'hold' && this.holding) {
@@ -1812,11 +1879,30 @@ export class Level16Scene extends CombatScene<Level16Data> {
         // Out in front of him, where he looks: swung round as he turns
         const dir = p.camera.getWorldDirection(new THREE.Vector3());
         const want = p.camera.position.clone().addScaledVector(dir, 4.2);
-        want.y = Math.max(want.y - 0.6, W.groundY(want.x, want.z) + 0.2);
+        // (Not up a wall's height: the cave's floor "rises" 12 m inside its rock)
+        want.y = Math.max(want.y - 0.6, Math.min(W.groundY(want.x, want.z), p.position.y + 1.2) - 0.4);
         const g = hd.group.position;
         this.holdPrev.copy(g);
-        g.lerp(want, Math.min(1, dt * 12));
+        const vIn = this.holdVel.clone();
+        const next = g.clone().lerp(want, Math.min(1, dt * 12));
+        // Whatever rock is in the way (a wall, a boulder, a trunk, the ground): it stops against it
+        const mv = next.clone().sub(g);
+        const L = mv.length();
+        let hit: Hit | null = null;
+        if (L > 1e-4) {
+          const d = mv.clone().divideScalar(L);
+          hit = this.trace(g.clone().add(V(0, 0.6, 0)), d, L + HELD_R, false);
+          if (hit) {
+            next.copy(hit.point).addScaledVector(d, -HELD_R).sub(V(0, 0.6, 0));
+            if (next.clone().sub(g).dot(d) < 0) next.copy(g);
+          }
+        }
+        g.copy(next);
         this.holdVel.subVectors(g, this.holdPrev).divideScalar(Math.max(dt, 1e-4));
+        if (hit) this.slamHeld(hd, hit, vIn, mv.normalize());
+      }
+      if (this.holding === hd && hd.alive) {
+        const g = hd.group.position;
         hd.group.rotation.y = p.yaw + Math.PI;
         T.tip.copy(g).add(V(0, 0.75, 0));
         T.len = T.tip.distanceTo(T.from);
@@ -1849,9 +1935,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     h.airV = 0;
     h.state = 'recover';
     this.flung.delete(h);
+    this.thrown.delete(h);
+    this.acidFuse.delete(h);
     T.state = 'hold';
     this.holdPrev.copy(h.group.position);
     this.holdVel.set(0, 0, 0);
+    if (!this.slamHinted) {
+      this.slamHinted = true;
+      this.hint('SWING IT INTO THE ROCK — HARD — TO KILL IT', 5);
+    }
     this.ctx.audio.houndBite(0);
     this.ctx.audio.houndScreech(T.len);
     this.shake = Math.max(this.shake, 0.3);
@@ -1867,11 +1959,102 @@ export class Level16Scene extends CombatScene<Level16Data> {
         const v = this.holdVel.clone().multiplyScalar(1.15).add(V(0, 2.5, 0));
         if (v.length() > 26) v.setLength(26);
         this.flung.set(h, v);
+        if (h.alive) this.thrown.add(h);
         h.spin.set((Math.random() - 0.5) * 12, 0, (Math.random() - 0.5) * 12);
         if (v.length() > 6) this.ctx.audio.kickWhoosh();
       }
     }
     this.tongue.state = 'back';
+  }
+
+  /**
+   * The hound on the grabber's just been swung into `hit` at `vIn`. Hard
+   * enough and it bursts against it, dead, blood across the rock; less hard
+   * and it's hurt, a smear where it hit; gently, nothing.
+   */
+  private slamHeld(hd: Hound, hit: Hit, vIn: THREE.Vector3, d: THREE.Vector3): void {
+    const n = hit.normal;
+    const speed = Math.max(-vIn.dot(n), vIn.dot(d) * 0.8);
+    if (speed < SLAM_HURT || this.t - this.slamAt < 0.3) return;
+    this.slamAt = this.t;
+    const kill = speed >= SLAM_KILL;
+    const at = hit.point;
+    this.wallSplat(at, n, vIn.lengthSq() > 1e-4 ? vIn.clone().normalize() : d, kill);
+    this.ctx.audio.bodyThud(0);
+    this.ctx.audio.punchImpact(kill);
+    this.drops.burst(at.clone().addScaledVector(n, 0.2), n, kill ? 40 : 14, kill ? 5 : 3, ALIEN_BLOOD);
+    if (kill) {
+      // Let go of it: it drops off the rock, broken
+      this.holding = null;
+      hd.held = false;
+      this.tongue.state = 'back';
+      this.holdVel.set(0, 0, 0);
+      this.shake = Math.max(this.shake, 0.6);
+      this.ctx.audio.kickImpact();
+      const away = n.clone().setY(Math.max(0, n.y));
+      if (away.lengthSq() < 1e-4) away.copy(d).negate();
+      this.hurtHound(hd, 99, at.clone().addScaledVector(n, 0.3), away.normalize(), false, { knock: 1.5 + speed * 0.1 });
+    } else {
+      this.shake = Math.max(this.shake, 0.25);
+      this.ctx.audio.houndScreech(0);
+      this.hurtHound(hd, 1, at.clone().addScaledVector(n, 0.3), d);
+    }
+  }
+
+  /** Blood across the rock where something hit it: a burst, stretched the way it was going, flecks round it; it runs. */
+  private wallSplat(at: THREE.Vector3, n: THREE.Vector3, d: THREE.Vector3, big: boolean): void {
+    const tang = d.clone().addScaledVector(n, -d.dot(n));
+    this.decals.place('blood', at, n, big ? 1.2 + Math.random() * 0.5 : 0.55 + Math.random() * 0.3, tang.lengthSq() > 0.01 ? tang : undefined, big ? 1.7 : 1.3);
+    // Round it, each found on the rock itself (it's not flat)
+    const u = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
+    const w = new THREE.Vector3().crossVectors(n, u);
+    const k = big ? 8 : 3;
+    const back = n.clone().negate();
+    for (let i = 0; i < k; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = (0.3 + Math.random()) * (big ? 1.5 : 0.7);
+      const off = u.clone().multiplyScalar(Math.cos(a) * r).addScaledVector(w, Math.sin(a) * r).addScaledVector(tang, 0.4 * r);
+      const h = this.trace(at.clone().add(off).addScaledVector(n, 0.6), back, 1.5, false);
+      if (h) this.decals.place('blood', h.point, h.normal, 0.15 + Math.random() * (big ? 0.55 : 0.3), off, 1.6);
+    }
+    // And a pool below, where it runs down to
+    if (big) this.groundSplat(at.clone().addScaledVector(n, 0.5), 0.9 + Math.random() * 0.5, 'pool');
+  }
+
+  /** Bodies dying in acid: through green, glowing faintly, smoking. */
+  private updateGreening(dt: number): void {
+    for (let i = this.greening.length - 1; i >= 0; i--) {
+      const b = this.greening[i];
+      b.t += dt;
+      if (!b.mats) {
+        // Its own copies of its materials, to colour (they're shared by every one of them)
+        b.mats = [];
+        const seen = new Map<THREE.Material, THREE.Material>();
+        b.root.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh || !m.visible) return;
+          const src = m.material as THREE.Material;
+          if (Array.isArray(src) || !('color' in src)) return;
+          let c = seen.get(src);
+          if (!c) {
+            c = src.clone();
+            seen.set(src, c);
+            const mm = c as THREE.MeshStandardMaterial;
+            b.mats!.push({ m: mm, c0: mm.color.clone(), e0: mm.emissive ? mm.emissive.clone() : null });
+          }
+          m.material = c;
+        });
+      }
+      const k = smooth(Math.min(1, b.t / 1.8));
+      for (const e of b.mats) {
+        e.m.color.copy(e.c0).lerp(ACID_GREEN, k * 0.9);
+        if (e.e0) (e.m as THREE.MeshStandardMaterial).emissive.copy(e.e0).lerp(ACID_GLOW, k * 0.6);
+      }
+      const at = b.root.getWorldPosition(new THREE.Vector3());
+      if (b.t < 3.5 && Math.random() < dt * 5) this.particles.smokeColumn(at.clone().add(V(0, 0.3, 0)), 0.3, 1);
+      if (b.t < 2.5 && Math.random() < dt * 6) this.drops.burst(at.clone().add(V(0, 0.4, 0)), V(0, 1, 0), 3, 1.2, ACID);
+      if (b.t > 4) this.greening.splice(i, 1);
+    }
   }
 
   private retract(T: Tongue): void {
@@ -1963,8 +2146,50 @@ export class Level16Scene extends CombatScene<Level16Data> {
   }
 
   /** A pool of acid where something came down: lying on the ground, whatever its shape. */
-  private spawnPuddle(x: number, z: number, r: number, enemy: boolean, life = 6): void {
-    if (W.inLake(x, z) && W.groundY(x, z) < WATER_Y) return;
+  /**
+   * Where a pool lands at (x, z) from a splash at height `y`: if that's up a
+   * wall (the ground there far above the splash), out from the wall to the
+   * floor at its foot. Its height there.
+   */
+  private floorAt(x: number, y: number, z: number): { x: number; z: number; y: number } {
+    let gy = W.groundY(x, z);
+    if (gy <= y + 0.6) return { x, z, y: gy };
+    const n = W.normal(x, y, z).setY(0);
+    if (n.lengthSq() < 1e-4) n.set(-x, 0, -z);
+    n.normalize();
+    for (let k = 0; k < 24 && gy > y + 0.6; k++) {
+      x += n.x * 0.25;
+      z += n.z * 0.25;
+      gy = W.groundY(x, z);
+    }
+    return { x, z, y: gy };
+  }
+
+  /**
+   * A point of a pool's outline (`u`, `v` in −1..1 across it) laid on the
+   * ground round its middle at height `y0`: where the ground steps up a wall
+   * or drops away, the outline's pulled in short of it rather than climbing it.
+   */
+  private drape(cx: number, cz: number, r: number, u: number, v: number, y0: number, out: THREE.Vector3): THREE.Vector3 {
+    let s = 1;
+    let x = cx + u * r;
+    let z = cz + v * r;
+    let gy = W.groundY(x, z);
+    for (let k = 0; k < 8 && Math.abs(gy - y0) > 0.45; k++) {
+      s *= 0.72;
+      x = cx + u * r * s;
+      z = cz + v * r * s;
+      gy = W.groundY(x, z);
+    }
+    return out.set(x, THREE.MathUtils.clamp(gy, y0 - 0.45, y0 + 0.45), z);
+  }
+
+  private spawnPuddle(x0: number, z0: number, r: number, enemy: boolean, life = 6, fromY = Infinity): void {
+    const f = this.floorAt(x0, fromY, z0);
+    const x = f.x;
+    const z = f.z;
+    const y0 = f.y;
+    if (W.inLake(x, z) && y0 < WATER_Y) return;
     const pd = this.puddles.reduce((a, b) => (b.life < a.life ? b : a));
     pd.x = x;
     pd.z = z;
@@ -1975,15 +2200,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     pd.burn = 0.5;
     const pos = pd.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
     const uv = pd.mesh.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    const q = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
-      const px = x + (uv.getX(i) * 2 - 1) * r;
-      const pz = z - (uv.getY(i) * 2 - 1) * r;
-      pos.setXYZ(i, px, W.groundY(px, pz) + 0.06, pz);
+      this.drape(x, z, r, uv.getX(i) * 2 - 1, -(uv.getY(i) * 2 - 1), y0, q);
+      pos.setXYZ(i, q.x, q.y + 0.06, q.z);
     }
     pos.needsUpdate = true;
     pd.mesh.geometry.computeBoundingSphere();
     pd.mesh.visible = true;
-    this.drops.burst(V(x, W.groundY(x, z) + 0.1, z), V(0, 1, 0), 16, 3, ACID);
+    this.drops.burst(V(x, y0 + 0.1, z), V(0, 1, 0), 16, 3, ACID);
     this.ctx.audio.gooSplat(Math.hypot(x - this.player.position.x, z - this.player.position.z));
   }
 
@@ -2012,10 +2237,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const geo = new THREE.PlaneGeometry(2, 2, 8, 8);
     const pos = geo.getAttribute('position') as THREE.BufferAttribute;
     const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    const y0 = W.groundY(x, z);
+    const q = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
-      const px = x + (uv.getX(i) * 2 - 1) * r;
-      const pz = z - (uv.getY(i) * 2 - 1) * r;
-      pos.setXYZ(i, px, W.groundY(px, pz) + 0.035, pz);
+      this.drape(x, z, r, uv.getX(i) * 2 - 1, -(uv.getY(i) * 2 - 1), y0, q);
+      pos.setXYZ(i, q.x, q.y + 0.035, q.z);
     }
     geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ color, alphaMap: Level16Scene.poolTex, transparent: true, opacity: 0.92, roughness: 0.08, metalness: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
@@ -2087,12 +2313,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
           this.shake = Math.max(this.shake, 0.4);
           this.vignette.style.opacity = '0.8';
           p.hit('ACID', a.clone());
-          this.spawnPuddle(near.x, near.z, 1.7, true);
+          this.spawnPuddle(near.x, near.z, 1.7, true, 6, near.y);
           return true;
         }
       }
       if (b.y < W.groundY(b.x, b.z)) {
-        this.spawnPuddle(b.x, b.z, PUDDLE_R, true, shot.damage);
+        this.spawnPuddle(b.x, b.z, PUDDLE_R, true, shot.damage, a.y);
         return true;
       }
       return false;
@@ -2109,15 +2335,16 @@ export class Level16Scene extends CombatScene<Level16Data> {
         m.mesh.visible = false;
       }
     }
-    // ---- Melting: smoking, slowing, three seconds from the first touch
+    // ---- Melting: stopped where it stands, smoking, and down in it a second and a half from the first touch
     for (const [h, t0] of this.acidFuse) {
       if (!h.alive) {
         this.acidFuse.delete(h);
         continue;
       }
       const g = h.group.position;
-      const k = (this.t - t0) / 3;
-      h.speed *= Math.exp(-dt * (1 + k * 3));
+      const k = (this.t - t0) / 1.6;
+      h.speed *= Math.exp(-dt * (5 + k * 8));
+      h.knock.multiplyScalar(Math.exp(-dt * 6));
       if (Math.random() < dt * 6) this.particles.smokeColumn(g.clone().add(V(0, 0.5, 0)), 0.35, 1);
       if (Math.random() < dt * 5) this.drops.burst(g.clone().add(V(0, 0.6, 0)), V(0, 1, 0), 3, 1.2, ACID);
       if (this.hissT <= 0) {
@@ -2182,7 +2409,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     else if (h.kind === 'boss') this.hurtBoss(s.damage * 2, h.point, dir, !!h.head);
     else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage * 2, h.point, dir);
     else if (h.kind === 'tongue') this.hurtTongue(3);
-    this.spawnPuddle(h.point.x, h.point.z, 1.6, false);
+    this.spawnPuddle(h.point.x, h.point.z, 1.6, false, 6, h.point.y);
   }
 
   // ============================================================ the big one
@@ -2977,9 +3204,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
             else lo = m;
           }
           const pt = o.clone().addScaledVector(dir, hi);
-          const e = 0.3;
-          const n = V(W.groundY(pt.x - e, pt.z) - W.groundY(pt.x + e, pt.z), 2 * e, W.groundY(pt.x, pt.z - e) - W.groundY(pt.x, pt.z + e)).normalize();
-          best = { dist: hi, point: pt, normal: n, kind: 'terrain' };
+          best = { dist: hi, point: pt, normal: W.normal(pt.x, pt.y, pt.z), kind: 'terrain' };
           break;
         }
         prev = tt;

@@ -26,7 +26,9 @@ export class HoundRagdoll {
   constructor(
     private world: CANNON.World,
     private hound: Hound,
-    vel: THREE.Vector3
+    vel: THREE.Vector3,
+    /** How hard it tumbles (rad/s, either way). */
+    spin = 14
   ) {
     const s = hound.group.scale.x;
     hound.group.updateMatrixWorld(true);
@@ -42,7 +44,7 @@ export class HoundRagdoll {
       b.collisionFilterGroup = 2;
       b.collisionFilterMask = 1;
       b.velocity.set(vel.x + (Math.random() - 0.5), vel.y, vel.z + (Math.random() - 0.5));
-      b.angularVelocity.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 14);
+      b.angularVelocity.set((Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin * 0.43, (Math.random() - 0.5) * spin);
       world.addBody(b);
       this.bodies.push(b);
       return b;
@@ -68,6 +70,20 @@ export class HoundRagdoll {
       l.knee.rotation.x = l.front ? -0.3 : 0.45;
       l.paw.rotation.x = 0;
     }
+  }
+
+  /** Its legs give under it: it rolls over onto its side (it would stand on four stiff legs else). */
+  topple(): void {
+    const s = Math.random() < 0.5 ? -1 : 1;
+    const f = this.torso.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    const side = this.torso.quaternion.vmult(new CANNON.Vec3(1, 0, 0));
+    for (const b of this.bodies) {
+      b.angularVelocity.set(f.x * 6 * s, f.y * 6 * s, f.z * 6 * s);
+      b.velocity.x += side.x * 1.6 * s;
+      b.velocity.z += side.z * 1.6 * s;
+    }
+    // The legs folding up under it rather than holding it up
+    for (const l of this.legs) l.velocity.y += 1.5;
   }
 
   private pin(a: CANNON.Body, b: CANNON.Body, at: THREE.Vector3): void {

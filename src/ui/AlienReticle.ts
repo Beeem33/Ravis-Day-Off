@@ -8,9 +8,9 @@
  */
 
 const CSS = `
-.alien-reticle{position:absolute;left:50%;top:50%;width:120px;height:120px;margin:-60px 0 0 -60px;pointer-events:none;z-index:6;opacity:0;transition:opacity .25s}
-.alien-reticle.on{opacity:1}
-.alien-reticle svg{width:100%;height:100%;overflow:visible;filter:drop-shadow(0 0 3px rgba(0,0,0,.8))}
+.alien-reticle{position:absolute;left:50%;top:50%;width:62px;height:62px;margin:-31px 0 0 -31px;pointer-events:none;z-index:6;opacity:0;transition:opacity .25s}
+.alien-reticle.on{opacity:.82}
+.alien-reticle svg{width:100%;height:100%;overflow:visible;filter:drop-shadow(0 0 2px rgba(0,0,0,.8))}
 `;
 
 export interface ReticleState {
@@ -94,10 +94,10 @@ export class AlienReticle {
     this.grabK += ((s.grab === 'hold' ? 1 : s.grab === 'out' ? 0.5 : 0) - this.grabK) * Math.min(1, dt * 10);
     this.targetK += ((s.target ? 1 : 0) - this.targetK) * Math.min(1, dt * 12);
     this.flare = Math.max(this.flare * Math.exp(-dt * 6), s.acid);
-    const breathe = 1 + Math.sin(t * 2.2) * 0.025;
+    const breathe = 1 + Math.sin(t * 2.2) * 0.012;
     // In on a target; the whole thing slowly turning
     const k = breathe * (1 - this.targetK * 0.16);
-    this.rot.setAttribute('transform', `translate(60 60) rotate(${(Math.sin(t * 0.6) * 8).toFixed(2)}) scale(${k.toFixed(3)}) translate(-60 -60)`);
+    this.rot.setAttribute('transform', `translate(60 60) rotate(${(Math.sin(t * 0.6) * 3).toFixed(2)}) scale(${k.toFixed(3)}) translate(-60 -60)`);
     // The grabber's half closing in round the middle while it holds something; its teeth biting
     const g = this.grabK;
     this.grab.setAttribute('transform', `translate(${(g * 9).toFixed(2)} 0)`);
@@ -105,7 +105,7 @@ export class AlienReticle {
     // The acid's half flaring when it spits; its drips falling and coming again
     const f = this.flare;
     this.acid.setAttribute('stroke-width', (3.2 + f * 2.5).toFixed(2));
-    this.acidGlow.setAttribute('opacity', (0.18 + f * 0.5).toFixed(2));
+    this.acidGlow.setAttribute('opacity', (0.1 + f * 0.35).toFixed(2));
     this.acid.setAttribute('stroke-dashoffset', (t * 14).toFixed(1));
     this.drips.forEach((d, i) => {
       const u = (t * 0.8 + i * 0.33) % 1;

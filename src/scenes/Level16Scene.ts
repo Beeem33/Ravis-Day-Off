@@ -98,6 +98,8 @@ const smooth = (x: number): number => {
 const SWIM_DEPTH = 1.25;
 /** Under his sprint (6.6), over his walk: he can get away, but not by strolling. */
 const HOUND_SPEED = 4.8;
+/** The boss's acid pools, and the rings that warn of them: the same size. */
+const PUDDLE_R = 1.9;
 const BOSS_NAME = 'THE MAW';
 const ALIEN_BLOOD = 0x9ad02a;
 const BOSS_BLOOD = 0x9a2a6a;
@@ -523,7 +525,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.scene.add(this.portalLight);
 
     this.acidShots = new GlowShots(ACID, 0.09, ACID_G, 0.3, 30);
-    this.bossAcid = new GlowShots(ACID, 0.17, ACID_G, 0.3, 40);
+    this.bossAcid = new GlowShots(ACID, 0.17, ACID_G, 0.3, 160);
     this.drops = new Droplets(900);
     this.scene.add(this.acidShots.group, this.bossAcid.group, this.drops.points);
     this.buildPools();
@@ -1274,8 +1276,16 @@ export class Level16Scene extends CombatScene<Level16Data> {
         g.x -= (dx / dist) * (0.9 - dist);
         g.z -= (dz / dist) * (0.9 - dist);
       }
-      g.x += h.vel.x * dt;
-      g.z += h.vel.z * dt;
+      const nx = g.x + h.vel.x * dt;
+      const nz = g.z + h.vel.z * dt;
+      if (this.part === 1 && inChasm(nx, nz) && !inChasm(g.x, g.z)) {
+        // At the edge: no further (they can't see, but they know where the ground stops)
+        h.vel.set(0, 0, 0);
+        if (h.state === 'lunge') h.state = 'recover';
+      } else {
+        g.x = nx;
+        g.z = nz;
+      }
       W.confine(g, 0.5);
       if (h.airV !== 0 || h.air > 0) {
         h.air += h.airV * dt;
@@ -1290,6 +1300,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       g.y = gy + h.air;
       h.group.rotation.y = h.yaw;
       h.animate(dt, this.t);
+      if (this.part === 1 && h.alive && inChasm(g.x, g.z) && gy < 0) this.hurtHound(h, 99, g.clone().add(V(0, 0.6, 0)), V(0, -1, 0));
     }
   }
 
@@ -1552,7 +1563,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
   // ============================================================ acid
 
   private buildPools(): void {
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 280; i++) {
       const mat = puddleMaterial(Math.random() * 40);
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2, 10, 10), mat);
       mesh.frustumCulled = false;
@@ -1562,7 +1573,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.puddles.push({ mesh, mat, x: 0, z: 0, r: 1, life: 0, max: 1, enemy: false, burn: 0 });
     }
     const ringMat = new THREE.MeshBasicMaterial({ color: 0xff5a20, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 48; i++) {
       const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 48), ringMat.clone());
       ring.rotation.x = -Math.PI / 2;
       ring.visible = false;
@@ -1702,7 +1713,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         }
       }
       if (b.y < W.groundY(b.x, b.z)) {
-        this.spawnPuddle(b.x, b.z, 1.9, true, shot.damage);
+        this.spawnPuddle(b.x, b.z, PUDDLE_R, true, shot.damage);
         return true;
       }
       return false;
@@ -1876,17 +1887,16 @@ export class Level16Scene extends CombatScene<Level16Data> {
         break;
       }
       case 'mortar': {
-        // Globs one after another, each at him (or near), a ring where it'll come down
-        const n = enraged ? 7 : 5;
-        if (this.moveShots < n && this.moveT > 0.4 + this.moveShots * 0.32) {
-          const spread = this.moveShots === 0 ? 0 : 3.5;
-          const a = Math.random() * Math.PI * 2;
-          const r = Math.sqrt(Math.random()) * spread;
-          const lead = p.velocity.clone().multiplyScalar(0.6);
-          this.lob(pp.x + lead.x + Math.cos(a) * r, pp.z + lead.z + Math.sin(a) * r, 1.5, 1.9);
+        // A barrage up into the air, coming down all over the ground round him: a ring where each will land,
+        // spaced so there's somewhere between them to stand — he has to get into a gap before it comes down
+        const pts = this.mortarPts;
+        const n = pts.length;
+        while (this.moveShots < n && this.moveT > 0.35 + this.moveShots * 0.07) {
+          const q = pts[this.moveShots];
+          this.lob(q.x, q.z, PUDDLE_R, 2.1 + this.moveShots * 0.02);
           this.moveShots++;
         }
-        if (this.moveShots >= n && this.moveT > 0.4 + n * 0.32 + 0.6) this.startMove('idle');
+        if (this.moveShots >= n && this.moveT > 0.35 + n * 0.07 + 2.8) this.startMove('idle');
         break;
       }
       case 'spray': {
@@ -1897,11 +1907,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
         if (this.moveShots < S.arcs && this.moveT >= 0.7 + this.moveShots * gap) {
           const k = this.moveShots;
           const r = 4 + k * S.step;
-          const w = 0.22 + k * 0.1;
-          const n = Math.max(2, Math.ceil((2 * w * r) / 2.2) + 1);
+          // Each arc fans wider than the last: by the far ones, well over a right angle across
+          const w = 0.38 + k * 0.17;
+          const n = Math.max(3, Math.ceil((2 * w * r) / 3.1) + 1);
           for (let j = 0; j < n; j++) {
             const a = S.base - w + (2 * w * j) / (n - 1);
-            this.lob(S.o.x + Math.sin(a) * r, S.o.z + Math.cos(a) * r, 1.6, 0.9, 1.9 + k * 0.05, false);
+            this.lob(S.o.x + Math.sin(a) * r, S.o.z + Math.cos(a) * r, PUDDLE_R, 0.9, 1.9 + k * 0.05, false);
           }
           this.moveShots++;
           this.shake = Math.max(this.shake, 0.2);
@@ -1937,6 +1948,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
   }
   private sprayHinted = false;
+  private mortarPts: { x: number; z: number }[] = [];
+  /** Under half its health: angrier. */
+  private bossHalf(): boolean {
+    return this.boss.hp < this.boss.maxHp * 0.5;
+  }
   private treeHitT = -10;
   private treeR = 12;
   /** The spray: where it comes from, which way, how many arcs. */
@@ -1955,9 +1971,26 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const pp = this.player.position;
       this.spray.o.copy(b.at);
       this.spray.base = Math.atan2(pp.x - b.at.x, pp.z - b.at.z);
-      this.spray.arcs = THREE.MathUtils.clamp(Math.ceil((d + 6 - 4) / 2.4), 4, 9);
-      // Far off, the arcs further apart: it still reaches past him
-      this.spray.step = Math.max(2.4, (d + 6 - 4) / (this.spray.arcs - 1));
+      this.spray.arcs = THREE.MathUtils.clamp(Math.ceil((d + 12 - 4) / 2.6), 5, 12);
+      // Far off, the arcs further apart: it still reaches well past him
+      this.spray.step = Math.max(2.6, (d + 12 - 4) / (this.spray.arcs - 1));
+    }
+    if (m === 'mortar') {
+      // Where it all comes down: one on him (where he's heading), the rest thrown over the ground round him,
+      // never closer than 5.4 m to each other, so a ring's width of clear ground lies between them
+      const pp = this.player.position;
+      const lead = this.player.velocity.clone().multiplyScalar(0.5);
+      const pts: { x: number; z: number }[] = [{ x: pp.x + lead.x, z: pp.z + lead.z }];
+      const want = this.bossHalf() ? 18 : 14;
+      for (let tries = 0; tries < 600 && pts.length < want; tries++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 2 + Math.sqrt(Math.random()) * 11;
+        const x = pp.x + Math.cos(a) * r;
+        const z = pp.z + Math.sin(a) * r;
+        if (pts.every((q) => Math.hypot(q.x - x, q.z - z) > 5.4)) pts.push({ x, z });
+      }
+      // Fired nearest-first, so the ones close to him are up first
+      this.mortarPts = pts.sort((u, v) => Math.hypot(u.x - pp.x, u.z - pp.z) - Math.hypot(v.x - pp.x, v.z - pp.z));
     }
     if (m === 'grab') {
       T.from.copy(b.muzzle(1));

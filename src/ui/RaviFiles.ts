@@ -638,7 +638,7 @@ class Classified implements Viewer {
       g.strokeStyle = '#e8141c';
       g.lineWidth = 5;
       g.beginPath();
-      g.ellipse(cx, cy, rad * 0.62, rad, 0.05, 0, Math.PI * 2);
+      g.arc(cx, cy, rad, 0, Math.PI * 2);
       g.stroke();
       g.save();
       g.font = `900 34px ${IMPACT}`;

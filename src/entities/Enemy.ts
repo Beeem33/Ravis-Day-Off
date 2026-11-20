@@ -2598,8 +2598,15 @@ export class Enemy {
   }
 
   /** Model only: clothes and hands all one flat colour (the face left alone). */
-  mannequin(color: number): void {
-    this.hitman?.mannequin(color);
+  mannequin(color: number, face = false): void {
+    this.hitman?.mannequin(color, face);
+  }
+
+  /** Index and middle fingers up out of his fists (left, right): a peace sign. */
+  setPeace(left: boolean, right: boolean): void {
+    if (!this.hitman) return;
+    this.hitman.peaceUp.L = left;
+    this.hitman.peaceUp.R = right;
   }
 
   /** The coworkers' kit for the fight (model only): a carrier that fits him, and a helmet in place of his cap. */

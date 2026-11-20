@@ -3096,7 +3096,7 @@ export class HitmanVisual {
    * colour, the buttons and the cap gone — the face, eyes, brows and hair
    * left as they are.
    */
-  mannequin(color: number): void {
+  mannequin(color: number, face = false): void {
     const paint = new THREE.MeshStandardMaterial({ name: 'HM_Mannequin', color, roughness: 0.55 });
     this.model.traverse((x) => {
       const m = x as THREE.Mesh;
@@ -3104,6 +3104,9 @@ export class HitmanVisual {
       if (!m.isMesh) return;
       if (m.name === 'HitmanButtons') m.visible = false;
       else if (m.name.startsWith('HitmanBody')) m.material = Array.isArray(m.material) ? m.material.map(() => paint) : paint;
+      // `face`: his head too — the skin and the brows the same paint, his hair gone; lips, mouth and eyes left be
+      else if (face && (m.name === 'HitmanFace_1' || m.name === 'HitmanFace_5')) m.material = paint;
+      else if (face && (m.name.startsWith('Hair_') || x.parent?.name.startsWith('Hair_'))) m.visible = false;
     });
   }
 
@@ -3656,7 +3659,7 @@ export class HitmanVisual {
   private curl(left: boolean, c: number): void {
     const k = THREE.MathUtils.clamp(c, 0, 1);
     const up = left ? this.middleUp.L : this.middleUp.R;
-    if (Math.abs(k - (left ? this.curlL : this.curlR)) < 0.004 && up === (left ? this.middleWasL : this.middleWasR)) return;
+    if (Math.abs(k - (left ? this.curlL : this.curlR)) < 0.004 && up === (left ? this.middleWasL : this.middleWasR) && !(left ? this.peaceUp.L : this.peaceUp.R)) return;
     if (left) {
       this.curlL = k;
       this.middleWasL = up;
@@ -3666,14 +3669,18 @@ export class HitmanVisual {
     }
     for (const f of this.fingers) {
       if (f.left !== left) continue;
-      // The finger: the middle one left out straight of the fist
-      if (up && f.bone.name.startsWith('Middle')) f.bone.quaternion.copy(f.relax);
+      // The finger: the middle one left out straight of the fist; a peace sign: the index and middle both
+      const peace = left ? this.peaceUp.L : this.peaceUp.R;
+      if ((up || peace) && f.bone.name.startsWith('Middle')) f.bone.quaternion.copy(f.relax);
+      else if (peace && f.bone.name.startsWith('Index')) f.bone.quaternion.copy(f.relax);
       else f.bone.quaternion.slerpQuaternions(f.relax, f.grip, k);
     }
   }
 
   /** Each hand's middle finger out straight from whatever the rest of the hand is doing (the finger). */
   readonly middleUp = { L: false, R: false };
+  /** Each hand's index and middle fingers out straight from a fist: a peace sign. */
+  readonly peaceUp = { L: false, R: false };
   private middleWasL = false;
   private middleWasR = false;
 

@@ -200,7 +200,8 @@ export const DENS: Den[] = [
   [8, 1],
   [-72, -1],
   [-134, 1],
-  [-153, -1]
+  // On the near side of the chasm, not in it: they come out at him at its edge
+  [-140, -1]
 ].map(([z, side]) => {
   // Out from the middle to the wall's foot
   const cx = valleyX(z);

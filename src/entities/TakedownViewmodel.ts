@@ -476,11 +476,23 @@ export class TakedownViewmodel {
     this.armL.quaternion.setFromUnitVectors(TakedownViewmodel.FWD, dir.normalize());
   }
 
+  /**
+   * The lead-in (the reach, the grab, the knife out and back at the hip)
+   * plays this many times faster than the rest: every move of it still
+   * there, but the first thrust lands under half a second after F rather
+   * than after a second and a quarter of holding him. From the thrust on,
+   * real time.
+   */
+  static readonly LEAD_SPEED = 2.8;
+
   update(dt: number): void {
     if (!this.active) return;
-    this.t += dt;
-    const t = this.t;
     const T = TakedownViewmodel;
+    if (this.t < T.STAB_T) {
+      const fast = this.t + dt * T.LEAD_SPEED;
+      this.t = fast <= T.STAB_T ? fast : T.STAB_T + (fast - T.STAB_T) / T.LEAD_SPEED;
+    } else this.t += dt;
+    const t = this.t;
     const ease = (x: number) => x * x * (3 - 2 * x);
     const c01 = (x: number) => Math.min(1, Math.max(0, x));
 

@@ -16,7 +16,6 @@ import { Level7Scene } from './scenes/Level7Scene';
 import { Level8Scene } from './scenes/Level8Scene';
 import { StairwellScene } from './scenes/StairwellScene';
 import { StreetScene } from './scenes/StreetScene';
-import { AirportScene } from './scenes/AirportScene';
 import { RunwayScene } from './scenes/RunwayScene';
 import { HQScene } from './scenes/HQScene';
 import { Level13Scene } from './scenes/Level13Scene';
@@ -119,14 +118,7 @@ bus.on<{ checkpoint?: number }>(Events.RestartStreet, (p) => {
   engine.setScene(new StreetScene(ctx, p?.checkpoint ?? 0), 'LEVEL 10 — THE STREET');
 });
 bus.on(Events.StreetComplete, () => {
-  engine.setScene(new AirportScene(ctx), 'LEVEL 11 — THE AIRPORT');
-});
-bus.on(Events.RestartAirport, () => {
-  engine.setScene(new AirportScene(ctx), 'LEVEL 11 — THE AIRPORT');
-});
-bus.on(Events.AirportComplete, () => {
-  // The end of the line, for now: back to the menu
-  engine.setScene(new MainMenuScene(ctx));
+  engine.setScene(new RunwayScene(ctx), 'LEVEL 11 — LEFT ON THE RUNWAY');
 });
 bus.on(Events.RunwayComplete, () => {
   engine.setScene(new HQScene(ctx), 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE');
@@ -201,9 +193,7 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   stairwell: () => ({ scene: new StairwellScene(ctx), title: 'LEVEL 8 — STAIRWELL B' }),
   level8: () => ({ scene: new Level8Scene(ctx), title: 'LEVEL 9 — THE PARKING LOT' }),
   street: () => ({ scene: new StreetScene(ctx), title: 'LEVEL 10 — THE STREET' }),
-  airport: () => ({ scene: new AirportScene(ctx), title: 'LEVEL 11 — THE AIRPORT' }),
-  // The alternate Level 11, from where Level 10 ends; reached only from here for now
-  runway: () => ({ scene: new RunwayScene(ctx), title: 'LEVEL 11 (ALTERNATE) — LEFT ON THE RUNWAY' }),
+  runway: () => ({ scene: new RunwayScene(ctx), title: 'LEVEL 11 — LEFT ON THE RUNWAY' }),
   hq: () => ({ scene: new HQScene(ctx), title: 'LEVEL 12 — THE EXTERMINATOR COLLECTIVE' }),
   level13: () => ({ scene: new Level13Scene(ctx), title: 'LEVEL 13 — THE UNDERWORKS' }),
   level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' }),

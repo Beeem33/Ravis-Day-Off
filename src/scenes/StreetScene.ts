@@ -2087,7 +2087,7 @@ export class StreetScene implements GameScene {
     // ---- The end: the jet's up and away; to black under the gunfire, the card, and on
     if (this.jetRollAt >= 0 && !this.completed) {
       const e = t - this.jetRollAt;
-      // To black as it starts its run: the chase down the runway is Level 11's
+      // To black as it starts its run: the jet down the runway and away is Level 11's
       if (e > 3.2 && this.phase === 'airport') {
         this.phase = 'done';
         this.fadeEl.style.opacity = '1';

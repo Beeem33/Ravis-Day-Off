@@ -21,10 +21,11 @@ import { RifleViewmodel } from '../entities/RifleViewmodel';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import { ParticleManager } from '../fx/ParticleManager';
 import { DialogueBox, type DialogueLine } from '../ui/DialogueBox';
+import { Colognes } from '../entities/Colognes';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
 
 /**
- * Level 11, the alternate — left on the runway. Where Level 10 left him:
+ * Level 11 — left on the runway. Where Level 10 left him:
  * the Civic stopped short of the airside gate, the boss's jet away down the
  * runway, and his men and the airport's security pouring rounds into the
  * car. He can't stop it: the jet lifts and is gone, and they close in.
@@ -1904,6 +1905,12 @@ export class RunwayScene implements GameScene {
     c.updateMatrixWorld(true);
     const L = (x: number, z: number): THREE.Vector3 => new THREE.Vector3(x, 1.64, z).applyMatrix4(c.matrixWorld);
     this.raviPath = [L(-1.45, 0.15), L(-1.35, -2.45), L(0.2, -3.25), this.raviAt.clone().setY(gy + 1.64)];
+    // The level's cologne: on the tarmac beside the Civic, right where he walks round it (picked up as he goes by)
+    {
+      const at = L(-1.35, -2.45).setY(gy + 0.02);
+      const face = this.raviPath[2].clone().sub(this.raviPath[1]);
+      Colognes.place(this.scene, 'haheed', at, Math.atan2(face.x, face.z), () => (this.beat === 'exit' || this.beat === 'talk1' || this.beat === 'board' ? this.camera : null), { radius: 1.8, auto: true });
+    }
     const legs = this.legTimes(this.raviPath, 1.6, gy + 99);
     this.raviLegT = legs.t;
     this.raviSteps = legs.step;

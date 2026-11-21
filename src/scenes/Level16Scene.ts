@@ -136,6 +136,8 @@ interface Hit {
   spider?: Spiderling;
   trap?: MawTrap;
   head?: boolean;
+  /** The mesh, for a hit on the world. */
+  obj?: THREE.Object3D;
 }
 
 interface Pack {
@@ -298,6 +300,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
   /** Bodies dying in acid: going green, smoking. */
   private greening: { root: THREE.Object3D; t: number; mats: { m: THREE.MeshStandardMaterial | THREE.MeshBasicMaterial; c0: THREE.Color; e0: THREE.Color | null }[] | null }[] = [];
   private ragdolls: HoundRagdoll[] = [];
+  /** Each hound's ragdoll (thrown and still alive, or dead), to hit again or stand it up. */
+  private houndRag = new Map<Hound, HoundRagdoll>();
+  /** A thrown one's body's speed last frame: a sudden stop is it hitting something. */
+  private ragPrev = new Map<Hound, THREE.Vector3>();
+  /** Getting back up off its side, from how it lay. */
+  private gettingUp = new Map<Hound, { q0: THREE.Quaternion; y0: number; t: number }>();
   /** The blood's colour in the spray: theirs is yellow-green. */
   protected bloodHue = 0.2;
   // ---- The spiderlings out of its sacs
@@ -1235,6 +1243,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
         h.animate(dt, this.t);
         continue;
       }
+      if (h.ragdoll) {
+        this.updateThrown(h);
+        continue;
+      }
       // Thrown: through the air till it lands, and the landing hurts
       const fv = this.flung.get(h);
       if (fv) {
@@ -1249,9 +1261,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
             fv.addScaledVector(wall.normal, into * 1.3).multiplyScalar(0.35);
             g.copy(wall.point).addScaledVector(d, -HELD_R).sub(V(0, 0.6, 0));
             if (into > 3) {
-              this.wallSplat(wall.point, wall.normal, d, into > SLAM_KILL);
+              this.wallSplat(wall.point, wall.normal, d, into > SLAM_KILL, wall.obj);
               this.ctx.audio.bodyThud(g.distanceTo(pp));
-              this.hurtHound(h, Math.max(1, into * 0.15), wall.point.clone(), d);
+              this.hurtHound(h, Math.max(1, into * 0.15), wall.point.clone(), d, false, { mercy: true });
             }
           }
         }
@@ -1276,7 +1288,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
           h.group.rotation.z = 0;
           this.ctx.audio.bodyThud(g.distanceTo(pp));
           this.drops.burst(g.clone().add(V(0, 0.4, 0)), V(0, 1, 0), 14, 2.5, ALIEN_BLOOD);
-          this.hurtHound(h, Math.max(1, sp * 0.4), g.clone().add(V(0, 0.6, 0)), fv.clone().normalize());
+          this.hurtHound(h, Math.max(1, sp * 0.4), g.clone().add(V(0, 0.6, 0)), fv.clone().normalize(), false, { mercy: true });
           this.thrown.delete(h);
           if (h.alive) {
             h.state = 'recover';
@@ -1382,6 +1394,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (W.inLake(g.x, g.z)) gy = Math.max(gy, WATER_Y - 0.55);
       g.y = gy + h.air;
       h.group.rotation.y = h.yaw;
+      // Up off its side: turned upright from how it lay, over a moment
+      const up = this.gettingUp.get(h);
+      if (up) {
+        up.t += dt;
+        const k = smooth(Math.min(1, up.t / 0.45));
+        h.group.quaternion.slerpQuaternions(up.q0, new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), h.yaw), k);
+        g.y = THREE.MathUtils.lerp(up.y0, g.y, k);
+        if (up.t >= 0.45) {
+          this.gettingUp.delete(h);
+          h.group.rotation.set(0, h.yaw, 0);
+        }
+      }
       h.animate(dt, this.t);
       if (this.part === 1 && h.alive && inChasm(g.x, g.z) && gy < 0) this.hurtHound(h, 99, g.clone().add(V(0, 0.6, 0)), V(0, -1, 0));
     }
@@ -1392,15 +1416,23 @@ export class Level16Scene extends CombatScene<Level16Data> {
    * One on the grabber, or thrown off it and still in the air, is hurt but
    * never killed by this: only a slam into the rock kills one he's got hold of.
    */
-  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false, o: { knock?: number } = {}): void {
+  private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false, o: { knock?: number; mercy?: boolean } = {}): void {
     if (!acid) {
       this.drops.burst(point, dir.clone().negate().setY(0.3), 12, 3, ALIEN_BLOOD);
       this.ctx.audio.fleshHit();
-      if (h.alive) this.alienSpatter(point, dir, dmg >= 2 || h.hp - dmg <= 0);
+      this.alienSpatter(point, dir, h.alive ? dmg >= 2 || h.hp - dmg <= 0 : dmg >= 1.5);
     }
-    if (!h.alive) return;
+    if (!h.alive) {
+      // Already dead: the body jerks with the hit, and bleeds
+      const rd = this.houndRag.get(h);
+      if (rd && !acid) {
+        rd.hit(point, dir, 3.5 + Math.min(dmg, 5) * 1.8);
+        if (!this.ragdolls.includes(rd)) this.ragdolls.push(rd);
+      }
+      return;
+    }
     h.hp -= dmg;
-    if ((h.held || this.thrown.has(h)) && h.hp < 1) h.hp = 1;
+    if ((h.held || o.mercy) && h.hp < 1) h.hp = 1;
     if (!acid) this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
     if (h.hp > 0) {
       if (!acid) h.speed *= 0.4;
@@ -1417,13 +1449,23 @@ export class Level16Scene extends CombatScene<Level16Data> {
     h.knock.set(dir.x, 0, dir.z).normalize().multiplyScalar(acid ? 0 : o.knock ?? 6.5 + Math.min(dmg, 6) * 1.3);
     this.drops.burst(point, V(0, 1, 0), acid ? 24 : 30, acid ? 2 : 4, acid ? ACID : ALIEN_BLOOD);
     this.acidFuse.delete(h);
-    if (!acid) {
+    this.thrown.delete(h);
+    this.ragPrev.delete(h);
+    this.gettingUp.delete(h);
+    const loose = this.houndRag.get(h);
+    if (loose) {
+      // Killed while it was tumbling: it stays loose, and takes the hit
+      if (!acid) loose.hit(point, dir, 2.5 + Math.min(dmg, 5) * 1.4);
+      else this.greening.push({ root: h.group, t: 0, mats: null });
+      this.bloodPool(h.group.position.x, h.group.position.z, 1.1, acid ? 0x7ab01a : 0x6a7a12);
+    } else if (!acid) {
       const fv = this.flung.get(h);
       this.flung.delete(h);
       const v = fv ? fv.clone() : h.knock.clone().add(V(0, o.knock !== undefined ? 1.5 + o.knock * 0.3 : 3.2 + Math.min(dmg, 6) * 0.5, 0)).add(h.vel.clone().multiplyScalar(0.5));
       h.group.rotation.x = 0;
       h.group.rotation.z = 0;
       const rd = new HoundRagdoll(this.world, h, v);
+      this.houndRag.set(h, rd);
       rd.onRest = (at) => {
         this.bloodPool(at.x, at.z, 1.1 + Math.random() * 0.5, 0x6a7a12);
         this.groundSplat(at, 1.6 + Math.random() * 0.6, 'pool');
@@ -1433,6 +1475,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       // Its legs go and it falls over into it, limp, and goes green through as the acid takes it
       this.bloodPool(h.group.position.x, h.group.position.z, 1.3, 0x7ab01a);
       const rd = new HoundRagdoll(this.world, h, V(0, 0.3, 0).add(h.vel.clone().multiplyScalar(0.3)), 1);
+      this.houndRag.set(h, rd);
       rd.topple();
       this.ragdolls.push(rd);
       this.greening.push({ root: h.group, t: 0, mats: null });
@@ -1440,10 +1483,6 @@ export class Level16Scene extends CombatScene<Level16Data> {
     if (this.t - this.lastGrowl > 1) {
       this.lastGrowl = this.t;
       this.ctx.audio.houndScreech(point.distanceTo(this.player.position));
-    }
-    for (const hb of h.hitboxes) {
-      const i = this.houndHits.indexOf(hb);
-      if (i >= 0) this.houndHits.splice(i, 1);
     }
   }
 
@@ -1736,7 +1775,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const cam = this.player.camera;
       const dir = cam.getWorldDirection(new THREE.Vector3());
       const h = this.trace(cam.position, dir, 35, true);
-      this.reticleTarget = (!!h && ['hound', 'spider', 'boss', 'trap', 'tongue'].includes(h.kind)) || (this.part === 2 && !!this.eggUnderAim(cam.position, dir, h ? h.dist : 35));
+      this.reticleTarget = (!!h && ['hound', 'spider', 'boss', 'trap', 'tongue'].includes(h.kind) && !(h.kind === 'hound' && !h.hound?.alive)) || (this.part === 2 && !!this.eggUnderAim(cam.position, dir, h ? h.dist : 35));
     }
     this.reticle.update(dt, {
       acid: this.acidArm.recoil,
@@ -1955,13 +1994,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.holding = null;
     if (h) {
       h.held = false;
-      if (h.alive || !stillHeld) {
-        const v = this.holdVel.clone().multiplyScalar(1.15).add(V(0, 2.5, 0));
-        if (v.length() > 26) v.setLength(26);
-        this.flung.set(h, v);
-        if (h.alive) this.thrown.add(h);
-        h.spin.set((Math.random() - 0.5) * 12, 0, (Math.random() - 0.5) * 12);
+      const v = this.holdVel.clone().multiplyScalar(1.15).add(V(0, 2.5, 0));
+      if (v.length() > 26) v.setLength(26);
+      if (h.alive) {
+        h.group.rotation.x = 0;
+        h.group.rotation.z = 0;
+        const rd = new HoundRagdoll(this.world, h, v, 9);
+        this.ragdolls.push(rd);
+        this.houndRag.set(h, rd);
+        this.ragPrev.set(h, v.clone());
+        this.thrown.add(h);
         if (v.length() > 6) this.ctx.audio.kickWhoosh();
+      } else if (!stillHeld) {
+        this.flung.set(h, v);
+        h.spin.set((Math.random() - 0.5) * 12, 0, (Math.random() - 0.5) * 12);
       }
     }
     this.tongue.state = 'back';
@@ -1979,7 +2025,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.slamAt = this.t;
     const kill = speed >= SLAM_KILL;
     const at = hit.point;
-    this.wallSplat(at, n, vIn.lengthSq() > 1e-4 ? vIn.clone().normalize() : d, kill);
+    this.wallSplat(at, n, vIn.lengthSq() > 1e-4 ? vIn.clone().normalize() : d, kill, hit.obj);
     this.ctx.audio.bodyThud(0);
     this.ctx.audio.punchImpact(kill);
     this.drops.burst(at.clone().addScaledVector(n, 0.2), n, kill ? 40 : 14, kill ? 5 : 3, ALIEN_BLOOD);
@@ -2002,9 +2048,32 @@ export class Level16Scene extends CombatScene<Level16Data> {
   }
 
   /** Blood across the rock where something hit it: a burst, stretched the way it was going, flecks round it; it runs. */
-  private wallSplat(at: THREE.Vector3, n: THREE.Vector3, d: THREE.Vector3, big: boolean): void {
+  /**
+   * The rock you'd see near `at` (a hit on the cave's shape is on its smooth
+   * outline; its real wall bulges in front of that or folds back behind):
+   * found looking back at it along `n` from in front. Null if there's no mesh there.
+   */
+  private onRock(at: THREE.Vector3, n: THREE.Vector3): { point: THREE.Vector3; normal: THREE.Vector3; obj: THREE.Object3D } | null {
+    this.raycaster.set(at.clone().addScaledVector(n, 1.4), n.clone().negate());
+    this.raycaster.far = 3.4;
+    const w = this.raycaster.intersectObjects(this.level.shootables, false)[0];
+    if (!w || !w.face) return null;
+    const nn = w.face.normal.clone().transformDirection(w.object.matrixWorld);
+    if (nn.dot(n) < 0) nn.negate();
+    return { point: w.point.clone(), normal: nn, obj: w.object };
+  }
+
+  private wallSplat(at: THREE.Vector3, n: THREE.Vector3, d: THREE.Vector3, big: boolean, obj?: THREE.Object3D): void {
+    if (!obj) {
+      const r = this.onRock(at, n);
+      if (r) {
+        at = r.point;
+        n = r.normal;
+        obj = r.obj;
+      }
+    }
     const tang = d.clone().addScaledVector(n, -d.dot(n));
-    this.decals.place('blood', at, n, big ? 1.2 + Math.random() * 0.5 : 0.55 + Math.random() * 0.3, tang.lengthSq() > 0.01 ? tang : undefined, big ? 1.7 : 1.3);
+    this.decals.place('blood', at, n, big ? 1.2 + Math.random() * 0.5 : 0.55 + Math.random() * 0.3, tang.lengthSq() > 0.01 ? tang : undefined, big ? 1.7 : 1.3, obj);
     // Round it, each found on the rock itself (it's not flat)
     const u = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
     const w = new THREE.Vector3().crossVectors(n, u);
@@ -2014,11 +2083,74 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const a = Math.random() * Math.PI * 2;
       const r = (0.3 + Math.random()) * (big ? 1.5 : 0.7);
       const off = u.clone().multiplyScalar(Math.cos(a) * r).addScaledVector(w, Math.sin(a) * r).addScaledVector(tang, 0.4 * r);
-      const h = this.trace(at.clone().add(off).addScaledVector(n, 0.6), back, 1.5, false);
-      if (h) this.decals.place('blood', h.point, h.normal, 0.15 + Math.random() * (big ? 0.55 : 0.3), off, 1.6);
+      const q = at.clone().add(off);
+      const rk = obj ? this.onRock(q, n) : null;
+      const h = rk ?? this.trace(q.clone().addScaledVector(n, 0.6), back, 1.5, false);
+      if (h) this.decals.place('blood', h.point, h.normal, 0.15 + Math.random() * (big ? 0.55 : 0.3), off, 1.6, rk ? rk.obj : (h as Hit).obj);
     }
     // And a pool below, where it runs down to
     if (big) this.groundSplat(at.clone().addScaledVector(n, 0.5), 0.9 + Math.random() * 0.5, 'pool');
+  }
+
+  /**
+   * A hound thrown off the grabber, loose: whatever it hits on the way it
+   * hits hard (blood where it does, and it's hurt, but a throw never kills
+   * it); it bowls over any it flies into; once it's lain still a moment it
+   * gets back up.
+   */
+  private updateThrown(h: Hound): void {
+    const rd = this.houndRag.get(h);
+    if (!rd) {
+      h.ragdoll = false;
+      return;
+    }
+    const at = rd.torsoAt(new THREE.Vector3());
+    const v = rd.torsoVel(new THREE.Vector3());
+    const prev = this.ragPrev.get(h) ?? v.clone();
+    const sp0 = prev.length();
+    if (sp0 > 6 && prev.distanceTo(v) > 5.5) {
+      // Stopped short: it's hit something
+      const d = prev.clone().normalize();
+      const wall = this.trace(at, d, 1.4, false);
+      if (wall) this.wallSplat(wall.point, wall.normal, d, sp0 > SLAM_KILL, wall.obj);
+      else this.groundSplat(at, 0.6 + Math.random() * 0.4, 'blood', d);
+      this.ctx.audio.bodyThud(at.distanceTo(this.player.position));
+      this.drops.burst(at.clone(), d.clone().negate().setY(0.5), 14, 3, ALIEN_BLOOD);
+      this.hurtHound(h, Math.max(1, (sp0 - v.length()) * 0.18), at.clone(), d, false, { mercy: true });
+    }
+    this.ragPrev.set(h, v.clone());
+    if (v.length() > 5)
+      for (const o of this.hounds) {
+        if (o === h || !o.alive || o.held || o.ragdoll) continue;
+        if (o.group.position.clone().setY(at.y).distanceTo(at) < 1.3 && Math.abs(o.group.position.y + 0.7 - at.y) < 1.2) {
+          o.knock.copy(v).setY(0).multiplyScalar(0.8);
+          this.hurtHound(o, 99, o.group.position.clone().add(V(0, 0.7, 0)), v.clone().normalize());
+          this.ctx.audio.bodyThud(0);
+        }
+      }
+    if (rd.stillT > 0.35 || rd.age > 4.5) {
+      // Lain still a moment: up again, facing the way its body lay
+      const f = rd.facing(new THREE.Vector3()).setY(0);
+      const q0 = h.group.quaternion.clone();
+      const y0 = h.group.position.y;
+      rd.release();
+      const i = this.ragdolls.indexOf(rd);
+      if (i >= 0) this.ragdolls.splice(i, 1);
+      this.houndRag.delete(h);
+      this.ragPrev.delete(h);
+      this.thrown.delete(h);
+      if (f.lengthSq() > 1e-4) h.yaw = Math.atan2(f.x, f.z);
+      h.group.rotation.set(0, h.yaw, 0);
+      h.group.position.set(at.x, W.groundY(at.x, at.z), at.z);
+      W.confine(h.group.position, 0.5);
+      h.body.position.set(0, 0.72, 0);
+      h.body.rotation.set(0, 0, 0);
+      h.body.scale.set(1, 1, 1);
+      h.state = 'recover';
+      h.stateT = -0.6;
+      h.speed = 0;
+      this.gettingUp.set(h, { q0, y0, t: 0 });
+    }
   }
 
   /** Bodies dying in acid: through green, glowing faintly, smoking. */
@@ -3243,7 +3375,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const w = this.raycaster.intersectObjects(this.level.shootables, false).find((h) => h.distance > 0.02);
     if (w) {
       const n = (w.face?.normal ?? V(0, 1, 0)).clone().transformDirection(w.object.matrixWorld);
-      best = { dist: w.distance, point: w.point.clone(), normal: n, kind: 'world' };
+      best = { dist: w.distance, point: w.point.clone(), normal: n, kind: 'world', obj: w.object };
     }
     if (creatures) {
       this.raycaster.far = best ? best.dist : far;

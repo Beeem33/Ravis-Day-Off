@@ -17,11 +17,17 @@ export class HoundRagdoll {
   private bodies: CANNON.Body[] = [];
   private constraints: CANNON.Constraint[] = [];
   private t = 0;
+  /** How long it's been loose. */
+  get age(): number {
+    return this.t;
+  }
   /** Settled: the scene takes it out of the physics then (the mesh keeps its last pose). */
   done = false;
   /** Fired once, when it first comes to rest: where (for the blood under it). */
   onRest: ((at: THREE.Vector3) => void) | null = null;
   private rested = false;
+  /** How long it's lain still, this time. */
+  stillT = 0;
 
   constructor(
     private world: CANNON.World,
@@ -110,12 +116,76 @@ export class HoundRagdoll {
     h.neck.quaternion.copy(rel(this.head));
     h.legs.forEach((l, i) => l.hip.quaternion.copy(rel(this.legs[i])));
     const still = this.torso.velocity.length() < 0.25 && this.torso.angularVelocity.length() < 0.4;
+    this.stillT = still ? this.stillT + dt : 0;
     if (!this.rested && (still || this.t > 3) && this.t > 0.6) {
       this.rested = true;
       this.onRest?.(tp.clone());
     }
     // Lying still for a while, or long enough: out of the physics, left as it fell
     if ((still && this.t > 2.5) || this.t > 10) this.dispose();
+  }
+
+  /** Where its body is, and how fast it's going. */
+  torsoAt(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(this.torso.position.x, this.torso.position.y, this.torso.position.z);
+  }
+  torsoVel(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(this.torso.velocity.x, this.torso.velocity.y, this.torso.velocity.z);
+  }
+  /** Which way its body faces (its head end). */
+  facing(out: THREE.Vector3): THREE.Vector3 {
+    const f = this.torso.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    return out.set(f.x, f.y, f.z);
+  }
+
+  /** Back into the physics (it had settled and been taken out), to be moved again. */
+  wake(): void {
+    if (!this.done) return;
+    this.done = false;
+    this.t = 0.7;
+    this.stillT = 0;
+    for (const b of this.bodies) {
+      b.velocity.setZero();
+      b.angularVelocity.setZero();
+      this.world.addBody(b);
+    }
+    for (const c of this.constraints) this.world.addConstraint(c);
+  }
+
+  /**
+   * Hit at `point` (world) going `dir` with force `k` (about the speed it
+   * knocks a limb to, m/s): the nearest part jerks, the body with it.
+   */
+  hit(point: THREE.Vector3, dir: THREE.Vector3, k: number): void {
+    this.wake();
+    let best = this.torso;
+    let bd = Infinity;
+    for (const b of this.bodies) {
+      const d = (b.position.x - point.x) ** 2 + (b.position.y - point.y) ** 2 + (b.position.z - point.z) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = b;
+      }
+    }
+    // (up off the ground as well: lying on it, a straight push is all friction)
+    const J = new CANNON.Vec3(dir.x, Math.max(0, dir.y) + 0.75, dir.z);
+    J.normalize();
+    // The part hit, hard; the rest of it, less
+    best.applyImpulse(J.scale(best.mass * k), new CANNON.Vec3(point.x - best.position.x, point.y - best.position.y, point.z - best.position.z));
+    if (best !== this.torso) this.torso.applyImpulse(J.scale(this.torso.mass * k * 0.6), new CANNON.Vec3(0, 0, 0));
+    else this.torso.angularVelocity.vadd(new CANNON.Vec3((Math.random() - 0.5) * k, (Math.random() - 0.5) * k * 0.5, (Math.random() - 0.5) * k), this.torso.angularVelocity);
+  }
+
+  /**
+   * Let go of it, alive: out of the physics and its pose given back to it to
+   * animate (the scene sets it upright).
+   */
+  release(): void {
+    this.dispose();
+    const h = this.hound;
+    h.ragdoll = false;
+    h.neck.quaternion.identity();
+    for (const l of h.legs) l.hip.rotation.set(0, 0, 0);
   }
 
   dispose(): void {

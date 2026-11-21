@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DecalGeometry } from 'three/examples/jsm/geometries/DecalGeometry.js';
 
 export type DecalKind = 'blood' | 'bullethole' | 'pool';
 
@@ -215,8 +216,14 @@ export class BloodDecalSystem {
   trimTo(n: number): void {
     while (this.decals.length > n) {
       const m = this.decals.pop();
-      if (m) this.scene.remove(m);
+      if (m) this.drop(m);
     }
+  }
+
+  /** Out of the scene (a projected one's own geometry freed). */
+  private drop(m: THREE.Mesh): void {
+    this.scene.remove(m);
+    if (m.geometry !== this.geo) m.geometry.dispose();
   }
 
   /**
@@ -264,16 +271,30 @@ export class BloodDecalSystem {
       mesh.rotateZ(Math.random() * Math.PI * 2);
     }
 
+    // On a surface that isn't flat (a cave's rock, marked `projectDecals`): laid over its folds,
+    // projected onto its own triangles, rather than a flat card that floats off it or sinks in
+    if (surface && (surface as THREE.Mesh).isMesh && surface.userData.projectDecals) {
+      surface.updateWorldMatrix(true, false);
+      const sz = new THREE.Vector3(Math.abs(mesh.scale.x), Math.abs(mesh.scale.y), Math.max(0.5, Math.max(mesh.scale.x, mesh.scale.y) * 0.8));
+      const geo = new DecalGeometry(surface as THREE.Mesh, mesh.position.clone().addScaledVector(n, -0.015), new THREE.Euler().setFromQuaternion(mesh.quaternion), sz);
+      if (!geo.getAttribute('position') || geo.getAttribute('position').count === 0) {
+        geo.dispose();
+        return;
+      }
+      const pm = new THREE.Mesh(geo, mat);
+      pm.renderOrder = 2;
+      this.scene.add(pm);
+      this.decals.push(pm);
+      if (this.decals.length > this.max) this.drop(this.decals.shift()!);
+      return;
+    }
     // Keep it on the face it hit
     if (surface && !this.clipToSurface(mesh, n, surface, mesh.scale.x, mesh.scale.y)) return;
 
     mesh.renderOrder = 2;
     this.scene.add(mesh);
     this.decals.push(mesh);
-    if (this.decals.length > this.max) {
-      const old = this.decals.shift()!;
-      this.scene.remove(old);
-    }
+    if (this.decals.length > this.max) this.drop(this.decals.shift()!);
 
     // Pools seep outward instead of appearing fully formed
     if (kind === 'pool') {

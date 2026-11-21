@@ -253,8 +253,46 @@ export class Level16CaveBuilder {
     geo.setIndex(idx);
     geo = mergeVertices(geo);
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, this.rock);
-    this.group.add(mesh);
+    // Cut into lengths of a few metres (normals worked out on the whole, so no seams): each is
+    // something a shot can hit and blood can be laid on, following the rock's folds (small
+    // enough to project a decal onto quickly), and culled when it's behind him
+    const ix = geo.getIndex()!.array;
+    const P = geo.getAttribute('position') as THREE.BufferAttribute;
+    const N = geo.getAttribute('normal') as THREE.BufferAttribute;
+    const per = R * 6;
+    const SEG = 6;
+    const chunks: THREE.Mesh[] = [];
+    for (let r0 = 0; r0 < rings.length - 1; r0 += SEG) {
+      const r1 = Math.min(rings.length - 1, r0 + SEG);
+      const map = new Map<number, number>();
+      const cp: number[] = [];
+      const cn: number[] = [];
+      const ci: number[] = [];
+      for (let i = r0 * per; i < r1 * per; i++) {
+        const v = ix[i];
+        let j = map.get(v);
+        if (j === undefined) {
+          j = cp.length / 3;
+          map.set(v, j);
+          cp.push(P.getX(v), P.getY(v), P.getZ(v));
+          cn.push(N.getX(v), N.getY(v), N.getZ(v));
+        }
+        ci.push(j);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(cp, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(cn, 3));
+      g.setIndex(ci);
+      g.computeBoundingSphere();
+      g.computeBoundingBox();
+      const m = new THREE.Mesh(g, this.rock);
+      m.userData.projectDecals = true;
+      this.group.add(m);
+      this.shootables.push(m);
+      chunks.push(m);
+    }
+    geo.dispose();
+    const mesh = chunks[0];
     // The far end shut with rock; the near end the light of outside
     const last = rings[rings.length - 1];
     const cap = new THREE.Mesh(new THREE.CircleGeometry(Math.max(last.w, last.h) * 1.2, 32), this.rock);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { FirstPersonArms, HAND, RaviVisual, grip, type Grip } from './RaviVisual';
+import { FirstPersonArms, RaviVisual, grip, mixShape, type Grip, type HandShape } from './RaviVisual';
 import { Controls } from '../core/Controls';
 
 /**
@@ -189,6 +189,7 @@ class CologneHunt {
       const id = this.held.id;
       this.held.group.removeFromParent();
       this.held = null;
+      this.hand = null;
       this.view?.card.classList.remove('show');
       this.collect(id);
     }
@@ -208,8 +209,18 @@ class CologneHunt {
     cam: THREE.PerspectiveCamera;
     holder: THREE.Group;
     arms: FirstPersonArms | null;
-    grip: Grip;
     card: HTMLElement;
+    mist: { s: THREE.Sprite; v: THREE.Vector3; life: number; max: number }[];
+  } | null = null;
+  /** The one in his hand: its grip (made to fit it), its cap and how that's flying, where its nozzle is. */
+  private hand: {
+    grip: Grip;
+    cap: THREE.Object3D | null;
+    capHome: THREE.Vector3;
+    capV: THREE.Vector3 | null;
+    capSpin: THREE.Vector3;
+    nozzle: THREE.Vector3;
+    cue: Set<string>;
   } | null = null;
 
   private onKey = (e: KeyboardEvent): void => {
@@ -255,8 +266,10 @@ class CologneHunt {
         p.last = eye;
         if (segDist(p.centre, prev, eye) <= p.radius) {
           this.placed.splice(i, 1);
-          p.group.removeFromParent();
-          this.collect(p.id);
+          if (this.held) {
+            p.group.removeFromParent();
+            this.collect(p.id);
+          } else this.inspect(p);
         }
         continue;
       }
@@ -292,7 +305,11 @@ class CologneHunt {
     this.prompt.classList.toggle('show', !!p);
   }
 
-  /** He picks it up: into his left hand, up in front of him, turned to the light. */
+  /**
+   * He picks it up in his right hand and brings it up in front of him, the
+   * label square to him; flicks the cap off with his thumb; puts it to his
+   * neck and gives it two sprays; and it's his (the achievement, in the corner).
+   */
   private inspect(p: Placed): void {
     const v = this.ensureView();
     p.group.removeFromParent();
@@ -302,6 +319,8 @@ class CologneHunt {
     p.glint.visible = false;
     v.holder.add(p.group);
     this.held = { id: p.id, group: p.group, t: 0 };
+    this.hand = this.fitHand(p.group);
+    v.arms?.set('r', p.group, this.hand.grip);
     this.audio?.pocket();
     const info = COLOGNES.find((c) => c.id === p.id)!;
     v.card.innerHTML = `<div class="ci-name">${info.name}</div><div class="ci-sub">an ultra-niche cologne</div><div class="ci-note">${info.note ?? ''}</div>`;
@@ -323,43 +342,221 @@ class CologneHunt {
     scene.add(cam);
     const holder = new THREE.Group();
     cam.add(holder);
-    // His left hand round the bottle's lower half: palm on its side, fingers
-    // curled round the front, the forearm running back down to his shoulder
-    const hold = grip([-0.05, 0.012, 0.012], [0.3, 0.22, -0.93], [1, 0.05, 0.15], [-0.5, -0.55, 0.67], {
-      fingers: [[55, 62, 38], [60, 66, 40], [64, 68, 42], [68, 70, 44]],
-      thumb: [0.6, 0.45, 0.3],
-      spread: 2
-    });
     let arms: FirstPersonArms | null = null;
-    if (RaviVisual.ready) {
-      arms = new FirstPersonArms(holder, cam).set('l', holder, hold);
-    }
+    if (RaviVisual.ready) arms = new FirstPersonArms(holder, cam);
     const card = document.createElement('div');
     card.className = 'cologne-inspect';
-    this.view = { scene, cam, holder, arms, grip: hold, card };
+    // The atomiser's mist: soft white puffs, drifting out of the nozzle toward his neck and thinning
+    const mist: NonNullable<CologneHunt['view']>['mist'] = [];
+    const mt = CologneHunt.mistTex();
+    for (let i = 0; i < 48; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: mt, color: 0xf4f7ff, transparent: true, opacity: 0, depthWrite: false }));
+      s.visible = false;
+      cam.add(s);
+      mist.push({ s, v: new THREE.Vector3(), life: 0, max: 1 });
+    }
+    this.view = { scene, cam, holder, arms, card, mist };
     return this.view;
   }
+
+  /**
+   * A grip made for this bottle: his right hand on its right side, palm flat
+   * to it, fingers round behind it (out of the label's way, knuckles past
+   * its back so nothing goes into the glass), the thumb up its front edge
+   * where it can reach the cap. Measured off the bottle itself.
+   */
+  private fitHand(bottle: THREE.Object3D): NonNullable<CologneHunt['hand']> {
+    const cap = bottle.userData.cap as THREE.Object3D | undefined;
+    bottle.updateMatrixWorld(true);
+    const inv = bottle.matrixWorld.clone().invert();
+    const body = new THREE.Box3();
+    const capBox = new THREE.Box3();
+    bottle.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.geometry.computeBoundingBox();
+      // (straight into the bottle's own space: out to the world and back would swell the box by however it's turned)
+      const b = m.geometry.boundingBox!.clone().applyMatrix4(inv.clone().multiply(m.matrixWorld));
+      let inCap = false;
+      for (let q: THREE.Object3D | null = o; q && q !== bottle; q = q.parent) if (q === cap) inCap = true;
+      (inCap ? capBox : body).union(b);
+    });
+    const hx = Math.max(Math.abs(body.min.x), body.max.x);
+    const hz = Math.max(Math.abs(body.min.z), body.max.z);
+    // (the helmet cap's strap hangs down past the neck: its rim is what counts)
+    const capY = capBox.isEmpty() ? body.max.y : Math.max(capBox.min.y, body.max.y - 0.012);
+    // The wrist beside it, high enough that the thumb run up its side reaches the cap's edge, and
+    // level with its middle front to back: the fingers go round behind (out past its back), the
+    // label in front is all clear
+    const wy = Math.max(0.008, capY - 0.075);
+    const wz = -0.005;
+    const g = grip([hx + 0.021, wy, wz], [-0.12, 0.2, -0.97], [-1, 0, -0.08], [0.35, -0.6, 0.72], CologneHunt.HOLD);
+    return {
+      grip: g,
+      cap: cap ?? null,
+      capHome: cap ? cap.position.clone() : new THREE.Vector3(),
+      capV: null,
+      capSpin: new THREE.Vector3(),
+      nozzle: new THREE.Vector3(0, Math.max(capY, body.max.y) + 0.004, 0),
+      cue: new Set()
+    };
+  }
+
+  /** The hand round a bottle; the thumb ready under the cap; the thumb flicking up off it; the thumb down on the nozzle. */
+  // (the thumb: negative straightens it up the bottle's side toward the cap, positive folds it in)
+  private static readonly HOLD: HandShape = { fingers: [[58, 64, 34], [64, 70, 38], [68, 72, 42], [72, 74, 46]], thumb: [-0.08, -0.08, -0.05], spread: 2 };
+  private static readonly COCK: HandShape = { fingers: [[58, 64, 34], [64, 70, 38], [68, 72, 42], [72, 74, 46]], thumb: [-0.32, -0.28, 0.25], spread: 2 };
+  private static readonly FLICK: HandShape = { fingers: [[58, 64, 34], [64, 70, 38], [68, 72, 42], [72, 74, 46]], thumb: [-0.7, -0.5, -0.6], spread: 2 };
+  private static readonly PRESS: HandShape = { fingers: [[58, 64, 34], [64, 70, 38], [68, 72, 42], [72, 74, 46]], thumb: [0.45, 0.45, 0.35], spread: 2 };
+
+  private static mistT: THREE.Texture | null = null;
+  private static mistTex(): THREE.Texture {
+    if (CologneHunt.mistT) return CologneHunt.mistT;
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const r = g.createRadialGradient(32, 32, 0, 32, 32, 31);
+    r.addColorStop(0, 'rgba(255,255,255,0.9)');
+    r.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+    r.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = r;
+    g.fillRect(0, 0, 64, 64);
+    CologneHunt.mistT = new THREE.CanvasTexture(c);
+    return CologneHunt.mistT;
+  }
+
+  /**
+   * The timeline (seconds):
+   *   0.00–0.60  up from low on the right into the middle of the view
+   *   0.60–1.95  held there, label square to him, turned a little in the light
+   *   1.95–2.45  the thumb under the cap's edge, and it flicks it off — up and away
+   *   2.50–3.05  in to his neck, the nozzle turned to it
+   *   3.10, 3.55 two sprays
+   *   3.95–4.50  down out of sight; then it's his
+   */
+  private static readonly T_END = 4.5;
 
   private stepInspect(dt: number): void {
     const h = this.held!;
     const v = this.view!;
+    const hand = this.hand!;
     h.t += dt;
-    const T = 3.6;
     const t = h.t;
-    // Up from low on the left, held, then down out of sight
-    const up = Math.min(1, t / 0.5);
-    const e = 1 - Math.pow(1 - up, 3);
-    const down = t > T - 0.45 ? Math.min(1, (t - (T - 0.45)) / 0.45) : 0;
-    const d = down * down;
-    v.holder.position.set(-0.32 + 0.3 * e + 0.05 * d, -0.42 + 0.33 * e - 0.4 * d, -0.42);
-    // Turned this way and that in the light, tipped back a touch
-    const look = Math.max(0, Math.min(1, (t - 0.4) / 0.6));
-    v.holder.rotation.set(-0.12 + Math.sin(t * 1.3) * 0.06, -0.35 + look * (0.35 + Math.sin((t - 0.4) * 1.6) * 0.7), 0.06 + Math.sin(t * 0.9) * 0.05);
-    if (t >= T) {
+    const sm = (x: number): number => {
+      const k = Math.min(1, Math.max(0, x));
+      return k * k * (3 - 2 * k);
+    };
+    const once = (k: string, at: number): boolean => {
+      if (t < at || hand.cue.has(k)) return false;
+      hand.cue.add(k);
+      return true;
+    };
+    // ---- Where the bottle is (camera space): low right → in front → (flick) → at his neck → away
+    const P0 = new THREE.Vector3(0.3, -0.5, -0.32);
+    const P1 = new THREE.Vector3(0.015, -0.068, -0.33);
+    const P3 = new THREE.Vector3(0.03, -0.085, -0.3);
+    const P4 = new THREE.Vector3(0.34, -0.55, -0.16);
+    const Q0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, -0.55, 0.45));
+    const sway = Math.sin(t * 1.25) * 0.16 * sm((t - 0.6) / 0.4) * (1 - sm((t - 1.7) / 0.3));
+    const Q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.06 + Math.sin(t * 0.8) * 0.02, sway, 0.02));
+    // The flick: tipped back a touch, away from him, as the thumb goes
+    const Q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.2, -0.05, -0.06));
+    // At his neck: the nozzle (its +Y) turned in and back toward it, low under his chin
+    // Laid over on its side, the nozzle (+Y) toward his neck (left, down, back toward him), and the
+    // side his hand's on (+X) turned down: his palm under it, the bottle on top in plain view
+    const toNeck = new THREE.Vector3(-0.85, -0.3, 0.43).normalize();
+    const handDown = new THREE.Vector3(0, -1, 0).addScaledVector(toNeck, 0.3).normalize();
+    const Q3 = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(handDown, toNeck, new THREE.Vector3().crossVectors(handDown, toNeck)));
+    const Q4 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.9, 0.4, 1.2));
+    const up = sm(t / 0.6);
+    const flk = sm((t - 1.95) / 0.25) * (1 - sm((t - 2.45) / 0.2));
+    const neck = sm((t - 2.5) / 0.55);
+    const away = sm((t - 3.95) / 0.55);
+    // Each spray jolts it a little toward him
+    const jolt = (Math.max(0, 1 - Math.abs(t - 3.13) / 0.08) + Math.max(0, 1 - Math.abs(t - 3.58) / 0.08)) * 0.006;
+    v.holder.position.lerpVectors(P0, P1, up).lerp(P3, neck).lerp(P4, away);
+    v.holder.position.y += up * (1 - neck) * Math.sin(t * 1.6) * 0.004;
+    v.holder.position.z += jolt;
+    v.holder.quaternion.slerpQuaternions(Q0, Q1, up).slerp(Q2, flk * (1 - neck)).slerp(Q3, neck).slerp(Q4, away);
+    // ---- His thumb: up its edge; under the cap and cocked; flicked up; then down on the nozzle, twice
+    const H = CologneHunt;
+    let shape = H.HOLD;
+    if (t > 1.95 && t < 2.5) {
+      const cock = sm((t - 1.95) / 0.22);
+      const flick = sm((t - 2.17) / 0.06);
+      const back = sm((t - 2.3) / 0.2);
+      shape = mixShape(mixShape(mixShape(H.HOLD, H.COCK, cock), H.FLICK, flick), H.HOLD, back);
+    } else if (t > 3.0 && t < 3.8) {
+      const p = Math.max(Math.max(0, 1 - Math.abs(t - 3.13) / 0.09), Math.max(0, 1 - Math.abs(t - 3.58) / 0.09));
+      shape = mixShape(mixShape(H.HOLD, H.COCK, sm((t - 3.0) / 0.1) * (1 - sm((t - 3.7) / 0.1))), H.PRESS, p);
+    }
+    v.arms?.shape('r', shape);
+    // ---- The cap: off with the flick, up and away over his left shoulder, spinning
+    if (hand.cap) {
+      if (once('flick', 2.2)) {
+        this.audio?.capFlick();
+        hand.capV = new THREE.Vector3(-0.35, 1.25, -0.15);
+        hand.capSpin.set(9 + Math.random() * 4, 3, -7);
+      }
+      if (hand.capV) {
+        hand.capV.y -= 3.2 * dt;
+        hand.cap.position.addScaledVector(hand.capV, dt);
+        hand.cap.rotation.x += hand.capSpin.x * dt;
+        hand.cap.rotation.y += hand.capSpin.y * dt;
+        hand.cap.rotation.z += hand.capSpin.z * dt;
+        if (t > 3.0) hand.cap.visible = false;
+      }
+    }
+    // ---- Two sprays: a puff of mist out of the nozzle toward his neck each time
+    for (const [k, at] of [['s1', 3.12], ['s2', 3.57]] as const) {
+      if (once(k, at)) {
+        this.audio?.perfumeSpray();
+        this.spray(v, h.group, hand.nozzle);
+      }
+    }
+    for (const m of v.mist) {
+      if (m.life <= 0) continue;
+      m.life -= dt;
+      m.v.multiplyScalar(Math.exp(-dt * 2.2));
+      m.s.position.addScaledVector(m.v, dt);
+      const k = 1 - m.life / m.max;
+      m.s.scale.setScalar(0.018 + k * 0.11);
+      (m.s.material as THREE.SpriteMaterial).opacity = 0.75 * Math.sin(Math.min(1, k * 4) * Math.PI * 0.5) * (1 - k);
+      if (m.life <= 0) m.s.visible = false;
+    }
+    // ---- The card while he looks at it; gone as he takes the cap off
+    v.card.classList.toggle('show', t > 0.5 && t < 2.1);
+    if (t >= CologneHunt.T_END) {
       h.group.removeFromParent();
       this.held = null;
+      this.hand = null;
       v.card.classList.remove('show');
+      for (const m of v.mist) {
+        m.life = 0;
+        m.s.visible = false;
+      }
       this.collect(h.id);
+    }
+  }
+
+  /** A puff of the atomiser: mist out of the nozzle (bottle space), in the camera's frame. */
+  private spray(v: NonNullable<CologneHunt['view']>, bottle: THREE.Object3D, nozzle: THREE.Vector3): void {
+    v.cam.updateMatrixWorld(true);
+    bottle.updateMatrixWorld(true);
+    const toCam = v.cam.matrixWorld.clone().invert().multiply(bottle.matrixWorld);
+    const at = nozzle.clone().applyMatrix4(toCam);
+    const q = new THREE.Quaternion();
+    toCam.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+    const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+    let n = 0;
+    for (const m of v.mist) {
+      if (m.life > 0) continue;
+      m.s.position.copy(at);
+      m.s.position.addScaledVector(dir, Math.random() * 0.02);
+      m.v.copy(dir).multiplyScalar(0.7 + Math.random() * 0.8).add(new THREE.Vector3((Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22));
+      m.max = m.life = 0.6 + Math.random() * 0.5;
+      m.s.visible = true;
+      if (++n >= 22) break;
     }
   }
 
@@ -402,7 +599,7 @@ class CologneHunt {
     el.innerHTML = `
       <img src="${img}" alt="">
       <div class="ct-text">
-        <div class="ct-kicker">ACHIEVEMENT · COLOGNE FOUND</div>
+        <div class="ct-kicker">ACHIEVEMENT · ULTRA NICHE COLLECTED</div>
         <div class="ct-name">${info.name.toUpperCase()}</div>
         <div class="ct-count">${count} / ${COLOGNES.length} ULTRA-NICHE COLOGNES${count === COLOGNES.length ? ' — THE FULL COLLECTION' : ''}</div>
       </div>`;
@@ -931,6 +1128,57 @@ function drawLabel(id: CologneId): HTMLCanvasElement {
 
 // ================================================================= bottles
 
+/**
+ * Where each bottle's cap starts (y, bottle space): everything wholly above
+ * it is the cap, lifted off as one; the neck or collar below it stays.
+ */
+const CAP_Y: Record<CologneId, number> = {
+  keypad: 0.098,
+  scam: 0.105,
+  declined: 0.088,
+  tikka: 0.11,
+  sweat: 0.084,
+  davi: 0.108,
+  delhi: 0.108,
+  pit: 0.104,
+  deadbull: 0.068,
+  curry: 0.105,
+  haheed: 0.107,
+  microsuf: 0.098,
+  pubjae: 0.076,
+  odore: 0.095,
+  maw: 0.086
+};
+
+/** The cap's parts into a group of their own (`userData.cap`), pivoting about its middle. */
+function splitCap(id: CologneId, g: THREE.Group): void {
+  const cap = new THREE.Group();
+  cap.name = 'cap';
+  const box = new THREE.Box3();
+  const parts: THREE.Object3D[] = [];
+  g.updateMatrixWorld(true);
+  for (const o of g.children) {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) continue;
+    m.geometry.computeBoundingBox();
+    const b = m.geometry.boundingBox!.clone().applyMatrix4(m.matrix);
+    // (the helmet's chin strap hangs below the brim, but it's the helmet's)
+    if (b.min.y >= CAP_Y[id] - 1e-4 || (id === 'pubjae' && m.geometry.type === 'TorusGeometry')) {
+      parts.push(m);
+      box.union(b);
+    }
+  }
+  if (!parts.length) return;
+  const c = box.getCenter(new THREE.Vector3());
+  cap.position.copy(c);
+  g.add(cap);
+  for (const m of parts) {
+    m.position.sub(c);
+    cap.add(m);
+  }
+  g.userData.cap = cap;
+}
+
 function buildBottle(id: CologneId, label: HTMLCanvasElement): THREE.Group {
   const g = new THREE.Group();
   const tex = texFrom(label);
@@ -1235,5 +1483,6 @@ function buildBottle(id: CologneId, label: HTMLCanvasElement): THREE.Group {
       break;
     }
   }
+  splitCap(id, g);
   return g;
 }

@@ -1215,6 +1215,20 @@ export class AudioManager {
     setTimeout(() => this.tone('sine', 660, 660, 0.45, 0.07), 90);
   }
 
+  /** A cologne's cap thumbed off: a tight plastic pop and a little tick as it goes. */
+  capFlick(): void {
+    this.tone('triangle', 1250, 620, 0.05, 0.16);
+    this.noise(0.03, 'bandpass', 3200, 0.14, true, 2.5);
+    setTimeout(() => this.tone('sine', 2600, 2500, 0.04, 0.04), 70);
+  }
+
+  /** One press of a cologne's atomiser: a short, fine hiss, with a click of the pump under it. */
+  perfumeSpray(): void {
+    this.tone('square', 1900, 1500, 0.01, 0.02);
+    this.noise(0.24, 'highpass', 6200, 0.16, true, 0.35);
+    this.noise(0.18, 'bandpass', 9000, 0.06, true, 0.6);
+  }
+
   /** A cologne found: a bright sparkling run up, and a spritz. */
   cologneGet(): void {
     [784, 988, 1175, 1568].forEach((f, i) => setTimeout(() => this.tone('sine', f, f, 0.4, 0.07), i * 70));

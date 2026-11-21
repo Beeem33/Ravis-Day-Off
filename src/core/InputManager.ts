@@ -1,4 +1,5 @@
 import { Controls } from './Controls';
+import { TOUCH } from './Touch';
 
 /**
  * InputManager — keyboard state, pointer-lock mouse look deltas and
@@ -114,6 +115,12 @@ export class InputManager {
 
   requestPointerLock(): void {
     if (this.pointerLocked) return;
+    // A phone has no mouse to capture: "locked" just means the touch controls
+    // are steering the game (see TouchControls), and it is always granted
+    if (TOUCH) {
+      this.pointerLocked = true;
+      return;
+    }
     // If the click was real and the browser still refuses, the site's
     // pointer-lock permission is blocked — worth telling the player.
     const hadGesture =
@@ -133,10 +140,36 @@ export class InputManager {
   }
 
   exitPointerLock(): void {
+    if (TOUCH) {
+      if (!this.pointerLocked) return;
+      this.pointerLocked = false;
+      this.onPointerLockLost?.();
+      return;
+    }
     if (this.pointerLocked) {
       this.codeExit = true;
       document.exitPointerLock();
     }
+  }
+
+  /** Touch only: the player let go themselves (the pause button), as Esc does on a PC. */
+  releaseByUser(): void {
+    if (!this.pointerLocked) return;
+    this.pointerLocked = false;
+    this.onPointerLockLost?.();
+    this.onUserUnlock?.();
+  }
+
+  /** Touch look: a drag, fed in as if the mouse had moved this far. */
+  addLook(dx: number, dy: number): void {
+    if (!this.pointerLocked) return;
+    this.mouseDX += dx;
+    this.mouseDY += dy;
+  }
+
+  /** Touch weapon swap: as if the wheel had turned `n` notches. */
+  addWheel(n: number): void {
+    if (this.pointerLocked) this.wheel += n;
   }
 
   isDown(code: string): boolean {

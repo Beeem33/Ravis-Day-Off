@@ -28,6 +28,8 @@ import { RaviVisual } from './entities/RaviVisual';
 import { loadAK } from './entities/AkModel';
 import { DeathFx } from './fx/DeathFx';
 import { ACTIONS, Controls, FIXED, keyName } from './core/Controls';
+import { TOUCH } from './core/Touch';
+import { TouchControls } from './ui/TouchControls';
 
 /** Shared services handed to every scene. */
 export interface GameContext {
@@ -421,6 +423,18 @@ if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { b
     if (performance.now() - menuAsked < 150) return;
     setPaused(true);
   });
+}
+
+// Phones and tablets: the on-screen stick and buttons (a PC never builds them)
+if (TOUCH) {
+  new TouchControls(
+    input,
+    () => {
+      const s = engine.currentScene;
+      return !!s && !(s instanceof MainMenuScene) && !engine.loading && !engine.paused;
+    },
+    () => !!(engine.currentScene as { player?: { cinematic?: boolean } } | null)?.player?.cinematic
+  );
 }
 
 engine.uiRoot = uiRoot;

@@ -1,3 +1,4 @@
+import { TOUCH } from '../core/Touch';
 import * as THREE from 'three';
 import { Colognes } from '../entities/Colognes';
 import * as CANNON from 'cannon-es';
@@ -363,7 +364,9 @@ export class IntroLevelScene extends CombatScene<IntroLevelData> {
     this.ui.querySelector('.intro-skip')!.classList.add('gone');
     const hint = document.createElement('div');
     hint.className = 'intro-terms-hint';
-    hint.innerHTML = '<b>MOUSE</b> MOVE THE CURRY &nbsp;·&nbsp; <b>DOUBLE-CLICK</b> TO OPEN &nbsp;·&nbsp; <b>WHEEL</b> SCROLL';
+    hint.innerHTML = TOUCH
+      ? '<b>TAP</b> MOVE THE CURRY &nbsp;·&nbsp; <b>DOUBLE-TAP</b> TO OPEN &nbsp;·&nbsp; <b>SWIPE</b> SCROLL'
+      : '<b>MOUSE</b> MOVE THE CURRY &nbsp;·&nbsp; <b>DOUBLE-CLICK</b> TO OPEN &nbsp;·&nbsp; <b>WHEEL</b> SCROLL';
     this.ui.appendChild(hint);
     this.termsHint = hint;
     this.ctx.input.exitPointerLock();

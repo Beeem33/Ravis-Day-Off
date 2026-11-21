@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EventBus, Events } from './EventBus';
 import { Colognes } from '../entities/Colognes';
+import { TOUCH } from './Touch';
 
 /**
  * A GameScene owns its own THREE.Scene/camera and is driven by the engine.
@@ -70,9 +71,10 @@ export class GameEngine {
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     const dpr = window.devicePixelRatio || 1;
-    this.scaleMin = Math.min(dpr, 1);
-    this.scaleMax = Math.min(dpr, 1.5);
-    this.scale = Math.min(dpr, 1.25);
+    // A phone's GPU is a fraction of a PC's: it may drop below 1x, and starts at 1x
+    this.scaleMin = Math.min(dpr, TOUCH ? 0.6 : 1);
+    this.scaleMax = Math.min(dpr, TOUCH ? 1.25 : 1.5);
+    this.scale = Math.min(dpr, TOUCH ? 1 : 1.25);
     this.renderer.setPixelRatio(this.scale);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;

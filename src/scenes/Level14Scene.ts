@@ -1,3 +1,4 @@
+import { TOUCH } from '../core/Touch';
 import * as THREE from 'three';
 import { Colognes } from '../entities/Colognes';
 import type { GameContext } from '../main';
@@ -476,6 +477,17 @@ export class Level14Scene extends CombatScene<Level14Data> {
     this.qteEl = el.querySelector('.l14-qte')!;
     this.qteKey = el.querySelector('.l14-qte .key')!;
     this.qteRing = el.querySelector('.l14-qte .ring')! as SVGCircleElement;
+    if (TOUCH) {
+      // No keyboard on a phone: the flashing key itself is the button
+      el.querySelector('.l14-qte .lbl')!.textContent = 'TAP';
+      const box = el.querySelector<HTMLElement>('.l14-qte .box')!;
+      box.style.pointerEvents = 'auto';
+      box.style.touchAction = 'none';
+      box.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (this.qte?.state === 'live' && !this.ctx.engine.paused) this.resolveQte(true);
+      }, { passive: false });
+    }
     this.tint = el.querySelector('.l14-tint')!;
     this.hintEl = el.querySelector('.l14-hint')!;
   }

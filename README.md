@@ -29,6 +29,8 @@ npm run build      # type-check + production bundle in dist/
 | Crouch | C (Ctrl also works, but Ctrl+W closes the tab) |
 | Jump | Space |
 
+**On a phone or tablet** the game shows on-screen controls instead (a PC never sees them): drag the left side for the movement stick (push it to the rim to sprint), drag anywhere else to look, and use the FIRE / AIM / JUMP / CROUCH / RELOAD / USE / KNIFE / KICK buttons, with SWAP, HEAL, MAP, FLIP and pause along the top. Play it sideways. Add `?touch=1` to the URL to try the touch controls on a PC, or `?touch=0` to turn them off.
+
 One shot kills an intruder. Ravi has 5 HP, takes 1 damage per bullet, and regenerates 1 HP every 30 seconds. Use cubicles as cover (bullets pierce one panel), shatter glass partitions, drop through the broken mezzanine railing, and listen: intruders investigate gunshots and sprinting footsteps.
 
 ## Architecture

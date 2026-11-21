@@ -324,10 +324,125 @@ export function quadShotgunModel(): QuadShotgun {
   );
   line.frustumCulled = false;
   group.add(line);
+  // ---- The jar: a little glass vial of the pressure fluid clamped to the left of the
+  // barrels ahead of the gauge, its level rising and falling with the charges; and three
+  // wires, red, blue and green, run from the gauge back to the jar's cap and on up the
+  // barrels to a junction box on the front clamp
+  const JAR = new THREE.Vector3(-0.054, 0.088, -0.25);
+  const JAR_R = 0.0155;
+  const JAR_H = 0.05;
+  const jar = new THREE.Group();
+  jar.position.copy(JAR);
+  // Up on the barrels' top-left shoulder, leaning out and back toward his eye so it shows past the gauge
+  jar.rotation.set(0.25, 0, 0.32);
+  group.add(jar);
+  jar.updateMatrix();
+  const onJar = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z).applyMatrix4(jar.matrix);
+  const jm = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.frustumCulled = false;
+    jar.add(m);
+    return m;
+  };
+  const liquidMat = new THREE.MeshStandardMaterial({ color: 0x063a14, emissive: 0x19e04a, emissiveIntensity: 0.9, roughness: 0.15 });
+  const LIQ_H = JAR_H - 0.008;
+  const liqGeo = new THREE.CylinderGeometry(JAR_R - 0.0025, JAR_R - 0.0025, LIQ_H, 16);
+  liqGeo.translate(0, LIQ_H / 2, 0);
+  const liquid = jm(liqGeo, liquidMat, 0, -JAR_H / 2 + 0.004, 0);
+  // A bubble or two caught in it
+  const bubbleMat = new THREE.MeshStandardMaterial({ color: 0xd8ffe8, emissive: 0x4aff8a, emissiveIntensity: 0.5, transparent: true, opacity: 0.7, roughness: 0.1 });
+  const bubbles: THREE.Mesh[] = [];
+  for (let i = 0; i < 3; i++) bubbles.push(jm(new THREE.SphereGeometry(0.0022 + i * 0.0006, 8, 6), bubbleMat, (i - 1) * 0.005, 0, (i % 2 ? 1 : -1) * 0.004));
+  // The glass round it (drawn after the liquid), its metal cap and base, two clamp bands
+  const glass = jm(new THREE.CylinderGeometry(JAR_R, JAR_R, JAR_H, 20, 1, true), new THREE.MeshStandardMaterial({ color: 0xbfe8d4, roughness: 0.04, metalness: 0.2, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide }), 0, 0, 0);
+  glass.renderOrder = 2;
+  jm(new THREE.CylinderGeometry(JAR_R + 0.0015, JAR_R + 0.0015, 0.008, 18), M.steel, 0, JAR_H / 2 + 0.003, 0);
+  jm(new THREE.CylinderGeometry(0.006, 0.008, 0.006, 12), M.dark, 0, JAR_H / 2 + 0.009, 0);
+  jm(new THREE.CylinderGeometry(JAR_R + 0.0015, JAR_R + 0.001, 0.007, 18), M.steel, 0, -JAR_H / 2 - 0.002, 0);
+  for (const y of [-0.013, 0.013]) jm(new THREE.TorusGeometry(JAR_R + 0.0012, 0.0016, 6, 20), M.dark, 0, y, 0).rotation.x = Math.PI / 2;
+  // Two rails down its sides, cap to base, so it reads as a jar however low it runs
+  for (const a of [0.6, Math.PI + 0.6]) jm(new THREE.BoxGeometry(0.003, JAR_H + 0.006, 0.003), M.steel, Math.cos(a) * (JAR_R + 0.0015), 0, Math.sin(a) * (JAR_R + 0.0015));
+  // Its cradle down on to the barrels
+  jm(new THREE.BoxGeometry(0.026, 0.008, 0.026), M.dark, 0.006, -JAR_H / 2 - 0.009, 0);
+  jm(new THREE.BoxGeometry(0.008, 0.03, 0.02), M.dark, 0.016, -JAR_H / 2 - 0.022, 0);
+  // A feed line from its base down the barrels' side into the canister under them
+  const feed = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3([onJar(-0.006, -JAR_H / 2 - 0.01, 0.006), new THREE.Vector3(-0.05, 0.045, -0.235), new THREE.Vector3(-0.056, 0.02, -0.215), new THREE.Vector3(-0.053, 0.004, -0.205)]), 14, 0.0025, 6, false),
+    M.steel
+  );
+  feed.frustumCulled = false;
+  group.add(feed);
+  // The junction box on the front clamp, where the wires end
+  const jb = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.03, 0.03), M.dark);
+  jb.position.set(-0.047, 0.046, -0.448);
+  jb.frustumCulled = false;
+  group.add(jb);
+  const jbLed = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.004, 0.006), M.glow);
+  jbLed.position.set(-0.0535, 0.056, -0.448);
+  jbLed.frustumCulled = false;
+  group.add(jbLed);
+  // Where the gauge's housing starts, out of its own turned frame into the gun's
+  gauge.updateMatrix();
+  const fromGauge = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z).applyMatrix4(gauge.matrix);
+  const WIRES: [number, number][] = [
+    [0xd42a1e, -1],
+    [0x2a5ae0, 0],
+    [0x22b04a, 1]
+  ];
+  for (const [col, k] of WIRES) {
+    const wmat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.45, metalness: 0.05 });
+    const o = k * 0.0042;
+    // Out of the gauge's front, down and forward along the barrels, a little slack, into the jar's cap
+    const a = fromGauge(-0.006, -0.018 + o, -0.064);
+    const toJar = [
+      a,
+      a.clone().add(new THREE.Vector3(-0.004, 0.004, -0.02)),
+      new THREE.Vector3(-0.058 + o * 0.5, 0.07, -0.15),
+      new THREE.Vector3(-0.062 + o * 0.6, 0.096, -0.205),
+      onJar(o * 1.2, JAR_H / 2 + 0.012, 0.011),
+      onJar(o * 1.2, JAR_H / 2 + 0.006, 0.004)
+    ];
+    // Out of the cap the other side and on along the barrels' top-left to the junction box
+    const fromJar = [
+      onJar(o * 1.2, JAR_H / 2 + 0.006, -0.004),
+      onJar(o * 1.2, JAR_H / 2 + 0.012, -0.011),
+      new THREE.Vector3(-0.058 + o * 0.4, 0.1, -0.3),
+      new THREE.Vector3(-0.047 + o * 0.3, 0.072 + o * 0.5, -0.37),
+      new THREE.Vector3(-0.045, 0.052 + o * 1.6, -0.418),
+      new THREE.Vector3(-0.048, 0.049 + o * 1.8, -0.434)
+    ];
+    for (const pts of [toJar, fromJar]) {
+      const w = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, 0.0016, 6, false), wmat);
+      w.frustumCulled = false;
+      group.add(w);
+    }
+  }
+  // Zip ties holding the bundle to the barrels
+  for (const [y, z] of [[0.07, -0.15], [0.074, -0.37]]) {
+    const tie = new THREE.Mesh(new THREE.TorusGeometry(0.0075, 0.0011, 4, 12), M.dark);
+    tie.position.set(z === -0.15 ? -0.058 : -0.047, y, z);
+    tie.frustumCulled = false;
+    group.add(tie);
+  }
+  let jarT = 0;
+
   const COL_FULL = new THREE.Color(0x35e0ff);
   const COL_FILL = new THREE.Color(0xff9a2a);
   const COL_OUT = new THREE.Color(0xff2a12);
   const setPressure = (p: number, flash = 0): void => {
+    // The jar's level: a third of it per charge, over a little that never runs out; it
+    // glows brighter full, and bubbles while it's filling back up
+    jarT += 1 / 60;
+    const lvl = 0.2 + 0.8 * Math.min(1, Math.max(0, p / 3));
+    liquid.scale.y = lvl;
+    liquidMat.emissiveIntensity = 0.55 + 0.6 * lvl + flash * 1.5;
+    const filling = p < 2.999;
+    bubbles.forEach((b, i) => {
+      const u = (jarT * (filling ? 0.9 : 0.25) + i * 0.37) % 1;
+      b.visible = filling || i === 0;
+      b.position.y = -JAR_H / 2 + 0.006 + u * LIQ_H * lvl;
+    });
     for (let i = 0; i < 3; i++) {
       const k = Math.min(1, Math.max(0, p - i));
       const f = fills[i];

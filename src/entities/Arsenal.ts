@@ -530,6 +530,14 @@ export class Arsenal {
     player.camera.getWorldDirection(dir);
     const muzzle = this.shotgun.muzzleWorld();
     for (let i = 0; i < 3; i++) particles.barrelSmoke(muzzle, dir);
+    // The blast itself: a wide cone of it out of all four barrels, and whatever's in
+    // front of it gets hit like a shotgun round (it's the same four barrels firing)
+    this.firing = 'shotgun';
+    const eye = player.eyePosition();
+    for (let i = 0; i < PELLETS; i++) {
+      const end = this.host.castBullet(eye, this.aimDir(0.06));
+      particles.tracer(muzzle, end);
+    }
     const away = dir.clone().negate();
     player.launch(away, Arsenal.PRESSURE_SPEED);
     this.onPressureShot?.(away);

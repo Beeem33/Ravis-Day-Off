@@ -14,9 +14,11 @@ import type { Lane, Road, RoadId, RoadSample, StreetBlocker, StreetData } from '
 //            cross streets at s 110, 400 and 640 (and one behind the start)
 //   onramp   from the avenue's end: funnels to one lane, curves right (east)
 //            and climbs to the deck (8 m), merges onto the highway's right side
-//   highway  east, a long left bend, a long right one and a last left one
-//            onto the final straight: three and a half kilometres. The cop
-//            at s 500, the fork at s 3150, the construction closure at s 3500
+//   highway  east, a long left bend, then (from s 1500) a further 2.2 km of
+//            sweeping bends and straights out across the country, a long right
+//            one and a last left one onto the final straight: five and three
+//            quarter kilometres. The cop at s 500, the fork at s 5350, the
+//            construction closure at s 5700
 //   exit     peels off the right at the fork, curves right and down to grade
 //   airport  south-south-east to the gate; beyond it the apron and the jet
 //
@@ -56,14 +58,24 @@ const MERGE_LEN = 110;
 const RAMP_HALF = 4.5;
 
 const HW_BACK = 900;
-const HW_LEN = 3510;
+/**
+ * The run made half as long again: this much more highway (bends and
+ * straights that come back to the same heading) put in at HW_INSERT, so
+ * everything past it — the last bends, the exit, the closure — is as it was,
+ * just further on.
+ */
+const HW_EXTRA = 2200;
+const HW_INSERT = 1500;
+/** Past the insert, a highway position moves on by HW_EXTRA. */
+const after = (u: number): number => (u > HW_INSERT ? u + HW_EXTRA : u);
+const HW_LEN = 3510 + HW_EXTRA;
 const HW_ON = 700;
-const EXIT_S = 3150;
-const MISSED_S = 3420;
-const CLOSURE_S = 3500;
-const NEAR_END = 3560;
+const EXIT_S = 3150 + HW_EXTRA;
+const MISSED_S = 3420 + HW_EXTRA;
+const CLOSURE_S = 3500 + HW_EXTRA;
+const NEAR_END = 3560 + HW_EXTRA;
 /** Where the last bend ends: the highway is straight from here to the closure, and the exit is laid out against that straight. */
-const HW_STRAIGHT = 2660;
+const HW_STRAIGHT = 2660 + HW_EXTRA;
 const COP_S = 500;
 const EXIT_HALF = 2.75;
 const AIR_HALF = 3.75;
@@ -358,12 +370,19 @@ function buildRoute(): Route {
     }
   }
 
-  // ---- The highway: 900 m of deck behind the merge for the view, the drivable 3510, 700 more of the far side
+  // ---- The highway: 900 m of deck behind the merge for the view, the drivable HW_LEN, 700 more of the far side
   const hwPoses = trace({ x: H0x - fx(hwYaw) * HW_BACK, z: H0z - fz(hwYaw) * HW_BACK, yaw: hwYaw }, [
     { len: HW_BACK, turn: 0 },
     { len: 560, turn: 0 },
     { len: 240, turn: 0.24 },
     { len: 700, turn: 0 },
+    // The stretch out across the country (HW_EXTRA in all, no net turn): a long right, a straight,
+    // a wide left the other way, a straight, a last easy right back on to the old heading
+    { len: 380, turn: -0.3 },
+    { len: 520, turn: 0 },
+    { len: 420, turn: 0.45 },
+    { len: 480, turn: 0 },
+    { len: 400, turn: -0.15 },
     { len: 320, turn: -0.42 },
     { len: 560, turn: 0 },
     { len: 280, turn: 0.32 },
@@ -2255,7 +2274,7 @@ export class StreetBuilder {
   private underChains(): Chain[] {
     if (this.underCache) return this.underCache;
     const out: Chain[] = [];
-    for (const u of [300, 980, 1760, 2480]) {
+    for (const u of [300, 980, 1880, 2350, 3100, 3560, after(1760), after(2480)]) {
       const f = this.r.hwVis.at(u);
       const yaw = yawOf(f.tangent) - Math.PI / 2;
       const poses = trace({ x: f.pos.x - fx(yaw) * 350, z: f.pos.z - fz(yaw) * 350, yaw }, [{ len: 700, turn: 0 }]);
@@ -3306,7 +3325,7 @@ export class StreetBuilder {
     const nearExit = (u: number): boolean => u > EXIT_S - 80 && u < CLOSURE_S + 60;
 
     // ---- The rail viaducts: laid out first, so nothing is built under them
-    for (const u of [1450, 2260]) this.viaduct(u, u === 1450);
+    for (const u of [1450, 2620, after(2260)]) this.viaduct(u, u === 1450);
 
     // ---- Billboards, alternating sides, angled in toward the traffic
     const ad = billboardAtlas();

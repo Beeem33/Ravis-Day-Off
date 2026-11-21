@@ -65,10 +65,10 @@ const BLAST_KILL = 2.3;
 /** Ravi's own blood (the helicopter's gunner): what he has, and what a round that finds him costs. */
 const RAVI_HP = 100;
 const HELI_ROUND = 2.9;
-/** Where on the highway each helicopter comes in. */
-const HELI_AT = [720, 1950];
+/** Where on the highway each helicopter comes in (the run is 5.7 km now: a third one out on the long middle stretch). */
+const HELI_AT = [720, 2500, 4150];
 /** Highway checkpoints past the helicopters (1, past the cop, is set by the level). */
-const CP_HELI = [1600, 2750];
+const CP_HELI = [1600, 3350, 4950];
 /** How far round he can turn his head in the seat (radians each way), and up and down. */
 const LOOK_YAW = 2.35;
 const LOOK_UP = 0.9;
@@ -632,7 +632,7 @@ export class StreetScene implements GameScene {
       const hw = L.roads.highway;
       const lane = hw.lanes.filter((l) => l.dir === 1)[1] ?? hw.lanes[0];
       // Past the cop; or past the first helicopter, or the second
-      const s = this.checkpoint >= 2 ? CP_HELI[Math.min(1, this.checkpoint - 2)] : L.cop.s + CHECKPOINT_AHEAD;
+      const s = this.checkpoint >= 2 ? CP_HELI[Math.min(CP_HELI.length - 1, this.checkpoint - 2)] : L.cop.s + CHECKPOINT_AHEAD;
       this.heliIndex = Math.max(0, this.checkpoint - 1);
       this.reached = this.checkpoint;
       this.player.place({ road: 'highway', s, d: lane.offset }, 40);

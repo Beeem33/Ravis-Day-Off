@@ -1788,3 +1788,114 @@ function sunroofRig(m: Model, panel: THREE.Object3D): { setOpen(k: number): void
   setOpen(0);
   return { setOpen, hatch: V(0, roofTop(m, uc), -uc) };
 }
+
+// ------------------------------------------------------------------ tanker
+
+/**
+ * A fuel tanker's size and weight, for the traffic: a cab and a long polished
+ * tank on its trailer, twelve metres of it.
+ */
+export const TANKER_SPEC: CarSpec = {
+  length: 12.2,
+  width: 2.5,
+  height: 3.4,
+  mass: 16000,
+  boxes: [{ c: [0, 1.65, 0], h: [1.25, 1.65, 6.1] }],
+  wheelRadius: 0.5
+};
+
+/**
+ * The tanker for the traffic's instanced drawing, baked like the cars
+ * (car-local, origin on the ground in the middle, front toward −Z; paint
+ * white so it takes the instance colour — the cab). Wrecked: burnt out,
+ * blackened all over and sagging.
+ */
+export function bakedTanker(wrecked = false): BakedCar {
+  const key = `tanker${wrecked ? ':wreck' : ''}`;
+  const hit = bakedCache.get(key);
+  if (hit) return hit;
+  const by: Record<keyof BakedCar, THREE.BufferGeometry[]> = { paint: [], trim: [], glass: [], lamps: [] };
+  const burnt = new THREE.Color(0x1c1a18);
+  const col = new THREE.Color();
+  const put = (slot: keyof BakedCar, g: THREE.BufferGeometry, hex: number, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0): void => {
+    if (rx) g.rotateX(rx);
+    if (ry) g.rotateY(ry);
+    if (rz) g.rotateZ(rz);
+    g.translate(x, y, z);
+    g.deleteAttribute('uv');
+    const n = g.getAttribute('position').count;
+    col.setHex(hex);
+    // Burnt: everything but the glass goes to soot, a little of its colour still showing
+    if (wrecked && slot !== 'glass') col.lerp(burnt, slot === 'paint' ? 0.85 : 0.75);
+    const c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      c[i * 3] = col.r;
+      c[i * 3 + 1] = col.g;
+      c[i * 3 + 2] = col.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    by[slot].push(g.index ? g.toNonIndexed() : g);
+  };
+  const box = (w: number, h: number, d: number): THREE.BufferGeometry => new THREE.BoxGeometry(w, h, d);
+  const cyl = (r0: number, r1: number, h: number, seg = 18): THREE.BufferGeometry => new THREE.CylinderGeometry(r0, r1, h, seg);
+  const sag = wrecked ? -0.25 : 0;
+  // ---- the cab
+  put('paint', box(2.45, 1.45, 2.3), 0xffffff, 0, 1.5, -4.95);
+  put('paint', box(2.32, 0.95, 1.85), 0xffffff, 0, 2.68, -4.78);
+  put('paint', box(2.2, 0.35, 0.9), 0xffffff, 0, 3.3, -4.45);
+  put('trim', box(2.5, 0.36, 0.28), C.black, 0, 0.62, -6.12);
+  put('trim', box(1.55, 0.85, 0.06), C.chrome, 0, 1.45, -6.12);
+  for (let i = 0; i < 6; i++) put('trim', box(1.45, 0.05, 0.07), C.black, 0, 1.12 + i * 0.13, -6.15);
+  put('glass', box(2.1, 0.78, 0.06), 0xffffff, 0, 2.72, -5.7, -0.12);
+  for (const s of [-1, 1]) {
+    put('glass', box(0.06, 0.62, 1.05), 0xffffff, s * 1.165, 2.75, -4.95);
+    put('trim', box(0.1, 0.32, 0.06), C.mirror, s * 1.36, 2.55, -5.5);
+    put('trim', box(0.42, 0.3, 1.1), 0x2a2c30, s * 1.08, 0.62, -5.05);
+    // Exhaust stacks behind the cab
+    put('trim', cyl(0.09, 0.09, 2.2, 10), C.chrome, s * 1.0, 3.05, -3.75);
+  }
+  // ---- the chassis and the tank
+  put('trim', box(1.15, 0.32, 11.8), 0x222326, 0, 0.92, 0.1);
+  put('trim', box(2.2, 0.16, 1.4), 0x303236, 0, 1.12, -3.0);
+  const tankLen = 8.7;
+  const tz = 1.55;
+  const ty = 2.2 + sag;
+  put('trim', cyl(1.2, 1.2, tankLen, 24), 0xd5d9dc, 0, ty, tz, Math.PI / 2);
+  for (const e of [-1, 1]) put('trim', cyl(1.12, 1.2, 0.18, 24), 0xbfc3c7, 0, ty, tz + e * (tankLen / 2 + 0.09), Math.PI / 2);
+  for (const r of [-2.9, -0.95, 1.0, 2.9]) put('trim', cyl(1.235, 1.235, 0.1, 24), 0x8f9397, 0, ty, tz + r, Math.PI / 2);
+  // The walkway and its rail on top, the hatches
+  put('trim', box(0.55, 0.06, tankLen - 0.6), 0x6c7075, 0, ty + 1.22, tz);
+  for (const h of [-2.6, 0, 2.6]) put('trim', cyl(0.28, 0.3, 0.14, 12), 0x7b7f84, 0, ty + 1.26, tz + h);
+  // FLAMMABLE: the hazard diamonds on the sides and the back, and a stripe
+  for (const s of [-1, 1]) {
+    put('trim', box(0.03, 0.46, 0.46), 0xe8461f, s * 1.215, ty - 0.1, tz + 3.3, Math.PI / 4);
+    put('trim', box(0.03, 0.14, tankLen - 0.4), 0xe8461f, s * 1.2, ty - 0.55, tz);
+  }
+  put('trim', box(0.46, 0.46, 0.03), 0xe8461f, 0, ty - 0.2, tz + tankLen / 2 + 0.2, 0, 0, Math.PI / 4);
+  // Mudguards and the rear bumper
+  put('trim', box(2.4, 0.22, 0.2), 0x1f2023, 0, 0.75, 6.0);
+  // ---- wheels: the steer axle, and the trailer's tandems (duals)
+  const wheel = (x: number, z: number, w: number): void => {
+    put('trim', cyl(0.5, 0.5, w, 14), C.tyre, x, 0.5, z, 0, 0, Math.PI / 2);
+    put('trim', cyl(0.27, 0.27, w + 0.02, 10), C.rim, x, 0.5, z, 0, 0, Math.PI / 2);
+  };
+  for (const s of [-1, 1]) {
+    wheel(s * 1.04, -4.85, 0.34);
+    for (const z of [3.05, 4.15, 5.25]) wheel(s * 0.98, z, 0.55);
+  }
+  // ---- lamps
+  for (const s of [-1, 1]) {
+    put('lamps', box(0.34, 0.2, 0.05), C.head, s * 0.92, 1.05, -6.14);
+    put('lamps', box(0.12, 0.08, 0.05), C.ind, s * 1.12, 3.35, -4.9);
+    put('lamps', box(0.26, 0.16, 0.05), C.tail, s * 1.0, 0.95, 6.12);
+  }
+  const out: BakedCar = {
+    paint: merge(by.paint, `${key} paint`),
+    trim: merge(by.trim, `${key} trim`),
+    glass: merge(by.glass, `${key} glass`),
+    lamps: merge(by.lamps, `${key} lamps`)
+  };
+  for (const g of [out.paint, out.trim, out.glass, out.lamps]) g.computeBoundingSphere();
+  bakedCache.set(key, out);
+  return out;
+}

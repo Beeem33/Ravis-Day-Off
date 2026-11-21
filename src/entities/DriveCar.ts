@@ -132,6 +132,8 @@ export class DriveCar implements ICar {
 
   /** Static solids to collide with (StreetData.blockers). */
   blockers: StreetBlocker[] = [];
+  /** On oil (0..1): the tyres can't hold the road — sideways grip, cornering, drive and brakes all mostly gone. */
+  slick = 0;
   /** Who this is, to the others' onImpact. */
   role: CarRole;
   readonly tune: Full;
@@ -296,13 +298,13 @@ export class DriveCar implements ICar {
         // A torque curve that pulls hard low down and fades into the top speed
         const x = Math.max(0, vF) / (t.topSpeed * 1.02);
         const x2 = x * x;
-        a = t.accel * thr * Math.max(0, 1 - x2 * x2 * x) * (1 - 0.3 * x);
+        a = t.accel * thr * Math.max(0, 1 - x2 * x2 * x) * (1 - 0.3 * x) * (1 - 0.75 * this.slick);
         driving = true;
       }
       this.reverseHold = 0;
     } else if (thr < -0.02) {
       if (vF > 0.6) {
-        a = t.brake * thr; // negative
+        a = t.brake * thr * (1 - 0.8 * this.slick); // negative
         this.braking = true;
         this.reverseHold = 0;
       } else {
@@ -336,7 +338,7 @@ export class DriveCar implements ICar {
     const lock = this.lockAt(av);
     this.steerAngle = this.steerNow * lock;
     let wT = (-vF * Math.tan(this.steerAngle)) / t.wheelbase;
-    const latCap = t.latMax * (hb ? 1.9 : 1.08);
+    const latCap = t.latMax * (hb ? 1.9 : 1.08) * (1 - 0.65 * this.slick);
     const wMax = latCap / Math.max(av, 2.5);
     wT = clamp(wT, -wMax, wMax);
     if (hb && av > 4) {
@@ -344,13 +346,13 @@ export class DriveCar implements ICar {
       wT = clamp(wT * 1.2 - Math.sign(vF) * this.steerNow * Math.min(1.9, av * 0.1), -2.7, 2.7);
     }
     // Low speed: the tyres hold the car to what the wheels say
-    const resp = hb ? 4.5 : t.yawResp - 4 * this.slide;
+    const resp = (hb ? 4.5 : t.yawResp - 4 * this.slide) * (1 - 0.75 * this.slick);
     this.yawRate += (wT - this.yawRate) * Math.min(1, resp * h);
 
     // ---- sideways: the tyres scrub the slip, up to what they can hold
     const slipAng = Math.atan2(Math.abs(vL), Math.max(1, av));
-    let k = t.grip * (hb ? 0.22 : 1) * (slipAng > 0.18 ? 0.6 : 1);
-    let cap = t.latMax * (hb ? 0.42 : 1.15) * (slipAng > 0.18 ? 0.8 : 1);
+    let k = t.grip * (hb ? 0.22 : 1) * (slipAng > 0.18 ? 0.6 : 1) * (1 - 0.92 * this.slick);
+    let cap = t.latMax * (hb ? 0.42 : 1.15) * (slipAng > 0.18 ? 0.8 : 1) * (1 - 0.9 * this.slick);
     if (av < 3) {
       // Nearly stopped: tyres just don't slide sideways
       k = Math.max(k, 14);

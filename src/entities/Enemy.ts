@@ -3129,6 +3129,26 @@ export class Enemy {
    * both travels properly and leaves the solver nothing to fight, so the
    * joints stay together while he is in the air.
    */
+  /**
+   * Hit by a car's front: his legs taken away at the car's speed, his top
+   * half left behind and thrown up, so he folds over the bonnet (call
+   * straight after die(), with the car's velocity). `up` how hard he's
+   * lifted (m/s).
+   */
+  runOver(v: THREE.Vector3, up: number): void {
+    for (const [name, body] of this.ragdollByName) {
+      const low = name.startsWith('leg') || name.startsWith('shin') || name.startsWith('pelvis') || name.startsWith('hip');
+      const k = low ? 1.0 : 0.78;
+      body.wakeUp();
+      body.velocity.set(v.x * k, low ? up * 0.7 : up, v.z * k);
+    }
+  }
+
+  /** One part of his ragdoll (head, torso, …), if he has one: where it is. */
+  ragdollPart(name: string): CANNON.Body | null {
+    return this.ragdollByName.get(name) ?? null;
+  }
+
   launch(v: THREE.Vector3): void {
     for (const { body } of this.ragdoll) {
       body.wakeUp();

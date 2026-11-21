@@ -1,7 +1,6 @@
 import * as THREE from 'three';
-import type { CarKind } from '../scenes/Level8Contracts';
-import type { ICar, ITraffic, Lane, RoadId, RoadPos, TrafficCar } from '../scenes/StreetContracts';
-import { bakedCar, carMaterials, CAR_COLOURS, CAR_SPECS } from '../environment/VehicleProps';
+import type { ICar, ITraffic, Lane, RoadId, RoadPos, TrafficCar, TrafficKind } from '../scenes/StreetContracts';
+import { bakedCar, bakedTanker, carMaterials, CAR_COLOURS, CAR_SPECS, TANKER_SPEC } from '../environment/VehicleProps';
 import { boxAt, impulse, makeBox, makeHit, sat, type Body } from './DriveCar';
 import { makeFrame, type RoadNet } from './RoadNet';
 
@@ -67,13 +66,15 @@ export interface TrafficCarState extends TrafficCar {
   dir: 1 | -1 | 0;
 }
 
-const KINDS: readonly CarKind[] = ['sedan', 'hatch', 'suv', 'pickup'];
-/** How common each kind is on the road. */
-const KIND_W = [0.42, 0.24, 0.24, 0.1];
+const KINDS: readonly TrafficKind[] = ['sedan', 'hatch', 'suv', 'pickup', 'tanker'];
+/** How common each kind is on the road (the tankers: on the highway only; anywhere else a pickup). */
+const KIND_W = [0.39, 0.22, 0.22, 0.09, 0.08];
+/** How hard a tanker can be knocked (m/s of impulse) before it goes up. */
+const TANKER_BLOW = 2.5;
 
 class TCar implements TrafficCarState {
   id: number;
-  kind: CarKind = 'sedan';
+  kind: TrafficKind = 'sedan';
   position = new THREE.Vector3();
   yaw = 0;
   speed = 0;
@@ -181,6 +182,10 @@ export class Traffic implements ITraffic {
   enabled = true;
   /** Everyone's seen something terrible up ahead: every car brakes to a stop where it is, and stays stopped. */
   halt = false;
+  /** Tankers knocked hard enough to go up (ids): the scene takes them, and blows them up. */
+  readonly blasts: number[] = [];
+  /** A stretch where nobody changes lanes (a roadblock: the queues stay in their lanes). */
+  laneLock: { road: RoadId; s0: number; s1: number } | null = null;
   /**
    * A launch ramp in one of the lanes, short of a hole in the deck. Before the
    * hole opens the cars in its lane stop short of it (in plain sight, not
@@ -188,7 +193,7 @@ export class Traffic implements ITraffic {
    */
   ramp: { road: RoadId; s0: number; len: number; height: number; d: number; open: boolean } | null = null;
   /** Cars that went off the end of the ramp this frame: the scene sends them down the hole. */
-  readonly launches: { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; pitch: number; vel: THREE.Vector3 }[] = [];
+  readonly launches: { kind: TrafficKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; pitch: number; vel: THREE.Vector3 }[] = [];
   onHorn: ((pos: THREE.Vector3) => void) | null = null;
 
   private pool: TCar[] = [];
@@ -293,7 +298,7 @@ export class Traffic implements ITraffic {
     const looks = this.opts.wreckLook ? [false, true] : [false];
     for (const kind of KINDS) {
       for (const wreck of looks) {
-        const baked = bakedCar(kind, wreck);
+        const baked = kind === 'tanker' ? bakedTanker(wreck) : bakedCar(kind, wreck);
         const parts: [THREE.BufferGeometry, THREE.Material, string][] = [
           [baked.paint, mats.paint, 'paint'],
           [baked.trim, mats.trim, 'trim'],
@@ -331,6 +336,8 @@ export class Traffic implements ITraffic {
   hit(id: number, imp: THREE.Vector3, spin: number): void {
     const c = this.pool[id];
     if (!c || !c.active) return;
+    // A tanker hit hard: up it goes (once)
+    if (c.kind === 'tanker' && !c.wrecked && Math.hypot(imp.x, imp.z) > TANKER_BLOW && !this.blasts.includes(id)) this.blasts.push(id);
     if (!c.wrecked) {
       c.wrecked = true;
       c.dir = 0;
@@ -360,8 +367,8 @@ export class Traffic implements ITraffic {
   }
 
   /** Lift the cars `which` picks out of the traffic, as they are now, for the scene to do with as it likes. */
-  take(which: (c: TrafficCarState) => boolean): { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] {
-    const out: { kind: CarKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] = [];
+  take(which: (c: TrafficCarState) => boolean): { kind: TrafficKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] {
+    const out: { kind: TrafficKind; colour: THREE.Color; position: THREE.Vector3; yaw: number; vel: THREE.Vector3 }[] = [];
     for (const c of this.pool) {
       if (!c.active || !which(c)) continue;
       const vel = c.wrecked ? c.vel.clone() : new THREE.Vector3(c.fx * c.speed, 0, c.fz * c.speed);
@@ -496,11 +503,11 @@ export class Traffic implements ITraffic {
       rampRel = s - rp.s0;
       if (rampRel > -160 && rampRel < rp.len + 8) {
         // Most of them go for it once the road's gone; before that, nobody does
-        if (rampRel >= -0.5 && rp.open && c.id % 3 !== 0) c.rampJump = true;
+        if (rampRel >= -0.5 && rp.open && c.id % 3 !== 0 && c.kind !== 'tanker') c.rampJump = true;
         // Sat at the foot of it a while with the road gone ahead and everyone behind leaning on the horn: he goes for it too
         if (rp.open && rampRel > -14 && rampRel < 0 && c.speed < 1) c.rampWait += dt;
-        if (c.rampWait > 3.5) c.rampJump = true;
-        jumper = c.rampJump || (rp.open && c.id % 3 !== 0);
+        if (c.rampWait > 3.5 && c.kind !== 'tanker') c.rampJump = true;
+        jumper = c.kind !== 'tanker' && (c.rampJump || (rp.open && c.id % 3 !== 0));
       }
     }
     if (jumper) {
@@ -612,6 +619,8 @@ export class Traffic implements ITraffic {
     }
 
     // ---- lane changes: now and then on multi-lane roads, or to get round something stopped
+    const locked = this.laneLock && c.at.road === this.laneLock.road && c.at.s > this.laneLock.s0 && c.at.s < this.laneLock.s1;
+    if (locked) c.laneTimer = Math.max(c.laneTimer, 1);
     if (L.siblings.length > 1 && c.laneTimer <= 0) {
       const urgent = staticAhead < 45;
       const roadP = c.at.road === 'highway' ? 1 : 0.35;
@@ -967,7 +976,7 @@ export class Traffic implements ITraffic {
       const T = this.lanes[id];
       for (let i = 0; i < T.n; i++) {
         const o = this.pool[T.list[i]];
-        if (o.active && o.lane === L.idx && Math.abs(o.at.s - s) < 9) return false;
+        if (o.active && o.lane === L.idx && Math.abs(o.at.s - s) < 9 + (o.kind === 'tanker' ? 5 : 0)) return false;
       }
     }
     const c = this.pool[this.free.pop()!];
@@ -977,8 +986,9 @@ export class Traffic implements ITraffic {
       r -= KIND_W[ki];
       ki++;
     }
-    const kind = KINDS[ki];
-    const spec = CAR_SPECS[kind];
+    // Tankers only out on the highway
+    const kind: TrafficKind = KINDS[ki] === 'tanker' && L.road !== 'highway' ? 'pickup' : KINDS[ki];
+    const spec = kind === 'tanker' ? TANKER_SPEC : CAR_SPECS[kind];
     c.active = true;
     c.wrecked = false;
     c.still = false;
@@ -990,7 +1000,7 @@ export class Traffic implements ITraffic {
     c.lane = L.idx;
     c.laneDir = L.lane.dir;
     c.dir = L.lane.dir;
-    c.v0 = L.lane.speed * (0.88 + this.rng() * 0.2);
+    c.v0 = L.lane.speed * (0.88 + this.rng() * 0.2) * (kind === 'tanker' ? 0.82 : 1);
     // Behind a slower car: no faster than it can stop for it (v² ≤ vl² + 2·4·gap)
     c.speed = vLead < Infinity ? Math.min(c.v0, Math.sqrt(vLead * vLead + 8 * Math.max(0, gap - 8))) : c.v0;
     c.vd = 0;
@@ -1000,7 +1010,8 @@ export class Traffic implements ITraffic {
     c.reactBrake = 1;
     c.hornCd = this.rng() * 2;
     c.trait = this.rng();
-    c.laneTimer = 3 + this.rng() * 15;
+    // (a tanker keeps to its lane)
+    c.laneTimer = kind === 'tanker' ? 1e9 : 3 + this.rng() * 15;
     c.takeExit = L.exitLane >= 0 && this.rng() < this.opts.exitChance;
     c.at.road = L.road;
     c.at.s = s;

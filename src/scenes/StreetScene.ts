@@ -36,6 +36,9 @@ import { AimSway } from '../entities/AimSway';
 import { highwayRamp, type Ramp } from '../environment/HighwayRamp';
 import type { FPSPlayer } from '../entities/FPSPlayer';
 import { track, smooth, clamp01, alongPath, pathLength, wrapAngle } from './cutscene';
+import { FireClouds, CarHail } from '../fx/FireCloud';
+import { OilSlicks } from '../fx/OilSlicks';
+import { Roadblock, type Officer } from '../fx/Roadblock';
 
 /** m/s → mph, for the speedo and the radar. */
 const MPH = 2.237;
@@ -73,6 +76,9 @@ const LOOK_DOWN = -0.65;
 /** The pistol out of the window: a magazine of it; and how many rounds put into a traffic car spin it out. */
 const PISTOL_MAG = 17;
 const SPINOUT_HITS = 3;
+/** Threading through traffic: how long the world slows for it (s), and how long before it can again. */
+const NEAR_T = 1.1;
+const NEAR_CD = 6;
 /** The finger: up, held, back on the wheel (seconds). */
 const FLIP_T = 2.1;
 /** Off the ramp: how long the world goes slow (real seconds), and how slow. */
@@ -301,6 +307,31 @@ export class StreetScene implements GameScene {
   /** How long Ravi's been past him while he was out to hold him up. */
   private copPassedT = 0;
   private copWasAhead = false;
+  // ---- Tankers, the boss's oil, the roadblock, near misses
+  private fireClouds!: FireClouds;
+  private hail: CarHail | null = null;
+  private hailK = 0;
+  private oil!: OilSlicks;
+  private fireEl!: HTMLElement;
+  private nearEl!: HTMLElement;
+  /** Tankers gone up: their burning wrecks (pool id), and how long they've burned. */
+  private tankerFires: { id: number; t: number }[] = [];
+  private debrisMats: THREE.Material[] = [];
+  private nearMissT = 0;
+  private nearMissCd = 0;
+  private lastNear = -10;
+  /** Each traffic car alongside: ahead of him (+1) or behind (−1) last frame, for spotting him going by. */
+  private readonly passSide = new Map<number, number>();
+  private oilCd = 10;
+  private oilQueue = -1;
+  private slickT = 0;
+  private clinkCd = 0;
+  private roadblock: Roadblock | null = null;
+  private roadblockDone = false;
+  /** Where the officers he runs down go: the road, and his car as a box they land on and come off. */
+  private runWorld: CANNON.World | null = null;
+  private runCar: CANNON.Body | null = null;
+  private runOvers: { e: Enemy; t: number; cracked: boolean; ravi: boolean }[] = [];
   /** Ravi out through the windscreen: his ragdoll (the same as on foot) and its little world with the road for a floor. DeathFx finds it here. */
   private raviRagdoll: RaviRagdoll | null = null;
   private ejectWorld: CANNON.World | null = null;
@@ -495,6 +526,12 @@ export class StreetScene implements GameScene {
     const hip = this.civicRig.seat.hip;
     this.interior = new CivicInterior(this.civicRig);
     this.junk = new CabinJunk(this.civicRig);
+    this.hail = new CarHail(this.civicRig);
+    this.hail.onClink = () => {
+      if (this.clinkCd > 0) return;
+      this.clinkCd = 0.06;
+      this.ctx.audio.clink();
+    };
     this.buildGlassCracks();
     // Whatever flies about, out of his face (the cabin's frame: where his eyes are in the seat)
     this.junk.keepClear(new THREE.Vector3(hip.x, hip.y + 0.68, hip.z + 0.06), 0.34);
@@ -520,6 +557,12 @@ export class StreetScene implements GameScene {
     this.debris = new Debris(this.particles, (x, z) => this.floorAt(x, z));
     this.missiles = new StreetMissiles(this.scene, this.particles);
     this.missiles.onBurst = (pos, hit) => this.onMissileBurst(pos, hit);
+    this.fireClouds = new FireClouds(this.particles);
+    this.oil = new OilSlicks(this.scene, (x, z) => this.floorAt(x, z));
+    this.oil.onBurst = (at) => {
+      this.ctx.audio.splash(false);
+      this.particles.spit(at, StreetScene.tmpA.set(0, 1, 0), at.y - 0.2);
+    };
     this.buildPassenger();
     this.findBossWindow();
     // The helicopter, built now and kept hidden: the warm-up compiles it
@@ -1010,6 +1053,8 @@ export class StreetScene implements GameScene {
           background:radial-gradient(ellipse at center, rgba(160,0,0,0) 50%, rgba(170,0,0,0.6) 100%); }
       </style>
       <div class="st-hurt"></div>
+      <div class="st-fire" style="position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at 50% 60%, rgba(255,190,70,0.97) 0%, rgba(240,96,18,0.97) 38%, rgba(70,22,8,0.98) 78%, rgba(12,8,6,1) 100%)"></div>
+      <div class="st-near" style="position:absolute;left:50%;top:30%;transform:translateX(-50%);font-size:30px;font-weight:bold;letter-spacing:10px;color:#fff;text-shadow:0 0 14px rgba(255,255,255,0.8);opacity:0;pointer-events:none;transition:opacity 0.25s">NEAR MISS</div>
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="st-hud off">
@@ -1056,6 +1101,8 @@ export class StreetScene implements GameScene {
     this.hpEl = el.querySelector('.st-hp i b')!;
     this.ammoEl = el.querySelector('.st-ammo')!;
     this.hurtEl = el.querySelector('.st-hurt')!;
+    this.fireEl = el.querySelector('.st-fire')!;
+    this.nearEl = el.querySelector('.st-near')!;
     this.hitEl = el.querySelector('.st-hit')!;
     this.warnEl = el.querySelector('.st-warn')!;
   }
@@ -1196,6 +1243,12 @@ export class StreetScene implements GameScene {
 
   update(dt: number, _time: number): void {
     dt = Math.min(dt, 0.05);
+    // Through a gap between two cars at speed: the world holds its breath a moment
+    if (this.nearMissT > 0) {
+      this.nearMissT = Math.max(0, this.nearMissT - dt);
+      dt *= 1 - 0.72 * Math.sin((this.nearMissT / NEAR_T) * Math.PI);
+    }
+    this.clinkCd -= dt;
     // Off the ramp: the world slows right down, then comes back up to speed
     if (this.slowmo > 0) {
       this.slowmo = Math.max(0, this.slowmo - dt);
@@ -1235,7 +1288,7 @@ export class StreetScene implements GameScene {
       else if (this.wreck) this.updateWreck(dt);
       else if (this.jump) this.updateJump(dt, input);
       else this.player.update(dt, input);
-      const hz = this.collapse.laneHazards;
+      const hz = this.roadblock && !this.roadblockDone ? [...this.collapse.laneHazards, ...this.roadblock.hazards] : this.collapse.laneHazards;
       this.traffic.update(dt, this.player.at, hz.length ? [this.player, this.boss.car, this.cop.car, ...hz] : [this.player, this.boss.car, this.cop.car]);
       // (in the air he's over them, not into them)
       resolveCollisions(this.jump || this.wreck ? [this.boss.car, this.cop.car] : [this.player, this.boss.car, this.cop.car], this.traffic);
@@ -1251,11 +1304,19 @@ export class StreetScene implements GameScene {
     this.updateHeli(dt);
     this.updateCrash(dt);
     this.debris.update(dt);
+    // Tankers that have gone up, their fire hanging over the road, the wrecks burning
+    for (const id of this.traffic.blasts.splice(0)) this.tankerBlast(id);
+    this.fireClouds.update(dt);
+    this.updateTankerFires(dt);
+    this.updateRunOvers(dt);
     this.collapse.update(dt);
     this.updateMissiles(dt);
     this.updateRifle(dt);
     this.updateHands(dt);
     this.updateRamp(dt);
+    this.checkNearMisses(dt);
+    this.updateOil(dt);
+    this.updateRoadblock(dt);
     this.interior?.update(dt, this.player.speed, this.player.throttleNow, this.player.yawRate * this.player.speed, this.civicRig.group.quaternion, this.carAcc);
     if (this.burning) {
       const g = this.civicRig.group;
@@ -1314,6 +1375,10 @@ export class StreetScene implements GameScene {
         this.civicRig.body.rotation.z += S.r;
       } else this.civicRig.body.position.y = 0.3;
       this.steerWheel();
+      // Out of a fire cloud: ash, embers and bits of tanker coming at the glass
+      // (and still coming a second or two after he's out of it: what it threw up, coming down on him)
+      this.hailK = Math.max(this.fireClouds.inside(this.player.position), this.hailK - dt * 0.55);
+      this.hail?.update(dt, this.hailK, Math.max(0, this.player.speed));
     }
     // Out through the windscreen: his body down the road, the death camera with it
     if (this.ejected && this.ejectWorld && this.raviRagdoll) {
@@ -2777,6 +2842,10 @@ export class StreetScene implements GameScene {
     this.particles.explosion(pos, 2.3);
     audio.explosion(d);
     this.shake = Math.min(1.4, this.shake + Math.max(0, 1.2 - d / 40));
+    // Anywhere near a tanker: that's the tanker too
+    for (const c of this.traffic.cars) {
+      if (c.kind === 'tanker' && !c.wrecked && c.position.distanceTo(pos) < c.halfLength + 4) this.traffic.hit(c.id, new THREE.Vector3(0, 0, 4), 0);
+    }
     if (hit && hit.kind === 'car') {
       const c = this.traffic.cars.find((x) => x.id === hit.id);
       if (c) {
@@ -2803,7 +2872,7 @@ export class StreetScene implements GameScene {
     this.burning = true;
     // A missile throws the car over and over — the grey, the song and the slow-motion from the
     // moment it hits, a little slow, so the roll can be watched; anything else, it's all over where it is
-    if (why === 'HIT BY A MISSILE') {
+    if (why === 'HIT BY A MISSILE' || why === 'CAUGHT IN THE BLAST') {
       this.startWreck();
       this.fail(why, 'later');
       this.die({ slow: 0.35, slowFor: 4.6 });
@@ -2893,6 +2962,401 @@ export class StreetScene implements GameScene {
     // Where that is on the road
     const f = this.net.sample(p.at.road, p.at.s);
     p.at.s += (p.position.x - f.pos.x) * f.tangent.x + (p.position.z - f.pos.z) * f.tangent.z;
+  }
+
+  // ----------------------------------------------- tankers, oil, the roadblock
+
+  /**
+   * A tanker going up: a ball of fire, the shock, the tank in pieces across
+   * the road and the cars round it thrown aside, the burnt-out wreck flung to
+   * the edge, and a wall of fire left hanging over the road for a good few
+   * seconds. Close to it, that's Ravi too.
+   */
+  private tankerBlast(id: number): void {
+    const c = this.traffic.cars.find((x) => x.id === id);
+    if (!c) return;
+    const { audio } = this.ctx;
+    const p = this.player;
+    const at = c.position.clone().setY(c.position.y + 1.8);
+    const d = this.camera.position.distanceTo(at);
+    const fwd = StreetScene.tmpA.set(-Math.sin(c.yaw), 0, -Math.cos(c.yaw));
+    this.particles.explosion(at, 9);
+    this.particles.explosion(at.clone().addScaledVector(fwd, 3.5), 7);
+    this.particles.explosion(at.clone().addScaledVector(fwd, -3.5).setY(at.y + 1.2), 7);
+    audio.explosion(d);
+    audio.explosion(d + 6);
+    audio.carCrash(d, true);
+    this.shake = Math.min(1.8, this.shake + Math.max(0.35, 2.2 - d / 30));
+    // The wreck thrown over toward the nearer edge of the road
+    const f = this.net.sample(c.at.road, c.at.s);
+    const side = c.at.d > (f.halfRight - f.halfLeft) / 2 ? 1 : -1;
+    this.traffic.hit(id, new THREE.Vector3(f.right.x * side * 7, 0, f.right.z * side * 7), side * 0.6);
+    // (torn open, it doesn't roll on: it stops more or less where it went up, the fire on it)
+    c.vel.x = c.vel.x * 0.2 + f.right.x * side * 6;
+    c.vel.z = c.vel.z * 0.2 + f.right.z * side * 6;
+    // Everything round it blown away from it (another tanker close by goes up too)
+    for (const o of this.traffic.cars) {
+      if (o.id === id) continue;
+      const dd = o.position.distanceTo(c.position);
+      if (dd > 18) continue;
+      const away = new THREE.Vector3(o.position.x - c.position.x, 0, o.position.z - c.position.z);
+      if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
+      away.normalize().multiplyScalar(16 - dd * 0.6);
+      this.traffic.hit(o.id, away, (Math.random() - 0.5) * 5);
+    }
+    for (const car of [this.boss.car, this.cop.car]) {
+      const dd = car.position.distanceTo(c.position);
+      if (dd < 16) car.velocity.add(new THREE.Vector3(car.position.x - c.position.x, 0, car.position.z - c.position.z).normalize().multiplyScalar((16 - dd) * 0.5));
+    }
+    // The tank in pieces
+    this.tankerDebris(at);
+    // The fire it leaves hanging over the road, and the wreck burning
+    this.fireClouds.add(c.position.clone(), 11, 11);
+    this.tankerFires.push({ id, t: 0 });
+    // Him
+    if (this.phase === 'drive') {
+      const rd = Math.hypot(p.position.x - c.position.x, p.position.z - c.position.z);
+      if (rd < 9) this.blowUp('CAUGHT IN THE BLAST');
+      else if (rd < 24) {
+        this.damage = Math.min(100, this.damage + (24 - rd) * 1.5);
+        this.hurt = 1;
+      }
+    }
+  }
+
+  /** Bits of tank and trailer, flung every way, some of them burning. */
+  private tankerDebris(at: THREE.Vector3): void {
+    if (!this.debrisMats.length) {
+      this.debrisMats = [
+        new THREE.MeshStandardMaterial({ color: 0xc9cdd1, roughness: 0.35, metalness: 0.8, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0x2a2826, roughness: 0.9, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 })
+      ];
+    }
+    for (let i = 0; i < 18; i++) {
+      let obj: THREE.Object3D;
+      let size: number;
+      if (i < 8) {
+        // A curl of the tank's skin
+        const w = 0.8 + Math.random() * 1.6;
+        obj = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, w, 8, 1, true, 0, 0.6 + Math.random() * 0.9), this.debrisMats[i % 3 === 0 ? 1 : 0]);
+        size = w * 0.5;
+      } else if (i < 12) {
+        obj = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.35, 12), this.debrisMats[2]);
+        size = 0.5;
+      } else {
+        const s = 0.2 + Math.random() * 0.5;
+        obj = new THREE.Mesh(new THREE.BoxGeometry(s, 0.05, s * 1.6), this.debrisMats[Math.random() < 0.5 ? 0 : 1]);
+        size = s * 0.5;
+      }
+      obj.position.copy(at).add(new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 1.5, (Math.random() - 0.5) * 6));
+      obj.castShadow = true;
+      this.scene.add(obj);
+      const dir = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+      this.debris.add({
+        obj,
+        vel: dir.multiplyScalar(6 + Math.random() * 16).setY(6 + Math.random() * 12),
+        spin: new THREE.Vector3((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12),
+        size,
+        fire: i < 6 ? 5 + Math.random() * 6 : 0,
+        smoke: i < 10 ? 4 + Math.random() * 4 : 0
+      });
+    }
+  }
+
+  /** The burnt-out tankers burning on at the side of the road. */
+  private updateTankerFires(dt: number): void {
+    for (let i = this.tankerFires.length - 1; i >= 0; i--) {
+      const f = this.tankerFires[i];
+      f.t += dt;
+      const c = this.traffic.cars.find((x) => x.id === f.id);
+      // (gone: recycled once it's well behind, and the id's someone else's now)
+      if (!c || !c.wrecked || c.kind !== 'tanker' || f.t > 45) {
+        this.tankerFires.splice(i, 1);
+        continue;
+      }
+      const k = f.t < 30 ? 1 : 1 - (f.t - 30) / 15;
+      const fwd = StreetScene.tmpB.set(-Math.sin(c.yaw), 0, -Math.cos(c.yaw));
+      for (const o of [-3, 0, 3]) this.particles.fire(StreetScene.tmpA.copy(c.position).addScaledVector(fwd, o).setY(c.position.y + 2.2), 2.2, k);
+      this.particles.smokeColumn(StreetScene.tmpA.copy(c.position).setY(c.position.y + 3.5), 2.2, k);
+    }
+    // The screen given over to the fire, from his seat, as he drives into it
+    const p = this.player;
+    const cover = this.shot === 'chase' ? this.fireClouds.cover(this.camera.position, StreetScene.tmpC.set(-Math.sin(p.yaw), 0, -Math.cos(p.yaw))) : 0;
+    this.fireEl.style.opacity = cover > 0.01 ? (cover * (0.93 + 0.07 * Math.sin(this.lightT * 27))).toFixed(3) : '0';
+  }
+
+  /**
+   * Threading through: a car he's just gone by with next to nothing between
+   * them. Two in quick succession (a gap between two of them), or one
+   * really close, and the world slows a beat.
+   */
+  private checkNearMisses(dt: number): void {
+    const p = this.player;
+    this.nearMissCd -= dt;
+    if (this.phase !== 'drive' || p.speed < 24) {
+      this.passSide.clear();
+      return;
+    }
+    for (const c of this.traffic.cars) {
+      if (c.wrecked || c.at.road !== p.at.road) continue;
+      const ds = c.at.s - p.at.s;
+      if (Math.abs(ds) > c.halfLength + 6) {
+        this.passSide.delete(c.id);
+        continue;
+      }
+      const sign = ds > 0 ? 1 : -1;
+      if (this.passSide.get(c.id) === 1 && sign === -1) {
+        const gap = Math.abs(c.at.d - p.at.d) - c.halfWidth - p.halfWidth;
+        if (gap < 0.9 && gap > -0.3) this.nearMiss(gap);
+      }
+      this.passSide.set(c.id, sign);
+    }
+  }
+
+  private nearMiss(gap: number): void {
+    const pair = this.lightT - this.lastNear < 0.9;
+    this.lastNear = this.lightT;
+    this.ctx.audio.carWhoosh(gap < 0.5 ? 0 : 2);
+    if ((pair || gap < 0.4) && this.nearMissCd <= 0) {
+      this.nearMissT = NEAR_T;
+      this.nearMissCd = NEAR_CD;
+      this.nearEl.style.opacity = '1';
+      window.setTimeout(() => (this.nearEl.style.opacity = '0'), 900);
+    }
+  }
+
+  /**
+   * The boss's oil: a bucket of it slung out of the back of his car now and
+   * then, with Ravi close behind him in his lane; and Ravi on a slick, the
+   * car gone light, sliding a second.
+   */
+  private updateOil(dt: number): void {
+    const p = this.player;
+    const b = this.boss.car;
+    if (this.phase === 'drive' && !this.jump && b.at.road === 'highway' && p.at.road === 'highway') {
+      const gap = this.net.routeS(b.at) - this.net.routeS(p.at);
+      this.oilCd -= dt;
+      const lined = gap > 14 && gap < 80 && Math.abs(b.at.d - p.at.d) < 2.6;
+      if (this.oilCd <= 0 && lined && this.swapT < 0) {
+        this.oilCd = 7 + Math.random() * 8;
+        this.dropBucket();
+        if (Math.random() < 0.45) this.oilQueue = 0.4;
+      }
+      if (this.oilQueue > 0) {
+        this.oilQueue -= dt;
+        if (this.oilQueue <= 0) {
+          this.oilQueue = -1;
+          this.dropBucket();
+        }
+      }
+    }
+    // Onto his car, mid-air: it bursts over the bonnet and the glass
+    if (this.oil.update(dt, this.phase === 'drive' ? p : undefined)) {
+      this.ctx.audio.carCrash(0, false);
+      this.shake = Math.min(1.2, this.shake + 0.5);
+      this.oilOnGlass();
+    }
+    // On it
+    if (this.phase === 'drive' && this.oil.slickAt(p.position.x, p.position.z)) {
+      if (this.slickT < 0.5) {
+        // The back end lets go as he hits it
+        p.yawRate += (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.min(0.8, Math.abs(p.speed) * 0.015));
+        this.ctx.audio.tyreSqueal(1.0, 0);
+      }
+      this.slickT = 1.0;
+    }
+    this.slickT = Math.max(0, this.slickT - dt);
+    p.slick = this.slickT > 0 ? Math.min(1, this.slickT / 0.3) : 0;
+    if (p.slick > 0.3 && Math.abs(p.speed) > 6) this.particles.tyreSmoke(StreetScene.tmpA.copy(p.position).setY(p.position.y + 0.2), StreetScene.tmpB.set(0, 1, 0), 0.4);
+  }
+
+  /** One out of the back of his car, thrown back at Ravi. */
+  private dropBucket(): void {
+    const b = this.boss.car;
+    const back = StreetScene.tmpA.set(Math.sin(b.yaw), 0, Math.cos(b.yaw));
+    const right = StreetScene.tmpB.set(Math.cos(b.yaw), 0, -Math.sin(b.yaw));
+    const at = b.position.clone().addScaledVector(back, b.halfLength + 0.3).addScaledVector(right, (Math.random() - 0.5) * 0.6).setY(b.position.y + 1.05);
+    const vel = b.velocity.clone().addScaledVector(back, 5 + Math.random() * 3).addScaledVector(right, (Math.random() - 0.5) * 3).setY(2.2 + Math.random() * 1.5);
+    vel.y = 2.2 + Math.random() * 1.5;
+    this.oil.drop(at, vel);
+    this.ctx.audio.clink();
+  }
+
+  /** Oil all over the glass: black splashes on it, running. */
+  private oilOnGlass(): void {
+    const c = this.glassCanvas;
+    const ctx = c?.getContext('2d');
+    if (!c || !ctx || !this.glassTex) return;
+    for (let i = 0; i < 9; i++) {
+      const x = (0.15 + Math.random() * 0.7) * c.width;
+      const y = (0.2 + Math.random() * 0.6) * c.height;
+      const r = c.height * (0.03 + Math.random() * 0.07);
+      ctx.fillStyle = 'rgba(8,6,4,0.88)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, r * (1 + Math.random()), r, Math.random() * 3, 0, Math.PI * 2);
+      ctx.fill();
+      // A run of it down the glass
+      ctx.fillRect(x - r * 0.15, y, r * 0.3, r * (2 + Math.random() * 3));
+    }
+    this.glassTex.needsUpdate = true;
+  }
+
+  /**
+   * The roadblock: put across the highway a good way ahead of him once he's
+   * well along it (not on a helicopter, if it can be helped), on a stretch
+   * with no hole in it; then its officers, and the open lane kept clear.
+   */
+  private updateRoadblock(dt: number): void {
+    const p = this.player;
+    const L = this.level;
+    if (!this.roadblock && !this.roadblockDone && this.phase === 'drive' && p.at.road === 'highway' && p.at.s > 1150 && (!this.heliUp || p.at.s > 1700)) {
+      let s = Math.min(p.at.s + 420, L.exitS - 260);
+      for (let k = 0; k < 6 && this.collapse.holeAt(this.net.point({ road: 'highway', s, d: -3.6 }, StreetScene.tmpA)); k++) s += 45;
+      const lanes = this.net.roads.highway.lanes.filter((l) => l.dir === 1).map((l) => l.offset).sort((a, b) => b - a);
+      const rb = new Roadblock(this.net, s, lanes, Math.floor(Math.random() * lanes.length));
+      this.scene.add(rb.group);
+      for (const o of rb.officers) this.scene.add(o.e.root);
+      for (const car of [this.player, this.boss.car, this.cop.car]) car.blockers = [...this.level.blockers, ...rb.blockers];
+      this.boss.hazards = rb.hazards;
+      this.cop.hazards = rb.hazards;
+      this.traffic.laneLock = { road: 'highway', s0: s - 260, s1: s + 5 };
+      this.roadblock = rb;
+    }
+    const rb = this.roadblock;
+    if (!rb) return;
+    rb.update(dt);
+    // The open lane: nobody else in it between him and the block (waved through, or held back)
+    if (p.at.road === 'highway' && p.at.s < rb.s + 20) {
+      for (const c of this.traffic.cars) {
+        if (c.wrecked || c.at.road !== 'highway' || Math.abs(c.at.d - rb.openD) > 1.6) continue;
+        if (c.at.s > p.at.s + 90 && c.at.s < rb.s + 14) this.traffic.clear('highway', c.at.s - 0.05, c.at.s + 0.05);
+      }
+    }
+    // Well past it: it's behind him for good
+    if (!this.roadblockDone && (p.at.road !== 'highway' || p.at.s > rb.s + 260)) {
+      this.roadblockDone = true;
+      this.traffic.laneLock = null;
+      this.boss.hazards = [];
+      this.cop.hazards = [];
+    }
+    // The officers: facing him, firing as he comes, and in the way of anything coming through
+    for (const o of rb.officers) {
+      if (o.down) continue;
+      const e = o.e;
+      e.faceToward(p.position, dt, 6);
+      e.update(dt);
+      const cars: [typeof p, boolean][] = [[p, true], [this.boss.car as typeof p, false], [this.cop.car as typeof p, false]];
+      for (const [car, ravi] of cars) {
+        if (ravi && this.phase !== 'drive') continue;
+        const dx = e.position.x - car.position.x;
+        const dz = e.position.z - car.position.z;
+        const along = -dx * Math.sin(car.yaw) - dz * Math.cos(car.yaw);
+        const lat = dx * Math.cos(car.yaw) - dz * Math.sin(car.yaw);
+        if (Math.abs(lat) < car.halfWidth + 0.3 && along > -car.halfLength && along < car.halfLength + 0.45 && Math.abs(car.speed) > 3) {
+          this.runOver(o, car, ravi);
+          break;
+        }
+      }
+      if (o.down) continue;
+      const ahead = rb.s - p.at.s;
+      if (this.phase === 'drive' && p.at.road === 'highway' && ahead > 4 && ahead < 140) {
+        o.fireCd -= dt;
+        if (o.fireCd <= 0) {
+          if (o.burst <= 0) o.burst = 3;
+          o.burst--;
+          o.fireCd = o.burst > 0 ? 0.13 : 1.2 + Math.random() * 1.6;
+          this.guardShot(e);
+        }
+      }
+    }
+  }
+
+  /**
+   * An officer under the front of a car: his legs taken, he folds over the
+   * bonnet — up it, into the glass if it's Ravi's, over the roof and off
+   * the back — or (anyone else's car) thrown up and over it.
+   */
+  private runOver(o: Officer, car: DriveCar, ravi: boolean): void {
+    o.down = true;
+    const e = o.e;
+    const world = this.ensureRunWorld();
+    const fwd = new THREE.Vector3(-Math.sin(car.yaw), 0, -Math.cos(car.yaw));
+    e.die(e.position.clone().setY(e.position.y + 0.9), fwd, world, 'torso', 0.2, { wound: false });
+    const sp = Math.abs(car.speed);
+    if (ravi) e.runOver(car.velocity, 2.4 + sp * 0.05);
+    else e.runOver(car.velocity.clone().multiplyScalar(0.95), 4 + sp * 0.09);
+    this.runOvers.push({ e, t: 0, cracked: false, ravi });
+    const d = this.camera.position.distanceTo(e.position);
+    this.ctx.audio.bodyThud(d);
+    this.ctx.audio.punchImpact(false);
+    if (ravi) {
+      this.shake = Math.min(1.2, this.shake + 0.55);
+      this.damage = Math.min(100, this.damage + 2);
+    }
+  }
+
+  /** The world the run-down officers come down in: the road, and Ravi's car as a box riding on it. */
+  private ensureRunWorld(): CANNON.World {
+    if (this.runWorld) return this.runWorld;
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -14, 0) });
+    world.allowSleep = true;
+    world.defaultContactMaterial.friction = 0.35;
+    world.defaultContactMaterial.restitution = 0.12;
+    const road = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+    road.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    road.position.set(0, this.player.position.y, 0);
+    world.addBody(road);
+    // The Civic: the body up to the bonnet, and the cabin on it from the windscreen's foot back (car-local, forward −Z)
+    const car = new CANNON.Body({ type: CANNON.Body.KINEMATIC });
+    car.addShape(new CANNON.Box(new CANNON.Vec3(0.86, 0.46, 2.07)), new CANNON.Vec3(0, 0.46, 0));
+    car.addShape(new CANNON.Box(new CANNON.Vec3(0.72, 0.3, 1.05)), new CANNON.Vec3(0, 1.2, 0.4));
+    world.addBody(car);
+    this.runWorld = world;
+    this.runCar = car;
+    return world;
+  }
+
+  /** The officers he's run down, their bodies going: over his bonnet and off it, along the road. */
+  private updateRunOvers(dt: number): void {
+    if (!this.runOvers.length || !this.runWorld || !this.runCar) return;
+    const p = this.player;
+    const car = this.runCar;
+    car.position.set(p.position.x, p.position.y, p.position.z);
+    car.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), p.yaw);
+    car.velocity.set(p.velocity.x, 0, p.velocity.z);
+    car.angularVelocity.set(0, p.yawRate, 0);
+    this.runWorld.step(1 / 240, dt, 14);
+    for (let i = this.runOvers.length - 1; i >= 0; i--) {
+      const r = this.runOvers[i];
+      r.t += dt;
+      r.e.update(dt);
+      // Into his windscreen: a crack in it where he hit, and the thump
+      if (r.ravi && !r.cracked && r.t < 2) {
+        const head = r.e.ragdollPart('head') ?? r.e.ragdollPart('torso');
+        if (head) {
+          const dx = head.position.x - p.position.x;
+          const dz = head.position.z - p.position.z;
+          const along = -dx * Math.sin(p.yaw) - dz * Math.cos(p.yaw);
+          const lat = dx * Math.cos(p.yaw) - dz * Math.sin(p.yaw);
+          const up = head.position.y - p.position.y;
+          if (along > -0.4 && along < 0.75 && Math.abs(lat) < 0.8 && up > 0.85 && up < 1.7) {
+            r.cracked = true;
+            const ndc = StreetScene.tmpA.set(head.position.x, head.position.y, head.position.z).project(this.camera);
+            this.cracks++;
+            this.crack((ndc.x + 1) / 2, (1 - ndc.y) / 2);
+            this.ctx.audio.glassShatter(0);
+            this.ctx.audio.bodyThud(0);
+            this.shake = Math.min(1.3, this.shake + 0.4);
+          }
+        }
+      }
+      if (r.t > 16) {
+        r.e.removeCorpse();
+        r.e.root.visible = false;
+        this.runOvers.splice(i, 1);
+      }
+    }
   }
 
   // ------------------------------------------------------------ helicopters
@@ -3058,7 +3522,7 @@ export class StreetScene implements GameScene {
     if (this.phase === 'drive' && !this.fall && !this.jump && p.at.road === 'highway' && this.collapse.holeAt(p.position)) this.startFall();
     // Whoever's on it when it goes — or can't stop in time after — goes down with it
     if (this.collapse.anyOpen) {
-      for (const car of this.traffic.take((t) => this.collapse.holeAt(t.position))) this.collapse.dropCar(car.kind, car.colour, car.position, car.yaw, car.vel);
+      for (const car of this.traffic.take((t) => this.collapse.holeAt(t.position))) this.collapse.dropCar(car.kind === 'tanker' ? 'pickup' : car.kind, car.colour, car.position, car.yaw, car.vel);
     }
   }
 
@@ -3493,7 +3957,7 @@ export class StreetScene implements GameScene {
   private updateRamp(dt: number): void {
     // The cars that went off the end: up, over, and all the way down
     for (const l of this.traffic.launches.splice(0)) {
-      this.collapse.launchCar(l.kind, l.colour, l.position, l.yaw, l.pitch, l.vel);
+      this.collapse.launchCar(l.kind === 'tanker' ? 'pickup' : l.kind, l.colour, l.position, l.yaw, l.pitch, l.vel);
       const d = this.camera.position.distanceTo(l.position);
       this.ctx.audio.carWhoosh(d);
       this.ctx.audio.carScrape(d);

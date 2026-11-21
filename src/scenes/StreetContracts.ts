@@ -241,9 +241,12 @@ export interface ICar {
 }
 
 /** A traffic car as the others see it, for collision and for avoiding. */
+/** What's in the traffic: the cars, and fuel tankers. */
+export type TrafficKind = CarKind | 'tanker';
+
 export interface TrafficCar {
   id: number;
-  kind: CarKind;
+  kind: TrafficKind;
   position: THREE.Vector3;
   yaw: number;
   speed: number;

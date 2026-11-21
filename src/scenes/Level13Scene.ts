@@ -18,6 +18,7 @@ import { Arsenal, loadoutFor } from '../entities/Arsenal';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { hideInventory } from '../ui/InventoryUI';
 import { GRIP_L, GRIP_R } from '../entities/ShotgunViewmodel';
+import { pressureShell, SHELL, SHELL_GRIP, SHELL_TEXT } from '../entities/PressureShell';
 import { yawPitchTo, wrapAngle } from './cutscene';
 import type { Enemy } from '../entities/Enemy';
 import type { Collider } from '../environment/OfficeLevelBuilder';
@@ -332,6 +333,13 @@ export class Level13Scene extends CombatScene<Level13Data> {
   private gunHome = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
   private pickFrom = { p: new THREE.Vector3(), yaw: 0, pitch: 0 };
   private swapped = false;
+  /** The pressure shell in the crate's foam: picked out and read before the gun comes out. */
+  private shell!: THREE.Group;
+  private shellHome = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+  private shellCard: HTMLElement | null = null;
+  /** When in the pickup he reaches for the shell, and how long it takes to read it and pocket it. */
+  private static readonly SHELL_AT = 0.3;
+  private static readonly SHELL_LEN = 4.7;
   private cratePromptOn = false;
   /** What E would do at the lift's buttons, if he's at one. */
   private liftPrompt: string | null = null;
@@ -511,11 +519,19 @@ export class Level13Scene extends CombatScene<Level13Data> {
       gc.pump.add(this.gunA.l);
       this.gunHome.p.copy(gc.gun.position);
       this.gunHome.q.copy(gc.gun.quaternion);
+      // A shell beside it in the foam, lying with its printing up
+      this.shell = pressureShell();
+      this.shell.position.set(gc.stand.x - 0.26, gc.stand.y + 0.59 + SHELL.R, gc.stand.z + 0.8 - 0.25);
+      this.shell.quaternion.setFromAxisAngle(V(0, 1, 0), Math.PI - 0.4).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -Math.PI / 2));
+      this.shellHome.p.copy(this.shell.position);
+      this.shellHome.q.copy(this.shell.quaternion);
+      this.scene.add(this.shell);
       if (this.from === 0) Level13Scene.quadTaken = false;
       if (this.checkpoint >= 2) Level13Scene.quadTaken = true;
       if (Level13Scene.quadTaken) {
         this.swapped = true;
         gc.gun.visible = false;
+        this.shell.visible = false;
         this.giveQuad();
       }
     }
@@ -565,6 +581,8 @@ export class Level13Scene extends CombatScene<Level13Data> {
   }
 
   exit(): void {
+    this.shellCard?.remove();
+    this.shellCard = null;
     this.ctx.audio.stopTrackMusic(0.8);
     for (const u of this.unsubs) u();
     document.removeEventListener('click', this.clickHandler);
@@ -1753,11 +1771,19 @@ export class Level13Scene extends CombatScene<Level13Data> {
     const cam = p.camera;
     const L = this.level;
     const gc = L.gunCrate;
-    const t = this.phaseT;
+    // The shell comes first: from SHELL_AT, for SHELL_LEN, the gun's timeline (`t`) waits
+    const raw = this.phaseT;
+    const S0 = Level13Scene.SHELL_AT;
+    const SL = Level13Scene.SHELL_LEN;
+    const u = raw - S0;
+    const inShell = u >= 0 && u < SL && !this.swapped;
+    const t = raw < S0 ? raw : raw < S0 + SL ? S0 : raw - SL;
+    // Up from the crate to read it, and back down into it after
+    const readK = inShell ? smooth((u - 0.5) / 0.6) * (1 - smooth((u - 3.85) / 0.55)) : 0;
     const a = this.arsenal;
     a.knifeStow = Math.min(1, a.knifeStow + dt * 6);
     if (!this.swapped) for (const v of a.all) v.stow = Math.min(1, v.stow + dt * 6);
-    const go = smooth(t / 0.6);
+    const go = smooth(raw / 0.6);
     p.position.lerpVectors(this.pickFrom.p, gc.stand, go);
     const eye = V(gc.stand.x, gc.stand.y + 1.62, gc.stand.z);
     const down = yawPitchTo(eye, this.gunHome.p);
@@ -1765,9 +1791,10 @@ export class Level13Scene extends CombatScene<Level13Data> {
     p.yaw = this.pickFrom.yaw + wrapAngle(down.yaw - this.pickFrom.yaw) * go;
     const lookDown = Math.max(down.pitch, -0.9);
     p.pitch = THREE.MathUtils.lerp(this.pickFrom.pitch + (lookDown - this.pickFrom.pitch) * go, -0.05, rise);
+    p.pitch += (-0.22 - p.pitch) * readK;
     p.update(dt, L.colliders);
-    // Bent over it: lower, leaning in
-    const bend = go * (1 - rise);
+    // Bent over it: lower, leaning in (straighter while he reads the shell)
+    const bend = go * (1 - rise) * (1 - 0.65 * readK);
     cam.position.y -= 0.52 * bend;
     const f = p.forwardDir(Level13Scene.tmpA);
     cam.position.addScaledVector(f, 0.34 * bend);
@@ -1782,6 +1809,13 @@ export class Level13Scene extends CombatScene<Level13Data> {
     if (!this.swapped) {
       const q = new THREE.Quaternion();
       for (const [side, a, g0] of [['r', this.pickA.r, GRIP_R], ['l', this.pickA.l, GRIP_L]] as const) {
+        if (inShell) {
+          // The left hand stays down out of it while the right has the shell
+          if (side === 'l') this.pickArms.set('l', null);
+          // and the right shoulder where his own is, this frame (not where it was set before he bent down)
+          else this.pickArms.shoulder('r', cam.position.clone().add(V(0, -0.24, 0)).addScaledVector(f, -0.05).add(V(-f.z * 0.2, 0, f.x * 0.2)), true);
+          continue;
+        }
         a.updateWorldMatrix(true, false);
         const w = a.getWorldPosition(new THREE.Vector3());
         const sh = cam.position.clone().add(V(0, -0.3, 0)).add(V(-f.z * (side === 'r' ? 0.2 : -0.2), 0, f.x * (side === 'r' ? 0.2 : -0.2)));
@@ -1793,6 +1827,7 @@ export class Level13Scene extends CombatScene<Level13Data> {
         this.pickArms.shoulder(side, cam.position.clone().add(V(0, -0.5, 0)).addScaledVector(f, -0.12).add(V(-f.z * (side === 'r' ? 0.22 : -0.22), 0, f.x * (side === 'r' ? 0.22 : -0.22))), true);
       }
     }
+    if (inShell) this.updateShell(u, dt);
     if (t >= 0.9 && t - dt < 0.9) this.ctx.audio.clink();
     if (!this.swapped) {
       // Up out of the foam to in front of him, its left side turned to him; then down to where he holds it
@@ -1834,6 +1869,68 @@ export class Level13Scene extends CombatScene<Level13Data> {
 
       a.showInventory();
     }
+  }
+
+  /**
+   * The shell, `u` seconds into its part of the pickup: his right hand down
+   * into the foam for it, up in front of his eyes with its printing to him
+   * (how the gun works — and a card of the same, to read it by), turned in
+   * the light while he reads, then away down into his pocket.
+   */
+  private updateShell(u: number, dt: number): void {
+    const cam = this.player.camera;
+    const sh = this.shell;
+    const crossed = (at: number): boolean => u >= at && u - dt < at;
+    if (u < 0.55) {
+      // The hand down to it
+      this.blendAnchor(this.pickA.r, V(0.3, -0.62, 0.2), sh, smooth(u / 0.55));
+      this.pickArms.set('r', this.pickA.r, SHELL_GRIP);
+    } else {
+      // In his fingers: up in front of his eyes, read, and away
+      const pose = (pos: THREE.Vector3, e: THREE.Euler): [THREE.Vector3, THREE.Quaternion] => {
+        const m = new THREE.Matrix4().compose(pos, new THREE.Quaternion().setFromEuler(e), V(1, 1, 1)).premultiply(cam.matrixWorld);
+        const pp = new THREE.Vector3();
+        const qq = new THREE.Quaternion();
+        m.decompose(pp, qq, new THREE.Vector3());
+        return [pp, qq];
+      };
+      const lift = smooth((u - 0.55) / 0.7);
+      const away = smooth((u - 3.95) / 0.6);
+      const [rp, rq] = pose(V(0.0, -0.026, -0.162), new THREE.Euler(0.04 + Math.sin(u * 1.3) * 0.025, -0.08 + Math.sin(u * 0.9) * 0.05, 0.03));
+      const [kp, kq] = pose(V(0.3, -0.62, 0.12), new THREE.Euler(0.7, 0.5, 0.9));
+      sh.position.lerpVectors(this.shellHome.p, rp, lift).lerp(kp, away);
+      sh.quaternion.slerpQuaternions(this.shellHome.q, rq, lift).slerp(kq, away);
+      sh.updateMatrixWorld(true);
+      this.pickArms.set('r', sh, SHELL_GRIP);
+    }
+    if (crossed(0.55)) this.ctx.audio.clink();
+    this.showShellCard(u > 1.05 && u < 4.0);
+    if (crossed(4.5)) {
+      sh.visible = false;
+      this.ctx.audio.pocket();
+      // The hand back where the gun's reach starts from
+      this.blendAnchor(this.pickA.r, V(0.3, -0.62, 0.2), sh, 0);
+      this.pickArms.set('r', this.pickA.r, GRIP_R);
+    }
+  }
+
+  /** The shell's printing again, large, beside it while he reads it. */
+  private showShellCard(on: boolean): void {
+    if (!this.shellCard) {
+      if (!on) return;
+      const el = document.createElement('div');
+      el.style.cssText =
+        'position:absolute;right:6%;top:50%;transform:translateY(-50%);max-width:380px;padding:14px 18px 14px 16px;background:rgba(24,6,4,.8);border-left:4px solid #d8b25a;color:#f3e6c8;font:600 15px/1.55 "Arial Narrow",Arial,sans-serif;letter-spacing:.05em;opacity:0;transition:opacity .35s;pointer-events:none;z-index:7;box-shadow:0 6px 24px rgba(0,0,0,.5)';
+      el.innerHTML =
+        `<div style="font-size:11px;color:#d8b25a;letter-spacing:.18em;margin-bottom:4px">PRINTED ON THE SHELL</div><div style="font-size:20px;color:#ffd98a;margin-bottom:8px">${SHELL_TEXT[0]}</div>` +
+        [SHELL_TEXT[1], SHELL_TEXT[2] + ' ' + SHELL_TEXT[3], SHELL_TEXT[4], SHELL_TEXT[5]].map((l) => `<div style="margin:3px 0">${l}</div>`).join('');
+      this.ctx.uiRoot.appendChild(el);
+      this.shellCard = el;
+      void el.offsetWidth;
+      el.style.opacity = '1';
+      return;
+    }
+    this.shellCard.style.opacity = on ? '1' : '0';
   }
 
   // ------------------------------------------------------------ the waste room

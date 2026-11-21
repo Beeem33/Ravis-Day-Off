@@ -1548,6 +1548,35 @@ function billboardAtlas(): { canvas: HTMLCanvasElement; regions: Record<string, 
   };
   const posters: { key: string; draw: () => void }[] = [
     {
+      key: 'gas711',
+      draw: () => {
+        // A roadside fuel stop: dark board, a pump on the left, the price on a lit panel
+        g.fillStyle = '#14233a';
+        g.fillRect(0, 0, PW, PH);
+        g.fillStyle = '#f2a516';
+        g.fillRect(0, PH - 34, PW, 34);
+        // The pump
+        g.fillStyle = '#e8e4dc';
+        g.fillRect(70, 70, 120, 210);
+        g.fillStyle = '#14233a';
+        g.fillRect(88, 92, 84, 56);
+        g.fillStyle = '#f2a516';
+        g.fillRect(96, 100, 68, 40);
+        g.strokeStyle = '#e8e4dc';
+        g.lineWidth = 12;
+        g.beginPath();
+        g.moveTo(190, 120);
+        g.lineTo(232, 120);
+        g.lineTo(232, 230);
+        g.lineTo(212, 250);
+        g.stroke();
+        say('711 GAS STATION', 280, 112, 104, '#ffffff');
+        say('NEXT EXIT · OPEN 24 HRS', 284, 188, 50, '#f2a516');
+        say('REGULAR $3.99', 284, 262, 56, '#ffd84a');
+        say('FUEL · SNACKS · COFFEE', PW / 2, PH - 10, 26, '#14233a', true, 'center');
+      }
+    },
+    {
       key: 'deadbull',
       draw: () => {
         const grd = g.createLinearGradient(0, 0, PW, 0);
@@ -3288,7 +3317,7 @@ export class StreetBuilder {
     this.adMat = new THREE.MeshLambertMaterial({ map: tex });
     // The gag signs first, two to every old ad, so nothing repeats close by
     const order = [
-      'readthis', 'honk', 'deadbull',
+      'readthis', 'gas711', 'honk', 'deadbull',
       'fallingcars', 'dayoff', 'lawyer',
       'heli', 'speedcam', 'doughnut',
       'brakes', 'dents', 'scrap',

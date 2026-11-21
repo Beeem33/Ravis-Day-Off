@@ -228,6 +228,9 @@ export class StreetScene implements GameScene {
   private leanPosed = false;
   /** Seconds into the finger (−1: not doing it). */
   private flipT = -1;
+  /** The finger out of the window too, beside the pistol (T while leant out, or leaning out mid-finger), until he's back in; and how far out it is (0..1). */
+  private flipOut = false;
+  private flipOutK = 0;
   private readonly pistol = new THREE.Group();
   private pistolAmmo = PISTOL_MAG;
   private pistolCd = 0;
@@ -639,11 +642,12 @@ export class StreetScene implements GameScene {
       this.leanPosed = out > 0.001;
     }
     const flip = this.flipK();
+    const fo = smooth(this.flipOutK);
     grip.free.l = lean > 0.001;
     grip.free.r = flip > 0.001;
     grip.update(a);
     if (lean > 0.001) this.layPistolArm(lean);
-    if (flip > 0.001) this.layFlipArm(flip);
+    if (flip > 0.001) this.layFlipArm(flip, fo);
     if (lean > 0.001 || flip > 0.001) r.apply();
     // (the pistol itself is placed once the camera's set for the frame: see updateCamera)
   }
@@ -730,21 +734,47 @@ export class StreetScene implements GameScene {
     return smooth((FLIP_T - t) / 0.35);
   }
 
-  /** The finger: the right hand up off the rim in front of his face, back of the hand to the road, a jab or two. */
-  private layFlipArm(k: number): void {
+  /**
+   * The finger: the right hand up off the rim in front of his face, back of
+   * the hand to the road, a jab or two. `out` (0..1): leant out of the
+   * window with the pistol, it's out there with him — up beside the gun, in
+   * his view, the finger up his view at whatever he's aiming at.
+   */
+  private layFlipArm(k: number, out = 0): void {
     const r = this.driverRig!;
     const hold = this.wheelGrip!.hold('r');
     if (!hold) return;
     const S = hold.shoulder;
     const t = this.flipT;
-    const jab = t > 0.3 && t < FLIP_T - 0.4 ? Math.max(0, Math.sin((t - 0.3) * 9)) * 0.05 : 0;
+    const jab = out > 0 ? Math.max(0, Math.sin(this.lightT * 9)) * 0.04 * out : t > 0.3 && t < FLIP_T - 0.4 ? Math.max(0, Math.sin((t - 0.3) * 9)) * 0.05 : 0;
     // Model space: he faces +Z, his left is +X
     const up = new THREE.Vector3(S.x + 0.12, S.y + 0.2 + jab * 0.4, S.z + 0.42 + jab);
+    const upAlong = new THREE.Vector3(0.05, 1, 0.22).normalize();
+    const upPalm = new THREE.Vector3(0, 0.1, -1).normalize();
+    let pole = new THREE.Vector3(-0.7, -0.7, -0.1);
+    if (out > 0) {
+      // Where his eyes are now (out of the window, on the car as it is this frame), and a point up to the
+      // right of his sights in them: the hand there, the finger up his view, its back to what he's looking at
+      const g = this.civicRig.group;
+      g.updateMatrixWorld();
+      const m = StreetScene.tmpM.multiplyMatrices(g.matrixWorld, this.camInCar);
+      r.root.updateWorldMatrix(true, false);
+      const there = r.root.worldToLocal(new THREE.Vector3(0.21, -0.1 + jab, -0.44 - jab).applyMatrix4(m));
+      const camQ = new THREE.Quaternion();
+      m.decompose(StreetScene.tmpA, camQ, StreetScene.tmpC);
+      camQ.premultiply(r.root.getWorldQuaternion(new THREE.Quaternion()).invert());
+      const camUp = new THREE.Vector3(0.12, 1, 0).applyQuaternion(camQ).normalize();
+      const camBack = new THREE.Vector3(0, 0, 1).applyQuaternion(camQ);
+      up.lerp(there, out);
+      upAlong.lerp(camUp, out).normalize();
+      upPalm.lerp(camBack, out).normalize();
+      pole = pole.lerp(new THREE.Vector3(-0.3, -1, 0.1), out);
+    }
     const wrist = hold.grip.wrist.clone().lerp(up, k);
-    const along = hold.grip.along.clone().lerp(new THREE.Vector3(0.05, 1, 0.22).normalize(), k).normalize();
-    const palm = hold.grip.palm.clone().lerp(new THREE.Vector3(0, 0.1, -1).normalize(), k);
+    const along = hold.grip.along.clone().lerp(upAlong, k).normalize();
+    const palm = hold.grip.palm.clone().lerp(upPalm, k);
     palm.addScaledVector(along, -palm.dot(along)).normalize();
-    const toward = elbowToward(wrist, S, new THREE.Vector3(-0.7, -0.7, -0.1));
+    const toward = elbowToward(wrist, S, pole);
     r.reach('r', wrist, along, palm, toward, S, 0.5, false).hand('r', blendHand(WHEEL_HAND, FLIP_HAND, k));
   }
 
@@ -3264,12 +3294,23 @@ export class StreetScene implements GameScene {
     this.leanK = THREE.MathUtils.clamp(this.leanK + (want ? dt / 0.5 : -dt / 0.4), 0, 1);
     if (!this.driverRig) this.leanK = 0;
     if (this.leanK < 0.001) this.pistol.visible = false;
-    // The finger, if both hands aren't busy
-    if (input.wasPressed('KeyT') && drive && this.leanK < 0.05 && !this.armsAway) this.flipT = 0;
+    // The finger. Leant out of his window with the pistol (or leaning out with the finger already up), it goes out
+    // of the window too, beside the gun, and stays there until he's back in: then down onto the wheel
+    const leantOut = drive && this.leanK > 0.5 && this.outK > 0.5;
+    if (input.wasPressed('KeyT') && drive && !this.armsAway) {
+      if (leantOut) this.flipOut = true;
+      else if (this.leanK < 0.05) this.flipT = 0;
+    }
+    if (leantOut && this.flipT >= 0 && this.flipT < FLIP_T - 0.35) this.flipOut = true;
+    if (this.flipOut && (!leantOut || this.armsAway)) {
+      this.flipOut = false;
+      // Back in: the hand comes in off the sill and down onto the wheel together
+      this.flipT = FLIP_T - 0.35;
+    }
+    if (this.flipOut) this.flipT = this.flipT < 0 ? 0 : Math.min(this.flipT, 1.0);
+    this.flipOutK = THREE.MathUtils.clamp(this.flipOutK + (this.flipOut ? dt / 0.3 : -dt / 0.35), 0, 1);
     if (this.flipT >= 0) {
       this.flipT += dt;
-      // Out of the window instead: back on the wheel
-      if (this.leanK > 0.02 && this.flipT < FLIP_T - 0.35) this.flipT = FLIP_T - 0.35;
       if (this.flipT >= FLIP_T || this.armsAway) this.flipT = -1;
     }
     // ---- The pistol

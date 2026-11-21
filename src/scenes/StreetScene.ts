@@ -1256,7 +1256,7 @@ export class StreetScene implements GameScene {
     this.updateRifle(dt);
     this.updateHands(dt);
     this.updateRamp(dt);
-    this.interior?.update(dt, this.player.speed, this.player.throttleNow, this.player.yawRate * this.player.speed);
+    this.interior?.update(dt, this.player.speed, this.player.throttleNow, this.player.yawRate * this.player.speed, this.civicRig.group.quaternion, this.carAcc);
     if (this.burning) {
       const g = this.civicRig.group;
       const at = StreetScene.tmpA.set(0, 0.9, -1.2).applyQuaternion(g.quaternion).add(g.position);

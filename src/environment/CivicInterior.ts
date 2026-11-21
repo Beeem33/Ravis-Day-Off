@@ -8,8 +8,8 @@ import type { CarRig } from '../scenes/Level8Contracts';
  * stack with the radio and the vents, door cards with armrests and pulls,
  * a headliner and pillar trims, sun visors (his half down), the seats and
  * the rear bench, a console with the gear stick and the handbrake, a tint
- * band across the top of the windscreen, and a pine-tree air freshener
- * swinging under the mirror.
+ * band across the top of the windscreen, and a curry-bowl air freshener
+ * hanging under the mirror on its strings, swinging with everything the car does.
  *
  * Car-local (the rig's group frame: forward −Z, the driver's side −X); it
  * hangs off the body so it rides the body's pitch and roll. Fixed to the
@@ -46,6 +46,18 @@ function across(profile: [number, number][], x0: number, x1: number, mat: THREE.
   m.position.x = x0;
   return m;
 }
+
+/** The freshener's cord down to the knot, and on to the bowl's middle (m). */
+const KNOT = 0.075;
+const HANG = 0.125;
+const _q = new THREE.Quaternion();
+const _t = new THREE.Quaternion();
+const _tw = new THREE.Quaternion();
+const _g = new THREE.Vector3();
+const _a = new THREE.Vector3();
+const _r = new THREE.Vector3();
+const _down = new THREE.Vector3(0, -1, 0);
+const _up = new THREE.Vector3(0, 1, 0);
 
 function box(w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material, rx = 0, ry = 0, rz = 0): THREE.Mesh {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -105,6 +117,13 @@ export class CivicInterior {
   private readonly speedNeedle: THREE.Object3D;
   private readonly revNeedle: THREE.Object3D;
   private readonly freshener: THREE.Object3D;
+  /** The bowl as a weight on a string, in the cabin's frame: where it is from the pivot, how it's moving, how it's turning on the string. */
+  private readonly bob = new THREE.Vector3(0, -HANG, 0);
+  private readonly bobV = new THREE.Vector3();
+  private readonly prevQ = new THREE.Quaternion();
+  private hasPrevQ = false;
+  private twist = 0;
+  private twistV = 0;
   private swing = 0;
   private swingV = 0;
   private revs = 0;
@@ -347,21 +366,81 @@ export class CivicInterior {
     G.add(box(1.5, 0.02, 2.4, 0, 0.21, 0.6, MAT.carpet));
 
     // ----------------------------------------------------- the air freshener
-    const tree = new THREE.Shape();
-    tree.moveTo(0, 0);
-    for (const [px, py] of [[0.022, -0.02], [0.012, -0.02], [0.03, -0.045], [0.016, -0.045], [0.036, -0.075], [0.006, -0.075], [0.006, -0.088], [-0.006, -0.088], [-0.006, -0.075], [-0.036, -0.075], [-0.016, -0.045], [-0.03, -0.045], [-0.012, -0.02], [-0.022, -0.02]] as [number, number][]) tree.lineTo(px, py);
-    tree.closePath();
-    const swingG = new THREE.Group();
+    // A little bowl of curry on a cord off the mirror: rice heaped on one side, the curry glossy
+    // round it with its chunks, a sprig of coriander, a wedge of naan; hung like a planter on three
+    // strings from a knot, the knot on one cord up to the mirror
+    const pivot = new THREE.Group();
     const [mx, my, mz] = CivicInterior.MIRROR_AT;
-    swingG.position.set(mx, my - 0.04, mz + 0.01);
-    const string = box(0.002, 0.07, 0.002, 0, -0.035, 0, MAT.dark);
-    swingG.add(string);
-    const leaf = new THREE.Mesh(new THREE.ShapeGeometry(tree), new THREE.MeshStandardMaterial({ color: 0x1f8a3a, roughness: 0.9, side: THREE.DoubleSide }));
-    leaf.position.y = -0.07;
-    swingG.add(leaf);
-    swingG.scale.setScalar(0.6);
-    G.add(swingG);
-    this.freshener = swingG;
+    pivot.position.set(mx, my - 0.04, mz + 0.01);
+    const hang = new THREE.Group();
+    pivot.add(hang);
+    const cord = (a: THREE.Vector3, b: THREE.Vector3): THREE.Mesh => {
+      const len = a.distanceTo(b);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.0009, 0.0009, len, 4), MAT.dark);
+      m.position.copy(a).add(b).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      return m;
+    };
+    const knot = new THREE.Vector3(0, -KNOT, 0);
+    hang.add(cord(new THREE.Vector3(), knot));
+    const bowl = new THREE.Group();
+    bowl.position.y = -HANG;
+    hang.add(bowl);
+    const R = 0.034;
+    // The bowl: glazed, white inside, a terracotta band round the outside
+    const prof = [
+      new THREE.Vector2(0.0, -0.016),
+      new THREE.Vector2(0.017, -0.016),
+      new THREE.Vector2(0.018, -0.013),
+      new THREE.Vector2(0.026, -0.008),
+      new THREE.Vector2(0.032, 0.003),
+      new THREE.Vector2(R, 0.012),
+      new THREE.Vector2(R - 0.003, 0.012),
+      new THREE.Vector2(0.029, 0.003),
+      new THREE.Vector2(0.022, -0.007),
+      new THREE.Vector2(0.0, -0.011)
+    ];
+    bowl.add(new THREE.Mesh(new THREE.LatheGeometry(prof, 20), new THREE.MeshStandardMaterial({ color: 0xf1ece2, roughness: 0.35, side: THREE.DoubleSide })));
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0325, 0.029, 0.006, 20, 1, true), new THREE.MeshStandardMaterial({ color: 0xb4532a, roughness: 0.5, side: THREE.DoubleSide }));
+    bowl.add(band);
+    // The curry, near the brim
+    const curry = new THREE.Mesh(new THREE.CircleGeometry(0.0295, 20), new THREE.MeshStandardMaterial({ color: 0xc8641e, roughness: 0.25 }));
+    curry.rotation.x = -Math.PI / 2;
+    curry.position.y = 0.0085;
+    bowl.add(curry);
+    // Chunks in it
+    const chunkMat = new THREE.MeshStandardMaterial({ color: 0x8a3e14, roughness: 0.6 });
+    const potato = new THREE.MeshStandardMaterial({ color: 0xe2b24a, roughness: 0.7 });
+    for (const [x, z, s, mat] of [[0.012, 0.01, 0.007, chunkMat], [-0.004, 0.018, 0.006, potato], [0.018, -0.006, 0.006, chunkMat], [0.006, -0.016, 0.005, potato], [-0.01, -0.012, 0.0055, chunkMat]] as [number, number, number, THREE.Material][]) {
+      const c = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.7, s), mat);
+      c.position.set(x, 0.0095, z);
+      c.rotation.set(0.3, x * 90, 0.2);
+      bowl.add(c);
+    }
+    // The rice, heaped up on one side
+    const rice = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), new THREE.MeshStandardMaterial({ color: 0xfbf8ef, roughness: 0.9 }));
+    rice.scale.set(1, 0.55, 0.9);
+    rice.position.set(-0.012, 0.01, 0.002);
+    bowl.add(rice);
+    // Coriander on top, and a wedge of naan stuck in at the back
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f8f3a, roughness: 0.8, side: THREE.DoubleSide });
+    for (const [x, z, a] of [[0.004, 0.004, 0.4], [0.008, 0.0, 1.6], [0.002, -0.004, 2.7]] as [number, number, number][]) {
+      const l = new THREE.Mesh(new THREE.CircleGeometry(0.0035, 6), leafMat);
+      l.rotation.set(-Math.PI / 2 + 0.3, 0, a);
+      l.position.set(x, 0.0125, z);
+      bowl.add(l);
+    }
+    const naan = new THREE.Mesh(new THREE.CircleGeometry(0.02, 3, 0, Math.PI * 0.55), new THREE.MeshStandardMaterial({ color: 0xd9a962, roughness: 0.85, side: THREE.DoubleSide }));
+    naan.rotation.set(-0.35, 0.4, 0);
+    naan.position.set(0.004, 0.006, 0.02);
+    bowl.add(naan);
+    // The three strings from the knot down to the rim
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.3;
+      hang.add(cord(knot, new THREE.Vector3(Math.cos(a) * (R - 0.001), -HANG + 0.012, Math.sin(a) * (R - 0.001))));
+    }
+    G.add(pivot);
+    this.freshener = hang;
 
     G.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) {
@@ -371,8 +450,13 @@ export class CivicInterior {
     });
   }
 
-  /** Each frame: the needles to the speed and the revs, the freshener swinging with the car. */
-  update(dt: number, speed: number, throttle: number, lateral: number): void {
+  /**
+   * Each frame: the needles to the speed and the revs, the freshener swinging
+   * with the car. `carQ`/`carAcc` (the car's turn and its acceleration, world):
+   * the bowl swings on its cord as a weight would, pushed about by every
+   * lurch, the cabin turning round it, spun on the cord as it goes.
+   */
+  update(dt: number, speed: number, throttle: number, lateral: number, carQ?: THREE.Quaternion, carAcc?: THREE.Vector3): void {
     const mph = Math.abs(speed) * 2.237;
     const toA = (k: number): number => THREE.MathUtils.degToRad(135 - Math.min(1, k) * 270);
     this.speedNeedle.rotation.z = toA(mph / 160);
@@ -382,12 +466,51 @@ export class CivicInterior {
     const want = Math.abs(speed) < 1 ? 0.11 + 0.1 * Math.max(0, throttle) : 0.28 + 0.48 * inGear + 0.12 * Math.max(0, throttle);
     this.revs += (want - this.revs) * Math.min(1, dt * 8);
     this.revNeedle.rotation.z = toA(this.revs);
-    // A pendulum pushed by the car's sideways shove
-    const acc = -lateral * 0.06 - this.swing * 26 - this.swingV * 1.6;
-    this.swingV += acc * dt;
-    this.swing += this.swingV * dt;
-    this.freshener.rotation.z = this.swing;
-    this.freshener.rotation.y = Math.sin(this.swing * 3) * 0.35;
+    if (!carQ || !carAcc || !(dt > 0)) {
+      // (no car's motion to go on: the old sideways nudge)
+      const acc = -lateral * 0.06 - this.swing * 26 - this.swingV * 1.6;
+      this.swingV += acc * dt;
+      this.swing += this.swingV * dt;
+      this.freshener.rotation.set(0, 0, this.swing);
+      return;
+    }
+    // A weight on a cord in the cabin's frame: the pull it feels is gravity less the car's own acceleration,
+    // turned into the car's frame; and as the car turns, the cabin turns round it
+    const inv = _q.copy(carQ).invert();
+    if (!this.hasPrevQ) {
+      this.prevQ.copy(carQ);
+      this.hasPrevQ = true;
+    }
+    const turn = _t.copy(inv).multiply(this.prevQ);
+    this.prevQ.copy(carQ);
+    this.bob.applyQuaternion(turn);
+    this.bobV.applyQuaternion(turn);
+    const g = _g.set(0, -9.8, 0).sub(_a.copy(carAcc).clampLength(0, 60)).applyQuaternion(inv);
+    // Substeps: a short cord is a quick pendulum, and a crash is a big shove
+    const n = Math.max(1, Math.ceil(dt / (1 / 240)));
+    const h = dt / n;
+    for (let i = 0; i < n; i++) {
+      this.bobV.addScaledVector(g, h);
+      // Air and the cord's own stiffness: it keeps swinging a good while
+      this.bobV.multiplyScalar(Math.exp(-h * 0.9));
+      this.bob.addScaledVector(this.bobV, h);
+      // On its cord: back to the cord's length, and no speed along it
+      this.bob.setLength(HANG);
+      const r = _r.copy(this.bob).normalize();
+      this.bobV.addScaledVector(r, -this.bobV.dot(r));
+      // Not up through the mirror and the roof: it can swing a long way, not right over the top
+      if (this.bob.y > -HANG * 0.05) {
+        this.bob.y = -HANG * 0.05;
+        this.bob.setLength(HANG);
+        if (this.bobV.y > 0) this.bobV.y *= -0.3;
+      }
+    }
+    // Spun on the cord by the swinging, and unwinding again
+    const sideways = this.bobV.x * this.bob.z - this.bobV.z * this.bob.x;
+    this.twistV += (sideways * 900 - this.twist * 6 - this.twistV * 1.2) * dt;
+    this.twist += this.twistV * dt;
+    // The cord along the bob, the bowl hanging off it, turned by the twist
+    this.freshener.quaternion.setFromUnitVectors(_down, _r.copy(this.bob).normalize()).multiply(_tw.setFromAxisAngle(_up, this.twist));
   }
 
   dispose(): void {

@@ -3,6 +3,7 @@ import type { AudioManager } from '../core/AudioManager';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { FirstPersonArms, RaviVisual, grip, mixShape, type Grip, type HandShape } from './RaviVisual';
 import { Controls } from '../core/Controls';
+import type { InputManager } from '../core/InputManager';
 
 /**
  * The fourteen ultra-niche colognes: one hidden somewhere in each of fourteen
@@ -107,6 +108,11 @@ function segDist(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
 class CologneHunt {
   audio: AudioManager | null = null;
   uiRoot: HTMLElement | null = null;
+  /** The game's input: his weapons held off while the bottle's in his hand. */
+  input: InputManager | null = null;
+  /** The camera he was looking through when he took it, and what on it was put out of sight for the while. */
+  private heldCam: THREE.Camera | null = null;
+  private hidden: THREE.Object3D[] = [];
   private placed: Placed[] = [];
   private labelCache = new Map<CologneId, HTMLCanvasElement>();
   private static glintTex: THREE.Texture | null = null;
@@ -184,6 +190,7 @@ class CologneHunt {
   clear(): void {
     for (const p of this.placed) p.group.removeFromParent();
     this.placed = [];
+    this.handsBack();
     if (this.held) {
       // Changed level mid-look: it still counts
       const id = this.held.id;
@@ -319,6 +326,8 @@ class CologneHunt {
     p.glint.visible = false;
     v.holder.add(p.group);
     this.held = { id: p.id, group: p.group, t: 0 };
+    this.heldCam = p.camera();
+    if (this.input) this.input.weaponsBlocked = true;
     this.hand = this.fitHand(p.group);
     v.arms?.set('r', p.group, this.hand.grip);
     this.audio?.pocket();
@@ -436,11 +445,39 @@ class CologneHunt {
    */
   private static readonly T_END = 4.5;
 
+  /**
+   * Out of sight for the while: everything drawn on the camera he's looking
+   * through — the weapon and the arms holding it, whatever's in his hands —
+   * so the only arm is the one with the bottle. Done every frame (a
+   * viewmodel shows its own parts again as it updates); the lights on the
+   * camera (a torch) stay as they are.
+   */
+  private handsAway(): void {
+    const cam = this.heldCam;
+    if (!cam) return;
+    cam.traverse((o) => {
+      if (o === cam || !o.visible) return;
+      const r = o as THREE.Mesh & THREE.Sprite & THREE.Points & THREE.Line;
+      if (!(r.isMesh || r.isSprite || r.isPoints || r.isLine)) return;
+      o.visible = false;
+      if (!this.hidden.includes(o)) this.hidden.push(o);
+    });
+  }
+
+  /** And back: his weapon (or whatever he had) in his hands again, the controls his again. */
+  private handsBack(): void {
+    for (const o of this.hidden) o.visible = true;
+    this.hidden = [];
+    this.heldCam = null;
+    if (this.input) this.input.weaponsBlocked = false;
+  }
+
   private stepInspect(dt: number): void {
     const h = this.held!;
     const v = this.view!;
     const hand = this.hand!;
     h.t += dt;
+    this.handsAway();
     const t = h.t;
     const sm = (x: number): number => {
       const k = Math.min(1, Math.max(0, x));
@@ -454,7 +491,7 @@ class CologneHunt {
     // ---- Where the bottle is (camera space): low right → in front → (flick) → at his neck → away
     const P0 = new THREE.Vector3(0.3, -0.5, -0.32);
     const P1 = new THREE.Vector3(0.015, -0.068, -0.33);
-    const P3 = new THREE.Vector3(0.03, -0.085, -0.3);
+    const P3 = new THREE.Vector3(0.02, -0.055, -0.3);
     const P4 = new THREE.Vector3(0.34, -0.55, -0.16);
     const Q0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, -0.55, 0.45));
     const sway = Math.sin(t * 1.25) * 0.16 * sm((t - 0.6) / 0.4) * (1 - sm((t - 1.7) / 0.3));
@@ -462,9 +499,9 @@ class CologneHunt {
     // The flick: tipped back a touch, away from him, as the thumb goes
     const Q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.2, -0.05, -0.06));
     // At his neck: the nozzle (its +Y) turned in and back toward it, low under his chin
-    // Laid over on its side, the nozzle (+Y) toward his neck (left, down, back toward him), and the
-    // side his hand's on (+X) turned down: his palm under it, the bottle on top in plain view
-    const toNeck = new THREE.Vector3(-0.85, -0.3, 0.43).normalize();
+    // Turned to point at him: the nozzle (+Y) straight back at the camera (a touch down and to the
+    // left, toward his neck), and the side his hand's on (+X) turned down, his palm under it
+    const toNeck = new THREE.Vector3(-0.12, 0.08, 1).normalize();
     const handDown = new THREE.Vector3(0, -1, 0).addScaledVector(toNeck, 0.3).normalize();
     const Q3 = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(handDown, toNeck, new THREE.Vector3().crossVectors(handDown, toNeck)));
     const Q4 = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.9, 0.4, 1.2));
@@ -478,6 +515,9 @@ class CologneHunt {
     v.holder.position.y += up * (1 - neck) * Math.sin(t * 1.6) * 0.004;
     v.holder.position.z += jolt;
     v.holder.quaternion.slerpQuaternions(Q0, Q1, up).slerp(Q2, flk * (1 - neck)).slerp(Q3, neck).slerp(Q4, away);
+    // His forearm back down to his right shoulder however the bottle's turned (in its own frame
+    // it would swing round with it, and come in across the bottom from the left)
+    hand.grip.toward.set(0.35, -0.6, 0.72).normalize().applyQuaternion(v.holder.quaternion.clone().invert());
     // ---- His thumb: up its edge; under the cap and cocked; flicked up; then down on the nozzle, twice
     const H = CologneHunt;
     let shape = H.HOLD;
@@ -519,6 +559,8 @@ class CologneHunt {
       m.life -= dt;
       m.v.multiplyScalar(Math.exp(-dt * 2.2));
       m.s.position.addScaledVector(m.v, dt);
+      // Gone as it reaches him (it would fill the screen past the lens)
+      if (m.s.position.z > -0.07) m.life = Math.min(m.life, 0.06);
       const k = 1 - m.life / m.max;
       m.s.scale.setScalar(0.018 + k * 0.11);
       (m.s.material as THREE.SpriteMaterial).opacity = 0.75 * Math.sin(Math.min(1, k * 4) * Math.PI * 0.5) * (1 - k);
@@ -535,6 +577,7 @@ class CologneHunt {
         m.life = 0;
         m.s.visible = false;
       }
+      this.handsBack();
       this.collect(h.id);
     }
   }
@@ -553,7 +596,7 @@ class CologneHunt {
       if (m.life > 0) continue;
       m.s.position.copy(at);
       m.s.position.addScaledVector(dir, Math.random() * 0.02);
-      m.v.copy(dir).multiplyScalar(0.7 + Math.random() * 0.8).add(new THREE.Vector3((Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22));
+      m.v.copy(dir).multiplyScalar(0.38 + Math.random() * 0.5).add(new THREE.Vector3((Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.22));
       m.max = m.life = 0.6 + Math.random() * 0.5;
       m.s.visible = true;
       if (++n >= 22) break;

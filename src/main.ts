@@ -67,6 +67,7 @@ document.addEventListener('keydown', unlockOnce);
 
 // The colognes' pickup sound and achievement card
 Colognes.audio = audio;
+Colognes.input = input;
 Colognes.uiRoot = uiRoot;
 
 // ---- Scene flow

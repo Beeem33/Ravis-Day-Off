@@ -13,9 +13,28 @@ export class InputManager {
   private clickQueued = false;
   private rightQueued = false;
   private wheel = 0;
-  mouseHeld = false;
+  private lmb = false;
+  private rmb = false;
+  /**
+   * The weapons' controls held off: both mouse buttons, the wheel and the
+   * weapon keys (draw, reload, switch, knife, grenade) read as untouched. Set
+   * while something else has his hands (a cologne he's picked up).
+   */
+  weaponsBlocked = false;
+  private static readonly WEAPON_KEYS = new Set(['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'KeyR', 'KeyF', 'KeyQ', 'KeyG', 'KeyV', 'KeyX']);
+  get mouseHeld(): boolean {
+    return this.lmb && !this.weaponsBlocked;
+  }
+  set mouseHeld(v: boolean) {
+    this.lmb = v;
+  }
   /** Right mouse button held (aim down sights). */
-  rightHeld = false;
+  get rightHeld(): boolean {
+    return this.rmb && !this.weaponsBlocked;
+  }
+  set rightHeld(v: boolean) {
+    this.rmb = v;
+  }
   pointerLocked = false;
 
   /** Optional hook fired when pointer lock is lost (e.g. user pressed Esc). */
@@ -178,6 +197,7 @@ export class InputManager {
 
   /** True only on the frame the key first went down. */
   wasPressed(code: string): boolean {
+    if (this.weaponsBlocked && InputManager.WEAPON_KEYS.has(code)) return false;
     return this.keysPressed.has(code);
   }
 
@@ -193,21 +213,21 @@ export class InputManager {
   consumeClick(): boolean {
     const c = this.clickQueued;
     this.clickQueued = false;
-    return c;
+    return c && !this.weaponsBlocked;
   }
 
   /** True once per physical right click while locked. */
   consumeRightClick(): boolean {
     const c = this.rightQueued;
     this.rightQueued = false;
-    return c;
+    return c && !this.weaponsBlocked;
   }
 
   /** Notches the wheel has turned since last asked: + down (next), − up (previous). */
   consumeWheel(): number {
     const w = this.wheel;
     this.wheel = 0;
-    return w;
+    return this.weaponsBlocked ? 0 : w;
   }
 
   /** Call at the end of every frame. */

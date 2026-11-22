@@ -399,6 +399,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private markers: Marker[] = [];
   private drops!: Droplets;
   private acidLight!: THREE.PointLight;
+  /** The acid arm's heat: each glob adds to it, it cools when he lets it be; full, and it's spent a while. */
+  private acidHeat = 0;
+  private acidSpent = 0;
+  private acidIdle = 0;
+  private spentHinted = false;
   private portalLight!: THREE.PointLight;
   private lamp!: THREE.SpotLight;
   private lampSpill!: THREE.PointLight;
@@ -1779,6 +1784,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     this.reticle.update(dt, {
       acid: this.acidArm.recoil,
+      heat: this.acidHeat,
+      spent: this.acidSpent > 0,
       grab: this.eggGrab || this.tongue.state === 'hold' ? 'hold' : this.tongue.state === 'out' ? 'out' : 'idle',
       target: this.reticleTarget
     });
@@ -1848,7 +1855,28 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const { input } = this.ctx;
     const p = this.player;
     // ---- Acid
-    if (canFire && input.rightHeld && this.acidArm.fire(0.42)) {
+    // Its heat: cooling once he's let it be a moment; spent (nothing comes) till it's cooled right down
+    this.acidIdle += dt;
+    if (this.acidSpent > 0) {
+      this.acidSpent -= dt;
+      this.acidHeat = Math.max(0, this.acidHeat - dt * 0.4);
+      if (Math.random() < dt * 14) this.particles.smokeColumn(this.acidArm.muzzleWorld(), 0.12, 1);
+      if (this.acidSpent <= 0) this.acidHeat = 0.35;
+    } else if (this.acidIdle > 0.5) this.acidHeat = Math.max(0, this.acidHeat - dt * 0.3);
+    if (canFire && input.rightHeld && this.acidSpent <= 0 && this.acidArm.fire(0.42)) {
+      this.acidIdle = 0;
+      this.acidHeat += 0.17;
+      if (this.acidHeat >= 1) {
+        // Spat itself dry: two and a half seconds of nothing, the arm steaming
+        this.acidHeat = 1;
+        this.acidSpent = 2.5;
+        this.ctx.audio.fireCrackle(0);
+        this.ctx.audio.gooSplat(0);
+        if (!this.spentHinted) {
+          this.spentHinted = true;
+          this.hint('THE ACID ARM IS SPENT — LET IT COOL', 3.5);
+        }
+      }
       const from = this.acidArm.muzzleWorld();
       const dir = p.camera.getWorldDirection(new THREE.Vector3());
       const v = dir.multiplyScalar(25).add(V(0, 2.2, 0)).add(p.velocity.clone().multiplyScalar(0.5));
@@ -2492,7 +2520,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (pd.life <= 0) continue;
       pd.life -= dt;
       const grow = Math.min(1, (pd.max - pd.life) / 0.25);
-      pd.mat.uniforms.uFade.value = Math.min(1, pd.life / 1.5) * grow;
+      pd.mat.uniforms.uFade.value = Math.min(1, pd.life / 0.9) * grow;
       pd.mat.uniforms.uT.value = this.t;
       if (pd.life <= 0) {
         pd.mesh.visible = false;
@@ -2541,7 +2569,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     else if (h.kind === 'boss') this.hurtBoss(s.damage * 2, h.point, dir, !!h.head);
     else if (h.kind === 'trap' && h.trap) this.hurtTrap(h.trap, s.damage * 2, h.point, dir);
     else if (h.kind === 'tongue') this.hurtTongue(3);
-    this.spawnPuddle(h.point.x, h.point.z, 1.6, false, 6, h.point.y);
+    this.spawnPuddle(h.point.x, h.point.z, 1.6, false, 3.2, h.point.y);
   }
 
   // ============================================================ the big one

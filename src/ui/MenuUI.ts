@@ -154,9 +154,12 @@ export class MenuUI {
         const act = btn.dataset.act as string;
         if (act === 'start') {
           this.audio.uiBeep(true);
+          Colognes.replay = false;
           this.bus.emit(Events.StartGame);
         } else if (act === 'level') {
           this.audio.uiBeep(true);
+          // Playing a floor back from the admin list: its cologne is there to take (and spray) again
+          Colognes.replay = true;
           this.bus.emit(Events.SelectLevel, { level: btn.dataset.level as LevelId });
         } else if (act === 'back') {
           this.audio.uiBeep();

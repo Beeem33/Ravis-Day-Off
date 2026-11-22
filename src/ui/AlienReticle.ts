@@ -20,6 +20,9 @@ export interface ReticleState {
   grab: 'idle' | 'out' | 'hold';
   /** Something alive under it. */
   target: boolean;
+  /** The acid arm's heat 0..1, and whether it's spent (cooling, nothing comes). */
+  heat?: number;
+  spent?: boolean;
 }
 
 export class AlienReticle {
@@ -105,6 +108,13 @@ export class AlienReticle {
     // The acid's half flaring when it spits; its drips falling and coming again
     const f = this.flare;
     this.acid.setAttribute('stroke-width', (3.2 + f * 2.5).toFixed(2));
+    // Hot: from green through yellow to orange; spent: grey, and it blinks
+    const heat = s.heat ?? 0;
+    const spent = !!s.spent;
+    const ac = spent ? (Math.sin(t * 10) > 0 ? '#8a8a7a' : '#5a5a50') : heat < 0.5 ? '#9aff3a' : heat < 0.8 ? '#e8e83a' : '#ff9a2a';
+    this.acid.setAttribute('stroke', ac);
+    this.acidGlow.setAttribute('stroke', spent ? '#55554a' : ac);
+    this.acid.setAttribute('opacity', spent ? '0.6' : '0.95');
     this.acidGlow.setAttribute('opacity', (0.1 + f * 0.35).toFixed(2));
     this.acid.setAttribute('stroke-dashoffset', (t * 14).toFixed(1));
     this.drips.forEach((d, i) => {

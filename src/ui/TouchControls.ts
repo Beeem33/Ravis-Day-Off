@@ -79,6 +79,8 @@ const CSS = `
   .tc-small { width: auto; height: 34px; padding: 0 12px; border-radius: 17px; font-size: 11px; }
   .tc-fire { width: 84px; height: 84px; font-size: 14px; right: calc(26px + env(safe-area-inset-right)); bottom: 34px;
     background: rgba(160,30,30,0.42); border-color: rgba(255,140,140,0.55); }
+  .tc-aim.tc-launch { font-size: 10px; background: rgba(200,120,20,0.42); border-color: rgba(255,200,110,0.7); }
+  .tc-aim.tc-launch.down { background: rgba(255,170,50,0.6); }
   .tc-fire.down { background: rgba(255,60,60,0.55); }
   .tc-aim { right: calc(40px + env(safe-area-inset-right)); bottom: 132px; }
   .tc-jump { right: calc(124px + env(safe-area-inset-right)); bottom: 22px; }
@@ -139,7 +141,7 @@ export class TouchControls {
   private swipeId: number | null = null;
   private swipeY = 0;
   /** Fingers on a button, and which button. */
-  private readonly btnTouch = new Map<number, { id: string; x: number; y: number }>();
+  private readonly btnTouch = new Map<number, { id: string; x: number; y: number; toggle: boolean }>();
 
   private wasActive = false;
   private wasPlay = false;
@@ -149,7 +151,13 @@ export class TouchControls {
     /** In a level, not paused, not loading: the controls are wanted. */
     private readonly active: () => boolean,
     /** A cutscene has the camera: only NEXT and pause are any use. */
-    private readonly cinematic: () => boolean = () => false
+    private readonly cinematic: () => boolean = () => false,
+    /**
+     * The quad shotgun's pressure shot is charged up and on right mouse: AIM
+     * becomes LAUNCH, a plain press every tap (as a toggle, every other tap
+     * would only be letting go of the button).
+     */
+    private readonly launcher: () => boolean = () => false
   ) {
     document.body.classList.add('touch');
     const style = document.createElement('style');
@@ -237,6 +245,25 @@ export class TouchControls {
     }
     this.wasActive = active;
     this.wasPlay = play;
+    const launch = play && this.launcher();
+    if (launch !== this.launchMode) {
+      this.launchMode = launch;
+      const aim = this.els.get('aim')!;
+      aim.textContent = launch ? 'LAUNCH' : 'AIM';
+      aim.classList.toggle('tc-launch', launch);
+      // Sights left on from before: off, or the next tap would only let go of them
+      if (launch && this.toggled.delete('aim')) {
+        this.up('mouse2');
+        aim.classList.remove('lit');
+      }
+    }
+  }
+
+  /** AIM is the pressure shot right now: pressed and let go like any button. */
+  private launchMode = false;
+
+  private toggles(b: Btn): boolean {
+    return !!b.toggle && !(b.id === 'aim' && this.launchMode);
   }
 
   private releaseButtons(): void {
@@ -297,7 +324,7 @@ export class TouchControls {
       const b = el && BUTTONS.find((x) => x.id === el.dataset.id);
       if (!b || !el) continue;
       e.preventDefault();
-      this.btnTouch.set(t.identifier, { id: b.id, x: t.clientX, y: t.clientY });
+      this.btnTouch.set(t.identifier, { id: b.id, x: t.clientX, y: t.clientY, toggle: this.toggles(b) });
       if (b.id === 'pause') {
         if (this.input.pointerLocked) this.input.releaseByUser();
         else {
@@ -313,7 +340,7 @@ export class TouchControls {
       }
       const id = this.target(b);
       if (!id) continue;
-      if (b.toggle) {
+      if (this.toggles(b)) {
         if (this.toggled.has(b.id)) {
           this.toggled.delete(b.id);
           this.up(id);
@@ -350,7 +377,7 @@ export class TouchControls {
       this.btnTouch.delete(t.identifier);
       const b = BUTTONS.find((x) => x.id === bt.id)!;
       const el = this.els.get(b.id)!;
-      if (b.toggle) continue;
+      if (bt.toggle) continue;
       el.classList.remove('down');
       const id = this.target(b);
       if (id) this.up(id);

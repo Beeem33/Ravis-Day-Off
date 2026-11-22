@@ -434,7 +434,8 @@ if (TOUCH) {
       const s = engine.currentScene;
       return !!s && !(s instanceof MainMenuScene) && !engine.loading && !engine.paused;
     },
-    () => !!(engine.currentScene as { player?: { cinematic?: boolean } } | null)?.player?.cinematic
+    () => !!(engine.currentScene as { player?: { cinematic?: boolean } } | null)?.player?.cinematic,
+    () => !!(engine.currentScene as { arsenal?: { pressureArmed?: boolean } } | null)?.arsenal?.pressureArmed
   );
 }
 

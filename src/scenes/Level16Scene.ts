@@ -25,7 +25,7 @@ import {
   inChasm,
   PILLARS
 } from '../environment/Level16Builder';
-import { Level16CaveBuilder, caveGround, caveSolid, caveConfine, caveNormal, type CaveExtras } from '../environment/Level16CaveBuilder';
+import { Level16CaveBuilder, caveGround, caveConfine, caveNormal, caveFloor, caveRoof, caveOffAxis, type CaveExtras } from '../environment/Level16CaveBuilder';
 import type { Collider } from '../environment/OfficeLevelBuilder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -52,6 +52,7 @@ import { AcidBubbles } from '../fx/AcidBubbles';
 import { Controls } from '../core/Controls';
 import type { Enemy } from '../entities/Enemy';
 import { HoundRagdoll } from '../entities/HoundRagdoll';
+import { Crawler } from '../entities/Crawler';
 import { Spiderling, SpiderlingRagdoll } from '../entities/Spiderling';
 import { AlienReticle } from '../ui/AlienReticle';
 import { Colognes } from '../entities/Colognes';
@@ -89,14 +90,18 @@ interface World16 {
   confine(p: THREE.Vector3, r: number): boolean;
   /** Which way the ground or rock faces at a point on it. */
   normal(x: number, y: number, z: number): THREE.Vector3;
+  /** The floor only (what a shot can hit by height alone; the cave's walls are its rock mesh). */
+  floorY(x: number, z: number): number;
 }
 /** The slope of a height function at (x, z). */
 function slopeNormal(f: (x: number, z: number) => number, x: number, z: number): THREE.Vector3 {
   const e = 0.3;
   return new THREE.Vector3(f(x - e, z) - f(x + e, z), 2 * e, f(x, z - e) - f(x, z + e)).normalize();
 }
-const CANYON: World16 = { groundY, inLake, inCave, outside, solid: () => false, confine: () => false, normal: (x, _y, z) => slopeNormal(groundY, x, z) };
-const CAVE: World16 = { groundY: caveGround, inLake: () => false, inCave: () => true, outside: () => -1, solid: caveSolid, confine: caveConfine, normal: caveNormal };
+const CANYON: World16 = { groundY, inLake, inCave, outside, solid: () => false, confine: () => false, normal: (x, _y, z) => slopeNormal(groundY, x, z), floorY: groundY };
+// (the cave's walls and roof are hit as the rock that's drawn, its mesh, not a smooth outline of it
+// that stands in front of the rock in places: shots, swings and splats find what you can see)
+const CAVE: World16 = { groundY: caveGround, inLake: () => false, inCave: () => true, outside: () => -1, solid: () => false, confine: caveConfine, normal: caveNormal, floorY: caveFloor };
 const W: World16 = { ...CANYON };
 type BossMove = 'idle' | 'mortar' | 'spray' | 'grab' | 'tree' | 'brood' | 'stagger';
 
@@ -350,6 +355,13 @@ export class Level16Scene extends CombatScene<Level16Data> {
   /** Its grabber has him: presses of F so far. */
   private grabbed = false;
   private presses = 0;
+  /** A cave crawler has hold of him: how long, the next bite, his tries to tear free. */
+  private seizedBy: Crawler | null = null;
+  private seizeT = 0;
+  private seizeBite = 0;
+  private tearPresses = 0;
+  private seizeHinted = false;
+  private crawlerHinted = false;
   /** Didn't break free: up to its mouth, in, and eaten. */
   private eating: {
     t: number;
@@ -401,6 +413,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
   private acidLight!: THREE.PointLight;
   /** The acid arm's heat: each glob adds to it, it cools when he lets it be; full, and it's spent a while. */
   private acidHeat = 0;
+  /** The cave lamp's next stutter (s); below 0 it's stuttering. */
+  private lampFlicker = 8;
   private acidSpent = 0;
   private acidIdle = 0;
   private spentHinted = false;
@@ -487,7 +501,18 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.treeCols.push(c);
       this.treeUsed.push(false);
     }
-    this.world = this.createPhysicsWorld(L.colliders);
+    // (in the cave, nothing but the rock itself: its walls as drawn, and its floor)
+    this.world = this.createPhysicsWorld(this.part === 2 ? [] : L.colliders);
+    HoundRagdoll.round = this.part === 2;
+    // (the rock wet and smooth: what lands on a wall slides off it, it doesn't stick)
+    if (this.part === 2) this.world.defaultContactMaterial.friction = 0.12;
+    if (this.part === 2) {
+      const C = L as Level16Data & Partial<CaveExtras>;
+      if (C.caveTri) {
+        const rock = new CANNON.Body({ mass: 0, shape: new CANNON.Trimesh(Array.from(C.caveTri.pos), Array.from(C.caveTri.idx)) });
+        this.world.addBody(rock);
+      }
+    }
     // Lighter gravity out here for everything that falls, as for him
     this.world.gravity.set(0, -12, 0);
     {
@@ -499,7 +524,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const data: number[][] = [];
       for (let i = 0; i < nx; i++) {
         const col: number[] = [];
-        for (let j = 0; j < nz; j++) col.push(W.groundY(X0 + i * es, Z1 - j * es));
+        for (let j = 0; j < nz; j++) col.push(W.floorY(X0 + i * es, Z1 - j * es));
         data.push(col);
       }
       this.floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Heightfield(data, { elementSize: es }) });
@@ -903,6 +928,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.updateTabletPickup(dt);
     this.updatePacks();
     this.updateHounds(dt);
+    this.updateSeize(dt);
     this.updateSpiders(dt);
     this.updateLocalLights(dt);
     this.updateBoss(dt);
@@ -924,8 +950,20 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.hud.setHealth(p.health, p.regenProgress);
     this.updateDebris(dt);
     for (let i = this.ragdolls.length - 1; i >= 0; i--) {
-      this.ragdolls[i].update(dt);
-      if (this.ragdolls[i].done) this.ragdolls.splice(i, 1);
+      const rd = this.ragdolls[i];
+      // In the cave: anything that's got through the rock (thrown hard at a thin wall) comes back in
+      if (this.part === 2 && !rd.done) {
+        const tp = rd.torsoAt(new THREE.Vector3());
+        const ax = caveOffAxis(tp.x, tp.z);
+        const fl = caveFloor(tp.x, tp.z);
+        if (ax.d > ax.w * 1.15 + 0.3) {
+          const k = (ax.w * 0.9) / ax.d;
+          rd.nudge(V(ax.cx + (tp.x - ax.cx) * k - tp.x, 0, ax.cz + (tp.z - ax.cz) * k - tp.z));
+        }
+        if (tp.y < fl - 0.15) rd.nudge(V(0, fl + 0.3 - tp.y, 0));
+      }
+      rd.update(dt);
+      if (rd.done) this.ragdolls.splice(i, 1);
     }
     this.updateBloodPools(dt);
     this.decals.update(dt);
@@ -1139,7 +1177,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     const m = this.heldBy;
     if (!m) {
-      if (!this.grabbed) {
+      if (!this.grabbed && !this.seizedBy) {
         p.stunned = false;
         this.vignette.style.opacity = '0';
       }
@@ -1202,8 +1240,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     pk.spawned = true;
     if (!pk.at.length) return; // nothing to bring (and nothing to screech from)
     pk.at.forEach((s, i) => {
-      const h = new Hound();
+      const h = this.part === 2 ? new Crawler() : new Hound();
       h.group.position.set(s.x, W.groundY(s.x, s.z), s.z);
+      if (h instanceof Crawler && i % 2 === 0) {
+        h.mode = 'ceiling';
+        h.roll = Math.PI;
+        h.roofY = this.roofOver(s.x, s.z, h.group.position.y);
+        h.roofAt.copy(h.group.position);
+        h.group.position.y = h.roofY;
+      }
       h.yaw = Math.atan2(this.player.position.x - s.x, this.player.position.z - s.z);
       h.group.rotation.y = h.yaw;
       h.state = 'lurk';
@@ -1301,6 +1346,10 @@ export class Level16Scene extends CombatScene<Level16Data> {
           }
         }
         h.animate(dt, this.t);
+        continue;
+      }
+      if (h instanceof Crawler) {
+        this.updateCrawler(h, dt);
         continue;
       }
       const dx = pp.x - g.x;
@@ -1421,6 +1470,268 @@ export class Level16Scene extends CombatScene<Level16Data> {
    * One on the grabber, or thrown off it and still in the air, is hurt but
    * never killed by this: only a slam into the rock kills one he's got hold of.
    */
+  /** The rock over (x, z): the cave's roof as drawn, found looking straight up from just over the floor. */
+  private roofOver(x: number, z: number, floor: number): number {
+    this.raycaster.set(V(x, floor + 1.2, z), V(0, 1, 0));
+    this.raycaster.far = 14;
+    const hit = this.raycaster.intersectObjects(this.level.shootables, false)[0];
+    return hit ? hit.point.y - 0.02 : caveRoof(x, z);
+  }
+
+  /**
+   * A cave crawler's turn. Across the roof toward him, upside down, its legs
+   * up on the rock (pausing now and then, as if listening); within reach of
+   * him, it lets go and drops, turning over as it falls. On the floor it comes
+   * at him low and fast, weaving; close, it stops and puts its arms out, and if
+   * he's still there when they've reached him it has him.
+   */
+  private updateCrawler(h: Crawler, dt: number): void {
+    const p = this.player;
+    const pp = p.position;
+    const g = h.group.position;
+    h.modeT += dt;
+    const dx = pp.x - g.x;
+    const dz = pp.z - g.z;
+    const dist = Math.hypot(dx, dz);
+    const want = Math.atan2(dx, dz);
+    const live = p.alive && this.phase === 'play';
+    const free = live && !this.seizedBy && !this.heldBy && !this.grabbed && !this.eating;
+    const floor = W.groundY(g.x, g.z);
+    let speed = 0;
+    let weave = 0;
+    const id = this.hounds.indexOf(h);
+    switch (h.mode) {
+      case 'ceiling': {
+        // Still for a moment now and then, then on
+        const pause = Math.sin(this.t * 0.8 + id * 1.7) > 0.75;
+        speed = live && !pause ? 3.1 : 0;
+        weave = 0.4;
+        if (h.roofAt.distanceToSquared(g) > 0.2) {
+          h.roofY = this.roofOver(g.x, g.z, floor);
+          h.roofAt.copy(g);
+        }
+        g.y += (h.roofY - g.y) * Math.min(1, dt * 10);
+        h.roll = Math.PI;
+        if (free && dist < 3.3) {
+          h.mode = 'drop';
+          h.modeT = 0;
+          h.vy = 0;
+          this.ctx.audio.crawlerChitter(dist);
+          if (!this.crawlerHinted) {
+            this.crawlerHinted = true;
+            this.hint('ON THE ROOF — SHOOT IT DOWN, OR GET OUT FROM UNDER IT', 4);
+          }
+        }
+        break;
+      }
+      case 'drop': {
+        h.vy -= 16 * dt;
+        g.y += h.vy * dt;
+        h.roll = Math.PI * (1 - smooth(h.modeT / 0.42));
+        speed = 1.4;
+        if (g.y <= floor) {
+          g.y = floor;
+          h.roll = 0;
+          h.mode = dist < 2.5 ? 'reach' : 'floor';
+          h.modeT = 0;
+          this.ctx.audio.bodyThud(dist);
+          if (dist < 5) this.shake = Math.max(this.shake, 0.3);
+        }
+        break;
+      }
+      case 'floor': {
+        speed = live ? 4.4 : 0;
+        weave = 0.55;
+        if (free && dist < 2.1) {
+          h.mode = 'reach';
+          h.modeT = 0;
+          this.ctx.audio.crawlerChitter(dist);
+        }
+        break;
+      }
+      case 'reach': {
+        speed = 0.9;
+        if (h.modeT > 0.42) {
+          if (free && dist < 1.8) this.crawlerSeize(h);
+          else {
+            h.mode = 'recoil';
+            h.modeT = 0;
+          }
+        }
+        break;
+      }
+      case 'recoil': {
+        speed = -1.6;
+        if (h.modeT > 0.9) {
+          h.mode = 'floor';
+          h.modeT = 0;
+        }
+        break;
+      }
+      case 'grab':
+        // (where it stands and what it does: updateSeize)
+        h.armTarget = 2;
+        h.chewing = true;
+        h.speed = 0;
+        h.group.rotation.set(0, h.yaw, 0);
+        h.animate(dt, this.t);
+        return;
+    }
+    h.armTarget = h.mode === 'reach' ? 1 : 0;
+    h.chewing = false;
+    // Turned toward him (on the roof as well: it knows where he is)
+    const d = Math.atan2(Math.sin(want - h.yaw), Math.cos(want - h.yaw));
+    h.yaw += THREE.MathUtils.clamp(d, -dt * 7, dt * 7);
+    h.speed += (Math.abs(speed) - h.speed) * Math.min(1, dt * 5);
+    const fx = Math.sin(h.yaw);
+    const fz = Math.cos(h.yaw);
+    const w = Math.sin(this.t * 3.2 + id * 2.1) * weave;
+    h.vel.set(fx * speed + fz * w * Math.abs(speed), 0, fz * speed - fx * w * Math.abs(speed));
+    const tmp = new THREE.Vector3();
+    for (const o of this.hounds) {
+      if (o === h || !o.alive) continue;
+      tmp.subVectors(g, o.group.position).setY(0);
+      const l = tmp.length();
+      if (l < 1.6 && l > 1e-3) h.vel.addScaledVector(tmp, ((1.6 - l) / l) * 4);
+    }
+    if (dist < 0.95 && dist > 1e-3 && h.mode !== 'ceiling') {
+      g.x -= (dx / dist) * (0.95 - dist);
+      g.z -= (dz / dist) * (0.95 - dist);
+    }
+    g.x += h.vel.x * dt;
+    g.z += h.vel.z * dt;
+    W.confine(g, h.mode === 'ceiling' ? 0.9 : 0.6);
+    if (h.mode !== 'ceiling' && h.mode !== 'drop') g.y = W.groundY(g.x, g.z);
+    h.group.rotation.set(0, h.yaw, h.roll);
+    const up = this.gettingUp.get(h);
+    if (up) {
+      up.t += dt;
+      const k = smooth(Math.min(1, up.t / 0.45));
+      h.group.quaternion.slerpQuaternions(up.q0, new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), h.yaw), k);
+      g.y = THREE.MathUtils.lerp(up.y0, g.y, k);
+      if (up.t >= 0.45) this.gettingUp.delete(h);
+    }
+    h.growlT -= dt;
+    if (h.growlT <= 0) {
+      h.growlT = 3 + Math.random() * 5;
+      if (dist < 22) this.ctx.audio.crawlerChitter(dist);
+    }
+    h.animate(dt, this.t);
+  }
+
+  /** It has him: its arms round him, its jaws at his face. */
+  private crawlerSeize(h: Crawler): void {
+    this.seizedBy = h;
+    h.mode = 'grab';
+    h.modeT = 0;
+    this.seizeT = 0;
+    this.seizeBite = 0.5;
+    this.tearPresses = 0;
+    this.player.stunned = true;
+    this.ctx.audio.houndScreech(0);
+    this.ctx.audio.crawlerChitter(0);
+    this.shake = Math.max(this.shake, 0.6);
+    if (!this.seizeHinted) {
+      this.seizeHinted = true;
+      this.hint('IT HAS YOU — HAMMER [F] TO TEAR FREE, OR KILL IT', 4);
+    }
+  }
+
+  /**
+   * Held by a crawler: stood in front of him, its face at his, its arms round
+   * him; his view dragged round onto its jaws. It bites; he hammers F to tear
+   * free (or shoots it, or burns it); too slow and it eats him.
+   */
+  private updateSeize(dt: number): void {
+    const h = this.seizedBy;
+    if (!h) return;
+    const p = this.player;
+    if (!h.alive || h.held || h.ragdoll || !p.alive) {
+      this.endSeize(false);
+      return;
+    }
+    this.seizeT += dt;
+    const pp = p.position;
+    p.stunned = true;
+    p.velocity.set(0, Math.min(0, p.velocity.y), 0);
+    p.boost.set(0, 0, 0);
+    // It, in front of him, close
+    const g = h.group.position;
+    const f = V(g.x - pp.x, 0, g.z - pp.z);
+    if (f.lengthSq() < 1e-4) f.set(-Math.sin(p.yaw), 0, -Math.cos(p.yaw));
+    f.normalize();
+    g.x += (pp.x + f.x * 0.95 - g.x) * Math.min(1, dt * 10);
+    g.z += (pp.z + f.z * 0.95 - g.z) * Math.min(1, dt * 10);
+    g.y = W.groundY(g.x, g.z);
+    h.yaw = Math.atan2(-f.x, -f.z);
+    // His view onto its face
+    const head = h.mouthWorld();
+    const to = head.sub(p.camera.position);
+    let dy = Math.atan2(-to.x, -to.z) - p.yaw;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    const k = Math.min(1, dt * 5);
+    p.yaw += dy * k;
+    p.pitch += (Math.atan2(to.y, Math.hypot(to.x, to.z)) - p.pitch) * k;
+    this.vignette.style.opacity = String(0.55 + 0.3 * Math.sin(this.t * 9));
+    this.shake = Math.max(this.shake, 0.1);
+    // Its bites
+    this.seizeBite -= dt;
+    if (this.seizeBite <= 0) {
+      this.seizeBite = 0.85;
+      this.ctx.audio.houndBite(0);
+      this.shake = Math.max(this.shake, 0.5);
+      this.drops.burst(p.camera.position.clone().addScaledVector(f, 0.35), V(0, 0.2, 0).sub(f), 14, 2.5, 0xa01010);
+      p.hit('A CAVE CRAWLER', g.clone());
+      if (!p.alive) {
+        this.endSeize(false);
+        return;
+      }
+    }
+    // His tries to tear free
+    const NEED = 7;
+    if (this.ctx.input.wasPressed('KeyF')) {
+      this.tearPresses++;
+      this.shake = Math.max(this.shake, 0.3);
+      this.ctx.audio.effortGrunt(0.6);
+    }
+    this.hud.setPrompt(`[ F ] TEAR FREE  ${Math.max(0, NEED - this.tearPresses)}`);
+    if (this.tearPresses >= NEED) {
+      // Torn free: it's flung off him, reeling
+      this.endSeize(true);
+      h.mode = 'recoil';
+      h.modeT = -0.8;
+      g.addScaledVector(f, 0.9);
+      p.launch(f.clone().negate().setY(0.3).normalize(), 5);
+      this.ctx.audio.squelchPop();
+      this.drops.burst(head.add(p.camera.position), f, 16, 2.5, ALIEN_BLOOD);
+    } else if (this.seizeT > 3.8) {
+      // Too slow: it eats him
+      this.ctx.audio.houndBite(0);
+      this.ctx.audio.houndScreech(0);
+      this.drops.burst(p.camera.position.clone().addScaledVector(f, 0.25), f.clone().negate(), 40, 4, 0xa01010);
+      p.kill('A CAVE CRAWLER', g.clone());
+      this.endSeize(false);
+    }
+  }
+
+  private endSeize(freed: boolean): void {
+    const h = this.seizedBy;
+    this.seizedBy = null;
+    this.hud.setPrompt(null);
+    this.player.stunned = !!this.heldBy || this.grabbed;
+    if (!this.heldBy && !this.grabbed) this.vignette.style.opacity = '0';
+    if (h && !freed && h.alive && !h.held) {
+      h.mode = this.player.alive ? 'recoil' : 'grab';
+      h.modeT = 0;
+    }
+  }
+
+  /** Back inside the passage (out of the rock) before it goes limp: a body started in the rock sticks there. */
+  private intoCave(h: Hound): void {
+    W.confine(h.group.position, 0.7);
+    h.group.updateMatrixWorld(true);
+  }
+
   private hurtHound(h: Hound, dmg: number, point: THREE.Vector3, dir: THREE.Vector3, acid = false, o: { knock?: number; mercy?: boolean } = {}): void {
     if (!acid) {
       this.drops.burst(point, dir.clone().negate().setY(0.3), 12, 3, ALIEN_BLOOD);
@@ -1438,6 +1749,12 @@ export class Level16Scene extends CombatScene<Level16Data> {
     }
     h.hp -= dmg;
     if ((h.held || o.mercy) && h.hp < 1) h.hp = 1;
+    // Shot off the roof: it lets go and falls
+    if (h instanceof Crawler && h.mode === 'ceiling' && h.hp > 0) {
+      h.mode = 'drop';
+      h.modeT = 0;
+      h.vy = 0;
+    }
     if (!acid) this.ctx.bus.emit(Events.HitMarker, { lethal: h.hp <= 0 });
     if (h.hp > 0) {
       if (!acid) h.speed *= 0.4;
@@ -1469,6 +1786,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       const v = fv ? fv.clone() : h.knock.clone().add(V(0, o.knock !== undefined ? 1.5 + o.knock * 0.3 : 3.2 + Math.min(dmg, 6) * 0.5, 0)).add(h.vel.clone().multiplyScalar(0.5));
       h.group.rotation.x = 0;
       h.group.rotation.z = 0;
+      if (this.part === 2) this.intoCave(h);
       const rd = new HoundRagdoll(this.world, h, v);
       this.houndRag.set(h, rd);
       rd.onRest = (at) => {
@@ -1479,6 +1797,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
     } else {
       // Its legs go and it falls over into it, limp, and goes green through as the acid takes it
       this.bloodPool(h.group.position.x, h.group.position.z, 1.3, 0x7ab01a);
+      if (this.part === 2) this.intoCave(h);
       const rd = new HoundRagdoll(this.world, h, V(0, 0.3, 0).add(h.vel.clone().multiplyScalar(0.3)), 1);
       this.houndRag.set(h, rd);
       rd.topple();
@@ -1958,9 +2277,11 @@ export class Level16Scene extends CombatScene<Level16Data> {
         let hit: Hit | null = null;
         if (L > 1e-4) {
           const d = mv.clone().divideScalar(L);
-          hit = this.trace(g.clone().add(V(0, 0.6, 0)), d, L + HELD_R, false);
+          // (a crawler's legs reach well out round it: it stops further off the rock)
+          const R = hd instanceof Crawler ? 0.85 : HELD_R;
+          hit = this.trace(g.clone().add(V(0, 0.6, 0)), d, L + R, false);
           if (hit) {
-            next.copy(hit.point).addScaledVector(d, -HELD_R).sub(V(0, 0.6, 0));
+            next.copy(hit.point).addScaledVector(d, -R).sub(V(0, 0.6, 0));
             if (next.clone().sub(g).dot(d) < 0) next.copy(g);
           }
         }
@@ -2004,6 +2325,15 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.flung.delete(h);
     this.thrown.delete(h);
     this.acidFuse.delete(h);
+    if (h instanceof Crawler) {
+      // Torn off the roof, or off him
+      if (this.seizedBy === h) this.endSeize(false);
+      h.mode = 'floor';
+      h.roll = 0;
+      h.armTarget = 0;
+      h.chewing = false;
+      h.group.rotation.set(0, h.group.rotation.y, 0);
+    }
     T.state = 'hold';
     this.holdPrev.copy(h.group.position);
     this.holdVel.set(0, 0, 0);
@@ -2027,6 +2357,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       if (h.alive) {
         h.group.rotation.x = 0;
         h.group.rotation.z = 0;
+        if (this.part === 2) this.intoCave(h);
         const rd = new HoundRagdoll(this.world, h, v, 9);
         this.ragdolls.push(rd);
         this.houndRag.set(h, rd);
@@ -2156,7 +2487,8 @@ export class Level16Scene extends CombatScene<Level16Data> {
           this.ctx.audio.bodyThud(0);
         }
       }
-    if (rd.stillT > 0.35 || rd.age > 4.5) {
+    // Lain still a moment (or near enough: wet rock lets a body creep), or long enough
+    if (rd.stillT > 0.35 || (rd.age > 1.6 && v.length() < 0.7) || rd.age > 4) {
       // Lain still a moment: up again, facing the way its body lay
       const f = rd.facing(new THREE.Vector3()).setY(0);
       const q0 = h.group.quaternion.clone();
@@ -2169,8 +2501,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
       this.thrown.delete(h);
       if (f.lengthSq() > 1e-4) h.yaw = Math.atan2(f.x, f.z);
       h.group.rotation.set(0, h.yaw, 0);
-      h.group.position.set(at.x, W.groundY(at.x, at.z), at.z);
-      W.confine(h.group.position, 0.5);
+      h.group.position.set(at.x, 0, at.z);
+      W.confine(h.group.position, 0.6);
+      h.group.position.y = W.groundY(h.group.position.x, h.group.position.z);
       h.body.position.set(0, 0.72, 0);
       h.body.rotation.set(0, 0, 0);
       h.body.scale.set(1, 1, 1);
@@ -2531,6 +2864,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
       // Hounds that step in it are done for
       for (const h of this.hounds) {
         if (!h.alive || h.held || this.flung.has(h)) continue;
+        if (h instanceof Crawler && (h.mode === 'ceiling' || h.mode === 'drop')) continue;
         const g = h.group.position;
         if (Math.hypot(g.x - pd.x, g.z - pd.z) > r + 0.3) continue;
         if (!this.acidFuse.has(h)) this.acidFuse.set(h, this.t);
@@ -3352,7 +3686,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
         const x = o.x + dir.x * tt;
         const y = o.y + dir.y * tt;
         const z = o.z + dir.z * tt;
-        if (y < W.groundY(x, z) || W.solid(x, y, z)) {
+        if (y < W.floorY(x, z) || W.solid(x, y, z)) {
           let lo = prev;
           let hi = tt;
           for (let k = 0; k < 8; k++) {
@@ -3360,7 +3694,7 @@ export class Level16Scene extends CombatScene<Level16Data> {
             const mx = o.x + dir.x * m;
             const my = o.y + dir.y * m;
             const mz = o.z + dir.z * m;
-            if (my < W.groundY(mx, mz) || W.solid(mx, my, mz)) hi = m;
+            if (my < W.floorY(mx, mz) || W.solid(mx, my, mz)) hi = m;
             else lo = m;
           }
           const pt = o.clone().addScaledVector(dir, hi);
@@ -3807,8 +4141,9 @@ export class Level16Scene extends CombatScene<Level16Data> {
     this.packs = (C.packs ?? []).map((p) => ({ trigger: p.trigger, at: p.at, spawned: false }));
     this.setObjective('FIND THE PORTAL — FOLLOW THE TRACKER [M]');
     // The eggs' glow on the rock round them: a few warm lights among the clusters
-    for (let k = 0; k < 3; k++) {
-      const l = new THREE.PointLight(0xff7a3a, 2.4, 8, 1.6);
+    // (two, and dim: the dark is the point)
+    for (let k = 0; k < 2; k++) {
+      const l = new THREE.PointLight(0xff5a2a, 1.5, 6, 1.8);
       l.position.set(0, -500, 0);
       this.scene.add(l);
       this.eggLights.push(l);
@@ -3956,19 +4291,28 @@ export class Level16Scene extends CombatScene<Level16Data> {
     const fl = cave || uw ? 0 : this.flash;
     const want = uw ? Level16Scene.FOG_WATER : cave ? Level16Scene.FOG_CAVE : Level16Scene.FOG_AIR;
     fog.color.lerp(want, uw ? 1 : Math.min(1, dt * 3));
-    const dens = uw ? 0.13 : cave ? 0.05 : 0.03;
+    const dens = uw ? 0.13 : this.part === 2 ? 0.085 : cave ? 0.05 : 0.03;
     L.groundFog.uniforms.uT.value = this.t;
     L.groundFog.uniforms.uScale.value = Math.max(window.innerHeight, 400) * 0.75;
     L.groundFog.uniforms.uAlpha.value = cave || uw ? 0 : 0.16;
     fog.density = uw ? dens : fog.density + (dens - fog.density) * Math.min(1, dt * 3);
     this.murk.style.opacity = uw ? '1' : '0';
-    const dark = uw ? 0.5 : this.part === 2 ? 0.3 : cave ? 0.18 : 1;
+    const dark = uw ? 0.5 : this.part === 2 ? 0.17 : cave ? 0.18 : 1;
     this.hemi.intensity += (Level16Scene.HEMI * dark + fl * 2.5 - this.hemi.intensity) * Math.min(1, dt * 8 + fl);
     this.moon.intensity += (Level16Scene.MOON * (cave ? 0 : uw ? 0.3 : 1) + fl * 4 - this.moon.intensity) * Math.min(1, dt * 8 + fl);
     L.sky.uniforms.uFlash.value = fl;
     const lampWant = (uw || cave) && p.alive ? 1 : 0;
     this.lampOn += (lampWant - this.lampOn) * Math.min(1, dt * 4);
-    this.lamp.intensity = 70 * this.lampOn;
+    // In the cave its beam is narrower and dies sooner; now and then it stutters
+    if (this.part === 2) {
+      this.lamp.distance = 30;
+      this.lamp.angle = 0.5;
+      this.lamp.penumbra = 0.75;
+      this.lampFlicker -= dt;
+      if (this.lampFlicker < -0.35) this.lampFlicker = 6 + Math.random() * 10;
+    }
+    const stutter = this.part === 2 && this.lampFlicker < 0 ? (Math.random() < 0.5 ? 0.15 : 0.7) : 1;
+    this.lamp.intensity = 70 * this.lampOn * stutter;
     this.lampSpill.intensity = 1.4 * this.lampOn;
     this.underLoop?.set(uw ? 1 : 0);
     L.water.uniforms.uT.value = this.t;

@@ -11,6 +11,11 @@ import type { Hound } from './AlienCreatures';
  * The parts don't collide with each other (group 2, mask 1: only the world).
  */
 export class HoundRagdoll {
+  /**
+   * Built of spheres, not boxes (the cave: its rock is a triangle mesh, and
+   * the physics can only put spheres against one).
+   */
+  static round = false;
   private torso: CANNON.Body;
   private head: CANNON.Body;
   private legs: CANNON.Body[] = [];
@@ -43,10 +48,12 @@ export class HoundRagdoll {
     hound.body.getWorldPosition(bodyW);
     hound.body.getWorldQuaternion(bodyQ);
     const q = new CANNON.Quaternion(bodyQ.x, bodyQ.y, bodyQ.z, bodyQ.w);
-    const make = (shape: CANNON.Shape, mass: number, at: THREE.Vector3): CANNON.Body => {
-      const b = new CANNON.Body({ mass, shape, linearDamping: 0.08, angularDamping: 0.12 });
+    const make = (shape: CANNON.Shape | CANNON.Shape[], mass: number, at: THREE.Vector3, bq: CANNON.Quaternion = q, offs?: CANNON.Vec3[]): CANNON.Body => {
+      const b = new CANNON.Body({ mass, linearDamping: 0.08, angularDamping: 0.12 });
+      if (Array.isArray(shape)) shape.forEach((sh, i) => b.addShape(sh, offs?.[i]));
+      else b.addShape(shape);
       b.position.set(at.x, at.y, at.z);
-      b.quaternion.copy(q);
+      b.quaternion.copy(bq);
       b.collisionFilterGroup = 2;
       b.collisionFilterMask = 1;
       b.velocity.set(vel.x + (Math.random() - 0.5), vel.y, vel.z + (Math.random() - 0.5));
@@ -55,27 +62,36 @@ export class HoundRagdoll {
       this.bodies.push(b);
       return b;
     };
-    this.torso = make(new CANNON.Box(new CANNON.Vec3(0.2 * s, 0.2 * s, 0.6 * s)), 25, bodyW);
+    const round = HoundRagdoll.round;
+    this.torso = round
+      ? make([new CANNON.Sphere(0.21 * s), new CANNON.Sphere(0.22 * s), new CANNON.Sphere(0.2 * s)], 25, bodyW, q, [new CANNON.Vec3(0, 0, -0.42 * s), new CANNON.Vec3(0, 0, 0), new CANNON.Vec3(0, 0, 0.42 * s)])
+      : make(new CANNON.Box(new CANNON.Vec3(0.2 * s, 0.2 * s, 0.6 * s)), 25, bodyW);
     const neckW = hound.neck.getWorldPosition(new THREE.Vector3());
     const headW = hound.mouthWorld(new THREE.Vector3());
     this.head = make(new CANNON.Sphere(0.2 * s), 5, headW);
     this.pin(this.torso, this.head, neckW);
+    // Each leg a stick out of its hip the way the leg goes now (down its hip's −Y), as long as its upper part
+    const L = hound.legHalf * s;
     for (const l of hound.legs) {
       const hip = l.hip.getWorldPosition(new THREE.Vector3());
-      const mid = hip.clone().add(new THREE.Vector3(0, -0.38 * s, 0).applyQuaternion(bodyQ));
-      const leg = make(new CANNON.Box(new CANNON.Vec3(0.05 * s, 0.38 * s, 0.05 * s)), 3, mid);
+      const hq = l.hip.getWorldQuaternion(new THREE.Quaternion());
+      const mid = hip.clone().add(new THREE.Vector3(0, -L, 0).applyQuaternion(hq));
+      const lq = new CANNON.Quaternion(hq.x, hq.y, hq.z, hq.w);
+      const leg = round
+        ? make([new CANNON.Sphere(0.06 * s), new CANNON.Sphere(0.06 * s)], 3, mid, lq, [new CANNON.Vec3(0, L * 0.75, 0), new CANNON.Vec3(0, -L * 0.85, 0)])
+        : make(new CANNON.Box(new CANNON.Vec3(0.05 * s, L, 0.05 * s)), 3, mid, lq);
+      // In the cave only its body and head touch the rock: legs that start a hair into a fold of it
+      // would wedge the whole thing there, hung in the air
+      if (round) leg.collisionFilterMask = 0;
       this.pin(this.torso, leg, hip);
       this.legs.push(leg);
     }
-    // The run's pose let go: straight, the knees a little bent, the body level in its own frame
+    // The run's pose let go: the body level in its own frame, the limbs as the creature lies them
     hound.ragdoll = true;
     hound.body.position.set(0, 0.72, 0);
     hound.body.rotation.set(0, 0, 0);
     hound.body.scale.set(1, 1, 1);
-    for (const l of hound.legs) {
-      l.knee.rotation.x = l.front ? -0.3 : 0.45;
-      l.paw.rotation.x = 0;
-    }
+    hound.ragdollRest();
   }
 
   /** Its legs give under it: it rolls over onto its side (it would stand on four stiff legs else). */
@@ -136,6 +152,22 @@ export class HoundRagdoll {
   facing(out: THREE.Vector3): THREE.Vector3 {
     const f = this.torso.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
     return out.set(f.x, f.y, f.z);
+  }
+
+  /** Every part moved by `d` at once (back out of rock it's got into), its speed that way stopped. */
+  nudge(d: THREE.Vector3): void {
+    const n = d.clone().normalize();
+    for (const b of this.bodies) {
+      b.position.x += d.x;
+      b.position.y += d.y;
+      b.position.z += d.z;
+      const into = b.velocity.x * n.x + b.velocity.y * n.y + b.velocity.z * n.z;
+      if (into < 0) {
+        b.velocity.x -= n.x * into;
+        b.velocity.y -= n.y * into;
+        b.velocity.z -= n.z * into;
+      }
+    }
   }
 
   /** Back into the physics (it had settled and been taken out), to be moved again. */

@@ -5497,6 +5497,15 @@ export class AudioManager {
   }
 
   /** Its jaws snapping shut: a heavy wet crunch. */
+  /** A cave crawler: a fast dry chittering of its jaws, a breathy rasp under it. */
+  crawlerChitter(dist = 0): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.5, 0.35);
+    const n = 8 + Math.floor(Math.random() * 9);
+    for (let i = 0; i < n; i++) this.burst(out, { at: i * 0.034 + Math.random() * 0.012, D: 0.018, type: 'bandpass', f: 2000 + Math.random() * 2200, q: 6, gain: 0.32, attack: 0.001 });
+    this.partial(out, { D: 0.55, type: 'sawtooth', f: 170 + Math.random() * 40, f1: 110, gain: 0.05, attack: 0.06 });
+  }
+
   houndBite(dist = 0): void {
     if (!this.ctx) return;
     const out = this.place(this.ctx, dist, 0.6, 0.2);

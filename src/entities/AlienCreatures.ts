@@ -134,7 +134,7 @@ export function wetFlesh(repeat = 2, opts: { clearcoat?: number; rough?: number 
 }
 
 /** Paint a geometry's vertices by a function of their position (and normal). */
-function paint(g: THREE.BufferGeometry, f: (p: THREE.Vector3, n: THREE.Vector3, out: THREE.Color) => void): THREE.BufferGeometry {
+export function paint(g: THREE.BufferGeometry, f: (p: THREE.Vector3, n: THREE.Vector3, out: THREE.Color) => void): THREE.BufferGeometry {
   const p = g.getAttribute('position') as THREE.BufferAttribute;
   if (!g.getAttribute('normal')) g.computeVertexNormals();
   const nAttr = g.getAttribute('normal') as THREE.BufferAttribute;
@@ -155,11 +155,11 @@ function paint(g: THREE.BufferGeometry, f: (p: THREE.Vector3, n: THREE.Vector3, 
 }
 const solid = (hex: number) => (_p: THREE.Vector3, _n: THREE.Vector3, c: THREE.Color): void => void c.setHex(hex);
 
-const toothMat = new THREE.MeshPhysicalMaterial({ color: 0xe8dfc2, roughness: 0.28, clearcoat: 0.6 });
+export const toothMat = new THREE.MeshPhysicalMaterial({ color: 0xe8dfc2, roughness: 0.28, clearcoat: 0.6 });
 const throatMat = new THREE.MeshStandardMaterial({ color: 0x2a0408, emissive: 0x500810, emissiveIntensity: 0.8, roughness: 0.4, side: THREE.BackSide });
 
 /** A tube along `curve` whose radius follows `r(u)` (and, optionally, its angle round). */
-function profiledTube(curve: THREE.Curve<THREE.Vector3>, segs: number, radial: number, r: (u: number, a: number) => number, closed = false): THREE.BufferGeometry {
+export function profiledTube(curve: THREE.Curve<THREE.Vector3>, segs: number, radial: number, r: (u: number, a: number) => number, closed = false): THREE.BufferGeometry {
   const g = new THREE.TubeGeometry(curve, segs, 1, radial, closed);
   const p = g.getAttribute('position') as THREE.BufferAttribute;
   const c = new THREE.Vector3();
@@ -684,7 +684,7 @@ export class Hound {
   /** A ragdoll has it now (physics poses it, not animate()). */
   ragdoll = false;
   private tail: THREE.Group[] = [];
-  private jaw: THREE.Group;
+  private jaw!: THREE.Group;
   readonly neck = new THREE.Group();
   hp = 3;
   alive = true;
@@ -704,10 +704,14 @@ export class Hound {
   melted = false;
   /** Spin while it's swung or thrown. */
   readonly spin = new THREE.Vector3();
+  /** Half the length of the upper part of a leg (its ragdoll's stick). */
+  legHalf = 0.38;
   air = 0;
   airV = 0;
 
-  constructor() {
+  /** `bare`: none of the hound's own body (a creature built on it makes its own). */
+  constructor(bare = false) {
+    if (bare) return;
     if (!houndSkin) houndSkin = wetFlesh(1.5, { clearcoat: 0.6, rough: 0.45 });
     const skin = houndSkin;
     const g = this.group;
@@ -781,6 +785,14 @@ export class Hound {
 
   mouthWorld(out = new THREE.Vector3()): THREE.Vector3 {
     return this.jaw.getWorldPosition(out);
+  }
+
+  /** As it goes limp: its legs straight, the knees a little bent. */
+  ragdollRest(): void {
+    for (const l of this.legs) {
+      l.knee.rotation.x = l.front ? -0.3 : 0.45;
+      l.paw.rotation.x = 0;
+    }
   }
 
   animate(dt: number, t: number): void {

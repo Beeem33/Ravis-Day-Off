@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Collider } from './OfficeLevelBuilder';
 import { makeCanvas } from './Level8Builder';
 import { triplanar, fbm, type Level16Data } from './Level16Builder';
@@ -53,6 +53,17 @@ interface Sample {
   h: number;
 }
 
+/**
+ * Where it closes in: a squeeze's middle (z), its half-length, and how narrow
+ * and low it gets there — just room for him to get through, the walls and
+ * roof close round him.
+ */
+const SQUEEZES = [
+  { z: -24, len: 6, w: 2.25, h: 2.75 },
+  { z: -66, len: 7, w: 2.1, h: 2.6 },
+  { z: -112, len: 6, w: 2.3, h: 2.7 }
+];
+
 const curve = new THREE.CatmullRomCurve3(PATH.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
 const LEN = curve.getLength();
 const STEP = 0.5;
@@ -70,6 +81,12 @@ const samples: Sample[] = [];
       const s = k * k * (3 - 2 * k);
       w = Math.max(w, w + (c.w - w) * s);
       h = Math.max(h, h + (c.h - h) * s);
+    }
+    for (const q of SQUEEZES) {
+      const k = Math.max(0, 1 - Math.max(0, Math.abs(p.z - q.z) - q.len * 0.5) / (q.len * 0.6));
+      const s = k * k * (3 - 2 * k);
+      w = Math.min(w, w + (q.w - w) * s);
+      h = Math.min(h, h + (q.h - h) * s);
     }
     samples.push({ p, t, w, h });
   }
@@ -102,6 +119,24 @@ function nearest(x: number, z: number): { s: Sample; d: number; i: number } {
         }
   if (best < 0) return { s: samples[0], d: 999, i: 0 };
   return { s: samples[best], d: Math.sqrt(bd), i: best };
+}
+
+/** The floor's height at (x, z) as if it ran on under the walls (no step up the rock). */
+export function caveFloor(x: number, z: number): number {
+  const { s } = nearest(x, z);
+  return s.p.y + fbm(x * 0.35, z * 0.35) * 0.08;
+}
+
+/** How far (x, z) is off the passage's middle, and its half-width there. */
+export function caveOffAxis(x: number, z: number): { d: number; w: number; cx: number; cz: number } {
+  const { s, d } = nearest(x, z);
+  return { d, w: s.w, cx: s.p.x, cz: s.p.z };
+}
+
+/** The roof's middle over the passage near (x, z) (its smooth outline; the rock itself bulges about it). */
+export function caveRoof(x: number, z: number): number {
+  const { s } = nearest(x, z);
+  return s.p.y + s.h;
 }
 
 /** The floor at (x, z); up the wall, somewhere he can't stand. */
@@ -148,6 +183,8 @@ export function caveConfine(p: THREE.Vector3, r: number): boolean {
 // ================================================================ builder
 
 export interface CaveExtras {
+  /** The rock's surface as triangles (the walls, roof and floor as drawn): what loose bodies hit. */
+  caveTri: { pos: Float32Array; idx: Uint32Array };
   eggs: { mesh: THREE.Group; at: THREE.Vector3; eaten: boolean }[];
   drips: { top: THREE.Vector3; floor: number; t: number; every: number }[];
   packs: { trigger: number; at: { x: number; z: number }[] }[];
@@ -159,6 +196,7 @@ export class Level16CaveBuilder {
   private shootables: THREE.Object3D[] = [];
   private glowMats: THREE.MeshStandardMaterial[] = [];
   private rock!: THREE.MeshStandardMaterial;
+  private caveTri: CaveExtras['caveTri'] = { pos: new Float32Array(0), idx: new Uint32Array(0) };
 
   build(): Level16Data & CaveExtras {
     this.rock = triplanar(new THREE.MeshStandardMaterial({ map: wetRock(), bumpMap: wetRock(true), bumpScale: 2.2, color: 0x8a8478, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide }), 0.3, 1);
@@ -170,7 +208,8 @@ export class Level16CaveBuilder {
     const portal = this.buildPortal();
     const dummyMat = (u: Record<string, { value: unknown }>): THREE.ShaderMaterial => new THREE.ShaderMaterial({ uniforms: u });
     const far = new THREE.Vector3(0, -999, 999);
-    const traps: THREE.Vector3[] = [-16, -47, -60, -104, -118].map((z) => {
+    this.buildCocoons();
+    const traps: THREE.Vector3[] = [-12, -47, -56, -100, -125].map((z) => {
       const { s } = nearest(0, z);
       const off = (Math.sin(z) * 0.5) * s.w * 0.5;
       const x = s.p.x + s.t.z * off;
@@ -203,6 +242,7 @@ export class Level16CaveBuilder {
       arenaTrees: [],
       caveGate: { box: new THREE.Box3(far.clone(), far.clone()), disabled: true },
       groundFog: dummyMat({ uT: { value: 0 }, uScale: { value: 1 }, uAlpha: { value: 0 } }),
+      caveTri: this.caveTri,
       eggs,
       drips,
       packs: holes
@@ -235,7 +275,7 @@ export class Level16CaveBuilder {
         v.y += ly;
         // Folds and bulges in the walls and roof (less on the floor)
         const n = fbm(v.x * 0.22 + v.y * 0.15, v.z * 0.22 - v.y * 0.1) * 1.3 + fbm(v.x * 0.8, v.z * 0.8 + v.y) * 0.35;
-        const out = floor ? 0 : n;
+        const out = floor ? 0 : n * Math.min(1, s.w / 3.7);
         lx += Math.sign(lx || 1) * out * Math.abs(Math.cos(th));
         v.copy(s.p).addScaledVector(side, lx);
         v.y += floor ? fbm(v.x * 0.35, v.z * 0.35) * 0.08 : ly + out * Math.max(0, Math.sin(th)) * 0.8;
@@ -253,6 +293,10 @@ export class Level16CaveBuilder {
     geo.setIndex(idx);
     geo = mergeVertices(geo);
     geo.computeVertexNormals();
+    this.caveTri = {
+      pos: new Float32Array((geo.getAttribute('position') as THREE.BufferAttribute).array),
+      idx: new Uint32Array(geo.getIndex()!.array)
+    };
     // Cut into lengths of a few metres (normals worked out on the whole, so no seams): each is
     // something a shot can hit and blood can be laid on, following the rock's folds (small
     // enough to project a decal onto quickly), and culled when it's behind him
@@ -308,6 +352,27 @@ export class Level16CaveBuilder {
   }
 
   /** A point on the wall at sample i, `side` ±1, `up` metres off the floor, pushed `into` the rock. */
+  private rc = new THREE.Raycaster();
+  /**
+   * The rock as drawn near `p` (wallPoint's is the passage's smooth outline;
+   * the real wall bulges in front of it or folds back behind): found by
+   * looking back at it along `n` from in front. `lift` off it.
+   */
+  private onRock(p: THREE.Vector3, n: THREE.Vector3, lift = 0): { p: THREE.Vector3; n: THREE.Vector3 } {
+    return this.findRock(p, n, lift) ?? { p: p.clone().addScaledVector(n, lift), n: n.clone() };
+  }
+
+  /** The same, or null where there's no rock to be found that way. */
+  private findRock(p: THREE.Vector3, n: THREE.Vector3, lift = 0): { p: THREE.Vector3; n: THREE.Vector3 } | null {
+    this.rc.set(p.clone().addScaledVector(n, 1.8), n.clone().negate());
+    this.rc.far = 3.6;
+    const hit = this.rc.intersectObjects(this.shootables, false)[0];
+    if (!hit || !hit.face || Math.abs(hit.distance - 1.8) > 1.2) return null;
+    const nn = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    if (nn.dot(n) < 0) nn.negate();
+    return { p: hit.point.clone().addScaledVector(nn, lift), n: nn };
+  }
+
   private wallPoint(i: number, side: number, up: number, into = 0): { p: THREE.Vector3; n: THREE.Vector3 } {
     const s = samples[Math.min(samples.length - 1, Math.max(0, i))];
     const sd = new THREE.Vector3(-s.t.z, 0, s.t.x).multiplyScalar(side);
@@ -319,58 +384,288 @@ export class Level16CaveBuilder {
   }
 
   /**
-   * Egg-cocoons in clusters on the walls: each a swollen, veined, glistening
-   * sac with a warm glow inside and something curled up in it, stuck to the
-   * rock in a mat of membrane. He can eat them (the scene).
+   * Egg clusters on the walls. Each egg is a swollen, lumpy, translucent sac,
+   * pale at the top and bruise-dark at the root, glistening wet, a net of dark
+   * red veins climbing it from the base and branching; through the shell a
+   * warm glow and the dark curled shape of what's growing in it; strings of
+   * slime hanging off it. They sit in a fleshy nest stuck to the rock, the
+   * nest's own veins running out across the wall, slime running down from it
+   * to a glistening pool on the floor. He can eat them (the scene).
    */
   private buildEggs(): CaveExtras['eggs'] {
     const eggs: CaveExtras['eggs'] = [];
-    const shell = wetFlesh(2, { clearcoat: 1, rough: 0.2 });
-    const glow = new THREE.MeshStandardMaterial({ color: 0x401010, emissive: 0xff7a3a, emissiveIntensity: 1.4, roughness: 0.4 });
+    const R = 0.22;
+    const SY = 1.45;
+    const shell = new THREE.MeshPhysicalMaterial({
+      vertexColors: true,
+      roughness: 0.16,
+      metalness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.04,
+      sheen: 0.7,
+      sheenColor: new THREE.Color(0xffb0c0),
+      transparent: true,
+      opacity: 0.8
+    });
+    const vein = new THREE.MeshStandardMaterial({ color: 0x4a0618, emissive: 0x7a0a1c, emissiveIntensity: 0.45, roughness: 0.25, metalness: 0.1 });
+    const glow = new THREE.MeshStandardMaterial({ color: 0x401010, emissive: 0xd8481a, emissiveIntensity: 0.7, roughness: 0.4 });
     this.glowMats.push(glow);
-    const membrane = new THREE.MeshPhysicalMaterial({ color: 0x8a5a6a, roughness: 0.25, clearcoat: 1, transparent: true, opacity: 0.85 });
-    const paintEgg = (g: THREE.BufferGeometry): THREE.BufferGeometry => {
-      const p = g.getAttribute('position') as THREE.BufferAttribute;
-      const col = new Float32Array(p.count * 3);
-      for (let i = 0; i < p.count; i++) {
-        const y = p.getY(i);
-        const c = new THREE.Color(0xd8a0a8).lerp(new THREE.Color(0x8a3a50), Math.max(0, -y) * 2);
-        col[i * 3] = c.r;
-        col[i * 3 + 1] = c.g;
-        col[i * 3 + 2] = c.b;
-      }
-      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      return g;
+    const embryo = new THREE.MeshStandardMaterial({ color: 0x14040a, roughness: 0.6 });
+    const slime = new THREE.MeshPhysicalMaterial({ color: 0x6a7a30, roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.02, transparent: true, opacity: 0.55, emissive: 0x0c1206, depthWrite: false });
+    const flesh = wetFlesh(2, { clearcoat: 1, rough: 0.25 });
+    // A point on the egg's surface: height y (−1 root … 1 tip) round angle a, pushed out by `out`
+    const onEgg = (y: number, a: number, out = 0): THREE.Vector3 => {
+      const r = R * Math.sqrt(Math.max(0, 1 - y * y)) * (1 + 0.05 * Math.sin(a * 3 + y * 5)) + out;
+      return new THREE.Vector3(Math.cos(a) * r, y * R * SY, Math.sin(a) * r);
     };
-    const eggGeo = paintEgg(new THREE.SphereGeometry(0.22, 20, 16));
-    eggGeo.scale(1, 1.45, 1);
+    // Three of them, each its own lumps and its own veins (shared by every egg)
+    const variants = [0, 1, 2].map((v) => {
+      let seed = 17 + v * 31;
+      const rnd = (): number => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647;
+      };
+      const geo = new THREE.SphereGeometry(R, 40, 30);
+      const pa = geo.getAttribute('position') as THREE.BufferAttribute;
+      const col = new Float32Array(pa.count * 3);
+      const c = new THREE.Color();
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i);
+        const y = pa.getY(i);
+        const z = pa.getZ(i);
+        const a = Math.atan2(z, x);
+        const yy = y / R;
+        // Lumpy, bulging where something pushes from inside, pinched toward the root
+        const lump = 1 + fbm(x * 18 + v * 3, z * 18 + y * 12) * 0.12 + Math.max(0, Math.sin(a * 2 + v) * Math.sin(yy * 2.4)) * 0.09 - Math.abs(Math.sin(a * 5 + v)) * 0.025 - Math.max(0, -yy - 0.6) * 0.25;
+        pa.setXYZ(i, x * lump, y * SY, z * lump);
+        // Pale bruised flesh: cream at the tip, pink, purple-black at the root; mottled
+        // Sickly: a yellowed tip, a grey-pink middle gone bruise-purple and black at the root; blotched
+        c.setHex(0xd8c890).lerp(new THREE.Color(0xa87878), THREE.MathUtils.clamp(0.5 - yy * 0.6, 0, 1)).lerp(new THREE.Color(0x2a0820), THREE.MathUtils.clamp(-yy - 0.2, 0, 1));
+        const blot = fbm(x * 22 + 5, z * 22 + y * 9 + v);
+        if (blot > 0.25) c.lerp(new THREE.Color(0x5a3a1a), Math.min(1, (blot - 0.25) * 3));
+        c.multiplyScalar(0.7 + fbm(x * 40, y * 40 + v) * 0.3);
+        col.set([c.r, c.g, c.b], i * 3);
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geo.computeVertexNormals();
+      // The veins: up from the root, wandering round it, branching, thinning toward the tip
+      const tubes: THREE.BufferGeometry[] = [];
+      const climb = (y0: number, a0: number, len: number, rad: number, depth: number): void => {
+        const pts: THREE.Vector3[] = [];
+        let a = a0;
+        let y = y0;
+        const n = 9;
+        for (let k = 0; k <= n; k++) {
+          pts.push(onEgg(Math.min(0.93, y), a, 0.004));
+          y += len / n;
+          a += (rnd() - 0.5) * 0.5;
+          if (depth < 2 && k === 4 && rnd() < 0.8) climb(y, a + (rnd() < 0.5 ? 0.5 : -0.5), len * 0.55, rad * 0.62, depth + 1);
+        }
+        tubes.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 22, rad, 5, false));
+      };
+      for (let k = 0; k < 8; k++) climb(-0.95, (k / 8) * Math.PI * 2 + rnd() * 0.5, 1.2 + rnd() * 0.5, 0.0045, 0);
+      const veins = mergeGeometries(tubes, false)!;
+      // Strings of slime from its lower side, sagging, a bead on the end of each
+      const strands: THREE.BufferGeometry[] = [];
+      for (let k = 0; k < 2; k++) {
+        const a = rnd() * Math.PI * 2;
+        const p0 = onEgg(-0.55, a);
+        const L = 0.12 + rnd() * 0.22;
+        const crv = new THREE.CatmullRomCurve3([p0, p0.clone().add(new THREE.Vector3(Math.cos(a) * 0.03, -L * 0.5, Math.sin(a) * 0.03)), p0.clone().add(new THREE.Vector3(Math.cos(a) * 0.02, -L, Math.sin(a) * 0.02))]);
+        strands.push(new THREE.TubeGeometry(crv, 10, 0.0035, 5, false));
+        const bead = new THREE.SphereGeometry(0.009, 8, 6);
+        bead.scale(1, 1.4, 1);
+        bead.translate(p0.x + Math.cos(a) * 0.02, p0.y - L, p0.z + Math.sin(a) * 0.02);
+        strands.push(bead.toNonIndexed());
+      }
+      const drool = mergeGeometries(strands.map((g) => (g.index ? g.toNonIndexed() : g)), false)!;
+      return { geo, veins, drool };
+    });
+    // What's in it: curled up, its head tucked, a dark shape against the glow
+    const curl = new THREE.TorusGeometry(0.085, 0.042, 10, 20, Math.PI * 1.6);
+    curl.rotateY(Math.PI / 2);
+    const head = new THREE.SphereGeometry(0.04, 12, 10);
+    head.translate(0, 0.07, 0.03);
+    const curled = mergeGeometries([curl.toNonIndexed(), head.toNonIndexed()], false)!;
+    const coreGeo = new THREE.SphereGeometry(0.09, 14, 12);
+    coreGeo.scale(0.9, 1.4, 0.9);
+
+    // ---- The clusters
     const spots = [40, 70, 110, 150, 190, 220, 250, 270, 300, 320, 350];
     spots.forEach((si, c) => {
       if (si >= samples.length) return;
       const side = c % 2 ? 1 : -1;
-      const base = this.wallPoint(si, side, 0.4 + (c % 3) * 0.5, -0.2);
-      const mat = new THREE.Mesh(new THREE.SphereGeometry(0.7, 14, 10), membrane);
-      mat.scale.set(1, 0.7, 0.35);
-      mat.position.copy(base.p);
-      mat.lookAt(base.p.clone().add(base.n));
-      this.group.add(mat);
+      for (const m of this.shootables) m.updateMatrixWorld(true);
+      const w0 = this.wallPoint(si, side, 0.4 + (c % 3) * 0.5, 0);
+      const base = this.onRock(w0.p, w0.n, -0.12);
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), base.n);
+      // The nest: a lumpy fleshy mound on the rock
+      const nestGeo = new THREE.SphereGeometry(0.75, 28, 18);
+      const np = nestGeo.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < np.count; i++) {
+        const x = np.getX(i);
+        const y = np.getY(i);
+        const z = np.getZ(i);
+        const k = 1 + fbm(x * 4 + c, y * 4) * 0.25;
+        np.setXYZ(i, x * k, y * k * 0.75, z * 0.32 * k);
+      }
+      nestGeo.computeVertexNormals();
+      const nest = new THREE.Mesh(nestGeo, flesh);
+      nest.position.copy(base.p);
+      nest.quaternion.copy(q);
+      this.group.add(nest);
+      // The nest's veins: out from under it across the wall, branching (a couple of metres of them)
+      const vt: THREE.BufferGeometry[] = [];
+      const u = new THREE.Vector3().crossVectors(base.n, new THREE.Vector3(0, 1, 0)).normalize();
+      for (let k = 0; k < 7; k++) {
+        const a = (k / 7) * Math.PI * 2 + Math.random() * 0.4;
+        const pts: THREE.Vector3[] = [];
+        let d = 0.3;
+        let aa = a;
+        for (let j = 0; j < 7; j++) {
+          const p = base.p.clone().addScaledVector(u, Math.cos(aa) * d).add(new THREE.Vector3(0, Math.sin(aa) * d * 0.8, 0));
+          // pressed onto the rock itself (and no further than there's rock to be found)
+          const r = this.findRock(p, base.n, 0.012);
+          if (!r) break;
+          pts.push(r.p);
+          d += 0.22 + Math.random() * 0.1;
+          aa += (Math.random() - 0.5) * 0.45;
+        }
+        if (pts.length >= 3) vt.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 30, 0.014 - k * 0.0008, 6, false));
+      }
+      if (vt.length) this.group.add(new THREE.Mesh(mergeGeometries(vt, false)!, vein));
+      // Slime run down the wall from it, and a pool on the floor under it
+      for (let k = 0; k < 3; k++) {
+        const x0 = (Math.random() - 0.5) * 0.8;
+        const top = this.onRock(base.p.clone().addScaledVector(u, x0).add(new THREE.Vector3(0, -0.35, 0)), base.n, 0.02).p;
+        const floor = caveFloor(top.x + base.n.x * 0.3, top.z + base.n.z * 0.3);
+        const mid = this.onRock(top.clone().add(new THREE.Vector3(0, -(top.y - floor) * 0.5, 0)), base.n, 0.02).p;
+        const crv = new THREE.CatmullRomCurve3([top, mid, new THREE.Vector3(mid.x, floor + 0.02, mid.z).addScaledVector(base.n, 0.1)]);
+        this.group.add(new THREE.Mesh(new THREE.TubeGeometry(crv, 16, 0.012 + Math.random() * 0.012, 6, false), slime));
+      }
+      {
+        const fp = base.p.clone().addScaledVector(base.n, 0.6);
+        const pool = new THREE.Mesh(new THREE.CircleGeometry(0.3 + Math.random() * 0.2, 24), slime);
+        pool.rotation.x = -Math.PI / 2;
+        pool.position.set(fp.x, caveFloor(fp.x, fp.z) + 0.025, fp.z);
+        pool.scale.set(1.3, 0.8, 1);
+        pool.renderOrder = 2;
+        this.group.add(pool);
+      }
+      // The eggs on it
       const n = 3 + (c % 4);
       for (let k = 0; k < n; k++) {
         const g = new THREE.Group();
         const off = new THREE.Vector3((Math.random() - 0.5) * 1.0, (Math.random() - 0.5) * 0.8, 0);
-        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), base.n);
-        g.position.copy(base.p).add(off.applyQuaternion(q)).addScaledVector(base.n, 0.15);
+        // On the nest, on the rock: its root just into the flesh
+        g.position.copy(this.onRock(base.p.clone().add(off.applyQuaternion(q)), base.n, 0.2).p);
         g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), base.n.clone().add(new THREE.Vector3(0, 0.9, 0)).normalize());
-        const egg = new THREE.Mesh(eggGeo, shell);
-        const core = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), glow);
-        core.scale.set(0.8, 1.3, 0.8);
-        g.add(egg, core);
+        const vr = variants[(c + k) % 3];
+        const egg = new THREE.Mesh(vr.geo, shell);
+        egg.renderOrder = 1;
+        const core = new THREE.Mesh(coreGeo, glow);
+        const inside = new THREE.Mesh(curled, embryo);
+        inside.rotation.set(Math.random(), Math.random() * 6, 0);
+        g.add(core, inside, egg, new THREE.Mesh(vr.veins, vein), new THREE.Mesh(vr.drool, slime));
         g.scale.setScalar(0.8 + Math.random() * 0.5);
         this.group.add(g);
         eggs.push({ mesh: g, at: g.position.clone(), eaten: false });
       }
     });
     return eggs;
+  }
+
+  /**
+   * Cocoons: man-sized bundles wound tight in pale silk, wet, lumpy with what's
+   * inside, some hung from the roof on strands, some stuck to the walls, one
+   * or two split and empty. Not to be eaten.
+   */
+  private buildCocoons(): void {
+    const silk = new THREE.MeshPhysicalMaterial({ color: 0xcfc8b4, roughness: 0.55, sheen: 1, sheenColor: new THREE.Color(0xf0f0e0), sheenRoughness: 0.4, clearcoat: 0.4, clearcoatRoughness: 0.3 });
+    const strand = new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.4, transparent: true, opacity: 0.8 });
+    const wet = new THREE.MeshPhysicalMaterial({ color: 0x3a1420, roughness: 0.2, clearcoat: 1 });
+    const make = (len: number, split: boolean): THREE.Group => {
+      const g = new THREE.Group();
+      const prof: THREE.Vector2[] = [];
+      for (let k = 0; k <= 16; k++) {
+        const u = k / 16;
+        prof.push(new THREE.Vector2(0.001 + Math.sin(u * Math.PI) ** 0.7 * 0.28 * (1 + 0.15 * Math.sin(u * 9)), (u - 0.5) * len));
+      }
+      const body = new THREE.LatheGeometry(prof, 28);
+      const bp = body.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < bp.count; i++) {
+        const x = bp.getX(i);
+        const y = bp.getY(i);
+        const z = bp.getZ(i);
+        // Lumps where what's inside presses out: a shoulder, a knee, a face
+        const k = 1 + fbm(x * 6, y * 5 + z * 6) * 0.18 + Math.max(0, Math.sin(y * 4.2)) * 0.06;
+        bp.setXYZ(i, x * k, y, z * k);
+      }
+      body.computeVertexNormals();
+      g.add(new THREE.Mesh(body, silk));
+      if (split) {
+        // Torn open down its front, dark and wet inside, empty
+        const gash = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 10), wet);
+        gash.scale.set(0.5, len * 1.6, 0.4);
+        gash.position.set(0, 0.05, 0.2);
+        g.add(gash);
+      }
+      // Wound round and round with strands, and across
+      const wraps: THREE.BufferGeometry[] = [];
+      for (let k = 0; k < 9; k++) {
+        const pts: THREE.Vector3[] = [];
+        const ph = Math.random() * 6;
+        const turns = 2 + Math.random() * 2;
+        for (let j = 0; j <= 40; j++) {
+          const u = j / 40;
+          const y = (u - 0.5) * len * 0.95;
+          const r = Math.sin(u * Math.PI) ** 0.7 * 0.29 + 0.012;
+          const a = ph + u * turns * Math.PI * 2 * (k % 2 ? 1 : -1);
+          pts.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+        }
+        wraps.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.006, 4, false));
+      }
+      g.add(new THREE.Mesh(mergeGeometries(wraps, false)!, strand));
+      return g;
+    };
+    // Up the passage: hung from the roof (strands up to it), or stuck to a wall
+    const rc = new THREE.Raycaster();
+    for (const m of this.shootables) m.updateMatrixWorld(true);
+    let k = 0;
+    for (let i = 60; i < samples.length - 30; i += 34 + Math.floor(Math.random() * 16), k++) {
+      const s = samples[i];
+      if (SQUEEZES.some((q) => Math.abs(s.p.z - q.z) < q.len)) continue;
+      const len = 1.4 + Math.random() * 0.5;
+      const c = make(len, k % 4 === 3);
+      if (k % 2 === 0) {
+        // Hung: find the rock over it
+        const side = new THREE.Vector3(-s.t.z, 0, s.t.x);
+        const at = s.p.clone().addScaledVector(side, (Math.random() - 0.5) * s.w * 0.7);
+        rc.set(new THREE.Vector3(at.x, s.p.y + 1.5, at.z), new THREE.Vector3(0, 1, 0));
+        const hit = rc.intersectObjects(this.shootables, false)[0];
+        const roof = hit ? hit.point.y : s.p.y + s.h;
+        const hangY = Math.max(s.p.y + 2.3 + len / 2, roof - 0.5 - len / 2);
+        c.position.set(at.x, hangY, at.z);
+        c.rotation.set((Math.random() - 0.5) * 0.25, Math.random() * 6, (Math.random() - 0.5) * 0.25);
+        this.group.add(c);
+        // Its strands up to the rock
+        const top = new THREE.Vector3(at.x, hangY + len / 2 - 0.05, at.z);
+        const st: THREE.BufferGeometry[] = [];
+        for (let j = 0; j < 4; j++) {
+          const a = (j / 4) * Math.PI * 2;
+          const end = new THREE.Vector3(at.x + Math.cos(a) * 0.4, roof + 0.2, at.z + Math.sin(a) * 0.4);
+          st.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([top, top.clone().lerp(end, 0.5).add(new THREE.Vector3(0, -0.05, 0)), end]), 8, 0.007, 4, false));
+        }
+        this.group.add(new THREE.Mesh(mergeGeometries(st, false)!, strand));
+      } else {
+        // Stuck to the wall, leaning, its foot near the floor
+        const w0 = this.wallPoint(i, k % 4 === 1 ? 1 : -1, 0.9 + len * 0.4, 0);
+        const w = this.onRock(w0.p, w0.n, 0.24);
+        c.position.copy(w.p);
+        c.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 1, 0).addScaledVector(w.n, -0.25).normalize());
+        this.group.add(c);
+      }
+    }
   }
 
   /** Water dripping from the roof: where it falls from, and a puddle where it lands. */
@@ -402,8 +697,8 @@ export class Level16CaveBuilder {
 
   /** Glowing fungus on the walls and floor-edges, crystals in clusters, more stalactites. */
   private buildGlow(): void {
-    const fungus = new THREE.MeshStandardMaterial({ color: 0x182030, emissive: 0x40c8ff, emissiveIntensity: 1.2, roughness: 0.5 });
-    const crystal = new THREE.MeshStandardMaterial({ color: 0x2a1040, emissive: 0xa050ff, emissiveIntensity: 1.6, roughness: 0.15 });
+    const fungus = new THREE.MeshStandardMaterial({ color: 0x101820, emissive: 0x3aa8d8, emissiveIntensity: 0.55, roughness: 0.5 });
+    const crystal = new THREE.MeshStandardMaterial({ color: 0x1a0828, emissive: 0x8040d0, emissiveIntensity: 0.8, roughness: 0.15 });
     this.glowMats.push(fungus, crystal);
     const cap = new THREE.SphereGeometry(0.08, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
     cap.scale(1, 0.5, 1);
@@ -417,16 +712,16 @@ export class Level16CaveBuilder {
     let ns = 0;
     for (let i = 0; i < samples.length; i += 2) {
       for (const side of [-1, 1]) {
-        if (Math.random() < 0.55 && nc < 900) {
+        if (Math.random() < 0.16 && nc < 900) {
           const w = this.wallPoint(i, side, Math.random() * 1.2, -0.05);
-          for (let k = 0; k < 3 && nc < 900; k++) {
+          for (let k = 0; k < 2 && nc < 900; k++) {
             q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), w.n.clone().add(new THREE.Vector3(0, 1.5, 0)).normalize());
             const s = 0.6 + Math.random() * 1.2;
             m4.compose(w.p.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.4)), q, new THREE.Vector3(s, s, s));
             capM.setMatrixAt(nc++, m4);
           }
         }
-        if (Math.random() < 0.12 && ns < 255) {
+        if (Math.random() < 0.035 && ns < 255) {
           const w = this.wallPoint(i, side, 0.5 + Math.random() * 3, 0.1);
           for (let k = 0; k < 4 && ns < 260; k++) {
             q.setFromEuler(new THREE.Euler((Math.random() - 0.5) * 1.4, Math.random() * 6, (Math.random() - 0.5) * 1.4));

@@ -1586,6 +1586,8 @@ export class Level19SkyScene implements GameScene {
   private startBlack(): void {
     this.phase = 'black';
     this.pt = 0;
+    // Nothing from the fall carries over: whatever was still marked goes with it
+    this.marks.style.display = 'none';
     this.fadeEl.style.transition = 'none';
     this.fadeEl.style.opacity = '1';
     this.waterEl.style.opacity = '0';

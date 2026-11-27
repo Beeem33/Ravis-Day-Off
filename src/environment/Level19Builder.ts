@@ -1,0 +1,1614 @@
+import * as THREE from 'three';
+import type { Collider, Waypoint } from './OfficeLevelBuilder';
+import type { BreakableGlass } from './BreakableGlass';
+import { foldProp } from './foldProp';
+
+/**
+ * Level19Builder — the inside of the boss's plane: a widebody airliner
+ * fitted out as a flying penthouse, at cruise, high over the clouds.
+ *
+ * One long tube, nose toward −Z, tail toward +Z, the floor at y = 0 and the
+ * aisle down x = 0; the main door on the left (−X). From the back:
+ *
+ *   aft galley   z 23.5 .. 30    where Ravi climbs up out of the hold; the
+ *                                main aft door, and the locker of chutes
+ *   the suite    z 8 .. 23.5     a corridor down the middle between four
+ *                                rooms: the boss's bedroom and bathroom on
+ *                                the left, a guest room and his study right
+ *   conference   z −6 .. 8       the long table, the screen, the security post
+ *   the lounge   z −22 .. −6     sofas, the bar, the boss's own chair
+ *   forward      z −28 .. −22    the crew's galley, the cockpit door
+ *   cockpit      z −33 .. −28    two seats, the panel, the windscreen
+ *
+ * The centre doorways all line up, so from the cockpit door you can see all
+ * the way down the plane to the back. The windows are real holes: what's
+ * outside (the sky dome, the sun, two decks of cloud far below) is drawn in
+ * the scene, and the scene scrolls the clouds.
+ *
+ * Static dressing is folded into one mesh per material (foldProp) — the
+ * shootable structure in one fold, the fine trim that bullets don't need to
+ * know about in another. Vision is tested against the walls and the tall
+ * furniture only, as plain meshes kept for the purpose.
+ */
+
+export const HW = 2.8;
+export const CEIL = 2.42;
+const T = 0.12;
+export const Z_AFT = 30;
+export const P_GALLEY = 23.5;
+export const P_SUITE = 8;
+export const P_CONF = -6;
+export const P_LOUNGE = -22;
+export const P_COCKPIT = -28;
+export const Z_NOSE = -33;
+/** The main aft door, in the left wall. */
+export const DOOR = { z0: 24.7, z1: 26.5, h: 1.95 };
+/** Each centre doorway's width. */
+const DW = 1.2;
+const DH = 2.08;
+/** The suite's corridor walls. */
+const CX = 0.72;
+
+export interface GuardSpawn {
+  pos: THREE.Vector3;
+  yaw: number;
+  /** How far from where he's posted his patrol goes (0: he stands his post). */
+  zone: number;
+  /** Which part of the plane he's in, for the checkpoints. */
+  section: 'suite' | 'conf' | 'lounge' | 'fwd';
+}
+
+export interface Level19Data {
+  group: THREE.Group;
+  colliders: Collider[];
+  shootables: THREE.Object3D[];
+  occluders: THREE.Object3D[];
+  glassPanes: BreakableGlass[];
+  waypoints: Waypoint[];
+  /** What's out of the windows: the sky dome, the sun, the cloud decks. Not part of `group`. */
+  outside: THREE.Group;
+  /** The two cloud decks' maps, for the scene to scroll. */
+  cloudMaps: THREE.Texture[];
+  playerSpawn: THREE.Vector3;
+  playerSpawnYaw: number;
+  /** Where a retry from each checkpoint puts him, and which way he faces. */
+  checkpoints: { pos: THREE.Vector3; yaw: number }[];
+  guards: GuardSpawn[];
+  /** The two pilots' seats: where each one's hips go, facing forward. */
+  pilotSeats: THREE.Vector3[];
+  /** The cockpit door: its leaf on a hinge (on the left of the frame), and the collider it blocks with. */
+  cockpitDoor: { pivot: THREE.Group; collider: Collider; at: THREE.Vector3 };
+  /** The aft door: a plug that moves in, then swings out and forward on its arm. */
+  aftDoor: { leaf: THREE.Group; collider: Collider; at: THREE.Vector3 };
+  /** The locker of chutes across from it: one pack per hook; the scene takes one. */
+  chutes: THREE.Object3D[];
+  lockerAt: THREE.Vector3;
+  /** The boss's chair in the lounge, and the cigar still going in the ashtray beside it. */
+  bossChair: THREE.Vector3;
+  cigarTip: THREE.Vector3;
+  /** Where the boss has been hiding (his bedroom), and his way from there to the open door. */
+  bossHide: THREE.Vector3;
+  bossRun: THREE.Vector3[];
+  /** The alarm's red lights: there all along at nothing, turned up when the pilots go. */
+  alarmLights: THREE.PointLight[];
+  alarmMat: THREE.MeshStandardMaterial;
+  /** The cabin's own lights, which flicker as she goes into the dive. */
+  cabinLights: THREE.PointLight[];
+  /** Loose things that fly about when the door goes: glasses, papers, cushions. */
+  loose: THREE.Object3D[];
+  /** The trap in the galley floor he comes up through. */
+  hatch: THREE.Vector3;
+  /** The cockpit's screens: the scene can set them flashing. */
+  screenMat: THREE.MeshStandardMaterial;
+  /** The LED strips and the ceiling's trough: they flicker with the lights. */
+  ledMat: THREE.MeshStandardMaterial;
+}
+
+// ================================================================ textures
+
+function canvas(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  draw(c.getContext('2d')!);
+  return c;
+}
+
+function tex(c: HTMLCanvasElement, rx = 1, ry = 1, srgb = true): THREE.CanvasTexture {
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** Seeded, so the plane comes out the same every time. */
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/** Deep navy carpet with a small gold lattice in it. */
+function carpetCanvas(): HTMLCanvasElement {
+  return canvas(256, 256, (g) => {
+    const r = rng(7);
+    g.fillStyle = '#1b2236';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 9000; i++) {
+      const v = 20 + r() * 26;
+      g.fillStyle = `rgba(${v},${v + 6},${v + 28},0.5)`;
+      g.fillRect(r() * 256, r() * 256, 1.5, 1.5);
+    }
+    g.strokeStyle = 'rgba(176,142,74,0.55)';
+    g.lineWidth = 2;
+    for (let k = -256; k <= 256; k += 64) {
+      g.beginPath();
+      g.moveTo(k, 0);
+      g.lineTo(k + 256, 256);
+      g.stroke();
+      g.beginPath();
+      g.moveTo(k + 256, 0);
+      g.lineTo(k, 256);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(206,170,96,0.8)';
+    for (let x = 0; x <= 256; x += 64) for (let y = 0; y <= 256; y += 64) g.fillRect(x - 3, y - 3, 6, 6);
+  });
+}
+
+/** Walnut veneer: long dark grain with the odd figure in it. */
+function walnutCanvas(): HTMLCanvasElement {
+  return canvas(256, 256, (g) => {
+    const r = rng(11);
+    g.fillStyle = '#4a2c19';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 160; i++) {
+      const y = r() * 256;
+      const v = r();
+      g.strokeStyle = v < 0.5 ? `rgba(30,16,8,${0.08 + r() * 0.16})` : `rgba(122,78,44,${0.05 + r() * 0.12})`;
+      g.lineWidth = 0.6 + r() * 2.4;
+      g.beginPath();
+      g.moveTo(0, y);
+      for (let x = 0; x <= 256; x += 16) g.lineTo(x, y + Math.sin(x * 0.03 + i) * (2 + r() * 3));
+      g.stroke();
+    }
+  });
+}
+
+/** Cream leather: a soft mottle. */
+function leatherCanvas(): HTMLCanvasElement {
+  return canvas(128, 128, (g) => {
+    const r = rng(3);
+    g.fillStyle = '#e8dcc4';
+    g.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 2600; i++) {
+      const v = r() < 0.5 ? 'rgba(150,128,96,0.10)' : 'rgba(255,250,240,0.12)';
+      g.fillStyle = v;
+      const s = 1 + r() * 3;
+      g.fillRect(r() * 128, r() * 128, s, s);
+    }
+  });
+}
+
+/** White marble with grey veins, for the galleys and the bathroom. */
+function marbleCanvas(): HTMLCanvasElement {
+  return canvas(256, 256, (g) => {
+    const r = rng(5);
+    g.fillStyle = '#ecebe6';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 14; i++) {
+      g.strokeStyle = `rgba(120,120,128,${0.15 + r() * 0.35})`;
+      g.lineWidth = 0.5 + r() * 1.8;
+      g.beginPath();
+      let x = r() * 256;
+      let y = 0;
+      g.moveTo(x, y);
+      while (y < 256) {
+        x += (r() - 0.5) * 30;
+        y += 8 + r() * 20;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    g.strokeStyle = 'rgba(160,160,160,0.5)';
+    g.lineWidth = 1;
+    g.strokeRect(0.5, 0.5, 255, 255);
+  });
+}
+
+/** The sidewall's lining: warm white panels with a faint seam. */
+function liningCanvas(): HTMLCanvasElement {
+  return canvas(128, 128, (g) => {
+    const r = rng(9);
+    g.fillStyle = '#e2d7c3';
+    g.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 900; i++) {
+      g.fillStyle = `rgba(180,170,150,${r() * 0.08})`;
+      g.fillRect(r() * 128, r() * 128, 2, 2);
+    }
+    g.fillStyle = 'rgba(150,140,120,0.35)';
+    g.fillRect(0, 0, 1, 128);
+  });
+}
+
+/** A sign, white on navy, or whatever's asked. */
+function signCanvas(lines: string[], bg = '#14213d', fg = '#f2e6c8', w = 512, h = 128): HTMLCanvasElement {
+  return canvas(w, h, (g) => {
+    g.fillStyle = bg;
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#c9a75a';
+    g.lineWidth = 4;
+    g.strokeRect(6, 6, w - 12, h - 12);
+    g.fillStyle = fg;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const size = Math.floor((h - 30) / lines.length);
+    g.font = `bold ${Math.floor(size * 0.72)}px Arial, Helvetica, sans-serif`;
+    lines.forEach((l, i) => g.fillText(l, w / 2, 15 + size * (i + 0.5)));
+  });
+}
+
+/** A grainy security-camera frame of the cabin, green-grey with a timestamp. */
+function cctvCanvas(n: number): HTMLCanvasElement {
+  return canvas(256, 160, (g) => {
+    const r = rng(20 + n);
+    const grd = g.createLinearGradient(0, 0, 0, 160);
+    grd.addColorStop(0, '#2c3a33');
+    grd.addColorStop(1, '#121a16');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 256, 160);
+    // A corridor going away: the vanishing lines and a doorway
+    g.strokeStyle = 'rgba(170,200,180,0.5)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(0, 160);
+    g.lineTo(108, 70);
+    g.moveTo(256, 160);
+    g.lineTo(148, 70);
+    g.moveTo(0, 0);
+    g.lineTo(108, 52);
+    g.moveTo(256, 0);
+    g.lineTo(148, 52);
+    g.stroke();
+    g.strokeRect(108, 52, 40, 18);
+    if (n % 2 === 0) {
+      // Somebody in it
+      g.fillStyle = 'rgba(30,40,35,0.9)';
+      g.fillRect(118 + r() * 30, 88, 14, 40);
+      g.beginPath();
+      g.arc(125 + r() * 30, 82, 7, 0, Math.PI * 2);
+      g.fill();
+    }
+    for (let i = 0; i < 2600; i++) {
+      g.fillStyle = `rgba(200,230,210,${r() * 0.12})`;
+      g.fillRect(r() * 256, r() * 160, 1, 1);
+    }
+    g.fillStyle = '#d8f0dc';
+    g.font = 'bold 13px monospace';
+    g.fillText(`CAM 0${n + 1}  ${['AFT GALLEY', 'SUITE', 'LOUNGE', 'FWD'][n % 4]}`, 8, 18);
+    g.fillText('REC ●', 200, 18);
+    g.fillText('41,000 FT  03:12:44', 8, 150);
+  });
+}
+
+/** The cockpit's glass: attitude, the nav map, engine strips. */
+function displayCanvas(): HTMLCanvasElement {
+  return canvas(512, 256, (g) => {
+    g.fillStyle = '#05070b';
+    g.fillRect(0, 0, 512, 256);
+    const panel = (x: number, draw: () => void): void => {
+      g.save();
+      g.translate(x, 0);
+      g.strokeStyle = '#2a3340';
+      g.lineWidth = 3;
+      g.strokeRect(4, 4, 120, 248);
+      draw();
+      g.restore();
+    };
+    for (let i = 0; i < 4; i++) {
+      panel(i * 128, () => {
+        if (i % 2 === 0) {
+          // The attitude ball: sky over ground
+          g.fillStyle = '#2f7fd9';
+          g.fillRect(10, 30, 108, 90);
+          g.fillStyle = '#8a5a2b';
+          g.fillRect(10, 120, 108, 90);
+          g.strokeStyle = '#fff';
+          g.lineWidth = 2;
+          g.beginPath();
+          g.moveTo(10, 120);
+          g.lineTo(118, 120);
+          g.stroke();
+          g.strokeStyle = '#ffd400';
+          g.lineWidth = 4;
+          g.beginPath();
+          g.moveTo(34, 120);
+          g.lineTo(54, 120);
+          g.lineTo(64, 128);
+          g.lineTo(74, 120);
+          g.lineTo(94, 120);
+          g.stroke();
+          g.fillStyle = '#9ef';
+          g.font = 'bold 14px monospace';
+          g.fillText('FL410', 30, 232);
+        } else {
+          // The nav display: a magenta route on black
+          g.strokeStyle = '#e040e0';
+          g.lineWidth = 3;
+          g.beginPath();
+          g.moveTo(64, 220);
+          g.lineTo(70, 150);
+          g.lineTo(52, 90);
+          g.lineTo(66, 30);
+          g.stroke();
+          g.strokeStyle = '#ddd';
+          g.lineWidth = 1.5;
+          g.beginPath();
+          g.arc(64, 220, 90, Math.PI * 1.15, Math.PI * 1.85);
+          g.stroke();
+          g.fillStyle = '#3f3';
+          g.font = 'bold 13px monospace';
+          g.fillText('ISLA', 70, 30);
+          g.fillText('GS 488', 14, 24);
+        }
+      });
+    }
+  });
+}
+
+/**
+ * A cloud deck's map, from above: soft white puffs with thin gaps of blue
+ * between them, tileable (each puff drawn again wherever it crosses an edge).
+ */
+function cloudCanvas(seed: number, density: number): HTMLCanvasElement {
+  return canvas(512, 512, (g) => {
+    const r = rng(seed);
+    g.clearRect(0, 0, 512, 512);
+    const puff = (x: number, y: number, rad: number, a: number): void => {
+      for (const dx of [-512, 0, 512]) {
+        for (const dy of [-512, 0, 512]) {
+          const gr = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad);
+          gr.addColorStop(0, `rgba(255,255,255,${a})`);
+          gr.addColorStop(0.55, `rgba(246,248,252,${a * 0.6})`);
+          gr.addColorStop(1, 'rgba(240,244,250,0)');
+          g.fillStyle = gr;
+          g.beginPath();
+          g.arc(x + dx, y + dy, rad, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    };
+    for (let i = 0; i < 140 * density; i++) {
+      const x = r() * 512;
+      const y = r() * 512;
+      const n = 3 + Math.floor(r() * 5);
+      for (let k = 0; k < n; k++) puff(x + (r() - 0.5) * 70, y + (r() - 0.5) * 40, 18 + r() * 46, 0.35 + r() * 0.35);
+    }
+  });
+}
+
+/**
+ * A box's UVs by the metre, so a texture keeps its scale whatever the size
+ * of the box (BoxGeometry stretches the whole map over every face). Faces
+ * come ±x, ±y, ±z, four corners each.
+ */
+function metreUVs(g: THREE.BoxGeometry, w: number, h: number, d: number): void {
+  const uv = g.attributes.uv as THREE.BufferAttribute;
+  const dims: [number, number][] = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (let f = 0; f < 6; f++) {
+    const [su, sv] = dims[f];
+    for (let k = 0; k < 4; k++) {
+      const i = f * 4 + k;
+      uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+    }
+  }
+}
+
+// ================================================================ the builder
+
+type Mat = THREE.Material;
+
+export class Level19Builder {
+  private group = new THREE.Group();
+  /** Shootable static structure and furniture, folded at the end. */
+  private statics = new THREE.Group();
+  /** Fine trim the bullets needn't know about, folded on its own. */
+  private trim = new THREE.Group();
+  private colliders: Collider[] = [];
+  private occluders: THREE.Object3D[] = [];
+  private loose: THREE.Object3D[] = [];
+  private cabinLights: THREE.PointLight[] = [];
+  private alarmLights: THREE.PointLight[] = [];
+
+  // materials
+  private M!: {
+    carpet: THREE.MeshStandardMaterial;
+    marble: THREE.MeshStandardMaterial;
+    lining: THREE.MeshStandardMaterial;
+    ceiling: THREE.MeshStandardMaterial;
+    walnut: THREE.MeshStandardMaterial;
+    leather: THREE.MeshStandardMaterial;
+    darkLeather: THREE.MeshStandardMaterial;
+    gold: THREE.MeshStandardMaterial;
+    steel: THREE.MeshStandardMaterial;
+    black: THREE.MeshStandardMaterial;
+    plastic: THREE.MeshStandardMaterial;
+    led: THREE.MeshStandardMaterial;
+    warmLed: THREE.MeshStandardMaterial;
+    glass: THREE.MeshStandardMaterial;
+    linen: THREE.MeshStandardMaterial;
+    navy: THREE.MeshStandardMaterial;
+    tunnel: THREE.MeshStandardMaterial;
+    screen: THREE.MeshStandardMaterial;
+    alarm: THREE.MeshStandardMaterial;
+    hole: THREE.MeshBasicMaterial;
+  };
+
+  build(): Level19Data {
+    this.materials();
+    this.group.add(this.statics, this.trim);
+    this.shell();
+    this.partitions();
+    this.galley();
+    const boss = this.suite();
+    this.conference();
+    const lounge = this.lounge();
+    this.forward();
+    const cockpit = this.cockpit();
+    const aftDoor = this.aftDoor();
+    const locker = this.locker();
+    this.lights();
+
+    // Fold: every static mesh into one per material. Boxes and cylinders
+    // carry a draw group per face; with one material each, those mean nothing
+    // here, and the fold won't take a mesh that has them
+    for (const root of [this.statics, this.trim]) {
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && !Array.isArray(m.material)) {
+          m.geometry = m.geometry.clone();
+          m.geometry.clearGroups();
+        }
+      });
+    }
+    foldProp(this.statics);
+    foldProp(this.trim);
+    const shootables: THREE.Object3D[] = [];
+    this.statics.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) shootables.push(o);
+    });
+    // The doors move, so they stay their own meshes, and take bullets as themselves
+    for (const leaf of [cockpit.door.pivot, aftDoor.leaf]) leaf.traverse((o) => (o as THREE.Mesh).isMesh && shootables.push(o));
+
+    const outside = this.outside();
+
+    return {
+      group: this.group,
+      colliders: this.colliders,
+      shootables,
+      occluders: this.occluders,
+      glassPanes: [],
+      waypoints: this.waypoints([cockpit.door.collider, aftDoor.collider]),
+      outside: outside.group,
+      cloudMaps: outside.maps,
+      playerSpawn: new THREE.Vector3(1.15, 0, 27.3),
+      playerSpawnYaw: 0,
+      checkpoints: [
+        { pos: new THREE.Vector3(1.15, 0, 27.3), yaw: 0 },
+        // Through into the lounge, past the conference room
+        { pos: new THREE.Vector3(0, 0, -4.6), yaw: 0 },
+        // At the cockpit door, the pilots done
+        { pos: new THREE.Vector3(0, 0, -27.0), yaw: Math.PI }
+      ],
+      guards: this.guards(),
+      pilotSeats: cockpit.seats,
+      cockpitDoor: cockpit.door,
+      aftDoor,
+      chutes: locker.chutes,
+      lockerAt: locker.at,
+      bossChair: lounge.chair,
+      cigarTip: lounge.cigar,
+      bossHide: boss.hide,
+      bossRun: boss.run,
+      alarmLights: this.alarmLights,
+      alarmMat: this.M.alarm,
+      cabinLights: this.cabinLights,
+      loose: this.loose,
+      hatch: new THREE.Vector3(1.2, 0, 28.2),
+      screenMat: this.M.screen,
+      ledMat: this.M.warmLed
+    };
+  }
+
+  // -------------------------------------------------------------- materials
+
+  private materials(): void {
+    const std = (o: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial(o);
+    this.M = {
+      carpet: std({ map: tex(carpetCanvas(), 2, 2), roughness: 0.95 }),
+      marble: std({ map: tex(marbleCanvas(), 1, 1), roughness: 0.25 }),
+      lining: std({ map: tex(liningCanvas(), 1, 1), roughness: 0.7, side: THREE.DoubleSide }),
+      ceiling: std({ color: 0xd8cdb9, roughness: 0.8, side: THREE.DoubleSide }),
+      walnut: std({ map: tex(walnutCanvas(), 1, 1), roughness: 0.45 }),
+      leather: std({ map: tex(leatherCanvas(), 2, 2), roughness: 0.55 }),
+      darkLeather: std({ color: 0x3a2418, roughness: 0.5 }),
+      gold: std({ color: 0xc9a24a, metalness: 1, roughness: 0.28 }),
+      steel: std({ color: 0xb8bcc2, metalness: 0.9, roughness: 0.32 }),
+      black: std({ color: 0x15171b, roughness: 0.4 }),
+      plastic: std({ color: 0xdedad2, roughness: 0.6, side: THREE.DoubleSide }),
+      led: std({ color: 0xffffff, emissive: 0xdfe9ff, emissiveIntensity: 1.6 }),
+      warmLed: std({ color: 0xffffff, emissive: 0xffc98a, emissiveIntensity: 0.9 }),
+      glass: std({ color: 0x9fb8c8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.25, depthWrite: false }),
+      linen: std({ color: 0xf6f3ec, roughness: 0.9 }),
+      navy: std({ color: 0x1c2741, roughness: 0.75 }),
+      tunnel: std({ color: 0x9d968a, roughness: 0.65, side: THREE.BackSide }),
+      screen: std({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(displayCanvas(), 1, 1), emissiveIntensity: 1.1 }),
+      alarm: std({ color: 0x400000, emissive: 0xff1a10, emissiveIntensity: 0 }),
+      hole: new THREE.MeshBasicMaterial({ color: 0x050505 })
+    };
+    this.M.walnut.map!.repeat.set(1, 1);
+  }
+
+  // -------------------------------------------------------------- helpers
+
+  /**
+   * A box, its bottom at y. Into the shootable statics (or the trim), and
+   * optionally a collider and a vision blocker.
+   */
+  private box(
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+    mat: Mat,
+    o: { collide?: boolean; occlude?: boolean; trim?: boolean; surface?: string; ry?: number; rx?: number; rz?: number; into?: THREE.Object3D } = {}
+  ): THREE.Mesh {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    if ((mat as THREE.MeshStandardMaterial).map) metreUVs(geo, w, h, d);
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y + h / 2, z);
+    if (o.ry) m.rotation.y = o.ry;
+    if (o.rx) m.rotation.x = o.rx;
+    if (o.rz) m.rotation.z = o.rz;
+    m.userData.surface = o.surface ?? 'wood';
+    (o.into ?? (o.trim ? this.trim : this.statics)).add(m);
+    if (o.collide) {
+      m.updateMatrixWorld(true);
+      const b = new THREE.Box3().setFromObject(m);
+      this.colliders.push({ box: b });
+    }
+    if (o.occlude) {
+      // A plain twin for the eyes: the drawn one is about to be folded away
+      const eye = new THREE.Mesh(m.geometry, mat);
+      eye.position.copy(m.position);
+      eye.rotation.copy(m.rotation);
+      eye.updateMatrixWorld(true);
+      this.occluders.push(eye);
+    }
+    return m;
+  }
+
+  /** A collider only, nothing drawn. */
+  private block(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Collider {
+    const c = { box: new THREE.Box3(new THREE.Vector3(Math.min(x0, x1), y0, Math.min(z0, z1)), new THREE.Vector3(Math.max(x0, x1), y1, Math.max(z0, z1))) };
+    this.colliders.push(c);
+    return c;
+  }
+
+  private cyl(rt: number, rb: number, h: number, x: number, y: number, z: number, mat: Mat, seg = 16, o: { trim?: boolean; collide?: boolean; rx?: number; rz?: number } = {}): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+    m.position.set(x, y + h / 2, z);
+    if (o.rx) m.rotation.x = o.rx;
+    if (o.rz) m.rotation.z = o.rz;
+    m.userData.surface = 'metal';
+    (o.trim ? this.trim : this.statics).add(m);
+    if (o.collide) {
+      m.updateMatrixWorld(true);
+      this.colliders.push({ box: new THREE.Box3().setFromObject(m) });
+    }
+    return m;
+  }
+
+  /** A flat sign/picture facing +Z (or turned by ry). */
+  private plane(w: number, h: number, x: number, y: number, z: number, mat: Mat, ry = 0, into: THREE.Object3D = this.trim): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    m.position.set(x, y, z);
+    m.rotation.y = ry;
+    into.add(m);
+    return m;
+  }
+
+  // -------------------------------------------------------------- the shell
+
+  /** Which spans of each sidewall have no window (bulkheads, the door, the cockpit). */
+  private static noWindow(side: -1 | 1, z: number): boolean {
+    if (z > Z_AFT - 0.8 || z < P_COCKPIT + 0.2) return true;
+    for (const p of [P_GALLEY, P_SUITE, P_CONF, P_LOUNGE]) if (Math.abs(z - p) < 0.45) return true;
+    // The doors, both sides (the right one stays shut: it's drawn as a panel)
+    if (z > DOOR.z0 - 0.35 && z < DOOR.z1 + 0.35) return true;
+    // The bar's back wall, and the galley's units
+    if (side === 1 && z > -13 && z < -6.6) return true;
+    return false;
+  }
+
+  private shell(): void {
+    const M = this.M;
+    const len = Z_AFT - P_COCKPIT;
+    const midZ = (Z_AFT + P_COCKPIT) / 2;
+
+    // ---- Floor: carpet through the cabins, marble in the galleys
+    const floor = (z0: number, z1: number, mat: Mat): void => {
+      const m = this.box(HW * 2, 0.3, z1 - z0, 0, -0.3, (z0 + z1) / 2, mat, { surface: 'concrete' });
+      m.receiveShadow = true;
+      const g = m.geometry as THREE.BoxGeometry;
+      // Repeat the map by the metre rather than stretching it
+      const uv = g.attributes.uv as THREE.BufferAttribute;
+      // By the metre already: the carpet's lattice wants a little bigger than that
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.5, uv.getY(i) * 0.5);
+    };
+    // The galley's floor goes round the hatch: 0.8 square at (1.2, 28.2)
+    const H0 = 0.8, H1 = 1.6, HZ0 = 27.8, HZ1 = 28.6;
+    floor(P_GALLEY, HZ0, M.marble);
+    floor(HZ1, Z_AFT, M.marble);
+    const strip = (x0: number, x1: number): void => {
+      this.box(x1 - x0, 0.3, HZ1 - HZ0, (x0 + x1) / 2, -0.3, (HZ0 + HZ1) / 2, M.marble, { surface: 'concrete' });
+    };
+    strip(-HW, H0);
+    strip(H1, HW);
+    floor(P_LOUNGE, P_GALLEY, M.carpet);
+    floor(Z_NOSE, P_LOUNGE, M.marble);
+    // Under the floor: solid, except the hatch (a body can't drop down it: it's capped just below)
+    this.block(-HW - 1, -1, Z_NOSE - 1, HW + 1, 0, HZ0);
+    this.block(-HW - 1, -1, HZ1, HW + 1, 0, Z_AFT + 1);
+    this.block(-HW - 1, -1, HZ0, H0, 0, HZ1);
+    this.block(H1, -1, HZ0, HW + 1, 0, HZ1);
+    this.block(H0, -1, HZ0, H1, -0.05, HZ1);
+    // The hold under it: a dark box of a room, a ladder up to the hatch, a work lamp
+    const holdMat = new THREE.MeshStandardMaterial({ color: 0x3b3c40, roughness: 0.9, side: THREE.DoubleSide });
+    const quad = (w: number, h: number, x: number, y: number, z: number, rx: number, ry: number): void => {
+      const q = new THREE.Mesh(new THREE.PlaneGeometry(w, h), holdMat);
+      q.position.set(x, y, z);
+      q.rotation.set(rx, ry, 0);
+      this.trim.add(q);
+    };
+    // Its floor, four walls, and a ceiling with the hatch left open in it
+    const hx = 1.2, hz = 28.2, HB = -2.6, HT = -0.32, HR = 1.3;
+    quad(HR * 2, HR * 2, hx, HB, hz, -Math.PI / 2, 0);
+    quad(HR * 2, HT - HB, hx, (HB + HT) / 2, hz - HR, 0, 0);
+    quad(HR * 2, HT - HB, hx, (HB + HT) / 2, hz + HR, 0, 0);
+    quad(HR * 2, HT - HB, hx - HR, (HB + HT) / 2, hz, 0, Math.PI / 2);
+    quad(HR * 2, HT - HB, hx + HR, (HB + HT) / 2, hz, 0, Math.PI / 2);
+    quad(HR * 2, HR - 0.4, hx, HT, hz - (HR + 0.4) / 2, Math.PI / 2, 0);
+    quad(HR * 2, HR - 0.4, hx, HT, hz + (HR + 0.4) / 2, Math.PI / 2, 0);
+    quad(HR - 0.4, 0.8, hx - (HR + 0.4) / 2, HT, hz, Math.PI / 2, 0);
+    quad(HR - 0.4, 0.8, hx + (HR + 0.4) / 2, HT, hz, Math.PI / 2, 0);
+    // The hatch's own shaft, through the floor's thickness
+    for (const [dx, dz, ry] of [[0, -0.392, 0], [0, 0.392, 0], [-0.392, 0, Math.PI / 2], [0.392, 0, Math.PI / 2]] as const) quad(0.784, 0.33, hx + dx, -0.155, hz + dz, 0, ry);
+    for (const x of [0.95, 1.45]) this.box(0.04, 2.7, 0.04, x, -2.6, 28.55, M.steel, { trim: true });
+    for (let y = -2.3; y < 0.1; y += 0.3) this.box(0.5, 0.03, 0.03, 1.2, y, 28.55, M.steel, { trim: true });
+    // His way in: crates, a golf bag
+    this.box(0.8, 0.7, 0.6, 0.4, -2.6, 27.4, M.walnut, { trim: true });
+    this.cyl(0.14, 0.14, 1.0, 2.1, -2.6, 28.9, M.navy, 12, { trim: true, rz: 0.4 });
+    const lamp = new THREE.PointLight(0xffc070, 1.2, 3.5, 1.6);
+    lamp.position.set(1.8, -0.9, 27.6);
+    this.group.add(lamp);
+
+    // ---- Ceiling, flat between the two shoulders
+    const ceil = this.box(4.3, 0.06, len, 0, CEIL, midZ, M.ceiling);
+    void ceil;
+    this.block(-HW, CEIL, P_COCKPIT, HW, CEIL + 0.6, Z_AFT);
+    // A recessed light trough down the middle, and the downlights either side of it
+    this.box(0.42, 0.02, len - 0.6, 0, CEIL - 0.015, midZ, M.warmLed, { trim: true });
+    for (let z = Z_AFT - 1.2; z > P_COCKPIT + 0.6; z -= 1.6) {
+      for (const x of [-1.25, 1.25]) {
+        const d = new THREE.Mesh(new THREE.CircleGeometry(0.06, 14), M.led);
+        d.rotation.x = Math.PI / 2;
+        d.position.set(x, CEIL - 0.005, z);
+        this.trim.add(d);
+      }
+    }
+
+    // ---- The fuselage outside: white, a navy belly, a gold cheatline. Only its
+    // outer faces are drawn, so from in the cabin (through a window, or the
+    // open door) it's not there, and from the door looking along her it is
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xf4f5f7, roughness: 0.35, metalness: 0.1 });
+    const bellyMat = new THREE.MeshStandardMaterial({ color: 0x1c2741, roughness: 0.4, metalness: 0.1 });
+    const skin = (r: number, a0: number, a1: number, mat: Mat): void => {
+      const g = new THREE.CylinderGeometry(r, r, len + 8, 48, 1, true, a0, a1 - a0);
+      const m = new THREE.Mesh(g, mat);
+      m.rotation.x = Math.PI / 2;
+      m.position.set(0, 0.95, midZ - 1);
+      this.trim.add(m);
+    };
+    // Around from the bottom (θ = 0 is underneath, after the turn)
+    skin(3.25, 1.05, Math.PI * 2 - 1.05, skinMat);
+    skin(3.26, -1.05, 1.05, bellyMat);
+    skin(3.262, 1.0, 1.06, this.M.gold);
+    skin(3.262, Math.PI * 2 - 1.06, Math.PI * 2 - 1.0, this.M.gold);
+
+    // ---- The sidewalls, each side: a lower panel, a band with the window
+    // holes in it, an upper panel, and the shoulder curving into the ceiling
+    for (const side of [-1, 1] as const) {
+      const x = side * HW;
+      const sx = side * (HW + T / 2);
+      // Windows: every 1.05 m, where the wall allows
+      const wins: number[] = [];
+      for (let z = Z_AFT - 1.3; z > P_COCKPIT; z -= 1.05) if (!Level19Builder.noWindow(side, z)) wins.push(z);
+      const W0 = 0.95;
+      const W1 = 1.55;
+      const HALF = 0.19;
+      // Spans to build solid, as [z0, z1], with the door left open on the left
+      const spans = (z0: number, z1: number, door: boolean): [number, number][] => {
+        if (!(door && side === -1)) return [[z0, z1]];
+        return [[z0, DOOR.z0], [DOOR.z1, z1]];
+      };
+      for (const [a, b] of spans(P_COCKPIT, Z_AFT, true)) {
+        this.box(T, W0, b - a, sx, 0, (a + b) / 2, M.lining, { surface: 'metal' });
+        this.box(T, 1.85 - W1, b - a, sx, W1, (a + b) / 2, M.lining, { surface: 'metal' });
+      }
+      // The band: solid between holes
+      const cuts = wins.map((z) => [z - HALF, z + HALF] as [number, number]).sort((p, q) => p[0] - q[0]);
+      let at = P_COCKPIT;
+      const pier = (a: number, b: number): void => {
+        for (const [p, q] of spans(a, b, true)) if (q - p > 0.005) this.box(T, W1 - W0, q - p, sx, W0, (p + q) / 2, M.lining, { surface: 'metal' });
+      };
+      for (const [c0, c1] of cuts) {
+        pier(at, c0);
+        at = c1;
+      }
+      pier(at, Z_AFT);
+      // Above the door: the wall carries on over it
+      if (side === -1) this.box(T, 1.85 - DOOR.h, DOOR.z1 - DOOR.z0, sx, DOOR.h, (DOOR.z0 + DOOR.z1) / 2, M.lining, { surface: 'metal' });
+      // The shoulder: a quarter-ellipse from the top of the wall to the ceiling's edge
+      const shape = new THREE.Shape();
+      const pts: THREE.Vector2[] = [];
+      for (let i = 0; i <= 10; i++) {
+        const a = (i / 10) * Math.PI * 0.5;
+        pts.push(new THREE.Vector2(side * (2.15 + 0.65 * Math.cos(a)), 1.85 + 0.57 * Math.sin(a)));
+      }
+      shape.moveTo(pts[0].x, pts[0].y);
+      for (const p of pts) shape.lineTo(p.x, p.y);
+      for (let i = pts.length - 1; i >= 0; i--) shape.lineTo(pts[i].x + side * 0.06, pts[i].y + 0.06);
+      const sh = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: len, bevelEnabled: false, curveSegments: 1 }), M.lining);
+      sh.position.z = P_COCKPIT;
+      sh.userData.surface = 'metal';
+      this.statics.add(sh);
+      // A gold pinstripe along the top of the wall, and an LED wash up the shoulder
+      // (all of it stopping either side of the door)
+      for (const [a, b] of spans(P_COCKPIT, Z_AFT, true)) {
+        const l = b - a;
+        const m = (a + b) / 2;
+        this.box(0.03, 0.025, l, side * (HW - 0.015), 1.84, m, M.gold, { trim: true });
+        this.box(0.02, 0.02, l, side * (HW - 0.06), 1.88, m, M.warmLed, { trim: true });
+        // A dado rail of walnut at sill height
+        this.box(0.05, 0.08, l, side * (HW - 0.025), 0.86, m, M.walnut, { trim: true });
+      }
+      this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(side < 0 ? -HW - 0.5 : HW, -0.5, P_COCKPIT - 0.2), new THREE.Vector3(side < 0 ? -HW : HW + 0.5, 3, Z_AFT + 0.2)) });
+      // The left wall's collider has a gap at the door: put it back in two halves, the door's own collider in between
+      if (side === -1) {
+        const c = this.colliders[this.colliders.length - 1];
+        c.box.max.z = DOOR.z0;
+        this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(-HW - 0.5, -0.5, DOOR.z1), new THREE.Vector3(-HW, 3, Z_AFT + 0.2)) });
+        this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(-HW - 0.5, DOOR.h, DOOR.z0), new THREE.Vector3(-HW, 3, DOOR.z1)) });
+      }
+      // Each window: a moulded bezel round an oval, and a short tunnel out through the skin
+      const bezelShape = new THREE.Shape();
+      bezelShape.moveTo(-0.27, -0.36);
+      bezelShape.lineTo(0.27, -0.36);
+      bezelShape.lineTo(0.27, 0.36);
+      bezelShape.lineTo(-0.27, 0.36);
+      bezelShape.lineTo(-0.27, -0.36);
+      const hole = new THREE.Path();
+      hole.absellipse(0, 0, 0.155, 0.225, 0, Math.PI * 2, true, 0);
+      bezelShape.holes.push(hole);
+      const bezelGeo = new THREE.ShapeGeometry(bezelShape, 24);
+      const bezelMat = new THREE.MeshStandardMaterial({ color: 0xd6ccb9, roughness: 0.5, side: THREE.DoubleSide });
+      // A dark rubber seal round the oval
+      const ring = new THREE.RingGeometry(1, 1.12, 32);
+      ring.scale(0.155, 0.225, 1);
+      const tunnelGeo = new THREE.CylinderGeometry(1, 1, 0.16, 24, 1, true);
+      tunnelGeo.rotateZ(Math.PI / 2);
+      tunnelGeo.scale(1, 0.225, 0.155);
+      for (const z of wins) {
+        const bz = new THREE.Mesh(bezelGeo, bezelMat);
+        bz.position.set(x - side * 0.005, 1.25, z);
+        bz.rotation.y = -side * Math.PI / 2;
+        this.trim.add(bz);
+        const seal = new THREE.Mesh(ring, M.black);
+        seal.position.set(x - side * 0.008, 1.25, z);
+        seal.rotation.y = -side * Math.PI / 2;
+        this.trim.add(seal);
+        const tn = new THREE.Mesh(tunnelGeo, M.tunnel);
+        tn.position.set(x + side * 0.08, 1.25, z);
+        this.trim.add(tn);
+        // The blind, half down: a little pull at its edge
+        const blind = this.box(0.01, 0.13, 0.3, x + side * 0.03, 1.37, z, M.plastic, { trim: true });
+        void blind;
+      }
+    }
+  }
+
+  /** A transverse bulkhead across the whole width at z, a doorway in the middle. */
+  private bulkhead(z: number, face: Mat, o: { door?: number; doorX?: number; noDoor?: boolean } = {}): void {
+    const w = o.door ?? DW;
+    const dx = o.doorX ?? 0;
+    const l = dx - w / 2;
+    const r = dx + w / 2;
+    if (o.noDoor) {
+      this.box(HW * 2, CEIL, T * 1.5, 0, 0, z, face, { collide: true, occlude: true });
+      return;
+    }
+    this.box(l + HW, CEIL, T * 1.5, (l - HW) / 2, 0, z, face, { collide: true, occlude: true });
+    this.box(HW - r, CEIL, T * 1.5, (r + HW) / 2, 0, z, face, { collide: true, occlude: true });
+    this.box(w, CEIL - DH, T * 1.5, dx, DH, z, face, { collide: true, occlude: true });
+    // A gold frame round the opening, both faces
+    for (const s of [-1, 1]) {
+      const fz = z + s * (T * 0.75 + 0.012);
+      this.box(0.05, DH, 0.025, l - 0.025, 0, fz, this.M.gold, { trim: true });
+      this.box(0.05, DH, 0.025, r + 0.025, 0, fz, this.M.gold, { trim: true });
+      this.box(w + 0.1, 0.05, 0.025, dx, DH, fz, this.M.gold, { trim: true });
+    }
+  }
+
+  private partitions(): void {
+    const M = this.M;
+    this.bulkhead(P_GALLEY, M.walnut);
+    this.bulkhead(P_SUITE, M.walnut);
+    this.bulkhead(P_CONF, M.walnut);
+    this.bulkhead(P_LOUNGE, M.walnut);
+    // The aft pressure bulkhead and the cockpit's front are the ends of the tube
+    this.box(HW * 2, CEIL, T, 0, 0, Z_AFT + T / 2, M.lining, { collide: true, occlude: true, surface: 'metal' });
+  }
+
+  // -------------------------------------------------------------- aft galley
+
+  private galley(): void {
+    const M = this.M;
+    // The units against the back wall: ovens, chillers, the coffee
+    const back = Z_AFT - 0.4;
+    this.box(3.6, 0.95, 0.75, 0, 0, back, M.steel, { collide: true, surface: 'metal' });
+    this.box(3.64, 0.04, 0.8, 0, 0.95, back, M.marble, { trim: true });
+    this.box(3.6, 0.9, 0.45, 0, 1.45, back + 0.12, M.steel, { surface: 'metal', collide: true });
+    for (let i = 0; i < 4; i++) {
+      const x = -1.35 + i * 0.9;
+      // Oven doors: dark glass with a steel handle
+      this.box(0.7, 0.5, 0.02, x, 1.52, back - 0.11, M.black, { trim: true });
+      this.box(0.4, 0.025, 0.03, x, 1.95, back - 0.12, M.steel, { trim: true });
+      // The carts' bays below: each cart's front with its latch
+      this.box(0.4, 0.82, 0.02, x, 0.06, back - 0.385, M.steel, { trim: true });
+      this.box(0.08, 0.06, 0.03, x, 0.75, back - 0.4, M.gold, { trim: true });
+    }
+    // The coffee machine and a stack of cups on the counter
+    this.box(0.38, 0.4, 0.32, -1.1, 0.99, back - 0.05, M.black, { trim: true });
+    this.cyl(0.04, 0.035, 0.09, -0.6, 0.99, back - 0.15, M.linen, 10, { trim: true });
+    this.cyl(0.04, 0.035, 0.09, -0.5, 0.99, back - 0.1, M.linen, 10, { trim: true });
+    // A cart out on the floor, by the right wall: cover to come up behind
+    this.box(0.42, 1.0, 0.82, 2.2, 0, 26.6, M.steel, { collide: true, surface: 'metal' });
+    this.box(0.44, 0.03, 0.84, 2.2, 1.0, 26.6, M.navy, { trim: true });
+    this.box(0.42, 1.0, 0.82, 2.2, 0, 25.6, M.steel, { collide: true, surface: 'metal' });
+    // The jump seats on the bulkhead either side of its doorway
+    for (const x of [-1.6, 1.6]) {
+      this.box(0.9, 0.08, 0.45, x, 0.5, P_GALLEY + 0.32, M.navy, { trim: true });
+      this.box(0.9, 0.6, 0.08, x, 0.58, P_GALLEY + 0.13, M.navy, { trim: true });
+    }
+    // The hatch he comes up through: its panel stood up open on its hinge, aft
+    this.box(0.8, 0.8, 0.04, 1.2, 0, 28.75, M.steel, { surface: 'metal', rx: -0.3 });
+    for (const x of [0.8, 1.6]) this.box(0.03, 0.02, 0.84, x, 0, 28.2, M.steel, { trim: true });
+    // A sign over the doorway into the cabin
+    this.plane(0.9, 0.22, 0, 2.2, P_GALLEY + T * 0.75 + 0.02, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['CREW ONLY']), 1, 1), roughness: 0.6 }), 0);
+  }
+
+  // -------------------------------------------------------------- the suite
+
+  private suite(): { hide: THREE.Vector3; run: THREE.Vector3[] } {
+    const M = this.M;
+    const z0 = P_SUITE;
+    const z1 = P_GALLEY;
+    // The corridor's two walls, each with its doorways
+    const corridorWall = (side: -1 | 1, doors: number[]): void => {
+      const x = side * CX;
+      const edges: [number, number][] = [];
+      let at = z0 + T;
+      for (const d of doors.sort((a, b) => a - b)) {
+        edges.push([at, d - 0.45]);
+        at = d + 0.45;
+      }
+      edges.push([at, z1 - T]);
+      for (const [a, b] of edges) this.box(T, CEIL, b - a, x, 0, (a + b) / 2, M.walnut, { collide: true, occlude: true });
+      for (const d of doors) this.box(T, CEIL - DH, 0.9, x, DH, d, M.walnut, { collide: true, occlude: true });
+      for (const d of doors) {
+        for (const s of [-1, 1]) this.box(0.025, DH, 0.05, x - side * 0.075, 0, d + s * 0.475, M.gold, { trim: true });
+      }
+    };
+    // Left: the bedroom (z 12.6 .. 23.5, door at 21.4) and its bathroom (z 8 .. 12.6, door at 9.4)
+    // Right: the guest room (z 15.6 .. 23.5, door at 17) and the study (z 8 .. 15.6, door at 9.8)
+    corridorWall(-1, [21.4, 9.4]);
+    corridorWall(1, [17, 9.8]);
+    this.box(HW - CX, CEIL, T, -(HW + CX) / 2, 0, 12.6, M.walnut, { collide: true, occlude: true });
+    this.box(HW - CX, CEIL, T, (HW + CX) / 2, 0, 15.6, M.walnut, { collide: true, occlude: true });
+
+    // ---- The bedroom: through the door from the corridor, the bed against
+    // the outer wall with its head at the far (forward) end under his
+    // portrait; a walkway down the corridor side; his wardrobe beyond the bed
+    const bx = -2.1;
+    this.box(1.35, 0.42, 2.1, bx, 0, 17.8, M.walnut, { collide: true });
+    this.box(1.31, 0.2, 2.02, bx, 0.42, 17.8, M.linen, { trim: true });
+    this.box(1.45, 1.15, 0.12, bx, 0, 16.68, M.leather, { collide: true });
+    this.box(1.37, 0.06, 1.0, bx, 0.62, 18.3, M.navy, { trim: true });
+    for (const px of [bx - 0.34, bx + 0.34]) this.box(0.46, 0.14, 0.32, px, 0.62, 17.0, M.linen, { trim: true });
+    // A gold-framed portrait of the boss himself over the bed, of course
+    this.box(1.0, 0.7, 0.04, bx, 1.35, 16.6, M.gold, { trim: true });
+    this.plane(0.9, 0.6, bx, 1.7, 16.63, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['THE BOSS', 'EMPLOYEE OF', 'EVERY MONTH'], '#5a1420', '#f7e3b0', 256, 180), 1, 1) }), 0);
+    // A bench at the bed's foot
+    this.box(1.1, 0.42, 0.4, bx, 0, 19.2, M.darkLeather, { collide: true });
+    // The wardrobe, forward of the bed: where he waits it out
+    this.box(0.55, 2.1, 1.6, -1.05, 0, 14.2, M.walnut, { collide: true, occlude: true });
+    this.box(0.02, 1.9, 0.02, -1.34, 0.1, 14.2, M.gold, { trim: true });
+    // ---- The bathroom: marble, a basin, a gold tap
+    this.box(HW - CX - 0.12, 0.02, 4.4, -(HW + CX) / 2, 0.001, 10.3, M.marble, { trim: true });
+    this.box(0.6, 0.85, 1.2, -2.45, 0, 10.6, M.marble, { collide: true });
+    this.cyl(0.18, 0.12, 0.1, -2.42, 0.85, 10.6, M.linen, 16, { trim: true });
+    this.cyl(0.015, 0.015, 0.2, -2.68, 0.85, 10.6, M.gold, 8, { trim: true });
+    this.box(0.02, 0.8, 1.0, -2.78, 1.1, 10.6, M.glass, { trim: true });
+
+    // ---- The guest room: a smaller bed, an armchair
+    this.box(1.3, 0.42, 2.0, 1.9, 0, 20.4, M.walnut, { collide: true });
+    this.box(1.26, 0.2, 1.92, 1.9, 0.42, 20.4, M.linen, { trim: true });
+    this.box(1.36, 1.0, 0.12, 1.9, 0, 21.45, M.leather, { collide: true });
+    this.sofa(1.95, 16.4, Math.PI, 1, M.leather);
+    // ---- The study: a desk under the windows, a chair, a safe
+    this.box(0.7, 0.75, 1.6, 2.35, 0, 12.4, M.walnut, { collide: true });
+    this.box(0.5, 0.03, 0.35, 2.4, 0.75, 12.0, M.black, { trim: true });
+    this.chair(1.75, 12.4, -Math.PI / 2, M.darkLeather);
+    this.box(0.6, 0.8, 0.6, 2.4, 0, 9.0, M.steel, { collide: true, surface: 'metal' });
+    this.cyl(0.08, 0.08, 0.03, 2.08, 0.5, 9.0, M.gold, 16, { trim: true, rz: Math.PI / 2 });
+    // A rug down the corridor
+    this.box(0.9, 0.012, z1 - z0 - 0.6, 0, 0.001, (z0 + z1) / 2, M.navy, { trim: true });
+    // Little sconces on the corridor walls
+    for (let z = 10; z < 23; z += 3) {
+      for (const s of [-1, 1]) this.box(0.04, 0.22, 0.1, s * (CX - 0.08), 1.6, z, M.warmLed, { trim: true });
+    }
+
+    // Where the boss hides (in the wardrobe's shadow), and his run from there
+    // out of the bedroom, down the corridor and across the galley to the door
+    // He waits it out in there, just inside the door; then out into the
+    // corridor, where he stops and turns to look up the plane (the scene
+    // holds him at the third point), and on at a run to the aft door
+    const hide = new THREE.Vector3(-1.35, 0, 21.4);
+    const run = [
+      hide.clone(),
+      new THREE.Vector3(-0.2, 0, 21.25),
+      new THREE.Vector3(0, 0, 20.9),
+      new THREE.Vector3(0, 0, 22.8),
+      new THREE.Vector3(-0.6, 0, 24.6),
+      new THREE.Vector3(-2.05, 0, 25.6)
+    ];
+    return { hide, run };
+  }
+
+  // -------------------------------------------------------------- conference
+
+  private conference(): void {
+    const M = this.M;
+    // The long table, down the middle, chairs either side
+    this.box(1.15, 0.05, 6.8, 0, 0.74, 1.4, M.walnut, { collide: true });
+    this.box(0.5, 0.74, 5.6, 0, 0, 1.4, M.black, {});
+    this.box(0.02, 0.006, 6.6, 0, 0.79, 1.4, M.gold, { trim: true });
+    for (let i = 0; i < 6; i++) {
+      const z = -1.4 + i * 1.12;
+      this.chair(-0.95, z, -Math.PI / 2, M.leather);
+      this.chair(0.95, z, Math.PI / 2, M.leather);
+      // A folder and a glass at each place
+      this.box(0.22, 0.01, 0.3, -0.4, 0.79, z, M.navy, { trim: true });
+      this.box(0.22, 0.01, 0.3, 0.4, 0.79, z, M.navy, { trim: true });
+    }
+    // The screen on the forward bulkhead: the quarterly numbers, all bad
+    this.box(1.62, 0.95, 0.06, 1.68, 1.05, P_CONF + 0.12, M.black, { trim: true });
+    const chart = canvas(512, 290, (g) => {
+      g.fillStyle = '#0c1424';
+      g.fillRect(0, 0, 512, 290);
+      g.fillStyle = '#f2e6c8';
+      g.font = 'bold 26px Arial';
+      g.fillText('RAVI-CALL SYSTEMS — Q3', 20, 40);
+      g.strokeStyle = '#e04040';
+      g.lineWidth = 6;
+      g.beginPath();
+      g.moveTo(30, 90);
+      g.lineTo(140, 120);
+      g.lineTo(220, 110);
+      g.lineTo(320, 190);
+      g.lineTo(400, 230);
+      g.lineTo(490, 275);
+      g.stroke();
+      g.fillStyle = '#e04040';
+      g.font = 'bold 22px Arial';
+      g.fillText('WITNESSES: TOO MANY', 230, 80);
+    });
+    this.plane(1.54, 0.87, 1.68, 1.525, P_CONF + 0.155, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(chart, 1, 1), emissiveIntensity: 0.9 }), 0);
+    // The security post: a desk on the right by the aft bulkhead, a wall of monitors
+    this.box(0.7, 0.78, 2.2, 2.35, 0, 5.8, M.black, { collide: true, surface: 'metal' });
+    this.box(0.74, 0.03, 2.24, 2.33, 0.78, 5.8, M.steel, { trim: true });
+    this.chair(1.6, 5.8, -Math.PI / 2, M.darkLeather);
+    for (let i = 0; i < 4; i++) {
+      const z = 5.0 + (i % 2) * 0.95 + 0.0;
+      const y = 1.05 + Math.floor(i / 2) * 0.55;
+      this.box(0.05, 0.5, 0.88, 2.72, y - 0.02, z + 0.0, M.black, { trim: true });
+      this.plane(0.82, 0.46, 2.69, y + 0.23, z, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(cctvCanvas(i), 1, 1), emissiveIntensity: 0.8 }), -Math.PI / 2);
+    }
+    // A rack of radios and a coffee gone cold
+    this.box(0.3, 0.12, 0.5, 2.4, 0.81, 6.6, M.black, { trim: true });
+    this.cyl(0.04, 0.035, 0.1, 2.3, 0.81, 5.0, M.linen, 10, { trim: true });
+    // Credenza on the left with a model of the plane on it
+    this.box(0.5, 0.8, 2.6, -2.5, 0, 4.6, M.walnut, { collide: true });
+    this.box(0.08, 0.06, 0.6, -2.5, 0.84, 4.6, M.linen, { trim: true });
+    this.box(0.5, 0.01, 0.08, -2.5, 0.88, 4.55, M.linen, { trim: true });
+  }
+
+  // -------------------------------------------------------------- the lounge
+
+  private lounge(): { chair: THREE.Vector3; cigar: THREE.Vector3 } {
+    const M = this.M;
+    // A rug the width of it, navy with a gold border
+    this.box(4.4, 0.012, 13.6, 0, 0.001, -14, M.navy, { trim: true });
+    for (const s of [-1, 1]) this.box(0.08, 0.014, 13.6, s * 2.16, 0.001, -14, M.gold, { trim: true });
+    // ---- Left: two long sofas under the windows, each with its table
+    this.sofa(-2.25, -9.6, -Math.PI / 2, 3, M.leather);
+    this.sofa(-2.25, -16.8, -Math.PI / 2, 3, M.leather);
+    for (const z of [-9.6, -16.8]) {
+      this.coffeeTable(-1.15, z);
+    }
+    this.loose.push(this.glass(-1.1, 0.46, -9.3), this.glass(-1.2, 0.46, -16.6), this.glass(-1.05, 0.46, -17.0));
+    // ---- Right, aft: the bar, its back wall of bottles lit from behind
+    const barX = 1.95;
+    this.box(0.55, 1.08, 4.6, barX - 0.5, 0, -9.4, M.walnut, { collide: true, occlude: false });
+    this.box(0.7, 0.05, 4.7, barX - 0.52, 1.08, -9.4, M.marble, { trim: true });
+    this.box(0.02, 0.06, 4.6, barX - 0.85, 0.15, -9.4, M.gold, { trim: true });
+    // Back bar: shelves, glowing panel, bottles
+    this.box(0.3, 2.0, 5.2, 2.62, 0, -9.6, M.black, { collide: true, occlude: true });
+    const amber = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xff9a3c, emissiveIntensity: 0.55 });
+    this.box(0.02, 1.3, 5.0, 2.46, 0.85, -9.6, amber, { trim: true });
+    const r = rng(31);
+    const bottleCols = [0x6a3a10, 0x2b5a2a, 0xe8e0c0, 0x7a1020, 0x3a3a60, 0xc08a30];
+    const bottleMats = bottleCols.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.85 }));
+    for (const y of [0.95, 1.45]) {
+      this.box(0.28, 0.025, 5.0, 2.42, y, -9.6, M.walnut, { trim: true });
+      for (let z = -11.9; z < -7.3; z += 0.16 + r() * 0.06) {
+        const m = bottleMats[Math.floor(r() * bottleMats.length)];
+        const h = 0.24 + r() * 0.12;
+        this.cyl(0.035, 0.04, h, 2.38, y + 0.025, z, m, 8, { trim: true });
+        this.cyl(0.012, 0.03, 0.08, 2.38, y + 0.025 + h, z, m, 6, { trim: true });
+      }
+    }
+    // Bar stools
+    for (let i = 0; i < 4; i++) {
+      const z = -11.2 + i * 1.2;
+      this.cyl(0.2, 0.2, 0.06, barX - 1.05, 0.72, z, M.darkLeather, 16);
+      this.cyl(0.025, 0.025, 0.72, barX - 1.05, 0, z, M.gold, 8, { trim: true });
+      this.cyl(0.18, 0.2, 0.03, barX - 1.05, 0, z, M.gold, 16, { trim: true });
+    }
+    this.loose.push(this.glass(barX - 0.5, 1.13, -8.4), this.glass(barX - 0.45, 1.13, -10.2), this.glass(barX - 0.55, 1.13, -11.0));
+    // An ice bucket and champagne
+    this.cyl(0.11, 0.09, 0.22, barX - 0.5, 1.13, -9.0, M.steel, 14, { trim: true });
+    this.cyl(0.04, 0.04, 0.3, barX - 0.5, 1.2, -9.0, bottleMats[1], 10, { trim: true });
+
+    // ---- Right, forward: the boss's own corner. Two club chairs and his,
+    // bigger, gold-legged, facing down the cabin, the cigar still going
+    this.club(1.75, -15.9, 0.2, M.darkLeather);
+    this.club(1.75, -19.1, Math.PI - 0.2, M.darkLeather);
+    const chair = new THREE.Vector3(0.9, 0, -17.5);
+    this.club(chair.x, chair.z, Math.PI, M.darkLeather, 1.25);
+    this.coffeeTable(1.85, -17.5);
+    // His ashtray, cigar, whisky
+    this.cyl(0.08, 0.07, 0.03, 1.7, 0.46, -17.3, M.glass, 14, { trim: true });
+    const cigar = this.cyl(0.011, 0.011, 0.14, 1.7, 0.5, -17.3, M.darkLeather, 8, { trim: true, rz: Math.PI / 2 });
+    void cigar;
+    const cigarTip = new THREE.Vector3(1.77, 0.5, -17.3);
+    this.loose.push(this.glass(1.95, 0.46, -17.65));
+    // A gold bust of him on a plinth by the forward bulkhead
+    this.box(0.5, 1.0, 0.5, 2.3, 0, -21.35, M.black, { collide: true });
+    const bust = new THREE.Group();
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 18, 14), M.gold);
+    head.scale.set(0.9, 1.15, 1);
+    head.position.y = 0.42;
+    bust.add(head);
+    const shoulders = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.26, 0.26, 18), M.gold);
+    shoulders.position.y = 0.13;
+    bust.add(shoulders);
+    bust.position.set(2.3, 1.0, -21.35);
+    this.statics.add(bust);
+    // The TV on the forward bulkhead, showing the boss's own face, in a frame
+    this.box(1.7, 1.0, 0.07, -1.66, 1.05, P_LOUNGE + 0.13, M.black, { trim: true });
+    const tv = canvas(512, 290, (g) => {
+      const gr = g.createLinearGradient(0, 0, 0, 290);
+      gr.addColorStop(0, '#1e3c72');
+      gr.addColorStop(1, '#2a5298');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 512, 290);
+      g.fillStyle = '#f7d774';
+      g.font = 'bold 40px Georgia';
+      g.textAlign = 'center';
+      g.fillText('BUSINESS WEEKLY', 256, 70);
+      g.fillStyle = '#fff';
+      g.font = 'bold 30px Georgia';
+      g.fillText('"I WORK HARDER THAN', 256, 150);
+      g.fillText('ANY OF MY EMPLOYEES"', 256, 190);
+      g.font = '22px Georgia';
+      g.fillText('— THE BOSS, FROM HIS JET', 256, 250);
+    });
+    this.plane(1.62, 0.91, -1.66, 1.55, P_LOUNGE + 0.17, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(tv, 1, 1), emissiveIntensity: 0.75 }), 0);
+    // Cushions to fly about later
+    for (const [x, z] of [[-2.1, -8.6], [-2.1, -10.6], [-2.1, -15.8], [-2.1, -17.8]] as const) {
+      const c = this.box(0.12, 0.34, 0.34, x, 0.48, z, M.navy, { into: this.group, ry: 0.2 });
+      c.userData.cushion = true;
+      this.loose.push(c);
+    }
+    return { chair, cigar: cigarTip };
+  }
+
+  // -------------------------------------------------------------- forward
+
+  private forward(): void {
+    const M = this.M;
+    // The crew's galley along the left: counter, chiller, ovens over
+    this.box(0.7, 0.95, 3.4, -2.42, 0, -25.0, M.steel, { collide: true, surface: 'metal' });
+    this.box(0.74, 0.04, 3.44, -2.42, 0.95, -25.0, M.marble, { trim: true });
+    this.box(0.45, 0.85, 3.4, -2.55, 1.45, -25.0, M.steel, { collide: true, surface: 'metal' });
+    this.loose.push(this.glass(-2.3, 0.99, -24.2), this.glass(-2.25, 0.99, -25.8));
+    // A lavatory, right, its door shut
+    this.box(1.3, CEIL, T, 2.15, 0, -25.6, M.walnut, { collide: true, occlude: true });
+    this.box(T, CEIL, 2.2, 1.5, 0, -26.75, M.walnut, { collide: true, occlude: true });
+    this.box(0.02, 1.95, 0.7, 1.43, 0, -26.6, M.plastic, { trim: true });
+    this.plane(0.25, 0.12, 1.42, 1.7, -26.6, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['OCCUPIED'], '#5a1010', '#fff', 256, 96), 1, 1) }), -Math.PI / 2);
+    // The crew's jump seats, right, aft of the lav
+    this.box(0.9, 0.08, 0.45, 2.1, 0.5, -24.9, M.navy, { trim: true });
+    this.box(0.9, 0.6, 0.08, 2.1, 0.58, -25.5, M.navy, { trim: true });
+  }
+
+  // -------------------------------------------------------------- cockpit
+
+  private cockpit(): { seats: THREE.Vector3[]; door: Level19Data['cockpitDoor'] } {
+    const M = this.M;
+    // The cockpit's own bulkhead, its armoured door (hinged on the left, swinging in)
+    const z = P_COCKPIT;
+    const dw = 0.86;
+    this.box(HW - dw / 2, CEIL, 0.16, -(HW + dw / 2) / 2, 0, z, M.lining, { collide: true, occlude: true, surface: 'metal' });
+    this.box(HW - dw / 2, CEIL, 0.16, (HW + dw / 2) / 2, 0, z, M.lining, { collide: true, occlude: true, surface: 'metal' });
+    this.box(dw, CEIL - 2.0, 0.16, 0, 2.0, z, M.lining, { collide: true, occlude: true, surface: 'metal' });
+    const pivot = new THREE.Group();
+    pivot.position.set(-dw / 2, 0, z);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(dw, 2.0, 0.07), new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.6, roughness: 0.4 }));
+    leaf.position.set(dw / 2, 1.0, 0);
+    leaf.userData.surface = 'metal';
+    pivot.add(leaf);
+    // A keypad and a peephole on its cabin side
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.02), M.black);
+    pad.position.set(dw - 0.14, 1.25, 0.045);
+    pivot.add(pad);
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.015, 0.01), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2a1a, emissiveIntensity: 1.5 }));
+    lamp.position.set(dw - 0.14, 1.34, 0.056);
+    pivot.add(lamp);
+    this.group.add(pivot);
+    const collider = this.block(-dw / 2, 0, z - 0.06, dw / 2, 2.0, z + 0.06);
+    // A sign over it
+    this.plane(0.8, 0.18, 0, 2.18, z + 0.09, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['FLIGHT DECK']), 1, 1) }), 0);
+
+    // The cockpit: narrower, its walls angling in to the nose, grey, with its own low ceiling
+    const grey = new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.7 });
+    this.box(3.6, 0.1, Math.abs(Z_NOSE - z), 0, CEIL - 0.2, (z + Z_NOSE) / 2, grey, { surface: 'metal' });
+    const w0 = 1.75;
+    const w1 = 1.25;
+    for (const s of [-1, 1]) {
+      const wall = this.box(T, CEIL, 5.0, s * ((w0 + w1) / 2), 0, (z + Z_NOSE) / 2, grey, { collide: true, occlude: true, surface: 'metal', ry: s * Math.atan2(w0 - w1, 5) });
+      void wall;
+      // Fill between the angled wall and the tube: nobody gets in there
+      this.block(s * w1, 0, Z_NOSE, s * HW, CEIL, z);
+      // Side panels with switches
+      this.box(0.25, 0.4, 1.6, s * (w0 - 0.3), 0.6, z - 1.6, M.black, { trim: true, ry: s * 0.1 });
+    }
+    // The panel, the glareshield over it, the screens
+    this.box(2.4, 0.95, 0.5, 0, 0, Z_NOSE + 0.6, M.black, { collide: true, surface: 'metal' });
+    this.box(2.4, 0.1, 0.62, 0, 1.12, Z_NOSE + 0.6, M.black, { trim: true });
+    const panel = this.box(2.2, 0.38, 0.05, 0, 0.72, Z_NOSE + 0.86, M.black, { trim: true, rx: -0.25 });
+    void panel;
+    this.plane(2.1, 0.33, 0, 0.92, Z_NOSE + 0.89, M.screen, 0).rotation.x = -0.25;
+    // The pedestal between the seats: throttles
+    this.box(0.36, 0.7, 1.1, 0, 0, Z_NOSE + 1.6, M.black, { collide: true, surface: 'metal' });
+    for (const tx of [-0.07, 0.07]) this.box(0.035, 0.18, 0.05, tx, 0.7, Z_NOSE + 1.45, M.steel, { trim: true, rx: 0.3 });
+    // Overhead panel
+    this.box(1.1, 0.06, 1.6, 0, CEIL - 0.08, Z_NOSE + 1.8, M.black, { trim: true });
+    // The windscreen: four panes in a dark frame, angled back, the sky through them
+    for (let i = 0; i < 4; i++) {
+      const x = -0.9 + i * 0.6;
+      this.box(0.05, 0.6, 0.05, x - 0.3, 1.22, Z_NOSE + 0.32, M.black, { trim: true, rx: 0.5 });
+      void x;
+    }
+    this.box(2.4, 0.08, 0.1, 0, 1.82, Z_NOSE + 0.1, M.black, { trim: true });
+    this.box(2.6, 0.5, 0.06, 0, 1.86, Z_NOSE + 0.1, grey, { surface: 'metal' });
+    // The two seats, each a shell on a rail
+    const seats = [new THREE.Vector3(-0.55, 0.48, Z_NOSE + 2.05), new THREE.Vector3(0.55, 0.48, Z_NOSE + 2.05)];
+    for (const s of seats) {
+      this.box(0.55, 0.12, 0.55, s.x, 0.36, s.z, M.darkLeather, {});
+      this.box(0.55, 0.62, 0.12, s.x, 0.48, s.z + 0.36, M.darkLeather, { rx: 0.12 });
+      this.box(0.22, 0.36, 0.3, s.x, 0, s.z, M.black, {});
+      this.block(s.x - 0.3, 0, s.z - 0.3, s.x + 0.3, 1.3, s.z + 0.45);
+    }
+    // A coffee on the glareshield
+    this.cyl(0.04, 0.035, 0.1, 0.8, 1.17, Z_NOSE + 0.7, M.linen, 10, { trim: true });
+    return { seats, door: { pivot, collider, at: new THREE.Vector3(0, 0, z + 0.6) } };
+  }
+
+  // -------------------------------------------------------------- the aft door
+
+  private aftDoor(): Level19Data['aftDoor'] {
+    const M = this.M;
+    const leaf = new THREE.Group();
+    const zc = (DOOR.z0 + DOOR.z1) / 2;
+    const dl = DOOR.z1 - DOOR.z0;
+    leaf.position.set(-HW - T / 2, 0, zc);
+    // The plug: a thick panel, lined inside, a window and the big handle
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(T + 0.04, DOOR.h - 0.02, dl - 0.04), M.lining);
+    slab.position.y = DOOR.h / 2;
+    slab.userData.surface = 'metal';
+    leaf.add(slab);
+    const win = new THREE.Mesh(new THREE.CircleGeometry(0.14, 20), M.hole);
+    win.rotation.y = Math.PI / 2;
+    win.position.set(T / 2 + 0.025, 1.3, 0);
+    leaf.add(win);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.7), M.steel);
+    handle.position.set(T / 2 + 0.06, 1.0, 0);
+    leaf.add(handle);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.06, dl - 0.1), M.alarm);
+    stripe.position.set(T / 2 + 0.025, 1.75, 0);
+    leaf.add(stripe);
+    // Placard: the instructions nobody reads
+    const plac = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.25), new THREE.MeshStandardMaterial({ map: tex(signCanvas(['DO NOT OPEN', 'IN FLIGHT'], '#d8d2c4', '#7a1010', 256, 128), 1, 1) }));
+    plac.rotation.y = Math.PI / 2;
+    plac.position.set(T / 2 + 0.025, 0.6, 0);
+    leaf.add(plac);
+    this.group.add(leaf);
+    // The frame round it
+    for (const s of [-1, 1]) this.box(0.04, DOOR.h, 0.06, -HW + 0.02, 0, zc + s * (dl / 2 + 0.03), M.steel, { trim: true });
+    this.box(0.04, 0.06, dl + 0.12, -HW + 0.02, DOOR.h, zc, M.steel, { trim: true });
+    const collider = this.block(-HW - 0.5, 0, DOOR.z0, -HW + 0.02, DOOR.h, DOOR.z1);
+    return { leaf, collider, at: new THREE.Vector3(-HW + 0.5, 0, zc) };
+  }
+
+  /** The glass-fronted locker across from the door, three chutes on hooks inside it. */
+  private locker(): { chutes: THREE.Object3D[]; at: THREE.Vector3 } {
+    const M = this.M;
+    const x = HW - 0.3;
+    const zc = 25.6 - 2.0;
+    const z0 = zc - 0.7;
+    void z0;
+    // The cart's been moved in front of the door's opposite number; the locker sits aft of the galley bulkhead on the right
+    const lz = 24.35;
+    this.box(0.5, 2.0, 1.3, x - 0.02, 0, lz, M.steel, { collide: true, surface: 'metal' });
+    this.box(0.02, 1.7, 1.18, x - 0.28, 0.18, lz, M.glass, { trim: true });
+    this.box(0.03, 1.7, 0.03, x - 0.29, 0.18, lz - 0.6, M.gold, { trim: true });
+    this.plane(0.9, 0.2, x - 0.28, 2.1, lz, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['EMERGENCY', 'PARACHUTES'], '#8a1010', '#fff', 256, 96), 1, 1) }), -Math.PI / 2);
+    const chutes: THREE.Object3D[] = [];
+    for (let i = 0; i < 3; i++) {
+      const p = parachutePack();
+      p.position.set(x - 0.12, 0.95, lz - 0.38 + i * 0.38);
+      p.rotation.y = -Math.PI / 2;
+      this.group.add(p);
+      chutes.push(p);
+    }
+    return { chutes, at: new THREE.Vector3(x - 0.75, 0, lz) };
+  }
+
+  // -------------------------------------------------------------- furniture
+
+  /** A sofa (n seats) facing `ry` (0: facing −Z). */
+  private sofa(x: number, z: number, ry: number, n: number, mat: Mat): void {
+    const g = new THREE.Group();
+    const W = n * 0.72;
+    const part = (w: number, h: number, d: number, px: number, py: number, pz: number, m: Mat = mat): void => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      b.position.set(px, py + h / 2, pz);
+      b.userData.surface = 'wood';
+      g.add(b);
+    };
+    part(W, 0.24, 0.85, 0, 0.08, 0);
+    part(W, 0.08, 0.85, 0, 0, 0, this.M.walnut);
+    for (let i = 0; i < n; i++) part(0.7, 0.12, 0.68, -W / 2 + 0.36 + i * 0.72, 0.32, -0.06);
+    part(W, 0.48, 0.18, 0, 0.32, 0.34);
+    for (const s of [-1, 1]) part(0.16, 0.36, 0.85, s * (W / 2 + 0.08), 0.08, 0);
+    g.position.set(x, 0, z);
+    g.rotation.y = ry;
+    this.statics.add(g);
+    g.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(g);
+    bb.max.y = Math.min(bb.max.y, 0.55);
+    this.colliders.push({ box: bb });
+  }
+
+  /** A club armchair, deep and round-armed. */
+  private club(x: number, z: number, ry: number, mat: Mat, k = 1): void {
+    const g = new THREE.Group();
+    const part = (w: number, h: number, d: number, px: number, py: number, pz: number, m: Mat = mat): void => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w * k, h * k, d * k), m);
+      b.position.set(px * k, (py + h / 2) * k, pz * k);
+      b.userData.surface = 'wood';
+      g.add(b);
+    };
+    part(0.66, 0.26, 0.7, 0, 0.12, 0);
+    part(0.6, 0.12, 0.58, 0, 0.38, -0.04);
+    part(0.66, 0.52, 0.16, 0, 0.38, 0.3);
+    for (const s of [-1, 1]) part(0.14, 0.32, 0.7, s * 0.36, 0.26, 0);
+    for (const s of [-1, 1]) for (const t of [-1, 1]) part(0.04, 0.12, 0.04, s * 0.3, 0, t * 0.3, this.M.gold);
+    g.position.set(x, 0, z);
+    g.rotation.y = ry;
+    this.statics.add(g);
+    g.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(g);
+    bb.max.y = 0.6;
+    // A touch smaller than its drawn bounds: it's round-armed and turned
+    bb.expandByVector(new THREE.Vector3(-0.08, 0, -0.08));
+    this.colliders.push({ box: bb });
+  }
+
+  private chair(x: number, z: number, ry: number, mat: Mat): void {
+    const g = new THREE.Group();
+    const part = (w: number, h: number, d: number, px: number, py: number, pz: number, m: Mat = mat): void => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      b.position.set(px, py + h / 2, pz);
+      b.userData.surface = 'wood';
+      g.add(b);
+    };
+    part(0.5, 0.1, 0.5, 0, 0.42, 0);
+    part(0.5, 0.55, 0.08, 0, 0.5, 0.24);
+    part(0.06, 0.42, 0.06, 0, 0, 0, this.M.steel);
+    part(0.4, 0.03, 0.4, 0, 0, 0, this.M.steel);
+    g.position.set(x, 0, z);
+    g.rotation.y = ry;
+    this.statics.add(g);
+    this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(x - 0.24, 0, z - 0.24), new THREE.Vector3(x + 0.24, 0.52, z + 0.24)) });
+  }
+
+  private coffeeTable(x: number, z: number): void {
+    this.cyl(0.42, 0.42, 0.03, x, 0.42, z, this.M.walnut, 24);
+    this.cyl(0.43, 0.43, 0.012, x, 0.448, z, this.M.gold, 24, { trim: true });
+    this.cyl(0.05, 0.08, 0.42, x, 0, z, this.M.gold, 12, { trim: true });
+    this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(x - 0.4, 0, z - 0.4), new THREE.Vector3(x + 0.4, 0.45, z + 0.4)) });
+  }
+
+  /** A crystal tumbler (loose: it's kept as itself, to fly about later). */
+  private glass(x: number, y: number, z: number): THREE.Object3D {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.03, 0.09, 12), this.M.glass);
+    m.position.set(x, y + 0.045, z);
+    this.group.add(m);
+    return m;
+  }
+
+  // -------------------------------------------------------------- lights
+
+  private lights(): void {
+    const add = (x: number, y: number, z: number, c: number, i: number, d: number, list = this.cabinLights): THREE.PointLight => {
+      const l = new THREE.PointLight(c, i, d, 1.6);
+      l.position.set(x, y, z);
+      this.group.add(l);
+      list.push(l);
+      return l;
+    };
+    add(0, 2.15, 26.6, 0xf2f4ff, 6, 9);
+    add(0, 2.15, 15.5, 0xffd7a8, 4.5, 9);
+    add(-1.75, 2.1, 17.4, 0xffc890, 3.2, 6);
+    add(1.75, 2.1, 12.5, 0xffd7a8, 2.6, 6);
+    add(0, 2.2, 1.2, 0xfff0dc, 6.5, 11);
+    add(0, 2.2, -10, 0xffcf98, 6.5, 11);
+    add(0, 2.2, -17.5, 0xffcf98, 6.5, 11);
+    add(2.2, 1.4, -9.6, 0xffa45a, 2.6, 4.5);
+    add(0, 2.1, -25.2, 0xf2f4ff, 4.5, 8);
+    add(0, 1.9, -30.8, 0x9ab8ff, 1.8, 5);
+    // The alarm: two red lamps, there from the start at nothing
+    for (const z of [-14, 14]) add(0, 2.25, z, 0xff2010, 0, 18, this.alarmLights);
+    for (const z of [-25, -3, 18, 26]) this.box(0.18, 0.05, 0.18, 0, CEIL - 0.05, z, this.M.alarm, { trim: true });
+    const hemi = new THREE.HemisphereLight(0xdfe6f2, 0x3a3026, 0.2);
+    this.group.add(hemi);
+  }
+
+  // -------------------------------------------------------------- enemies
+
+  private guards(): GuardSpawn[] {
+    const g = (x: number, z: number, yaw: number, zone: number, section: GuardSpawn['section']): GuardSpawn => ({ pos: new THREE.Vector3(x, 0, z), yaw, zone, section });
+    return [
+      // The suite: one at the galley door with his back to it, one going
+      // round the guest room and out into the corridor, one in the study
+      g(0, 22.3, 0, 0, 'suite'),
+      g(1.9, 19.2, Math.PI, 2.6, 'suite'),
+      g(1.8, 11.0, Math.PI / 2, 0, 'suite'),
+      // Conference: two walking round the table, one at the security post
+      g(-1.9, 3.5, 0, 5.5, 'conf'),
+      g(1.9, -1.5, Math.PI, 5.5, 'conf'),
+      g(1.65, 4.3, -Math.PI / 2, 0, 'conf'),
+      // The lounge: one at the bar, two walking, one by the boss's chair
+      g(0.6, -10.8, -Math.PI / 2, 0, 'lounge'),
+      g(-0.6, -13.0, 0, 6, 'lounge'),
+      g(0.3, -19.5, Math.PI, 6, 'lounge'),
+      g(1.3, -16.0, Math.PI * 0.6, 0, 'lounge'),
+      // Forward: one on the cockpit door
+      g(0.2, -26.6, Math.PI, 0, 'fwd')
+    ];
+  }
+
+  // -------------------------------------------------------------- waypoints
+
+  /** Sampled walkable floor, linked wherever a body can be swept between two points. */
+  private waypoints(ignore: Collider[]): Waypoint[] {
+    const R = 0.36;
+    const walls = this.colliders.filter((c) => !ignore.includes(c)).map((c) => c.box).filter((b) => b.min.y < 1.5 && b.max.y > 0.2);
+    const clear = (x: number, z: number, r = R): boolean => {
+      for (const b of walls) if (x > b.min.x - r && x < b.max.x + r && z > b.min.z - r && z < b.max.z + r) return false;
+      return true;
+    };
+    const walkable = (ax: number, az: number, bx: number, bz: number): boolean => {
+      const dx = bx - ax;
+      const dz = bz - az;
+      const n = Math.ceil(Math.hypot(dx, dz) / 0.15);
+      for (let i = 1; i < n; i++) if (!clear(ax + (dx * i) / n, az + (dz * i) / n, R + 0.04)) return false;
+      return true;
+    };
+    const pts: [number, number][] = [];
+    // The doorways and the corridor's middle first: they're narrower than the grid
+    for (const z of [P_GALLEY, P_SUITE, P_CONF, P_LOUNGE]) for (const dz of [-0.6, 0, 0.6]) pts.push([0, z + dz]);
+    for (const [x, z] of [[-CX, 21.4], [-CX, 9.4], [CX, 17], [CX, 9.8]] as const) {
+      const s = Math.sign(x);
+      for (const dx of [-0.55, 0, 0.55]) pts.push([x + s * dx, z]);
+    }
+    for (let z = Z_AFT - 0.5; z > P_COCKPIT + 0.3; z -= 0.8) {
+      for (let x = -HW + 0.45; x <= HW - 0.45; x += 0.8) pts.push([x, z]);
+      pts.push([0, z]);
+    }
+    const ok = pts.filter(([x, z]) => clear(x, z));
+    const wps: Waypoint[] = ok.map(([x, z]) => ({ pos: new THREE.Vector3(x, 0, z), links: [] }));
+    for (let i = 0; i < wps.length; i++) {
+      for (let j = i + 1; j < wps.length; j++) {
+        const a = wps[i].pos;
+        const b = wps[j].pos;
+        if (a.distanceTo(b) > 1.75) continue;
+        if (!walkable(a.x, a.z, b.x, b.z)) continue;
+        wps[i].links.push(j);
+        wps[j].links.push(i);
+      }
+    }
+    // Keep the biggest island only
+    const seen = new Set<number>();
+    let best: number[] = [];
+    for (let i = 0; i < wps.length; i++) {
+      if (seen.has(i)) continue;
+      const comp: number[] = [];
+      const q = [i];
+      seen.add(i);
+      while (q.length) {
+        const c = q.pop()!;
+        comp.push(c);
+        for (const n of wps[c].links) if (!seen.has(n)) {
+          seen.add(n);
+          q.push(n);
+        }
+      }
+      if (comp.length > best.length) best = comp;
+    }
+    const keep = new Map<number, number>();
+    best.sort((a, b) => a - b).forEach((old, k) => keep.set(old, k));
+    return best.map((old) => ({ pos: wps[old].pos, links: wps[old].links.filter((l) => keep.has(l)).map((l) => keep.get(l)!) }));
+  }
+
+  // -------------------------------------------------------------- outside
+
+  /**
+   * The sky: a dome, deep blue overhead to a pale haze at the horizon, the
+   * sun low on the right; and two decks of cloud far below, the near one
+   * broken, the far one solid. All of it fog-free and unlit.
+   */
+  private outside(): { group: THREE.Group; maps: THREE.Texture[] } {
+    const group = new THREE.Group();
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(1800, 48, 24),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: { sun: { value: new THREE.Vector3(0.8, 0.28, -0.5).normalize() } },
+        vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+        fragmentShader: `
+          uniform vec3 sun; varying vec3 vDir;
+          void main(){
+            float h = vDir.y;
+            vec3 top = vec3(0.10,0.27,0.62);
+            vec3 hor = vec3(0.52,0.70,0.93);
+            vec3 below = vec3(0.36,0.52,0.68);
+            vec3 c = h > 0.0 ? mix(hor, top, pow(clamp(h,0.0,1.0), 0.55)) : mix(hor, below, clamp(-h*6.0,0.0,1.0));
+            float s = max(dot(normalize(vDir), sun), 0.0);
+            c += vec3(1.0,0.92,0.75) * (pow(s, 900.0) * 6.0 + pow(s, 12.0) * 0.25);
+            gl_FragColor = vec4(c, 1.0);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }`
+      })
+    );
+    dome.renderOrder = -2;
+    group.add(dome);
+    const maps: THREE.Texture[] = [];
+    // Each layer thins out to nothing toward its edge, well inside the
+    // camera's far plane, so neither a plane's edge nor the clip ever shows
+    const fade = new THREE.CanvasTexture(
+      canvas(128, 128, (g) => {
+        const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        gr.addColorStop(0, '#fff');
+        gr.addColorStop(0.45, '#fff');
+        gr.addColorStop(1, '#000');
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 128, 128);
+      })
+    );
+    const deck = (y: number, size: number, rep: number, seed: number, density: number, opacity: number): void => {
+      const map = tex(cloudCanvas(seed, density), rep, rep);
+      maps.push(map);
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(size, size),
+        new THREE.MeshBasicMaterial({ map, alphaMap: fade, color: 0xeef2f8, transparent: true, opacity, depthWrite: false, fog: false })
+      );
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = y;
+      m.renderOrder = -1;
+      group.add(m);
+    };
+    // The sea, miles down: deep blue, a ripple of light on it
+    const seaC = canvas(256, 256, (g) => {
+      const r = rng(77);
+      g.fillStyle = '#163f66';
+      g.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 1800; i++) {
+        g.fillStyle = r() < 0.5 ? 'rgba(40,96,140,0.35)' : 'rgba(10,36,64,0.35)';
+        g.fillRect(r() * 256, r() * 256, 2 + r() * 6, 1);
+      }
+    });
+    const sea = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), new THREE.MeshBasicMaterial({ map: tex(seaC, 16, 16), alphaMap: fade, transparent: true, fog: false, depthWrite: false }));
+    sea.rotation.x = -Math.PI / 2;
+    sea.position.y = -2600;
+    sea.renderOrder = -1.5;
+    group.add(sea);
+    deck(-1100, 7000, 4, 41, 0.42, 0.85);
+    deck(-300, 7000, 9, 42, 0.3, 0.7);
+    return { group, maps };
+  }
+}
+
+/**
+ * A parachute pack: the container with its flaps and the ripcord handle, and
+ * the harness hanging off it. Its back (the side against a man) faces +Z,
+ * its top up. About 0.5 × 0.6 × 0.2.
+ */
+export function parachutePack(): THREE.Group {
+  const g = new THREE.Group();
+  const nylon = new THREE.MeshStandardMaterial({ color: 0x1d2a4a, roughness: 0.8 });
+  const trimM = new THREE.MeshStandardMaterial({ color: 0xd04020, roughness: 0.6 });
+  const strap = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.7 });
+  const metal = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.9, roughness: 0.3 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.56, 0.18), nylon);
+  g.add(body);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.2, 0.04), nylon);
+  flap.position.set(0, 0.2, -0.1);
+  flap.rotation.x = 0.12;
+  g.add(flap);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.02, 0.19), trimM);
+  edge.position.y = 0.28;
+  g.add(edge);
+  const pilot = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 12), trimM);
+  pilot.rotation.x = Math.PI / 2;
+  pilot.position.set(0.16, -0.22, -0.1);
+  g.add(pilot);
+  for (const s of [-1, 1]) {
+    const sh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.62, 0.02), strap);
+    sh.position.set(s * 0.14, 0.02, 0.1);
+    g.add(sh);
+    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.02), metal);
+    buckle.position.set(s * 0.14, -0.08, 0.115);
+    g.add(buckle);
+  }
+  return g;
+}

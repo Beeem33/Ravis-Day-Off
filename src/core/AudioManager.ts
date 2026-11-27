@@ -5693,4 +5693,123 @@ export class AudioManager {
       }
     };
   }
+
+  /**
+   * Freefall (Level 19): the roar of the wind past him at terminal velocity —
+   * a deep rumble, a broad rush and a high hiss, each wobbling on its own
+   * slow gusts so it never settles into a drone. set(k) 0..1 (k is roughly
+   * how fast he is falling, as a share of flat out); stop() fades it.
+   */
+  windLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, ctx.currentTime);
+    out.connect(this.sfxBus);
+    const srcs: AudioBufferSourceNode[] = [];
+    const gusts: OscillatorNode[] = [];
+    const layer = (type: BiquadFilterType, f: number, q: number, g: number, rate: number, gustHz: number): void => {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      src.playbackRate.value = rate;
+      const flt = ctx.createBiquadFilter();
+      flt.type = type;
+      flt.frequency.value = f;
+      flt.Q.value = q;
+      const gn = ctx.createGain();
+      gn.gain.value = g;
+      // A slow wobble on the level and the filter: the gusting
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = gustHz;
+      const lg = ctx.createGain();
+      lg.gain.value = g * 0.35;
+      lfo.connect(lg).connect(gn.gain);
+      const lf = ctx.createGain();
+      lf.gain.value = f * 0.18;
+      lfo.connect(lf).connect(flt.frequency);
+      src.connect(flt).connect(gn).connect(out);
+      src.start(ctx.currentTime, Math.random() * 1.5);
+      lfo.start();
+      srcs.push(src);
+      gusts.push(lfo);
+    };
+    layer('lowpass', 160, 0.8, 0.5, 0.45, 0.23);
+    layer('bandpass', 700, 0.5, 0.22, 0.8, 0.37);
+    layer('highpass', 3200, 0.4, 0.06, 1.1, 0.61);
+    let alive = true;
+    return {
+      set: (k: number) => {
+        if (!alive) return;
+        out.gain.setTargetAtTime(Math.max(0, fin(k, 0)) * 0.9, ctx.currentTime, 0.25);
+      },
+      stop: () => {
+        if (!alive) return;
+        alive = false;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+        for (const s of srcs) s.stop(ctx.currentTime + 2);
+        for (const g of gusts) g.stop(ctx.currentTime + 2);
+        window.setTimeout(() => out.disconnect(), 2300);
+      }
+    };
+  }
+
+  /** A gull's cry, `dist` metres off: two or three falling, nasal yelps. */
+  gullCry(dist: number): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, dist, 0.22, 0.15);
+    const n = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      const at = i * (0.16 + Math.random() * 0.06);
+      const f = 1500 + Math.random() * 400;
+      this.partial(out, { at, D: 0.14, type: 'sawtooth', f, f1: f * 0.62, gain: 0.16, attack: 0.012 });
+      this.partial(out, { at, D: 0.13, type: 'square', f: f * 1.5, f1: f * 0.9, gain: 0.05, attack: 0.012 });
+    }
+  }
+
+  /** Surf on a beach: the wash coming up the sand and drawing back, over and over. set(k) 0..1; stop() fades it. */
+  surfLoop(): { set(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, stop: (): void => {} };
+    if (!this.ctx) return idle;
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, ctx.currentTime);
+    out.connect(this.sfxBus);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    src.playbackRate.value = 0.7;
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.value = 900;
+    const swell = ctx.createGain();
+    swell.gain.value = 0.5;
+    // The wash: a slow swell of the level and the brightness, one wave every eleven seconds or so
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.09;
+    const lg = ctx.createGain();
+    lg.gain.value = 0.38;
+    lfo.connect(lg).connect(swell.gain);
+    const lf = ctx.createGain();
+    lf.gain.value = 600;
+    lfo.connect(lf).connect(flt.frequency);
+    src.connect(flt).connect(swell).connect(out);
+    src.start();
+    lfo.start();
+    let alive = true;
+    return {
+      set: (k: number) => {
+        if (alive) out.gain.setTargetAtTime(Math.max(0, fin(k, 0)) * 0.5, ctx.currentTime, 0.6);
+      },
+      stop: () => {
+        if (!alive) return;
+        alive = false;
+        out.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+        src.stop(ctx.currentTime + 2.5);
+        lfo.stop(ctx.currentTime + 2.5);
+        window.setTimeout(() => out.disconnect(), 2800);
+      }
+    };
+  }
 }

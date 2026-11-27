@@ -22,6 +22,8 @@ import { Level13Scene } from './scenes/Level13Scene';
 import { Level14Scene } from './scenes/Level14Scene';
 import { Level15Scene } from './scenes/Level15Scene';
 import { Level16Scene } from './scenes/Level16Scene';
+import { Level19Scene } from './scenes/Level19Scene';
+import { Level19SkyScene } from './scenes/Level19SkyScene';
 import { FPSPlayer } from './entities/FPSPlayer';
 import { HitmanVisual } from './entities/HitmanVisual';
 import { RaviVisual } from './entities/RaviVisual';
@@ -157,6 +159,18 @@ bus.on(Events.Level16Cave, () => {
 bus.on<{ checkpoint?: number }>(Events.RestartLevel16b, (p) => {
   engine.setScene(new Level16Scene(ctx, p?.checkpoint ?? 0, 2), 'LEVEL 16 PART 2 — THE CAVE');
 });
+bus.on<{ checkpoint?: number }>(Events.RestartLevel19, (p) => {
+  engine.setScene(new Level19Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 19 — THE FLYING LOUNGE');
+});
+bus.on(Events.Level19Jump, () => {
+  engine.setScene(new Level19SkyScene(ctx), 'LEVEL 19 PART 2 — FREEFALL');
+});
+bus.on<{ checkpoint?: number }>(Events.RestartLevel19b, (p) => {
+  engine.setScene(new Level19SkyScene(ctx, p?.checkpoint ?? 0), 'LEVEL 19 PART 2 — FREEFALL');
+});
+bus.on(Events.Level19Complete, () => {
+  engine.setScene(new MainMenuScene(ctx));
+});
 bus.on(Events.Level16Complete, () => {
   // The end of the line, for now: back to the menu
   engine.setScene(new MainMenuScene(ctx));
@@ -202,7 +216,9 @@ const LEVEL_SCENES: Record<LevelId, () => { scene: GameScene; title: string }> =
   level14: () => ({ scene: new Level14Scene(ctx), title: 'LEVEL 14 — THE LABORATORY' }),
   level15: () => ({ scene: new Level15Scene(ctx), title: 'LEVEL 15 — THE PORTAL ROOM' }),
   level16: () => ({ scene: new Level16Scene(ctx), title: 'LEVEL 16 — THE FAR SIDE' }),
-  level16b: () => ({ scene: new Level16Scene(ctx, 0, 2), title: 'LEVEL 16 PART 2 — THE CAVE' })
+  level16b: () => ({ scene: new Level16Scene(ctx, 0, 2), title: 'LEVEL 16 PART 2 — THE CAVE' }),
+  level19: () => ({ scene: new Level19Scene(ctx), title: 'LEVEL 19 — THE FLYING LOUNGE' }),
+  level19b: () => ({ scene: new Level19SkyScene(ctx), title: 'LEVEL 19 PART 2 — FREEFALL' })
 };
 bus.on<{ level: LevelId }>(Events.SelectLevel, ({ level }) => {
   const make = LEVEL_SCENES[level];

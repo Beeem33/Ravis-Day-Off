@@ -111,6 +111,14 @@ export const Events = {
   RestartLevel16b: 'restart-level16b',
   /** Through the exit portal: to be continued. */
   Level16Complete: 'level16-complete',
+  /** {checkpoint: number} — Level 19 again: 0 the hold, 1 past the lounge, 2 the cockpit. */
+  RestartLevel19: 'restart-level19',
+  /** Out of the plane's back door after the boss: part two, the fall. */
+  Level19Jump: 'level19-jump',
+  /** {checkpoint: number} — the fall again. */
+  RestartLevel19b: 'restart-level19b',
+  /** Washed up on the island: to be continued. */
+  Level19Complete: 'level19-complete',
   /** {level: LevelId} — jump straight to a level from the menu's test page. */
   SelectLevel: 'select-level',
   /** {lethal: boolean} */
@@ -136,7 +144,9 @@ export const LEVELS = [
   { id: 'level14', n: '14', name: 'THE LABORATORY', blurb: 'The report, the scientists, the rocket and the hallway' },
   { id: 'level15', n: '15', name: 'THE PORTAL ROOM', blurb: 'The suit, the three buttons, the Atom Warper' },
   { id: 'level16', n: '16', name: 'THE FAR SIDE', blurb: 'The station, the tracker, the water, and the thing with the arms' },
-  { id: 'level16b', n: '16 PT 2', name: 'THE CAVE', blurb: 'Eggs on the walls, things in the holes, and the way out' }
+  { id: 'level16b', n: '16 PT 2', name: 'THE CAVE', blurb: 'Eggs on the walls, things in the holes, and the way out' },
+  { id: 'level19', n: '19', name: 'THE FLYING LOUNGE', blurb: 'Stowed away on the boss\'s plane: the security, the cockpit, the back door' },
+  { id: 'level19b', n: '19 PT 2', name: 'FREEFALL', blurb: 'After him, down through the birds, the planes and the FBI' }
 ] as const;
 
 export type LevelId = (typeof LEVELS)[number]['id'];

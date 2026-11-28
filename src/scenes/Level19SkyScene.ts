@@ -9,13 +9,14 @@ import { FPSHUD } from '../ui/FPSHUD';
 import { DialogueBox, type DialogueLine } from '../ui/DialogueBox';
 import { ParticleManager } from '../fx/ParticleManager';
 import { Enemy } from '../entities/Enemy';
-import { RaviVisual, FirstPersonArms, grip, type RaviRig, type Grip, type HandShape } from '../entities/RaviVisual';
+import { RaviVisual, RaviRig, FirstPersonArms, grip, elbowToward, type Grip, type HandShape } from '../entities/RaviVisual';
+import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { Arsenal } from '../entities/Arsenal';
 import { pistolProp } from '../entities/RaviRagdoll';
 import { armWithAK } from '../entities/AkModel';
 import { diverQuat, raviFreefall, raviUnderCanopy, enemyCrawl, DiverPose } from '../entities/Skydiver';
 import {
-  skyDome, ocean, islandMesh, ISLANDS, farIslands, WindStreaks, CloudDeck, Birds, type Flock, bossWidebody, airliner, turboprop, exhaustTrail,
+  skyDome, ocean, islandMesh, ISLANDS, farIslands, CloudDeck, CanopyRip, Birds, type Flock, bossWidebody, airliner, turboprop, exhaustTrail,
   type Aircraft, canopy, type Canopy, chutePack, letterPatch, HAZE, HAZE_DENSITY, SUN_DIR
 } from '../environment/Level19Sky';
 import { buildBeach, sandY, type Beach } from '../environment/Level19Beach';
@@ -187,7 +188,15 @@ class Spray {
 
 export class Level19SkyScene implements GameScene {
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 60000);
+  /**
+   * The world's camera. Its near plane stays well out (anything closer than
+   * that is drawn in a pass of its own: the hands and gun in first person,
+   * his body and canopy after the pull), so the depth buffer has the
+   * precision to keep the islands' shores off the sea all the way down.
+   */
+  private camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 2.5, 60000);
+  /** The close-up pass's camera: the world camera's view, a near plane of centimetres, layer 1 only. */
+  private nearCam = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.04, 400);
   private phase: Phase = 'exit';
   /** Seconds since leaving the door, and since the phase began. */
   private tt = 0;
@@ -243,14 +252,18 @@ export class Level19SkyScene implements GameScene {
   private arms!: FirstPersonArms;
   private armAnchor!: THREE.Object3D;
   private armGrip!: Grip;
-  private streaks!: WindStreaks;
+  /** Deadbull on G, as on foot. */
+  private drink!: DrinkViewmodel;
+  /** The left arm back out from the gun after a reload (0..1, 1 when it's out), and where its hand started. */
+  private armBack = 1;
+  private armFrom = new THREE.Vector3();
+  private wasReloading = false;
   private debris: { mesh: THREE.Object3D; body: CANNON.Body; t: number }[] = [];
   /** This frame's mouse movement. */
   private mouse = new THREE.Vector2();
   /** 0 spread in the arch .. 1 head-down with his arms in (W). */
   private pencil = 0;
   private steer = { x: 0, y: 0 };
-  private rushEl!: HTMLElement;
   private bossPose!: DiverPose;
 
   // ---- the rest of them
@@ -338,12 +351,16 @@ export class Level19SkyScene implements GameScene {
     this.sun.position.copy(SUN_DIR).multiplyScalar(100);
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
-    this.scene.add(new THREE.HemisphereLight(0xc4dcf2, 0x2a4a66, 1.2));
+    const hemi = new THREE.HemisphereLight(0xc4dcf2, 0x2a4a66, 1.2);
+    this.scene.add(hemi);
+    this.sun.layers.enable(1);
+    hemi.layers.enable(1);
+    this.nearCam.layers.set(1);
 
-    // Two decks of cloud to fall through, and a high thin one he starts above
+    // Two decks of cloud to fall through, and a high thin one he starts under
     this.decks.push(new CloudDeck(2500, 220, 950, 2400, 3));
     this.decks.push(new CloudDeck(1300, 180, 850, 2400, 8));
-    this.decks.push(new CloudDeck(5200, 60, 500, 6000, 5, 900));
+    this.decks.push(new CloudDeck(5200, 60, 450, 2500, 5, 900));
     for (const d of this.decks) this.scene.add(d.mesh);
 
     this.birds = new Birds(720);
@@ -369,7 +386,7 @@ export class Level19SkyScene implements GameScene {
 
     this.unsubs.push(
       bus.on(Events.Resize, () => {
-        for (const c of [this.camera, this.fpCam, this.player.camera]) {
+        for (const c of [this.camera, this.fpCam, this.player.camera, this.nearCam]) {
           c.aspect = window.innerWidth / window.innerHeight;
           c.updateProjectionMatrix();
         }
@@ -569,16 +586,12 @@ export class Level19SkyScene implements GameScene {
     el.innerHTML = `
       <div class="l19-white" style="position:absolute;inset:0;background:#f4f8fb;opacity:0;pointer-events:none"></div>
       <div class="l19-water" style="position:absolute;inset:0;opacity:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%, rgba(80,170,190,0.92), rgba(6,40,66,0.98) 70%)"></div>
-      <div class="l19-rush" style="position:absolute;inset:0;pointer-events:none;opacity:0;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);-webkit-mask-image:radial-gradient(ellipse at 50% 55%, transparent 48%, #000 92%);mask-image:radial-gradient(ellipse at 50% 55%, transparent 48%, #000 92%);background:radial-gradient(ellipse at 50% 55%, rgba(225,238,250,0) 55%, rgba(225,238,250,0.22) 100%)"></div>
       <div class="l19-marks" style="position:absolute;inset:0;pointer-events:none;overflow:hidden"></div>
       <div class="intro-letterbox open"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="l19-alt" style="position:absolute;right:28px;top:22px;text-align:right;color:#eaf6ff;font-family:'Courier New',monospace;letter-spacing:2px;text-shadow:0 0 8px rgba(0,0,0,0.8);opacity:0;transition:opacity .4s">
         <div style="font-size:11px;opacity:.75">ALTITUDE</div>
         <div class="v" style="font-size:30px;font-weight:bold">4000 M</div>
-        <div style="font-size:11px;opacity:.75;margin-top:6px">PULL IN</div>
-        <div class="t" style="font-size:18px">01:03</div>
-        <div style="width:150px;height:4px;background:rgba(255,255,255,0.2);margin-top:6px;margin-left:auto"><div class="bar" style="height:100%;width:0;background:#f2c919"></div></div>
       </div>
       <div class="l19-warn" style="position:absolute;left:50%;top:14%;transform:translateX(-50%);color:#ffcf4a;font-family:'Courier New',monospace;font-size:17px;letter-spacing:4px;font-weight:bold;text-shadow:0 0 10px rgba(0,0,0,0.9);opacity:0;white-space:nowrap"></div>
       <div class="l19-caption" style="position:absolute;left:50%;bottom:13%;transform:translateX(-50%);max-width:70vw;text-align:center;background:rgba(0,0,0,0.5);padding:8px 16px;border-radius:3px;color:#fff3cf;font-family:'Courier New',monospace;font-size:17px;letter-spacing:1px;text-shadow:0 0 6px #000,0 0 14px rgba(0,0,0,0.9);opacity:0;transition:opacity .35s"></div>
@@ -595,7 +608,6 @@ export class Level19SkyScene implements GameScene {
     this.altEl = el.querySelector('.l19-alt')!;
     this.warnEl = el.querySelector('.l19-warn')!;
     this.marks = el.querySelector('.l19-marks')!;
-    this.rushEl = el.querySelector('.l19-rush')!;
     this.whiteEl = el.querySelector('.l19-white')!;
     this.waterEl = el.querySelector('.l19-water')!;
     this.fadeEl = el.querySelector('.intro-fade')!;
@@ -768,7 +780,29 @@ export class Level19SkyScene implements GameScene {
     cam.add(this.armAnchor);
     this.armGrip = grip([-0.5, -0.04, -0.46], [-0.55, 0.2, -0.8], [0, -1, 0], [-0.2, -0.35, 0.9], FLAT_HAND);
     this.arms = new FirstPersonArms(cam, cam).set('l', this.armAnchor, this.armGrip);
-    this.streaks = new WindStreaks(cam);
+    // A Deadbull, on G: both hands off the gun, three seconds, full health
+    this.drink = new DrinkViewmodel(cam);
+    this.drink.onEvent = (e, i) => {
+      if (e === 'crack') audio.canCrack();
+      else if (e === 'gulp') audio.gulp(i);
+      else if (e === 'heal') {
+        this.hp = MAX_HP;
+        this.regenT = 0;
+      } else if (e === 'crush') audio.canCrush();
+      else if (e === 'toss') this.dropCan(this.drink.tossPose());
+    };
+  }
+
+  /** The empty can, flicked away: the wind has it. */
+  private dropCan(pose: { position: THREE.Vector3; quaternion: THREE.Quaternion; velocity: THREE.Vector3 }): void {
+    const mesh = DrinkViewmodel.crushedCan();
+    mesh.position.copy(pose.position);
+    mesh.quaternion.copy(pose.quaternion);
+    const body = new CANNON.Body({ mass: 0.016, shape: new CANNON.Box(new CANNON.Vec3(0.042, 0.03, 0.042)), position: new CANNON.Vec3(pose.position.x, pose.position.y, pose.position.z) });
+    body.quaternion.set(pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w);
+    body.velocity.set(pose.velocity.x, pose.velocity.y, pose.velocity.z);
+    body.angularVelocity.set((Math.random() - 0.5) * 26, (Math.random() - 0.5) * 26, (Math.random() - 0.5) * 26);
+    this.addDebris(mesh, body);
   }
 
   /** Where his eyes are: up off his back, toward his head. */
@@ -812,33 +846,73 @@ export class Level19SkyScene implements GameScene {
       cam.updateProjectionMatrix();
     }
     cam.updateMatrixWorld(true);
+    // A reload: the left hand comes off the wind for the magazine. Once it's gone down out of
+    // shot to fetch one, the gun's own left hand (the one every other level reloads with) takes
+    // over, seats it and racks the slide; when it's done the arm goes back out from the grip.
+    const vm = this.arsenal.pistol as unknown as { reloadT: number; supportHand: THREE.Object3D };
+    const reloading = this.arsenal.pistol.reloading;
+    const handOver = reloading && vm.reloadT >= 0.28;
+    this.arsenal.hideSupportHand = !handOver;
     this.arsenal.updateViewmodels(dt, aiming);
-    this.layArm(flail, pk);
-    this.streaks.update(dt, this.hv, FALL_V, pk, this.phase === 'exit' ? 0.6 : 1);
+    if (this.wasReloading && !reloading) {
+      // Back out from where the gun's hand finished, on the grip
+      this.armBack = 0;
+      this.armFrom.copy(vm.supportHand.getWorldPosition(new THREE.Vector3())).applyMatrix4(cam.matrixWorldInverse);
+    }
+    this.wasReloading = reloading;
+    this.armBack = Math.min(1, this.armBack + dt / 0.4);
+    const fetch = reloading ? Math.min(1, vm.reloadT / 0.26) : 0;
+    this.layArm(flail, pk, fetch, handOver);
+    this.drink.update(dt, p);
   }
 
-  /** The left hand out on the wind, palm to the ground, fluttering; or swept back along his side. */
-  private layArm(flail: number, pk: number): void {
+  /**
+   * The left arm out on the wind, palm to the ground, fluttering; swept back
+   * along his side in the dive (`pk`); off to fetch a magazine (`fetch`), or
+   * handed over to the gun's own left hand altogether (`gone`). Laid with a
+   * proper two-bone solve from his own shoulder: the hand kept within reach,
+   * the elbow out and a little down, the way a spread arm's is.
+   */
+  private static readonly SHOULDER_L = V(-0.172, -0.22, 0.08);
+  private static armLen = 0;
+
+  private layArm(flail: number, pk: number, fetch: number, gone: boolean): void {
     const t = this.time;
     const g = this.armGrip;
     const cam = this.player.camera;
+    if (!Level19SkyScene.armLen) Level19SkyScene.armLen = RaviRig.len('upperarm_l', 'lowerarm_l') + RaviRig.len('lowerarm_l', 'hand_l');
+    const reach = Level19SkyScene.armLen * 0.92;
     const fl = (k: number): number => Math.sin(t * (9 + k) + k) * 0.006 + Math.sin(t * (2.3 + k * 0.4) + k * 2) * 0.012;
-    // The spread: out at the edge of the view, level with his eyes, a little ahead
+    const S = Level19SkyScene.SHOULDER_L;
+    // The spread: out to the side and forward of the shoulder, level, at the edge of the view
     const steer = this.steer;
-    const W = V(-0.43 - steer.x * 0.03 + fl(1), -0.1 + steer.x * 0.05 + fl(2), -0.5 + fl(3));
-    W.x += Math.sin(t * 7.1) * 0.16 * flail;
-    W.y += Math.cos(t * 6.3) * 0.18 * flail;
-    W.z += Math.sin(t * 5.2 + 1) * 0.1 * flail;
+    const out = V(-0.4 - steer.x * 0.06, 0.16 + steer.x * 0.08, -0.9);
+    out.x += Math.sin(t * 7.1) * 0.35 * flail + fl(1) * 2;
+    out.y += Math.cos(t * 6.3) * 0.4 * flail + fl(2) * 2;
+    out.z += Math.sin(t * 5.2 + 1) * 0.2 * flail;
+    const W = S.clone().addScaledVector(out.normalize(), reach);
     // Swept back: down along his side, behind the view
-    const P = V(-0.28, -0.62, 0.2);
     const k = pk * pk * (3 - 2 * pk);
-    g.wrist.copy(W).lerp(P, k);
-    g.along.set(-0.55, 0.2 + fl(4) * 4, -0.8).lerp(V(0, -0.3, 0.95), k).normalize();
-    // The palm to the ground, wherever the ground is from here
+    W.lerp(S.clone().add(V(-0.12, -0.5, 0.12)), k);
+    // Off for a magazine: down and in, below the view
+    const f = fetch * fetch * (3 - 2 * fetch);
+    W.lerp(S.clone().add(V(0.05, -0.45, -0.2)), f);
+    // Back out after the reload, from the grip
+    const back = this.armBack * this.armBack * (3 - 2 * this.armBack);
+    if (back < 1) W.copy(this.armFrom).lerp(W, back);
+    // Within reach of the shoulder, always: past it the arm can only fold the wrong way
+    const d = W.clone().sub(S);
+    if (d.length() > reach) W.copy(S).addScaledVector(d.normalize(), reach);
+    // The elbow out to his left and a touch down, never in toward his chest
+    const toward = elbowToward(W, S, V(-1, -0.45, 0.15).normalize());
+    const elbow = W.clone().addScaledVector(toward, RaviRig.len('lowerarm_l', 'hand_l'));
+    g.wrist.copy(W);
+    // The hand carries on from the forearm, flattened out a little onto the wind
+    g.along.copy(W).sub(elbow).normalize().add(V(-0.2, 0.1 + fl(4) * 3, -0.15).multiplyScalar(1 - k)).normalize();
     g.palm.set(0, -1, 0).applyQuaternion(Level19SkyScene._q.copy(cam.quaternion).invert());
     g.palm.addScaledVector(g.along, -g.palm.dot(g.along)).normalize();
-    g.toward.set(-0.25, -0.3, 0.9).lerp(V(0.1, 0.95, 0.2), k).normalize();
-    this.armAnchor.visible = k < 0.92;
+    g.toward.copy(toward);
+    this.armAnchor.visible = !gone && k < 0.92;
     this.arms.update();
   }
 
@@ -901,7 +975,6 @@ export class Level19SkyScene implements GameScene {
     // The world's camera follows his eyes (the markers and the sky read it)
     this.syncCamera();
     this.wind?.set(0.45 + 0.5 * smooth(tt / 2.5));
-    this.rush(0.25 + 0.4 * smooth(tt / 3));
     if (this.pt > 0.9 && this.pt - dt <= 0.9) this.say('RAVI', 'Arms out. Arms out. Like the card in the seat pocket.', RAVI, 2.6);
     if (tt > 3.6 && tt - dt <= 3.6) this.say('RAVI', 'There. That speck. That’s him.', RAVI, 2.2);
     if (tt >= EXIT) this.startFall(0);
@@ -946,7 +1019,7 @@ export class Level19SkyScene implements GameScene {
     }
     // ---- W: the pencil — arms in to his sides, head down, going
     const tumbling = this.tumble > 0;
-    const wantPencil = input.isDown(Controls.key('forward')) && !tumbling;
+    const wantPencil = input.isDown(Controls.key('forward')) && !tumbling && !this.drink.engaged;
     this.pencil += ((wantPencil ? 1 : 0) - this.pencil) * Math.min(1, dt * 6);
     const pk = this.pencil;
     // ---- A, D and S: tracking across the sky, relative to where he's looking
@@ -977,7 +1050,8 @@ export class Level19SkyScene implements GameScene {
     const look = { yaw: this.yaw, pitch: this.pitch - 0.32 * pk + (tumbling ? Math.sin(this.time * 9) * 0.1 * flail : 0), roll };
 
     // ---- the pistol: the same as on foot, put away while he's pencilled in
-    const busy = pk > 0.35 || tumbling;
+    if (input.wasPressed('KeyG') && !tumbling && pk < 0.2 && !this.arsenal.reloading && this.hp < MAX_HP + 1) this.drink.start();
+    const busy = pk > 0.35 || tumbling || this.drink.engaged;
     const aiming = input.rightHeld && input.pointerLocked && !busy && !this.arsenal.reloading;
     this.drive(dt, look, flail, busy, aiming);
     this.syncCamera();
@@ -1017,15 +1091,10 @@ export class Level19SkyScene implements GameScene {
     this.hud.setHealth(this.hp, this.hp < MAX_HP && this.hurtT > 4 ? this.regenT / 6 : 0);
 
     // ---- the readouts, and the rush of it
-    const left = Math.max(0, FALL_SECONDS - T);
     (this.altEl.querySelector('.v') as HTMLElement).textContent = `${Math.round(this.pos.y)} M`;
-    const sec = Math.ceil(left);
-    (this.altEl.querySelector('.t') as HTMLElement).textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
-    (this.altEl.querySelector('.bar') as HTMLElement).style.width = `${(T / FALL_SECONDS) * 100}%`;
     const speed = this.hv.length();
     this.wind?.set(0.85 + 0.15 * Math.min(1, speed / DIVE) + 0.15 * pk);
     this.wind?.setRush(pk * 0.8 + Math.min(1, speed / DIVE) * 0.3);
-    this.rush(0.45 + 0.55 * pk);
     if (T >= CHECKPOINT_T && T - dt < CHECKPOINT_T && this.checkpoint < 1) this.setObjective('CHECKPOINT');
 
     // ---- the pull
@@ -1045,10 +1114,9 @@ export class Level19SkyScene implements GameScene {
     this.camera.updateMatrixWorld(true);
   }
 
-  /** The edges of the view blur and pale with the speed of it. */
-  private rush(k: number): void {
-    const v = String(Math.max(0, Math.min(1, k)).toFixed(3));
-    if (this.rushEl.style.opacity !== v) this.rushEl.style.opacity = v;
+  /** Draw this (and all of it) in the close-up pass instead of the world's. */
+  private toNearPass(o: THREE.Object3D): void {
+    o.traverse((x) => x.layers.set(1));
   }
 
   private applyShake(dt: number): void {
@@ -1094,24 +1162,50 @@ export class Level19SkyScene implements GameScene {
    */
   private castBullet(origin: THREE.Vector3, dir: THREE.Vector3): THREE.Vector3 {
     const { audio, bus } = this.ctx;
-    this.raycaster.set(origin, dir);
-    this.raycaster.far = 400;
-    const parts: THREE.Object3D[] = [];
-    for (const d of this.divers) if (d.state === 'dive' || d.state === 'hold' || d.state === 'leave') parts.push(...d.e.parts);
-    const hits = this.raycaster.intersectObjects(parts, false).filter((h) => h.distance > 0.6);
-    if (!hits.length) return origin.clone().addScaledVector(dir, 400);
-    const h = hits[0];
-    const e = h.object.userData.enemy as Enemy | undefined;
-    const d = this.divers.find((x) => x.e === e);
-    if (!d) return h.point.clone();
-    const head = h.object.userData.part === 'head';
-    d.hp -= head ? 2 : 1;
-    this.particles.bloodSpray(h.point, dir.clone().negate(), head, -1e9);
+    // What he's aiming at is the red box round each of them: a round that goes through the box
+    // hits him. The box is drawn a fixed size on screen whatever his limbs are doing, so the test
+    // is against that — the box carried out to the man's distance, square to the view — not the
+    // thin body inside it.
+    const cam = this.camera;
+    cam.updateMatrixWorld(true);
+    const right = Level19SkyScene._a.set(1, 0, 0).applyQuaternion(cam.quaternion);
+    const up = Level19SkyScene._b.set(0, 1, 0).applyQuaternion(cam.quaternion);
+    const h = this.ctx.uiRoot.clientHeight || window.innerHeight;
+    const perPx = (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / h;
+    let best: Diver | null = null;
+    let bestT = Infinity;
+    let bestCore = false;
+    const C = new THREE.Vector3();
+    const off = new THREE.Vector3();
+    for (const d of this.divers) {
+      if (d.state !== 'dive' && d.state !== 'hold' && d.state !== 'leave') continue;
+      C.copy(this.pos).add(d.rel);
+      const t = off.copy(C).sub(origin).dot(dir);
+      if (t < 1 || t > 400 || t >= bestT) continue;
+      off.copy(C).sub(origin).addScaledVector(dir, -t);
+      const camDist = cam.position.distanceTo(C);
+      const sizePx = THREE.MathUtils.clamp(1400 / Math.max(1, camDist), 24, 90);
+      // Half the box, in metres out where he is (and never smaller than the man himself)
+      const half = Math.max(0.75, (sizePx / 2) * perPx * t);
+      const ox = Math.abs(off.dot(right));
+      const oy = Math.abs(off.dot(up));
+      if (ox > half || oy > half) continue;
+      best = d;
+      bestT = t;
+      // Dead centre of the box: that's his head and chest, and it's the end of him
+      bestCore = Math.max(ox, oy) < half * 0.35;
+    }
+    const end = origin.clone().addScaledVector(dir, Math.min(bestT, 400));
+    if (!best) return end;
+    const d = best;
+    d.hp -= bestCore ? 2 : 1;
+    const at = d.e.chest.getWorldPosition(new THREE.Vector3());
+    this.particles.bloodSpray(at, dir.clone().negate(), bestCore, -1e9);
     audio.fleshHit();
     bus.emit(Events.HitMarker, { lethal: d.hp <= 0 });
     if (d.hp <= 0) this.killDiver(d, dir);
     else d.e.flinch(1);
-    return h.point.clone();
+    return at;
   }
 
   /** What comes out of the gun (a spent case, an empty magazine): left behind, up into the wind. */
@@ -1189,6 +1283,7 @@ export class Level19SkyScene implements GameScene {
    */
   private die(by: string, fling: THREE.Vector3 | null): void {
     if (!this.alive) return;
+    this.drink.abort();
     this.alive = false;
     this.phase = 'dead';
     this.pt = 0;
@@ -1196,12 +1291,11 @@ export class Level19SkyScene implements GameScene {
     this.deadVel.copy(fling ?? V(0, -6, 0));
     this.deadSpin.set(Math.random() * 6 - 3, Math.random() * 6 - 3, Math.random() * 6 - 3).multiplyScalar(fling ? 2.5 : 1);
     this.syncCamera();
-    this.camera.near = 0.2;
-    this.camera.updateProjectionMatrix();
+    this.toNearPass(this.rig.root);
+    this.toNearPass(this.pistol);
     this.camera.position.addScaledVector(V(0, 1, 0), 1.2);
     this.rig.root.visible = true;
     this.pistol.visible = true;
-    this.rushEl.style.opacity = '0';
     this.ctx.audio.stopTrackMusic(0.5);
     this.ctx.input.exitPointerLock();
     this.warn('');
@@ -1637,8 +1731,10 @@ export class Level19SkyScene implements GameScene {
   private pullCam = new THREE.Vector3();
   private pullYaw = 0;
   private pullPitch = -0.95;
+  private rip: CanopyRip | null = null;
 
   private startPull(): void {
+    this.drink.abort();
     this.phase = 'pull';
     this.pt = 0;
     this.hud.hide();
@@ -1659,11 +1755,13 @@ export class Level19SkyScene implements GameScene {
     this.pullPitch = this.pitch;
     // Out of the first-person rig and into his own body: he'll look down at it
     this.rig.root.visible = true;
-    this.rushEl.style.opacity = '0';
     this.poseRavi({ x: 0, y: 0 }, 0);
-    this.camera.near = 0.06;
     this.camera.fov = 78;
     this.camera.updateProjectionMatrix();
+    // Him and his canopy are drawn in their own close-up pass (layer 1): the world's camera keeps
+    // a near plane far enough out that the island's shore and the sea don't fight for the same depth
+    this.toNearPass(this.rig.root);
+    this.toNearPass(this.pistol);
     // The holes: however many rounds came his way, and never fewer than a handful
     const n = THREE.MathUtils.clamp(Math.round(5 + this.holesIn * 0.6), 8, 18);
     const holes: { u: number; v: number; r: number }[] = [];
@@ -1672,6 +1770,7 @@ export class Level19SkyScene implements GameScene {
     this.chute = canopy({ span: 8, chord: 3, rise: 4.8, colours: [0x15264a, 0xc9a245, 0x15264a, 0xf1efe6, 0x15264a, 0xc9a245, 0x15264a], holes });
     this.chute.setOpen(0);
     this.scene.add(this.chute.group);
+    this.toNearPass(this.chute.group);
     // The island he'll wash up on: put where he'll see its beach as he comes down
     const head = V(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const s = ISLANDS[0];
@@ -1685,50 +1784,80 @@ export class Level19SkyScene implements GameScene {
     for (const d of this.divers) d.e.root.visible = false;
   }
 
+  /** When the wind takes what's left of it (pull seconds), and when he goes over head-first after it. */
+  private static readonly RIP_AT = 4.9;
+  private static readonly DROP_AT = 5.9;
+
   private updatePull(dt: number): void {
     const p = this.pt;
-    // How fast he's coming down: the jolt off terminal, a moment of hanging, then the holes let go of the air
-    const v = track([[0, FALL_V], [0.9, 13], [3.8, 17], [5.4, 34], [7, 52]], p);
+    const RIP = Level19SkyScene.RIP_AT;
+    const DROP = Level19SkyScene.DROP_AT;
+    // How fast he's coming down: the jolt off terminal, a moment of hanging under it, and then
+    // nothing over him at all — head-down, faster than he's gone all day
+    const v = track([[0, FALL_V], [0.9, 13], [3.8, 17], [RIP, 19], [RIP + 0.6, 30], [DROP + 0.5, 60], [DROP + 1.5, 78]], p);
     this.pos.y -= v * dt;
     const head = V(-Math.sin(this.pullYaw), 0, -Math.cos(this.pullYaw));
     this.pos.addScaledVector(head, 6 * dt);
-    // The canopy: out of the pack and open over him, then sagging and twisting with the air going out through it
+    // The canopy: out of the pack and open over him, sagging with the air going out through the holes —
+    // and then the wind gets into them and it comes apart, cell after cell
     const open = smooth(p / 0.9);
-    const sag = p > 4 ? 1 - 0.22 * smooth((p - 4) / 2) + Math.sin(p * 7) * 0.03 * smooth(p - 4) : 1;
+    const sag = p > 4 ? 1 - 0.22 * smooth((p - 4) / 0.9) + Math.sin(p * 9) * 0.05 * smooth(p - 4) : 1;
     this.chute.group.visible = true;
     this.chute.setOpen(open * sag);
-    const spin = this.pullYaw + p * 0.42 + smooth((p - 4.5) / 4) * 1.4;
-    this.chute.group.rotation.set(Math.sin(p * 2.3) * 0.06 * open, spin, Math.sin(p * 1.7) * 0.08 * open);
+    const spin = this.pullYaw + Math.min(p, RIP) * 0.42 + smooth((Math.min(p, DROP) - 4.5) / 4) * 1.4;
+    this.chute.group.rotation.set(Math.sin(p * 2.3) * 0.06 * open + (p > 4 ? Math.sin(p * 13) * 0.04 : 0), spin, Math.sin(p * 1.7) * 0.08 * open);
     for (const [i, t] of this.chute.tatters.entries()) t.rotation.set(Math.sin(p * 13 + i) * 0.9, 0, Math.sin(p * 9 + i * 2) * 0.5);
-    // Him: flat on the wind, snapped upright under it (Ravi's model faces +Z: turned round to face where the canopy flies)
+    if (p >= RIP && !this.rip) {
+      this.rip = new CanopyRip(this.chute, this.scene, 1);
+      for (const t of this.chute.tatters) t.visible = false;
+      this.ctx.audio.fabricRip(true);
+      this.shake = 1.2;
+      this.say('RAVI', 'No no no no NO—', RAVI, 1.6);
+    }
+    if (this.rip) {
+      const before = this.rip.torn;
+      this.rip.update(dt, p - RIP);
+      if (this.rip.torn > before && this.rip.torn > 1) this.ctx.audio.fabricRip(false);
+    }
+    // Him: flat on the wind, snapped upright under it; then over, head-first, nothing holding him
     const up = smooth((p - 0.15) / 0.6);
+    const fall = smooth((p - DROP) / 0.7);
     const hang = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.sin(p * 2) * 0.05, spin + Math.PI, 0));
     if (p < 0.35) {
       this.poseRavi({ x: 0, y: 0 }, smooth(p / 0.35));
-    } else {
+    } else if (fall <= 0) {
       this.bodyQ.slerp(hang, up);
       const r = this.rig.root;
       r.quaternion.copy(this.bodyQ);
       r.position.copy(this.pos).sub(V(0, 1.0, 0).applyQuaternion(this.bodyQ));
-      raviUnderCanopy(this.rig, this.time, 1);
+      raviUnderCanopy(this.rig, this.time, 1 + smooth(p - RIP) * 2);
       this.holdPistol();
+    } else {
+      // Head-down: his head to the sea, his front the way he was facing, arms everywhere
+      const f = V(-Math.sin(spin + Math.PI), 0, -Math.cos(spin + Math.PI)).negate();
+      const y = V(0, -1, 0);
+      const x = new THREE.Vector3().crossVectors(y, f).normalize();
+      const dive = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, new THREE.Vector3().crossVectors(x, y)));
+      this.bodyQ.copy(hang).slerp(dive, fall);
+      this.poseRavi({ x: 0, y: 0 }, 1);
     }
     this.pistol.visible = p < 0.5;
     // The risers come off his shoulders: the canopy's origin a little over his head
     const headAt = this.rig.bones.get('neck_01')!.getWorldPosition(new THREE.Vector3());
     // A ram-air wing flies a little ahead of the man under it
     const ahead = V(-Math.sin(spin), 0, -Math.cos(spin));
-    this.chute.group.position.set(headAt.x, this.rig.root.position.y + 1.55, headAt.z).addScaledVector(ahead, 0.9 * up);
-    // Camera: his own eyes all the way — the jolt as it opens, his head yanked up to it, a long look, then down at the sea
+    if (!this.rip || p - RIP < 0.8) this.chute.group.position.set(headAt.x, this.rig.root.position.y + 1.55, headAt.z).addScaledVector(ahead, 0.9 * up);
+    // Camera: his own eyes all the way — the jolt as it opens, his head yanked up to it, a long look
+    // as it goes to pieces, then over and straight down at the sea coming up, face first into it
     const headPos = this.rig.bones.get('head')!.getWorldPosition(Level19SkyScene._a);
     const face = V(-Math.sin(spin), 0, -Math.cos(spin));
-    this.camera.position.copy(headPos).add(V(0, 0.1, 0)).addScaledVector(face, 0.16 * up);
-    const pitch = track([[0, this.pullPitch], [0.2, this.pullPitch - 0.25], [1.0, 1.36], [4.9, 1.47], [6.1, -1.3]], p);
-    const yaw = this.pullYaw + wrapAngle(spin - this.pullYaw) * up + Math.sin(p * 0.8) * 0.1 * up;
+    this.camera.position.copy(headPos).add(V(0, 0.1 * (1 - fall) - 0.18 * fall, 0)).addScaledVector(face, 0.16 * up * (1 - fall));
+    const pitch = track([[0, this.pullPitch], [0.2, this.pullPitch - 0.25], [1.0, 1.36], [RIP, 1.47], [DROP, 1.4], [DROP + 0.8, -1.55]], p);
+    const yaw = this.pullYaw + wrapAngle(spin - this.pullYaw) * up + Math.sin(p * 0.8) * 0.1 * up * (1 - fall);
     this.camera.rotation.order = 'YXZ';
-    this.camera.rotation.set(pitch, yaw, Math.sin(p * 1.6) * 0.04);
+    this.camera.rotation.set(pitch, yaw, Math.sin(p * 1.6) * 0.04 + fall * Math.sin(p * 3) * 0.12);
     if (p > 0.15 && p - dt <= 0.15) this.shake = 1.4;
-    this.shake = Math.max(this.shake, p > 5.2 ? 0.25 : 0.1);
+    this.shake = Math.max(this.shake, p > RIP ? 0.45 : p > 4 ? 0.25 : 0.1);
     this.applyShake(dt);
     if (p > 0.35 && p - dt <= 0.35) {
       this.ctx.audio.kickImpact();
@@ -1736,15 +1865,16 @@ export class Level19SkyScene implements GameScene {
     }
     if (p > 2.1 && p - dt <= 2.1) this.say('RAVI', '...Huh.', RAVI, 1.3);
     if (p > 3.2 && p - dt <= 3.2) this.say('RAVI', 'Those are bullet holes.', RAVI, 1.4);
-    if (p > 4.4 && p - dt <= 4.4) this.say('RAVI', 'That is a LOT of bullet holes.', RAVI, 1.5);
-    if (p > 6.4 && p - dt <= 6.4) this.say('RAVI', 'Oh no.', RAVI, 1.4);
-    if (p > 8 && this.pos.y < 120 && this.captionT <= 0) this.say('RAVI', 'OH NO OH NO OH NO—', RAVI, 3);
-    this.wind?.set(0.35 + (v / FALL_V) * 0.6);
+    if (p > 4.2 && p - dt <= 4.2) this.say('RAVI', 'That is a LOT of bullet holes.', RAVI, 0.7);
+    if (p > DROP + 1 && this.pos.y < 160 && this.captionT <= 0) this.say('RAVI', 'OH NO OH NO OH NO—', RAVI, 3);
+    this.wind?.set(0.35 + Math.min(1.2, v / FALL_V) * 0.6);
+    this.wind?.setRush(Math.max(0, (v - FALL_V) / 24));
     this.updateBossAbove(dt);
     this.birds.update(dt);
     this.T += dt;
     for (const c of this.crossings) this.positionCrossing(c);
-    if (this.pos.y <= 0.6) this.startSplash();
+    // Face first: his head is the first of him into it
+    if (this.camera.position.y <= 0.3) this.startSplash();
   }
 
   /** The boss after the pull: drifting on above, out of it. */
@@ -2122,6 +2252,26 @@ export class Level19SkyScene implements GameScene {
       this.rig.root.visible = rigWas;
     }
     renderer.render(this.scene, this.camera);
+    if (this.phase === 'pull' || this.phase === 'splash' || this.phase === 'dead') {
+      // Him (and his canopy) close up, over the world
+      this.camera.updateMatrixWorld(true);
+      this.nearCam.position.copy(this.camera.position);
+      this.nearCam.quaternion.copy(this.camera.quaternion);
+      if (this.nearCam.fov !== this.camera.fov || this.nearCam.aspect !== this.camera.aspect) {
+        this.nearCam.fov = this.camera.fov;
+        this.nearCam.aspect = this.camera.aspect;
+        this.nearCam.updateProjectionMatrix();
+      }
+      const auto = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      // (A colour background would clear the world's pass away: none for this one)
+      const bg = this.scene.background;
+      this.scene.background = null;
+      renderer.render(this.scene, this.nearCam);
+      this.scene.background = bg;
+      renderer.autoClear = auto;
+    }
     if (this.phase === 'exit' || this.phase === 'fall') {
       // His hands, the gun and the rush of air, over the world
       const auto = renderer.autoClear;

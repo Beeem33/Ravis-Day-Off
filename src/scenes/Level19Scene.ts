@@ -3,7 +3,7 @@ import * as CANNON from 'cannon-es';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level19Builder, type Level19Data, type GuardSpawn, parachutePack, HW, DOOR, P_COCKPIT, P_CONF, P_GALLEY } from '../environment/Level19Builder';
+import { Level19Builder, type Level19Data, type GuardSpawn, parachutePack, HW, CEIL, DOOR, P_COCKPIT, P_CONF, P_GALLEY, Z_AFT, Z_NOSE } from '../environment/Level19Builder';
 import { CombatScene, type TakedownArms } from './CombatScene';
 import { NeckStabViewmodel } from '../entities/NeckStabViewmodel';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
@@ -677,17 +677,49 @@ export class Level19Scene extends CombatScene<Level19Data> {
 
   /**
    * Into the dive: as near nothing as makes no difference. The dead and
-   * everything loose come up off the floor and drift about the cabin — not
-   * up through the roof, not pinned to it: floating, turning, wandering in
-   * the air the plane's falling through.
+   * everything loose come up off the floor and drift slowly up to the
+   * ceiling, turning over as they go — except the captain, who stays where
+   * he went down, slumped over his column.
    */
   private weightless(): void {
-    this.world.gravity.set(0, 0.3, -0.5);
+    // Up, gently (the floor's falling away faster than they are), and a little toward the nose
+    this.world.gravity.set(0, 0.7, -0.25);
     this.floating = true;
-    for (const b of this.world.bodies) if (b.mass > 0) b.wakeUp();
+    // A ceiling for them to come to rest against (the cabin's own is only a picture to the physics)
+    const roof = new CANNON.Body({ type: CANNON.Body.STATIC });
+    roof.addShape(new CANNON.Box(new CANNON.Vec3(HW + 0.5, 0.2, (Z_AFT - Z_NOSE) / 2 + 1)));
+    roof.position.set(0, CEIL - 0.05 + 0.2, (Z_AFT + Z_NOSE) / 2);
+    this.world.addBody(roof);
+    // The captain: frozen where he went down, slumped over his column, for good
+    this.pinned = new Set(RAG_PARTS.map((n) => this.captain.ragdollPart(n)).filter((b): b is CANNON.Body => !!b));
+    for (const b of this.pinned) {
+      b.velocity.set(0, 0, 0);
+      b.angularVelocity.set(0, 0, 0);
+      b.type = CANNON.Body.STATIC;
+      b.mass = 0;
+      b.updateMassProperties();
+    }
+    // Thick air: the drift and the turning-over damped right down (inside every solver step, where the
+    // joints' own wobble gets made, not once a frame after it), and the joints solved more carefully
+    for (const b of this.world.bodies) {
+      if (b.type !== CANNON.Body.DYNAMIC || b.mass <= 0) continue;
+      b.linearDamping = Math.max(b.linearDamping, 0.6);
+      b.angularDamping = Math.max(b.angularDamping, 0.9);
+      b.wakeUp();
+    }
+    const solver = this.world.solver as unknown as { iterations: number };
+    solver.iterations = Math.max(solver.iterations, 25);
   }
+  /** The captain's ragdoll: held down on his controls through the dive. */
+  private pinned = new Set<CANNON.Body>();
 
-  /** A step of the drift: each body pulled gently toward the middle of the cabin's height, stirred by the air, slowed by it. */
+  /**
+   * A step of the drift. Every part of a body is pushed the same way at once
+   * (a slow current through the cabin that changes from place to place only
+   * over metres), so a man's limbs never pull against each other and shake —
+   * he just goes up and wanders, turning over slowly. The air takes the speed
+   * and the spin out of everything.
+   */
   private floatBodies(dt: number): void {
     if (!this.floating || !(dt > 0)) return;
     this.floatT += dt;
@@ -695,19 +727,18 @@ export class Level19Scene extends CombatScene<Level19Data> {
     const f = new CANNON.Vec3();
     for (const b of this.world.bodies) {
       if (b.type !== CANNON.Body.DYNAMIC || b.mass <= 0) continue;
-      b.wakeUp();
       const m = b.mass;
-      const k = b.id * 1.37;
-      // Where it wants to be: somewhere between knee and head height, wandering
-      const want = 1.15 + 0.55 * Math.sin(t * 0.45 + k);
-      f.set(Math.sin(t * 0.8 + k * 2.1) * 1.6 * m, ((want - b.position.y) * 2.4 + Math.sin(t * 1.3 + k) * 0.8) * m, Math.cos(t * 0.6 + k * 0.7) * 1.4 * m);
-      b.applyForce(f, b.position);
-      // Air: it doesn't build up speed, it drifts
-      const drag = Math.exp(-dt * 0.9);
-      b.velocity.scale(drag, b.velocity);
-      b.angularVelocity.scale(Math.exp(-dt * 0.4), b.angularVelocity);
-      // A slow tumble of its own
-      if (b.angularVelocity.lengthSquared() < 0.3) b.angularVelocity.set(Math.sin(k) * 0.6, Math.cos(k) * 0.6, Math.sin(k * 1.7) * 0.6);
+      if (this.pinned.has(b)) continue;
+      b.wakeUp();
+      const p = b.position;
+      f.set(Math.sin(t * 0.21 + p.z * 0.35) * 0.35 * m, 0, Math.cos(t * 0.17 + p.x * 0.6) * 0.3 * m);
+      b.applyForce(f, p);
+      // No shaking: whatever a body brushes past on its way up (a sofa, a seat, the next man) can turn it
+      // over slowly or nudge it along, never set a limb thrashing
+      const w = b.angularVelocity.length();
+      if (w > 1.6) b.angularVelocity.scale(1.6 / w, b.angularVelocity);
+      const v = b.velocity.length();
+      if (v > 1.4) b.velocity.scale(1.4 / v, b.velocity);
     }
   }
 

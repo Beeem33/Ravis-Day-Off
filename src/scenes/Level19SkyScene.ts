@@ -104,6 +104,10 @@ interface Diver {
   dist: number;
   dy: number;
   orbit: number;
+  /** Seconds till he flies off to a new spot round Ravi. */
+  moveT: number;
+  /** 0..1 how much he's tracking across the sky (on the move) rather than holding and facing Ravi. */
+  track: number;
   fireT: number;
   glint: number;
   burst: number;
@@ -541,6 +545,8 @@ export class Level19SkyScene implements GameScene {
           dist: 16,
           dy: 0,
           orbit: 0,
+          moveT: 0,
+          track: 0,
           fireT: 0,
           glint: 0,
           burst: 0,
@@ -1605,15 +1611,52 @@ export class Level19SkyScene implements GameScene {
           d.fireT = 2.5 + Math.random() * 1.5;
         }
       } else {
-        // Holding off: his distance, slowly round him, bobbing a little on the air
+        // Working round him. Every few seconds (and straight after he's fired) he flies off to a new
+        // spot — a different side, nearer or further, higher or lower — the way a skydiver does it:
+        // tracking across the sky on his belly, quick sideways but only a few metres a second up or
+        // down, banking into the turn, then easing up, turning in to face Ravi and steadying to shoot.
+        // Never on the move while he's lining up or firing.
+        const shooting = d.glint > 0 || d.burst > 0;
+        d.moveT -= dt;
+        if (d.moveT <= 0 && !shooting) {
+          const side = Math.random() < 0.5 ? -1 : 1;
+          d.ang += side * (0.6 + Math.random() * 1.3);
+          d.dist = 11 + Math.random() * 12;
+          d.dy = -11 + Math.random() * 12;
+          d.orbit = side * (0.03 + Math.random() * 0.05);
+          d.moveT = 3 + Math.random() * 3;
+        }
         d.ang += d.orbit * dt;
-        const slot = tmp.set(Math.cos(d.ang) * d.dist, d.dy + Math.sin(d.t * 0.7) * 1.2, Math.sin(d.ang) * d.dist);
-        d.vel.lerp(slot.clone().sub(d.rel).multiplyScalar(1.4), Math.min(1, dt * 2));
+        const slot = tmp.set(Math.cos(d.ang) * d.dist, d.dy + Math.sin(d.t * 0.7) * 0.8, Math.sin(d.ang) * d.dist);
+        const wantV = slot.clone().sub(d.rel).multiplyScalar(0.9);
+        const wh = Math.hypot(wantV.x, wantV.z);
+        if (wh > 13) wantV.multiply(V(13 / wh, 1, 13 / wh));
+        wantV.y = THREE.MathUtils.clamp(wantV.y, -4, 3.5);
+        if (shooting) wantV.multiplyScalar(0.15);
+        // (a body on the wind can't change its speed much faster than this)
+        // (across the sky, a body on the wind can't change its speed much faster than this; up and down,
+        // flaring out of the dive, it can brake hard)
+        const dv = wantV.sub(d.vel);
+        const dvh = Math.hypot(dv.x, dv.z);
+        if (dvh > 7 * dt) dv.multiply(V((7 * dt) / dvh, 1, (7 * dt) / dvh));
+        dv.y = THREE.MathUtils.clamp(dv.y, -14 * dt, 14 * dt);
+        d.vel.add(dv);
         d.rel.addScaledVector(d.vel, dt);
-        // Facing him, turning into the drift
-        const toRavi = d.rel.clone().negate();
-        const want = diverQuat(toRavi, d.orbit * 1.2 + Math.sin(d.t * 0.9) * 0.08, 0.1, 'enemy', new THREE.Quaternion());
-        d.q.slerp(want, Math.min(1, dt * 3));
+        // Not right on top of him: he keeps the room to shoot
+        const rr = d.rel.length();
+        if (rr < 7) d.vel.addScaledVector(d.rel, ((7 - rr) / rr) * dt * 3);
+        // Facing: the way he's going while he tracks (head down into it a touch), turned in to Ravi otherwise
+        const hs = Math.hypot(d.vel.x, d.vel.z);
+        d.track += ((shooting ? 0 : THREE.MathUtils.clamp((hs - 2) / 6, 0, 1)) - d.track) * Math.min(1, dt * 3);
+        const toRavi = V(-d.rel.x, 0, -d.rel.z).normalize();
+        const heading = hs > 0.5 ? toRavi.clone().lerp(V(d.vel.x / hs, 0, d.vel.z / hs), d.track) : toRavi.clone();
+        if (heading.lengthSq() < 1e-4) heading.copy(toRavi);
+        heading.normalize();
+        // Banked into the turn: how hard he's being pushed off to his right (+) or left
+        const sideAcc = dt > 0 ? (dv.x * -heading.z + dv.z * heading.x) / dt : 0;
+        const bank = THREE.MathUtils.clamp(sideAcc / 7, -1, 1) * 0.5 + Math.sin(d.t * 0.9) * 0.06;
+        const want = diverQuat(heading, bank, 0.1 + d.track * 0.35, 'enemy', new THREE.Quaternion());
+        d.q.slerp(want, Math.min(1, dt * 2.5));
         // Shooting: the marker goes red and the arm comes up, then two rounds
         d.fireT -= dt;
         if (d.fireT <= 0 && d.glint <= 0 && d.burst <= 0) d.glint = 0.75;
@@ -1631,12 +1674,16 @@ export class Level19SkyScene implements GameScene {
             d.burstT = 0.2;
             this.diverShot(d);
             if (!this.alive) return;
-            if (d.burst === 0) d.fireT = 3.6 + Math.random() * 2.2;
+            if (d.burst === 0) {
+              d.fireT = 3.6 + Math.random() * 2.2;
+              // Fired: off to somewhere else before Ravi can draw a bead on where the shots came from
+              d.moveT = 0.3 + Math.random() * 0.5;
+            }
           }
         }
-        const aiming = d.glint > 0 || d.burst > 0 || d.fireT > 3.2;
+        const aiming = d.glint > 0 || d.burst > 0 || (d.fireT > 3.2 && d.track < 0.4);
         pose.aimK += ((aiming ? 1 : 0) - pose.aimK) * Math.min(1, dt * 5);
-        pose.steer = THREE.MathUtils.clamp(d.orbit * 3, -1, 1);
+        pose.steer = THREE.MathUtils.clamp(bank * 2, -1, 1);
       }
       if (pose.aimK > 0.01) {
         // The arm out at him: his chest to Ravi's, in his own frame
@@ -1648,7 +1695,7 @@ export class Level19SkyScene implements GameScene {
       const dist = d.rel.length();
       const at = tmp.copy(this.pos).add(d.rel);
       const danger = d.glint > 0;
-      this.place(d.mark, at, dist > 4, danger ? '! FBI !' : 'FBI', THREE.MathUtils.clamp(1400 / Math.max(1, this.camera.position.distanceTo(at)), 24, 90), danger);
+      this.place(d.mark, at, dist > 4, '', THREE.MathUtils.clamp(1400 / Math.max(1, this.camera.position.distanceTo(at)), 24, 90), danger);
       d.mark.style.color = danger ? '#ff2a2a' : '#ff8a70';
     }
   }
@@ -1669,6 +1716,8 @@ export class Level19SkyScene implements GameScene {
     d.dist = 15 + Math.random() * 8;
     d.dy = -7 - Math.random() * 8;
     d.orbit = (Math.random() < 0.5 ? -1 : 1) * (0.06 + Math.random() * 0.06);
+    d.moveT = 1.5 + Math.random() * 2;
+    d.track = 0;
     d.e.root.visible = true;
     if (!firstOfWave) return;
     if (d.at < 9) this.say('RAVI', 'The FBI? They jumped too?! Since when is the FBI on this?!', RAVI, 3);
@@ -1687,7 +1736,7 @@ export class Level19SkyScene implements GameScene {
     const from = d.e.pistolMuzzleWorld(new THREE.Vector3());
     const dist = d.rel.length();
     // Not easy, from a falling man at twenty metres: harder still if Ravi's moving, and hardly at all with him pencilled in
-    const p = THREE.MathUtils.clamp(0.26 - this.hv.length() / 45 - dist / 140 - this.pencil * 0.15, 0.03, 0.26);
+    const p = THREE.MathUtils.clamp(0.26 - this.hv.length() / 45 - dist / 140 - this.pencil * 0.15 - d.track * 0.1, 0.03, 0.26);
     const hit = Math.random() < p;
     const to = this.pos.clone();
     if (!hit) to.add(V(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(1.2 + Math.random() * 2.2));

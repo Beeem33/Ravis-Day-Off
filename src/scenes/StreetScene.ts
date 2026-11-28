@@ -120,6 +120,8 @@ const PASSENGERS = 3;
 const SWAP = { arrive: 1.0, doorOpen: 2.3, push: 2.6, doorShut: 3.1, settle: 3.3, end: 4.6 };
 /** Into another car faster than this (m/s) and he goes out through the windscreen; slower, his head into the wheel. */
 const EJECT_SPEED = 20;
+/** Closing speed (m/s) into another car that kills him; under it, it's a knock — damage, not death. */
+const SLAM_SPEED = 11;
 /** Half a hole's length along the road (HighwayCollapse's HALF). */
 const HOLE_HALF = 18;
 /** Round the rim (WheelGrip's grip), the finger, and a pistol's grip: what his hands go between. */
@@ -334,6 +336,13 @@ export class StreetScene implements GameScene {
   private runWorld: CANNON.World | null = null;
   private runCar: CANNON.Body | null = null;
   private runOvers: { e: Enemy; t: number; cracked: boolean; ravi: boolean }[] = [];
+  /**
+   * The officer Ravi hit hard enough: in through the windscreen, and dead in
+   * the passenger seat for the rest of the drive. Built at the start (hidden)
+   * so the warm-up compiles him; `t` is how far through coming in he is (−1: not yet).
+   */
+  private seatCop: Enemy | null = null;
+  private seatCopT = -1;
   /** Ravi out through the windscreen: his ragdoll (the same as on foot) and its little world with the road for a floor. DeathFx finds it here. */
   private raviRagdoll: RaviRagdoll | null = null;
   private ejectWorld: CANNON.World | null = null;
@@ -523,6 +532,7 @@ export class StreetScene implements GameScene {
     this.buildAirside();
     this.buildDriver();
     this.buildGuards();
+    this.buildSeatCop();
     this.cockpitGlass();
     // His mirrors, turned to his eyes in the seat
     const hip = this.civicRig.seat.hip;
@@ -1311,6 +1321,7 @@ export class StreetScene implements GameScene {
     this.fireClouds.update(dt);
     this.updateTankerFires(dt);
     this.updateRunOvers(dt);
+    this.placeSeatCop(dt);
     this.collapse.update(dt);
     this.updateMissiles(dt);
     this.updateRifle(dt);
@@ -1618,9 +1629,9 @@ export class StreetScene implements GameScene {
   private onPlayerImpact(speed: number, point: THREE.Vector3, other: 'wall' | 'traffic' | 'boss' | 'cop' | 'player'): void {
     const { audio } = this.ctx;
     if (this.phase === 'done') return;
-    // Another car, at any speed worth the name: that's it. The boss's car
+    // Another car, slammed into: that's it (a tap or a nudge just costs the Civic). The boss's car
     // isn't: ram it all he likes (it costs the Civic, not his life, for now)
-    const lethal = other === 'traffic' && speed > 2;
+    const lethal = other === 'traffic' && speed > SLAM_SPEED;
     if (other === 'boss' && speed > 5 && this.phase === 'drive' && this.crashCd <= 0) {
       // A proper shunt: his tail lights in pieces, sparks off both bumpers, the saloon twitched off line
       this.particles.glassShards(point, StreetScene.tmpA.set(0, 0.6, 0), point.y - 1);
@@ -1982,6 +1993,31 @@ export class StreetScene implements GameScene {
       this.scene.add(e.root);
       this.officers.push(e);
     }
+  }
+
+  /** The officer who'll end up in the passenger seat, if Ravi hits one hard enough. */
+  private buildSeatCop(): void {
+    const e = new Enemy(new THREE.Vector3(0, -60, 0), 0, 40, { name: 'HIGHWAY PATROL', security: true });
+    e.hideWeapon();
+    e.setSitting(true, true);
+    e.root.rotation.order = 'YXZ';
+    // Dead: slumped forward and over against the door, arms gone, head lolled onto his shoulder
+    e.pose = {
+      handL: new THREE.Vector3(-0.22, 0.3, -0.3),
+      handR: new THREE.Vector3(0.3, 0.22, -0.18),
+      elbow: new THREE.Vector3(0.6, -0.7, 0.2),
+      curl: 0.15,
+      lean: 0.25,
+      head: new THREE.Euler(0.45, 0.35, 0.5)
+    };
+    // What the glass did to him
+    const stain = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.3), new THREE.MeshStandardMaterial({ color: 0x6a0a0a, roughness: 0.4 }));
+    stain.position.set(0.02, 0.08, -0.13);
+    stain.rotation.y = Math.PI;
+    e.addChestPatch(stain);
+    e.root.visible = false;
+    this.civicRig.body.add(e.root);
+    this.seatCop = e;
   }
 
   /** The men in the boss's car: built now (hidden) so the warm-up compiles them. */
@@ -3292,6 +3328,11 @@ export class StreetScene implements GameScene {
    * the back — or (anyone else's car) thrown up and over it.
    */
   private runOver(o: Officer, car: DriveCar, ravi: boolean): void {
+    // Hit properly by Ravi (not nudged), and the seat's free: he comes in through the glass
+    if (ravi && Math.abs(car.speed) > 9 && this.seatCop && this.seatCopT < 0) {
+      this.throughGlass(o);
+      return;
+    }
     o.down = true;
     const e = o.e;
     const world = this.ensureRunWorld();
@@ -3308,6 +3349,130 @@ export class StreetScene implements GameScene {
       this.shake = Math.min(1.2, this.shake + 0.55);
       this.damage = Math.min(100, this.damage + 2);
     }
+  }
+
+  /**
+   * An officer taken at speed: up the bonnet and head first through the
+   * windscreen, in a burst of it, and into the passenger seat — where he
+   * stays, slumped against the door, dead, for the rest of the drive.
+   */
+  private throughGlass(o: Officer): void {
+    o.down = true;
+    o.e.root.visible = false;
+    o.e.setAiming(false);
+    const cop = this.seatCop!;
+    this.seatCopT = 0;
+    cop.root.visible = true;
+    this.placeSeatCop(0);
+    // The glass: a crater of it where he came through, on the passenger side, and the rest of it everywhere
+    this.smashHole(0.74, 0.48);
+    const g = this.civicRig.group;
+    g.updateMatrixWorld(true);
+    const p = this.player;
+    const at = new THREE.Vector3(0.38, 1.12, -0.35).applyMatrix4(g.matrixWorld);
+    const back = new THREE.Vector3(Math.sin(p.yaw), 0.5, Math.cos(p.yaw));
+    this.particles.glassShards(at, back, p.position.y + 0.3);
+    this.particles.glassShards(at, back.clone().setY(0.9), p.position.y + 0.3);
+    this.particles.bloodSpray(at, back, true, p.position.y + 0.3);
+    const { audio } = this.ctx;
+    audio.glassShatter(0);
+    audio.bodyThud(0);
+    audio.punchImpact(true);
+    this.shake = Math.min(1.5, this.shake + 1.0);
+    this.hurt = Math.max(this.hurt, 0.3);
+    this.damage = Math.min(100, this.damage + 4);
+  }
+
+  /** The seat officer: coming in through the glass (`k` 0..1, over the bonnet to the seat), or sat dead in it. */
+  private placeSeatCop(dt: number): void {
+    const e = this.seatCop;
+    if (!e || this.seatCopT < 0) return;
+    this.seatCopT += dt;
+    const k = smooth(Math.min(1, this.seatCopT / 0.28));
+    const hip = this.civicRig.seat.hip;
+    const axle = this.civicRig.body.position.y;
+    // His seat: the driver's, mirrored across the car
+    const seat = StreetScene.tmpA.set(-hip.x - 0.04, hip.y - 0.53 - axle, hip.z + 0.04);
+    // Coming in: from out over the bonnet, head first and low, through the glass and down into it
+    const from = StreetScene.tmpB.set(-hip.x, 0.55 - axle, -1.6);
+    e.position.copy(from).lerp(seat, k);
+    e.yaw = 0;
+    e.update(dt);
+    // (head first in, then thrown back into the seat; once there, slumped forward in it)
+    e.root.rotation.set(-1.1 * (1 - k) + 0.1 * k, 0, -0.07 * k, 'YXZ');
+  }
+
+  /** Where a body came through the windscreen: a crater of crazed glass and a hole in the middle of it. */
+  private smashHole(u: number, v: number): void {
+    const c = this.glassCanvas;
+    if (!c || !this.glassTex) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const x = u * c.width;
+    const y = (1 - v) * c.height;
+    const r = c.height * 0.42;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0.01 * c.width, c.height);
+    ctx.lineTo(0.99 * c.width, c.height);
+    ctx.lineTo(0.94 * c.width, 0.07 * c.height);
+    ctx.lineTo(0.06 * c.width, 0.07 * c.height);
+    ctx.closePath();
+    ctx.clip();
+    // Crazed white all round where it took him, thinning out
+    const grd = ctx.createRadialGradient(x, y, r * 0.18, x, y, r * 0.75);
+    grd.addColorStop(0, 'rgba(235,240,245,0.55)');
+    grd.addColorStop(1, 'rgba(235,240,245,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.75, 0, Math.PI * 2);
+    ctx.fill();
+    // The web: cracks out from it a long way, and rings round it
+    ctx.strokeStyle = 'rgba(240,244,248,0.85)';
+    ctx.lineWidth = Math.max(1.5, c.height / 300);
+    for (let i = 0; i < 26; i++) {
+      let a = (i / 26) * Math.PI * 2 + Math.random() * 0.2;
+      let px = x + Math.cos(a) * r * 0.2;
+      let py = y + Math.sin(a) * r * 0.2;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      const len = r * (0.5 + Math.random() * 0.9);
+      for (let d = 0; d < len; d += r * 0.08) {
+        a += (Math.random() - 0.5) * 0.35;
+        px += Math.cos(a) * r * 0.08;
+        py += Math.sin(a) * r * 0.08;
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    for (const k of [0.28, 0.4, 0.55, 0.72]) {
+      ctx.beginPath();
+      for (let i = 0; i <= 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const rr = r * k * (0.85 + Math.random() * 0.3);
+        if (i === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+        else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      }
+      ctx.stroke();
+    }
+    // The hole he went through: clear, with a jagged ragged lip of glass round it
+    ctx.beginPath();
+    for (let i = 0; i <= 30; i++) {
+      const a = (i / 30) * Math.PI * 2;
+      const rr = r * (0.3 + Math.random() * 0.07);
+      if (i === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.85);
+      else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.85);
+    }
+    ctx.closePath();
+    ctx.save();
+    ctx.clip();
+    ctx.clearRect(x - r, y - r, r * 2, r * 2);
+    ctx.restore();
+    ctx.lineWidth = Math.max(3, c.height / 120);
+    ctx.strokeStyle = 'rgba(250,252,255,0.95)';
+    ctx.stroke();
+    ctx.restore();
+    this.glassTex.needsUpdate = true;
   }
 
   /** The world the run-down officers come down in: the road, and Ravi's car as a box riding on it. */

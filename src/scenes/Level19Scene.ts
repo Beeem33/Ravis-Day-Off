@@ -41,7 +41,7 @@ import { smooth, clamp01, yawPitchTo, wrapAngle, alongPath, pathLength } from '.
  * conference room behind him cleared), 2 the cockpit door, the boss gone.
  */
 
-type Phase = 'intro' | 'play' | 'knock' | 'pilots' | 'dive' | 'reveal' | 'run' | 'gear' | 'jump' | 'dead';
+type Phase = 'intro' | 'play' | 'knock' | 'pilots' | 'dive' | 'reveal' | 'run' | 'gear' | 'out' | 'jump' | 'dead';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -127,6 +127,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
   private subtitle!: HTMLElement;
   private subT = 0;
   private fadeEl!: HTMLElement;
+  private mark!: HTMLElement;
   private unsubs: (() => void)[] = [];
   private keyHandler = (e: KeyboardEvent): void => this.onKey(e);
   private clickHandler = (): void => this.onClick();
@@ -285,6 +286,10 @@ export class Level19Scene extends CombatScene<Level19Data> {
       <div class="intro-letterbox"><span class="lb-top"></span><span class="lb-bot"></span></div>
       <div class="intro-objective"></div>
       <div class="l19-sub" style="position:absolute;left:50%;bottom:17%;transform:translateX(-50%);width:min(760px,88vw);text-align:center;font:600 17px/1.4 'Courier New',monospace;color:#f4ecd8;text-shadow:0 2px 6px #000,0 0 2px #000;opacity:0;transition:opacity .3s;pointer-events:none"></div>
+      <div class="l19-mark" style="position:absolute;left:0;top:0;display:none;pointer-events:none;color:#ffd24a;font:700 12px/1 'Courier New',monospace;letter-spacing:2px;text-align:center;text-shadow:0 0 6px #000,0 0 2px #000;transform:translate(-50%,-50%)">
+        <div class="l19-arrow" style="font-size:26px;line-height:26px">▼</div>
+        <div class="l19-label" style="margin-top:4px;white-space:nowrap"></div>
+      </div>
       <div class="l19-fade" style="position:absolute;inset:0;background:#000;opacity:0;pointer-events:none"></div>
     `;
     this.ctx.uiRoot.appendChild(el);
@@ -293,6 +298,54 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.objective = el.querySelector('.intro-objective')!;
     this.subtitle = el.querySelector('.l19-sub')!;
     this.fadeEl = el.querySelector('.l19-fade')!;
+    this.mark = el.querySelector('.l19-mark')!;
+  }
+
+  /**
+   * After the boss has gone, where to go: a marker over the closet, then
+   * over the open door — pinned to the edge of the screen, pointing, when
+   * it's behind him or off to the side.
+   */
+  private updateMarker(): void {
+    const L = this.level;
+    const show = (this.phase === 'run' || this.phase === 'out') && this.player.alive && !this.inTakedown;
+    if (!show) {
+      if (this.mark.style.display !== 'none') this.mark.style.display = 'none';
+      return;
+    }
+    const at = this.phase === 'run' ? V(HW - 0.4, 1.35, L.lockerAt.z) : V(-HW, 1.2, (DOOR.z0 + DOOR.z1) / 2);
+    const label = this.phase === 'run' ? 'PARACHUTE' : 'JUMP';
+    const cam = this.player.camera;
+    cam.updateMatrixWorld(true);
+    const dist = Math.round(this.player.position.distanceTo(at.clone().setY(0)));
+    const v = at.clone().applyMatrix4(cam.matrixWorldInverse);
+    const ndc = at.clone().project(cam);
+    let x = ndc.x;
+    let y = ndc.y;
+    const behind = v.z > 0;
+    let pinned = behind || Math.abs(x) > 0.92 || Math.abs(y) > 0.85;
+    if (behind) {
+      x = -x;
+      y = -y;
+    }
+    if (pinned) {
+      const k = 0.88 / Math.max(Math.abs(x), Math.abs(y) / 0.95, 1e-3);
+      x *= k;
+      y *= k;
+      if (behind && Math.abs(x) < 0.5) {
+        // Right behind him: off to whichever side is nearer round
+        x = x < 0 ? -0.88 : 0.88;
+        pinned = true;
+      }
+    }
+    const w = this.ctx.uiRoot.clientWidth || window.innerWidth;
+    const h = this.ctx.uiRoot.clientHeight || window.innerHeight;
+    this.mark.style.display = 'block';
+    this.mark.style.left = `${((x + 1) / 2) * w}px`;
+    this.mark.style.top = `${((1 - y) / 2) * h}px`;
+    const arrow = this.mark.firstElementChild as HTMLElement;
+    arrow.textContent = !pinned ? '▼' : Math.abs(x) > Math.abs(y) ? (x > 0 ? '▶' : '◀') : y > 0 ? '▲' : '▼';
+    (this.mark.lastElementChild as HTMLElement).textContent = `${label} ${dist}M`;
   }
 
   private setObjective(text: string): void {
@@ -645,24 +698,40 @@ export class Level19Scene extends CombatScene<Level19Data> {
     if (this.doorOpen === 0) this.openAftDoor(false);
     if (u > 1.9 && u < 3.4) b.faceToward(cam.position, dt, 6);
     if (u > 2.3 && u < 3.4) b.setMiddleFingers(true, true);
-    if (u >= 3.4) {
-      // Backwards out of the door, into the blue
+    if (u >= 3.4 && u < 3.9) {
+      // Round to face the door
       b.setMiddleFingers(false, false);
+      b.faceToward(V(-HW - 3, 0, b.position.z), dt, 9);
+    }
+    if (u >= 3.9) {
+      // Two strides to the sill and out through the middle of the opening,
+      // tipping forward head first once his feet are off it
       if (!this.bossGone) {
         this.bossGone = true;
         this.ctx.audio.kickWhoosh();
+        this.bossLeap = b.position.x;
+        b.root.rotation.order = 'YXZ';
       }
-      const w = u - 3.4;
-      b.position.x = Math.max(-HW - 30, b.position.x - dt * (2 + w * 6));
-      b.position.y -= dt * w * 6;
-      b.position.z -= dt * w * 5;
-      b.root.rotation.x = -Math.min(1.3, w * 1.6);
+      const w = u - 3.9;
+      const zc = (DOOR.z0 + DOOR.z1) / 2;
+      b.position.z += (zc - b.position.z) * Math.min(1, dt * 8);
+      b.position.x = Math.max(-HW - 2.2, this.bossLeap - w * 2.6);
+      const off = b.position.x < -HW - 0.3;
+      if (off) {
+        this.bossDrop += dt * 22;
+        b.position.y -= this.bossDrop * dt;
+      }
+      b.setWalk(off ? 0 : 1);
+      b.root.rotation.x = -Math.min(1.35, Math.max(0, w - 0.35) * 2.4);
     }
-    if (u > 4.8) {
+    if (b.position.y < -3) b.root.visible = false;
+    if (u > 5.2) {
       b.root.visible = false;
       this.endReveal();
     }
   }
+  private bossLeap = 0;
+  private bossDrop = 0;
   private doorShotAt = 0;
 
   private endReveal(): void {
@@ -672,7 +741,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.player.camera.fov = 74;
     this.player.camera.updateProjectionMatrix();
     this.startRun();
-    this.say('RAVI', 'He was hiding in his own bedroom. Of course he was. There were chutes back by that door…', 5);
+    this.say('RAVI', 'He was hiding in his own bedroom. Of course he was. The emergency closet by that door — there will be chutes in it.', 5);
   }
 
   /** Down the plane in the gale, to the chutes. */
@@ -681,7 +750,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.checkpoint = 2;
     this.player.cinematic = false;
     this.cinema(false);
-    this.setObjective('GET A PARACHUTE — THE LOCKER BY THE BACK DOOR');
+    this.setObjective('GET A PARACHUTE — THE EMERGENCY CLOSET AT THE BACK');
     if (!this.klaxon) {
       this.klaxon = this.ctx.audio.klaxonLoop();
       this.klaxon.set(0.5);
@@ -722,14 +791,16 @@ export class Level19Scene extends CombatScene<Level19Data> {
   private gearT = 0;
   private gearFrom = { pos: new THREE.Vector3(), yaw: 0, pitch: 0 };
 
-  /** E at the locker: a chute out of it, on, and to the door. */
+  /** E at the closet: the doors open, a chute off its hook and onto his back. */
   private startGear(): void {
     this.phase = 'gear';
     this.gearT = 0;
     this.player.cinematic = true;
+    this.player.aiming = false;
     this.cinema(true);
     this.setObjective('');
     this.hud.setPrompt(null);
+    this.ctx.audio.doorOpen();
     const pack = this.level.chutes.find((c) => c.visible) ?? this.level.chutes[0];
     pack.visible = false;
     const mine = parachutePack();
@@ -741,11 +812,10 @@ export class Level19Scene extends CombatScene<Level19Data> {
   }
 
   /**
-   *  0.0  he faces the locker and lifts a pack off its hook toward him
-   *  1.1  up over his head and onto his back (the buckles)
-   *  2.4  round to the door, a few steps to the edge, the gale in his face
-   *  4.2  looking down: the cloud, miles below
-   *  5.7  out
+   *  0.0  he faces the closet; its doors swing open
+   *  0.7  he lifts a pack off its hook toward him
+   *  1.5  up over his shoulders and on (the straps, the buckles)
+   *  2.5  his hands are his own again: to the door, and out
    */
   private updateGear(dt: number): void {
     const L = this.level;
@@ -754,46 +824,75 @@ export class Level19Scene extends CombatScene<Level19Data> {
     const t = this.gearT;
     const cam = p.camera;
     const eye = V(this.gearFrom.pos.x, 1.6, this.gearFrom.pos.z);
-    const face = yawPitchTo(eye, V(L.lockerAt.x + 0.75, 1.05, L.lockerAt.z));
-    const doorZ = (DOOR.z0 + DOOR.z1) / 2;
-    if (t < 2.4) {
-      const k = smooth(t / 0.6);
-      p.yaw = this.gearFrom.yaw + wrapAngle(face.yaw - this.gearFrom.yaw) * k;
-      p.pitch = this.gearFrom.pitch + (face.pitch - this.gearFrom.pitch) * k;
-      const pack = this.ownChute!;
+    const face = yawPitchTo(eye, V(L.lockerAt.x + 0.75, 1.2, L.lockerAt.z));
+    const k = smooth(t / 0.6);
+    p.yaw = this.gearFrom.yaw + wrapAngle(face.yaw - this.gearFrom.yaw) * k;
+    p.pitch = this.gearFrom.pitch + (face.pitch - this.gearFrom.pitch) * k;
+    const open = smooth(t / 0.7);
+    L.closetDoors[0].rotation.y = -1.9 * open;
+    L.closetDoors[1].rotation.y = 1.9 * open;
+    const pack = this.ownChute!;
+    if (t > 0.7) {
       cam.updateMatrixWorld(true);
-      const lift = smooth((t - 1.1) / 0.7);
-      const hold = V(0, -0.4 + lift * 1.0, -0.72 + lift * 0.9).applyMatrix4(cam.matrixWorld);
-      pack.position.lerp(hold, Math.min(1, dt * (t < 1.1 ? 4 : 10)));
+      const lift = smooth((t - 1.5) / 0.7);
+      const hold = V(0, -0.42 + lift * 1.0, -0.75 + lift * 0.95).applyMatrix4(cam.matrixWorld);
+      pack.position.lerp(hold, Math.min(1, dt * (t < 1.5 ? 4 : 10)));
       const q = cam.quaternion.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0, 0)));
       pack.quaternion.slerp(q, Math.min(1, dt * 6));
-      if (t > 1.6 && t - dt <= 1.6) this.ctx.audio.velcro();
-      if (t > 2.0 && t - dt <= 2.0) this.ctx.audio.clink();
-      if (t > 1.9) pack.visible = false;
-      return;
     }
-    const k = smooth((t - 2.4) / 1.8);
-    const door = V(-HW + 0.62, 0, doorZ);
-    p.position.lerpVectors(this.gearFrom.pos, door, k);
-    const out = yawPitchTo(V(door.x, 1.6, door.z), V(-30, -14, doorZ - 6));
-    const look = smooth((t - 3.8) / 1.2);
-    p.yaw = face.yaw + wrapAngle(out.yaw - face.yaw) * smooth((t - 2.4) / 1.4);
-    p.pitch = face.pitch * (1 - k) * (1 - look) + out.pitch * 1.4 * look;
-    if (t > 4.2 && t - dt <= 4.2) this.say('RAVI', 'Never done this before. How hard can it be.', 2.4);
-    if (t > 5.7) {
-      // Out: the floor goes, the view tips down into the blue
-      const j = clamp01((t - 5.7) / 1.0);
-      p.position.x = door.x - j * 2.6;
-      p.position.y = -j * j * 1.5;
-      p.pitch = out.pitch * 1.4 - j * 0.9;
-      this.fadeEl.style.background = '#fff';
-      this.fadeEl.style.opacity = String(smooth((t - 6.1) / 0.5));
-      if (t > 6.7 && this.phase === 'gear') {
-        this.phase = 'jump';
-        this.ctx.bus.emit(Events.Level19Jump);
-      }
+    if (t > 1.9 && t - dt <= 1.9) this.ctx.audio.velcro();
+    if (t > 2.25 && t - dt <= 2.25) this.ctx.audio.clink();
+    if (t > 2.15) pack.visible = false;
+    if (t > 2.6) this.startOut();
+  }
+
+  /** Chute on: the door's his. Nothing stops him walking out of it now. */
+  private startOut(): void {
+    this.phase = 'out';
+    this.player.cinematic = false;
+    this.cinema(false);
+    this.level.aftDoor.collider.disabled = true;
+    this.setObjective('JUMP — OUT OF THE DOOR AFTER HIM');
+    this.say('RAVI', 'Never done this before. How hard can it be.', 3);
+  }
+
+  /** Over the sill: the floor goes, the view tips down into the blue, the sky takes it. */
+  private jumpT = 0;
+  private jumpV = new THREE.Vector3();
+  private startJump(): void {
+    this.phase = 'jump';
+    this.jumpT = 0;
+    this.player.cinematic = true;
+    this.player.aiming = false;
+    this.hud.setPrompt(null);
+    this.setObjective('');
+    this.jumpV.set(-3.2, 0, 0);
+    this.jumpFrom = { yaw: this.player.yaw, pitch: this.player.pitch };
+    this.ctx.audio.kickWhoosh();
+    this.mark.style.display = 'none';
+  }
+  private jumpFrom = { yaw: 0, pitch: 0 };
+
+  private updateJump(dt: number): void {
+    const p = this.player;
+    this.jumpT += dt;
+    const t = this.jumpT;
+    // Out and down, the slipstream taking him aft along the fuselage
+    this.jumpV.y -= 9.8 * dt;
+    this.jumpV.z += 14 * dt;
+    p.position.addScaledVector(this.jumpV, dt);
+    const k = smooth(t / 0.7);
+    p.yaw = this.jumpFrom.yaw + wrapAngle(Math.PI / 2 - this.jumpFrom.yaw) * k;
+    p.pitch = this.jumpFrom.pitch + (-0.7 - this.jumpFrom.pitch) * k;
+    // Into the sky's own colour; the engine holds it while the fall builds
+    this.fadeEl.style.background = '#dce9f5';
+    this.fadeEl.style.opacity = String(smooth((t - 0.35) / 0.4));
+    if (t > 0.8 && !this.jumped) {
+      this.jumped = true;
+      this.ctx.bus.emit(Events.Level19Jump);
     }
   }
+  private jumped = false;
 
   // ================================================================ input
 
@@ -822,7 +921,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
   update(dt: number, _time: number): void {
     const { input } = this.ctx;
     const p = this.player;
-    const playable = (this.phase === 'play' || this.phase === 'pilots' || this.phase === 'run') && !this.dialogue.isActive;
+    const playable = (this.phase === 'play' || this.phase === 'pilots' || this.phase === 'run' || this.phase === 'out') && !this.dialogue.isActive;
     if (playable && !input.pointerLocked && input.mouseHeld) input.requestPointerLock();
 
     switch (this.phase) {
@@ -844,11 +943,14 @@ export class Level19Scene extends CombatScene<Level19Data> {
       case 'gear':
         this.updateGear(dt);
         break;
+      case 'jump':
+        this.updateJump(dt);
+        break;
     }
 
     // ---- The knife on F
     const candidates =
-      this.phase === 'play' || this.phase === 'run' ? this.guards.map((g) => g.e) : this.phase === 'pilots' ? [this.copilot, ...(this.captainUp && this.captain.standing ? [this.captain] : [])] : [];
+      this.phase === 'play' || this.phase === 'run' || this.phase === 'out' ? this.guards.map((g) => g.e) : this.phase === 'pilots' ? [this.copilot, ...(this.captainUp && this.captain.standing ? [this.captain] : [])] : [];
     this.stepTakedown(dt, candidates, p.alive && playable && !this.arsenal.reloading && !this.drink.engaged, (on) => this.hud.setTakedownHint(on));
 
     // ---- Deadbull on G
@@ -924,14 +1026,17 @@ export class Level19Scene extends CombatScene<Level19Data> {
       if (near && this.ctx.input.wasPressed('KeyE')) this.knock();
     }
     if (this.phase === 'run') {
-      const near = p.distanceTo(L.lockerAt) < 1.15;
-      this.hud.setPrompt(near ? '[ E ] TAKE A PARACHUTE' : null);
+      const near = p.distanceTo(L.lockerAt) < 1.3;
+      this.hud.setPrompt(near ? '[ E ] OPEN THE CLOSET — TAKE A PARACHUTE' : null);
       if (near && this.ctx.input.wasPressed('KeyE') && !this.inTakedown) this.startGear();
     }
+    // Chute on: across the sill and out
+    if (this.phase === 'out' && !this.inTakedown && p.x < -HW + 0.15 && p.z > DOOR.z0 && p.z < DOOR.z1) this.startJump();
+    this.updateMarker();
   }
 
   private updateGuards(dt: number): void {
-    const active = this.phase === 'play' || this.phase === 'run' || this.phase === 'pilots' || this.phase === 'knock';
+    const active = this.phase === 'play' || this.phase === 'run' || this.phase === 'out' || this.phase === 'pilots' || this.phase === 'knock';
     for (const g of this.guards) {
       g.e.update(dt);
       if (!g.e.alive) continue;

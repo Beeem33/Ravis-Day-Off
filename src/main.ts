@@ -163,7 +163,8 @@ bus.on<{ checkpoint?: number }>(Events.RestartLevel19, (p) => {
   engine.setScene(new Level19Scene(ctx, p?.checkpoint ?? 0), 'LEVEL 19 — THE FLYING LOUNGE');
 });
 bus.on(Events.Level19Jump, () => {
-  engine.setScene(new Level19SkyScene(ctx), 'LEVEL 19 PART 2 — FREEFALL');
+  // Straight on from the plane's door: the plane fades to the sky's colour, the card holds it, the fall comes up out of it
+  engine.setScene(new Level19SkyScene(ctx), '', { cover: '#dce9f5' });
 });
 bus.on<{ checkpoint?: number }>(Events.RestartLevel19b, (p) => {
   engine.setScene(new Level19SkyScene(ctx, p?.checkpoint ?? 0), 'LEVEL 19 PART 2 — FREEFALL');

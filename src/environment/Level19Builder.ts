@@ -83,6 +83,8 @@ export interface Level19Data {
   /** The locker of chutes across from it: one pack per hook; the scene takes one. */
   chutes: THREE.Object3D[];
   lockerAt: THREE.Vector3;
+  /** The closet's two doors, each on its hinge: rotation.y opens them (the first negative, the second positive). */
+  closetDoors: THREE.Group[];
   /** The boss's chair in the lounge, and the cigar still going in the ashtray beside it. */
   bossChair: THREE.Vector3;
   cigarTip: THREE.Vector3;
@@ -510,6 +512,7 @@ export class Level19Builder {
       aftDoor,
       chutes: locker.chutes,
       lockerAt: locker.at,
+      closetDoors: locker.doors,
       bossChair: lounge.chair,
       cigarTip: lounge.cigar,
       bossHide: boss.hide,
@@ -1275,28 +1278,57 @@ export class Level19Builder {
     return { leaf, collider, at: new THREE.Vector3(-HW + 0.5, 0, zc) };
   }
 
-  /** The glass-fronted locker across from the door, three chutes on hooks inside it. */
-  private locker(): { chutes: THREE.Object3D[]; at: THREE.Vector3 } {
+  /**
+   * The emergency closet across from the door: a walnut cupboard on the right
+   * wall with two doors (hung on their outer edges, swinging out into the
+   * galley), lit inside, three chutes on hooks in it.
+   */
+  private locker(): { chutes: THREE.Object3D[]; at: THREE.Vector3; doors: THREE.Group[] } {
     const M = this.M;
-    const x = HW - 0.3;
-    const zc = 25.6 - 2.0;
-    const z0 = zc - 0.7;
-    void z0;
-    // The cart's been moved in front of the door's opposite number; the locker sits aft of the galley bulkhead on the right
     const lz = 24.35;
-    this.box(0.5, 2.0, 1.3, x - 0.02, 0, lz, M.steel, { collide: true, surface: 'metal' });
-    this.box(0.02, 1.7, 1.18, x - 0.28, 0.18, lz, M.glass, { trim: true });
-    this.box(0.03, 1.7, 0.03, x - 0.29, 0.18, lz - 0.6, M.gold, { trim: true });
-    this.plane(0.9, 0.2, x - 0.28, 2.1, lz, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['EMERGENCY', 'PARACHUTES'], '#8a1010', '#fff', 256, 96), 1, 1) }), -Math.PI / 2);
+    const D = 0.6;
+    const W = 1.3;
+    const H = 2.1;
+    const fx = HW - D;
+    const inside = new THREE.MeshStandardMaterial({ color: 0x2a1c14, roughness: 0.8 });
+    // The carcass: back, sides, top, floor (open at the front)
+    this.box(0.04, H, W, HW - 0.02, 0, lz, inside, {});
+    for (const s of [-1, 1]) this.box(D, H, 0.04, HW - D / 2, 0, lz + s * (W / 2 - 0.02), M.walnut, {});
+    this.box(D, 0.05, W, HW - D / 2, H - 0.05, lz, M.walnut, {});
+    this.box(D, 0.06, W, HW - D / 2, 0, lz, M.walnut, {});
+    this.block(fx, 0, lz - W / 2, HW, H, lz + W / 2);
+    // A light inside it, and the rail the packs hang from
+    this.box(0.03, 0.03, W - 0.1, HW - 0.3, H - 0.25, lz, M.steel, { trim: true });
+    this.box(0.02, 0.02, W - 0.2, fx + 0.06, H - 0.1, lz, M.warmLed, { trim: true });
+    // Over it, the sign; on it, a red stripe so it stands out from the galley
+    this.plane(1.0, 0.24, fx - 0.005, H + 0.17, lz, new THREE.MeshStandardMaterial({ map: tex(signCanvas(['EMERGENCY', 'PARACHUTES'], '#8a1010', '#fff', 256, 96), 1, 1) }), -Math.PI / 2);
+    // The two doors, each its own hinge
+    const doors: THREE.Group[] = [];
+    for (const s of [-1, 1]) {
+      const hinge = new THREE.Group();
+      hinge.position.set(fx - 0.02, 0, lz + s * (W / 2));
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.035, H - 0.04, W / 2 - 0.01), M.walnut);
+      leaf.position.set(0, H / 2, -s * (W / 4));
+      leaf.userData.surface = 'wood';
+      hinge.add(leaf);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.3, 0.025), M.gold);
+      handle.position.set(-0.03, 1.05, -s * (W / 2 - 0.08));
+      hinge.add(handle);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.08, W / 2 - 0.06), new THREE.MeshStandardMaterial({ color: 0x8a1010, roughness: 0.5 }));
+      stripe.position.set(-0.02, 1.6, -s * (W / 4));
+      hinge.add(stripe);
+      this.group.add(hinge);
+      doors.push(hinge);
+    }
     const chutes: THREE.Object3D[] = [];
     for (let i = 0; i < 3; i++) {
       const p = parachutePack();
-      p.position.set(x - 0.12, 0.95, lz - 0.38 + i * 0.38);
+      p.position.set(HW - 0.28, 1.25, lz - 0.38 + i * 0.38);
       p.rotation.y = -Math.PI / 2;
       this.group.add(p);
       chutes.push(p);
     }
-    return { chutes, at: new THREE.Vector3(x - 0.75, 0, lz) };
+    return { chutes, at: new THREE.Vector3(fx - 0.75, 0, lz), doors };
   }
 
   // -------------------------------------------------------------- furniture

@@ -128,11 +128,11 @@ export class GameEngine {
    * under it, and it only comes down once the new scene has actually drawn a
    * frame — which is when `CombatScene.warmUp` has finished.
    */
-  setScene(scene: GameScene, label = ''): void {
+  setScene(scene: GameScene, label = '', opts: { cover?: string } = {}): void {
     this.paused = false;
     this.onSceneChange?.();
     Colognes.clear(); // the old level's bottle goes with it
-    this.loadingCard = this.showLoading(label);
+    this.loadingCard = this.showLoading(label, opts.cover);
     // The swap is deferred by a frame on purpose. Building a level and then
     // compiling its shaders is one long synchronous block — around a second
     // for the call floor, three for the raid — and the browser cannot paint
@@ -183,13 +183,24 @@ export class GameEngine {
     this.lastTime = performance.now(); // the build is not elapsed game time
   }
 
-  private showLoading(label: string): HTMLElement {
+  /**
+   * The card over a swap. With `cover`, it's no card at all: the screen held
+   * on that one flat colour, no words — for a scene that ends by fading to
+   * that colour and a next one that starts out of it, so the swap reads as
+   * one continuous shot (out of the plane's door into the sky).
+   */
+  private showLoading(label: string, cover?: string): HTMLElement {
     // Anything still up from a previous swap goes now — a restart mid-fade
     // used to stack cards on top of each other.
     this.loadingCard?.remove();
     for (const old of (this.uiRoot ?? document.body).querySelectorAll('.level-load')) old.remove();
     const el = document.createElement('div');
     el.className = 'level-load';
+    if (cover) {
+      el.style.background = cover;
+      (this.uiRoot ?? document.body).appendChild(el);
+      return el;
+    }
     el.innerHTML =
       '<div class="ll-title">' + (label || 'LOADING') + '</div>' +
       '<div class="ll-bar"><i></i></div>' +

@@ -225,6 +225,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.buildPilots();
     this.buildBoss();
     this.buildPapers();
+    this.buildClutter();
     for (const o of L.loose) this.fliers.push({ o, v: new THREE.Vector3(), spin: new THREE.Vector3(), light: !!o.userData.cushion });
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
@@ -375,9 +376,16 @@ export class Level19Scene extends CombatScene<Level19Data> {
     const L = this.level;
     const { bus, audio } = this.ctx;
     L.guards.forEach((sp, i) => {
-      // Past a checkpoint, the men behind it are already down: they aren't here at all
-      if (this.from >= 2) return;
-      if (this.from >= 1 && (sp.section === 'suite' || sp.section === 'conf')) return;
+      // Past a checkpoint, the men behind it are already down: dead where they stood
+      if (this.from >= 2 || (this.from >= 1 && (sp.section === 'suite' || sp.section === 'conf'))) {
+        const body = new Enemy(sp.pos.clone(), sp.yaw, i + 21, { name: 'BOSS SECURITY' });
+        this.scene.add(body.root);
+        for (const p of body.parts) L.shootables.push(p);
+        const dir = new THREE.Vector3(Math.sin(i * 1.7), -0.2, Math.cos(i * 1.7)).normalize();
+        body.die(sp.pos.clone().setY(1.2), dir, this.world, i % 3 === 0 ? 'head' : 'torso');
+        this.corpses.push(body);
+        return;
+      }
       const e = new Enemy(sp.pos.clone(), sp.yaw, i + 21, { name: 'BOSS SECURITY' });
       this.scene.add(e.root);
       for (const p of e.parts) L.shootables.push(p);
@@ -391,10 +399,22 @@ export class Level19Scene extends CombatScene<Level19Data> {
         enemyFire: (x) => this.enemyFire(x)
       });
       if (sp.zone > 0) ai.setPatrolZone(sp.pos, sp.zone);
+      // No ducking from cover to cover in here: in a cabin this full of
+      // furniture the spot he picks is one he can't get to, and he'd walk
+      // round in circles trying instead of shooting. Stand and fight.
+      ai.holdGround();
       this.guards.push({ e, ai, spawn: sp, look: i * 1.7 });
     });
     this.remaining = this.guards.length;
+    // The dead laid out on the floor before the first frame
+    if (this.corpses.length) {
+      for (let f = 0; f < 100; f++) {
+        this.world.step(1 / 60);
+        for (const c of this.corpses) c.update(1 / 60);
+      }
+    }
   }
+  private corpses: Enemy[] = [];
 
   private buildPilots(): void {
     const L = this.level;
@@ -452,6 +472,69 @@ export class Level19Scene extends CombatScene<Level19Data> {
     }
   }
 
+  /**
+   * Everything else loose about the cabin that the dive will lift: cups and
+   * plates in the galleys, a laptop and phones on the conference table,
+   * bottles on the bar, books, pillows on the beds, and more paper.
+   */
+  private buildClutter(): void {
+    const std = (c: number, o: Partial<THREE.MeshStandardMaterialParameters> = {}): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, ...o });
+    const china = std(0xf4f1ea, { roughness: 0.3 });
+    const black = std(0x16171a, { roughness: 0.35 });
+    const glass = std(0x3a6a3a, { roughness: 0.1, transparent: true, opacity: 0.85 });
+    const amber = std(0x7a4210, { roughness: 0.1, transparent: true, opacity: 0.85 });
+    const linen = std(0xf6f3ec, { roughness: 0.9 });
+    const books = [std(0x7a1a1a), std(0x1a3a6a), std(0x2a4a2a), std(0x5a4a2a)];
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, light = false): void => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.y = Math.random() * Math.PI;
+      this.scene.add(m);
+      this.fliers.push({ o: m, v: new THREE.Vector3(), spin: new THREE.Vector3(), light });
+    };
+    const cup = new THREE.CylinderGeometry(0.04, 0.032, 0.09, 12);
+    const plate = new THREE.CylinderGeometry(0.11, 0.09, 0.015, 18);
+    const bottle = new THREE.CylinderGeometry(0.035, 0.04, 0.3, 10);
+    const book = new THREE.BoxGeometry(0.16, 0.03, 0.23);
+    const phone = new THREE.BoxGeometry(0.075, 0.009, 0.15);
+    const laptop = new THREE.BoxGeometry(0.33, 0.02, 0.23);
+    const pillow = new THREE.BoxGeometry(0.5, 0.13, 0.32);
+    const sheet = new THREE.PlaneGeometry(0.21, 0.297);
+    // The aft galley's counter and the forward one
+    for (let i = 0; i < 5; i++) add(i % 2 ? plate : cup, china, -1.3 + i * 0.55, 1.03, 29.45);
+    for (let i = 0; i < 4; i++) add(cup, china, -2.35, 1.03, -26.3 + i * 0.45);
+    // The conference table: a laptop, phones, a water bottle or two
+    add(laptop, black, -0.3, 0.8, 0.6);
+    add(laptop, black, 0.3, 0.8, 3.2);
+    for (const [x, z] of [[-0.35, -0.9], [0.4, 1.7], [-0.4, 4.1]] as const) add(phone, black, x, 0.8, z);
+    for (const z of [0.0, 2.4]) add(bottle, glass, 0, 0.94, z);
+    // The bar top
+    for (let i = 0; i < 4; i++) add(bottle, i % 2 ? amber : glass, 1.45, 1.27, -11.3 + i * 1.1);
+    // Books on the credenza and the study's desk
+    for (let i = 0; i < 4; i++) add(book, books[i], -2.5, 0.83 + i * 0.03, 3.8 + (i % 2) * 0.1);
+    for (let i = 0; i < 3; i++) add(book, books[(i + 1) % 4], 2.35, 0.77 + i * 0.03, 13.0);
+    // Pillows off the beds
+    add(pillow, linen, -2.1, 0.75, 17.0, true);
+    add(pillow, linen, 1.9, 0.75, 21.1, true);
+    // And paper: a stack blown off every surface
+    const mat = new THREE.MeshStandardMaterial({ color: 0xf5f3ee, roughness: 0.9, side: THREE.DoubleSide });
+    for (let i = 0; i < 26; i++) {
+      const p = new THREE.Mesh(sheet, mat);
+      p.rotation.set(-Math.PI / 2, 0, Math.random() * Math.PI);
+      const spots: [number, number, number][] = [[0, 0.8, 1.4], [-2.5, 0.84, 4.6], [2.35, 0.79, 6], [1.45, 1.14, -9.5], [-1.15, 0.47, -16.8], [-1.15, 0.47, -9.6]];
+      const [x, y, z] = spots[i % spots.length];
+      p.position.set(x + (Math.random() - 0.5) * 0.5, y + i * 0.0005, z + (Math.random() - 0.5) * 1.2);
+      this.scene.add(p);
+      this.fliers.push({ o: p, v: new THREE.Vector3(), spin: new THREE.Vector3(), light: true });
+    }
+  }
+
+  /** Into the dive: negative g. The dead and everything loose lift off the floor and go up to the ceiling. */
+  private weightless(): void {
+    this.world.gravity.set(0, 3.2, -1.4);
+    for (const b of this.world.bodies) if (b.mass > 0) b.wakeUp();
+  }
+
   // ================================================================ beats
 
   /** Up the ladder out of the hold: the camera comes up through the hatch. */
@@ -503,6 +586,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.level.cockpitDoor.collider.disabled = true;
     this.level.cockpitDoor.pivot.rotation.y = 1.45;
     this.pitchDown = this.pitchTarget = 0.2;
+    this.weightless();
     this.alarm = 1;
     this.openAftDoor(true);
     this.updateAftDoorPose();
@@ -564,6 +648,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
 
   /** Nobody at the controls: she drops her nose. */
   private startDive(): void {
+    this.weightless();
     this.phase = 'dive';
     this.t = 0;
     this.pitchTarget = 0.2;
@@ -1014,12 +1099,13 @@ export class Level19Scene extends CombatScene<Level19Data> {
       }
     }
     this.hud.setAiming(this.arsenal.aimBlend > 0.5);
+    this.hud.setHealth(p.health, p.regenProgress);
     const canFire = playable && p.alive && input.pointerLocked && !busy;
     this.arsenal.updateFire(dt, input, canFire, (r, m, re) => this.hud.setAmmo(r, m, re));
 
     this.updateGuards(dt);
     this.updateTriggers();
-    for (const x of [this.captain, this.copilot, this.boss]) x.update(dt);
+    for (const x of [this.captain, this.copilot, this.boss, ...this.corpses]) x.update(dt);
     this.updatePlane(dt);
     this.updateAftDoor(dt);
     this.updateFliers(dt);
@@ -1126,12 +1212,32 @@ export class Level19Scene extends CombatScene<Level19Data> {
   /** The camera's shake, on top of wherever it is. */
   private applyShake(): void {
     if (this.phase === 'dead') return;
-    const s = this.pitchTarget > 0 ? 0.004 + this.wind * 0.006 : 0.0007;
     const cam = this.player.camera;
-    cam.position.x += (Math.random() - 0.5) * s;
-    cam.position.y += (Math.random() - 0.5) * s;
-    cam.rotation.z += (Math.random() - 0.5) * s * 0.6 + (this.pitchTarget > 0 ? Math.sin(performance.now() * 0.0011) * 0.012 : 0);
+    if (this.pitchTarget <= 0) {
+      cam.position.x += (Math.random() - 0.5) * 0.0007;
+      cam.position.y += (Math.random() - 0.5) * 0.0007;
+      return;
+    }
+    // Going down: a hard rattle through the floor, a slow heave and roll as
+    // she wallows, and every so often a jolt that throws the view
+    const now = performance.now() * 0.001;
+    const k = this.alarm * (1 + this.wind * 0.6);
+    const rattle = 0.016 * k;
+    cam.position.x += (Math.random() - 0.5) * rattle + Math.sin(now * 1.3) * 0.02 * k;
+    cam.position.y += (Math.random() - 0.5) * rattle + Math.sin(now * 2.1) * 0.025 * k;
+    cam.rotation.z += (Math.random() - 0.5) * 0.012 * k + Math.sin(now * 0.9) * 0.05 * k;
+    cam.rotation.x += Math.sin(now * 1.7) * 0.02 * k;
+    this.jolt -= 1 / 60;
+    if (this.jolt <= 0) {
+      this.jolt = 0.9 + Math.random() * 2.2;
+      this.joltK = 1;
+    }
+    this.joltK *= 0.9;
+    cam.position.y += (Math.random() - 0.5) * 0.12 * this.joltK * k;
+    cam.rotation.z += (Math.random() - 0.5) * 0.08 * this.joltK * k;
   }
+  private jolt = 1;
+  private joltK = 0;
 
   /**
    * Loose things: in the dive they slide forward; when the door goes the
@@ -1151,7 +1257,10 @@ export class Level19Scene extends CombatScene<Level19Data> {
         f.v.addScaledVector(to.normalize(), pull * dt);
         if (f.light && Math.random() < dt * 3) f.spin.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
       }
-      f.v.y -= dt * (f.light ? 1.5 : 9.8);
+      // Negative g in the dive: everything drifts up off the floor to the
+      // ceiling, the light things wandering as they go
+      f.v.y += dt * (f.light ? 1.4 + Math.sin(this.t * 3 + o.id) * 0.8 : 3.0);
+      if (f.light && Math.random() < dt * 1.5) f.spin.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
       f.v.multiplyScalar(1 - dt * (f.light ? 1.2 : 0.4));
       o.position.addScaledVector(f.v, dt);
       o.rotation.x += f.spin.x * dt;

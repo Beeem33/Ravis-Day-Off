@@ -15,6 +15,7 @@ import { DriveCar, CIVIC_TUNE, COP_TUNE, resolveCollisions } from '../entities/D
 import { Traffic } from '../entities/Traffic';
 import { BossDriver, CopDriver } from '../entities/Chasers';
 import { Enemy } from '../entities/Enemy';
+import { Backdrop } from '../environment/StreetBackdrop';
 import { armWithAK } from '../entities/AkModel';
 import { buildAirside } from '../environment/AirsideProps';
 import { RaviVisual, elbowToward, HAND, type RaviRig, type HandShape, type SeatPose, type Side } from '../entities/RaviVisual';
@@ -120,6 +121,8 @@ const PASSENGERS = 3;
 const SWAP = { arrive: 1.0, doorOpen: 2.3, push: 2.6, doorShut: 3.1, settle: 3.3, end: 4.6 };
 /** Into another car faster than this (m/s) and he goes out through the windscreen; slower, his head into the wheel. */
 const EJECT_SPEED = 20;
+/** The storm's bearing, turned this far from straight off the highway's left (+: round toward its start). */
+const STORM_TURN = 0.0;
 /** Closing speed (m/s) into another car that kills him; under it, it's a knock — damage, not death. */
 const SLAM_SPEED = 11;
 /** Half a hole's length along the road (HighwayCollapse's HALF). */
@@ -154,6 +157,8 @@ export class StreetScene implements GameScene {
   private camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, STREET_ATMOSPHERE.cameraFar);
   private level!: StreetData;
   private net!: RoadNet;
+  /** Out on the horizon: the mountains, and the dust storm rolling along to the highway's left. */
+  private backdrop = new Backdrop();
   private traffic!: Traffic;
   private player!: DriveCar;
   private boss!: BossDriver;
@@ -491,6 +496,19 @@ export class StreetScene implements GameScene {
     this.level = new StreetBuilder().build();
     this.scene.add(this.level.group);
     this.net = new RoadNet(this.level.roads);
+    {
+      // The storm: off to the highway's left, the whole way along it (and ahead of him on the avenue, coming up to it)
+      const hw = this.level.roads.highway;
+      const a = this.net.sample('highway', 0).pos;
+      const b = this.net.sample('highway', hw.length).pos;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const bearing = Math.atan2(dz, -dx) + STORM_TURN;
+      const haze = new THREE.Color(A.fog.color);
+      this.backdrop.mountains(-0.25, haze);
+      this.backdrop.dustStorm(bearing, 1.35, -0.25, haze);
+      this.scene.add(this.backdrop.group);
+    }
     // Cologne: on top of the highway's median barrier, between two lamp posts:
     // only a driver scraping right along the median gets it
     {
@@ -1255,6 +1273,7 @@ export class StreetScene implements GameScene {
 
   update(dt: number, _time: number): void {
     dt = Math.min(dt, 0.05);
+    this.backdrop.update(dt);
     // Through a gap between two cars at speed: the world holds its breath a moment
     if (this.nearMissT > 0) {
       this.nearMissT = Math.max(0, this.nearMissT - dt);

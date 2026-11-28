@@ -2167,6 +2167,8 @@ export class StreetBuilder {
   private fence = new Geo();
   private glass = new Geo();
   private soft = new Geo();
+  /** Bare ground on the fields: dirt and dry grass, laid on the grass (drawn pulled toward the eye, so it never fights it). */
+  private dirt = new Geo();
   private skyline: THREE.BufferGeometry[] = [];
   private treeSpots: { x: number; y: number; z: number; s: number }[] = [];
   private blockers: StreetBlocker[] = [];
@@ -2199,6 +2201,7 @@ export class StreetBuilder {
     this.buildStreetFurniture();
     this.buildCityBlocks();
     this.buildOutskirts();
+    this.buildCountryDetail();
     this.buildSkyline();
     this.buildTrees();
     this.buildSky();
@@ -2936,7 +2939,8 @@ export class StreetBuilder {
     extrude(this.conc, frs, (k) => [[oR(frs[k]), bot(frs[k])], [oR(frs[k]), barRt ? BAR_H : 0]], C.concDark, 3);
     extrude(this.conc, frs, (k) => [[oL(frs[k]), barL ? BAR_H : 0], [oL(frs[k]), bot(frs[k])]], C.concDark, 3);
     if (barRt) extrude(this.conc, frs, (k) => barR(hr(frs[k])), C.conc, 3);
-    if (barL) extrude(this.conc, frs, (k) => barL_(hl(frs[k])), C.conc, 3);
+    // (the left barrier stands at the left edge: −halfLeft)
+    if (barL) extrude(this.conc, frs, (k) => barL_(-hl(frs[k])), C.conc, 3);
   }
 
   /** Pillars every `every` metres where a deck stands high enough off the ground. */
@@ -4039,6 +4043,131 @@ export class StreetBuilder {
     }
   }
 
+  /**
+   * The country either side of the highway, so it isn't one flat lawn:
+   * patches of bare dirt and dry grass, scrub bushes scattered over the
+   * fields (thicker the further out), a water tower, and two radio masts
+   * with their red lights, one of them stood up against the storm.
+   */
+  private buildCountryDetail(): void {
+    const rnd = lcg(5151);
+    const ch = this.r.hwVis;
+    const free = (x: number, z: number, r: number): boolean => !this.clear.blocked(x, z, r) && !this.inAirport(x, z, 20);
+    const notBuilt = (x: number, z: number, r: number): boolean => {
+      const foot: Foot = { x, z, ax: [1, 0], az: [0, 1], hx: r, hz: r };
+      return !this.feet.some((o) => overlaps(foot, o, 1));
+    };
+    const Y = GROUND + 0.02;
+    // ---- Bare ground: ragged patches of dirt and dry, yellowed grass
+    const dirtCols = [0x9b8263, 0x8a7458, 0xa48f6a, 0xb3a272, 0x9f9a5e, 0x8e8a55];
+    for (let u = -400; u < HW_LEN + 300; u += 6) {
+      for (const sd of [1, -1]) {
+        if (rnd() < 0.45) continue;
+        const f = ch.at(u + rnd() * 9);
+        const lat = sd * (26 + Math.pow(rnd(), 1.3) * 420);
+        const c = pt(f, lat, 0);
+        const r = 8 + rnd() * rnd() * 34;
+        if (!free(c[0], c[2], r)) continue;
+        const col = rgba(dirtCols[Math.floor(rnd() * dirtCols.length) % dirtCols.length]);
+        const n = 11;
+        const a0 = rnd() * 6.3;
+        const stretch = 0.6 + rnd() * 0.8;
+        const ring: [number, number][] = [];
+        for (let i = 0; i < n; i++) {
+          const a = a0 + (i / n) * Math.PI * 2;
+          const rr = r * (0.65 + rnd() * 0.55);
+          ring.push([c[0] + Math.cos(a) * rr * stretch, c[2] + Math.sin(a) * rr]);
+        }
+        // (a fan from its middle, as one flat polygon would be)
+        for (let i = 0; i < n; i++) {
+          const p = ring[i];
+          const q = ring[(i + 1) % n];
+          this.dirt.poly([[c[0], Y, c[2]], [p[0], Y, p[1]], [q[0], Y, q[1]]], null, col, UP);
+        }
+      }
+    }
+    // ---- Scrub: low round bushes, olive and dry brown, in loose clumps
+    const bushCols = [0x5c6b34, 0x6d7a3c, 0x4d5a2c, 0x7d7445, 0x6b5f3a, 0x8a8048];
+    const bush = (x: number, z: number, r: number, h: number, col: RGBA): void => {
+      const n = 7;
+      const low: V3[] = [];
+      const mid: V3[] = [];
+      const a0 = rnd() * 6.3;
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (i / n) * Math.PI * 2;
+        low.push([x + Math.cos(a) * r * 0.8, GROUND, z + Math.sin(a) * r * 0.8]);
+        const j = 0.85 + rnd() * 0.3;
+        mid.push([x + Math.cos(a + 0.2) * r * j, GROUND + h * (0.45 + rnd() * 0.15), z + Math.sin(a + 0.2) * r * j]);
+      }
+      const top: V3 = [x + (rnd() - 0.5) * r * 0.3, GROUND + h, z + (rnd() - 0.5) * r * 0.3];
+      const dark: RGBA = [col[0] * 0.78, col[1] * 0.78, col[2] * 0.78, 1];
+      for (let i = 0; i < n; i++) {
+        const k = (i + 1) % n;
+        const out: V3 = [Math.cos(a0 + ((i + 0.5) / n) * Math.PI * 2), 0, Math.sin(a0 + ((i + 0.5) / n) * Math.PI * 2)];
+        this.props.poly([low[i], low[k], mid[k], mid[i]], null, dark, out);
+        this.props.poly([mid[i], mid[k], top], null, col, [out[0], 1, out[2]]);
+      }
+    };
+    for (let u = -400; u < HW_LEN + 300; u += 6) {
+      for (const sd of [1, -1]) {
+        if (rnd() < 0.25) continue;
+        const f = ch.at(u + rnd() * 6);
+        const lat = sd * (22 + Math.pow(rnd(), 1.4) * 380);
+        const c = pt(f, lat, 0);
+        if (!free(c[0], c[2], 4) || !notBuilt(c[0], c[2], 3)) continue;
+        const col = rgba(bushCols[Math.floor(rnd() * bushCols.length) % bushCols.length]);
+        // A clump of two to four
+        const m = 2 + Math.floor(rnd() * 4);
+        for (let i = 0; i < m; i++) {
+          const r = 1.1 + rnd() * 1.9;
+          bush(c[0] + (rnd() - 0.5) * 6, c[2] + (rnd() - 0.5) * 6, r, r * (0.7 + rnd() * 0.5), col);
+        }
+      }
+    }
+    // ---- A water tower: four legs and a fat tank up on them, off the right of the highway
+    {
+      const f = ch.at(1180);
+      const c = pt(f, 95, 0);
+      if (free(c[0], c[2], 12) && notBuilt(c[0], c[2], 12)) {
+        const legH = 26;
+        const steel = rgba(0x8f9aa3);
+        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) cylY(this.props, c[0] + a * 4.2, GROUND, c[2] + b * 4.2, 0.35, 0.3, legH, 8, steel);
+        // Cross bracing between the legs, halfway up
+        for (const [a, b, w, d] of [[0, -4.2, 8.4, 0.2], [0, 4.2, 8.4, 0.2], [-4.2, 0, 0.2, 8.4], [4.2, 0, 0.2, 8.4]] as const) {
+          boxAt(this.props, c[0] + a, GROUND + legH * 0.45, c[2] + b, 0, w, 0.25, d, steel);
+        }
+        cylY(this.props, c[0], GROUND + legH, c[2], 7.5, 7.5, 9, 20, rgba(0xd9dde0));
+        cylY(this.props, c[0], GROUND + legH + 9, c[2], 7.5, 0.6, 3.5, 20, rgba(0xb9c0c6));
+        cylY(this.props, c[0], GROUND + legH - 0.6, c[2], 6, 7.5, 0.6, 20, rgba(0xb9c0c6));
+        // A red band round the tank
+        cylY(this.props, c[0], GROUND + legH + 3.4, c[2], 7.56, 7.56, 1.2, 20, rgba(0xa8302a));
+        this.feet.push({ x: c[0], z: c[2], ax: [1, 0], az: [0, 1], hx: 9, hz: 9 });
+      }
+    }
+    // ---- Radio masts: tall and thin, guyed, red lights at the top and partway up
+    const mast = (u: number, lat: number, h: number): void => {
+      const f = ch.at(u);
+      const c = pt(f, lat, 0);
+      if (!free(c[0], c[2], 6) || !notBuilt(c[0], c[2], 4)) return;
+      const red = rgba(0xc8352b);
+      const white = rgba(0xe8e8e4);
+      // Banded red and white, a section at a time
+      const seg = h / 10;
+      for (let i = 0; i < 10; i++) boxAt(this.props, c[0], GROUND + i * seg, c[2], 0, 1.1, seg, 1.1, i % 2 ? white : red);
+      for (const k of [0.5, 1]) boxAt(this.glow, c[0], GROUND + h * k - 0.6, c[2], 0, 1.4, 0.7, 1.4, rgba(0xff2a1a));
+      // Guy wires out to the ground, three ways
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + 0.4;
+        const gx = c[0] + Math.cos(a) * h * 0.45;
+        const gz = c[2] + Math.sin(a) * h * 0.45;
+        tube(this.props, [c[0], GROUND + h * 0.8, c[2]], [gx, GROUND, gz], 0.06, 0.06, 3, rgba(0x55595c));
+      }
+      this.feet.push({ x: c[0], z: c[2], ax: [1, 0], az: [0, 1], hx: 3, hz: 3 });
+    };
+    mast(650, 230, 85);
+    mast(2350, -260, 95);
+  }
+
   /** Other people's towns, out past everything in each direction: unlit, Level 8's way. */
   private buildSkyline(): void {
     const rnd = lcg(71);
@@ -4217,6 +4346,7 @@ export class StreetBuilder {
       this.group.add(mesh);
     };
     add(this.grass, m.grass, 'none', 'grass', 'grass');
+    add(this.dirt, new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 'rgb', 'dirt', 'grass');
     add(this.asph, m.asphalt, 'rgb', 'asphalt', 'concrete');
     add(this.apron, m.apron, 'rgb', 'apron', 'concrete');
     add(this.walk, m.walk, 'none', 'walk', 'concrete');

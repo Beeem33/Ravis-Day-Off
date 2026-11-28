@@ -353,6 +353,16 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
         continue;
       }
 
+      // ---- Something that breaks when it's shot (a bottle): it goes, and the round carries on through
+      if (typeof obj.userData.onShot === 'function') {
+        (obj.userData.onShot as (p: THREE.Vector3, d: THREE.Vector3) => void)(point.clone(), dir);
+        const k = this.level.shootables.indexOf(obj);
+        if (k >= 0) this.level.shootables.splice(k, 1);
+        remaining -= hit.distance + 0.05;
+        from = point.addScaledVector(dir, 0.05);
+        continue;
+      }
+
       // ---- Cubicle panels: soft cover, one panel of penetration
       if (obj.userData.pierce && pierces < 1) {
         pierces++;

@@ -1,8 +1,9 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
-import { Level19Builder, type Level19Data, type GuardSpawn, parachutePack, HW, DOOR, P_COCKPIT, P_CONF } from '../environment/Level19Builder';
+import { Level19Builder, type Level19Data, type GuardSpawn, parachutePack, HW, DOOR, P_COCKPIT, P_CONF, P_GALLEY } from '../environment/Level19Builder';
 import { CombatScene } from './CombatScene';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
@@ -41,7 +42,13 @@ import { smooth, clamp01, yawPitchTo, wrapAngle, alongPath, pathLength } from '.
  * conference room behind him cleared), 2 the cockpit door, the boss gone.
  */
 
-type Phase = 'intro' | 'play' | 'knock' | 'pilots' | 'dive' | 'reveal' | 'run' | 'gear' | 'out' | 'jump' | 'dead';
+type Phase = 'intro' | 'play' | 'knock' | 'pilots' | 'slump' | 'dive' | 'reveal' | 'run' | 'gear' | 'out' | 'jump' | 'dead';
+
+/** The captain's ragdoll, part by part, for the replay of him going over onto the controls. */
+const RAG_PARTS = ['torso', 'pelvis', 'head', 'armL', 'armR', 'foreL', 'foreR', 'legL', 'legR', 'shinL', 'shinR'];
+/** The captain shot: how long it plays out live, and how slow the replay of it goes. */
+const SLUMP_LIVE = 1.4;
+const REPLAY_RATE = 0.35;
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
@@ -136,6 +143,16 @@ export class Level19Scene extends CombatScene<Level19Data> {
   private copilot!: Enemy;
   private captain!: Enemy;
   private captainUp = false;
+  /** The first officer down: the captain's said his piece (he stays at the controls, flying her). */
+  private captainPleaded = false;
+  /** The captain going over onto his yoke: the live part recorded frame by frame, then played back slow. */
+  private slumpFrames: { parts: number[][]; yoke: number }[] = [];
+  private slumpReplay = -1;
+  private yokeHit = -1;
+  private yokeAngle = 0;
+  /** In the dive: everything loose (and dead) drifting about the cabin, and the time it's been doing it. */
+  private floating = false;
+  private floatT = 0;
   /** The cut to the galley for the door: its own camera. */
   private cutCam = new THREE.PerspectiveCamera(50, 1, 0.05, 4000);
   private useCut = false;
@@ -226,6 +243,9 @@ export class Level19Scene extends CombatScene<Level19Data> {
     this.buildBoss();
     this.buildPapers();
     this.buildClutter();
+    this.buildPaperStorm();
+    this.buildYokeSolids();
+    this.buildBottles();
     for (const o of L.loose) this.fliers.push({ o, v: new THREE.Vector3(), spin: new THREE.Vector3(), light: !!o.userData.cushion });
 
     this.hud = new FPSHUD(this.ctx.uiRoot, bus, this.remaining, this.player.maxHealth);
@@ -508,8 +528,44 @@ export class Level19Scene extends CombatScene<Level19Data> {
     add(laptop, black, 0.3, 0.8, 3.2);
     for (const [x, z] of [[-0.35, -0.9], [0.4, 1.7], [-0.4, 4.1]] as const) add(phone, black, x, 0.8, z);
     for (const z of [0.0, 2.4]) add(bottle, glass, 0, 0.94, z);
-    // The bar top
-    for (let i = 0; i < 4; i++) add(bottle, i % 2 ? amber : glass, 1.45, 1.27, -11.3 + i * 1.1);
+    // (the bar's own bottles are the builder's: they can be shot)
+    void amber;
+    // More of everything, the length of the plane: magazines, glasses, napkins, a headset, cushions, playing cards
+    const mag = new THREE.BoxGeometry(0.21, 0.006, 0.28);
+    const tumbler = new THREE.CylinderGeometry(0.035, 0.03, 0.09, 10);
+    const napkin = new THREE.PlaneGeometry(0.2, 0.2);
+    const card = new THREE.PlaneGeometry(0.06, 0.09);
+    const cushion = new THREE.BoxGeometry(0.4, 0.12, 0.4);
+    const headset = new THREE.TorusGeometry(0.08, 0.012, 6, 14, Math.PI);
+    const mags = [std(0xc0392b), std(0x2c6fbb), std(0xe5c34a), std(0x2b2b2b)];
+    const cushions = [std(0x8a6a4a, { roughness: 0.9 }), std(0x2b3a55, { roughness: 0.9 }), std(0xd8cdb8, { roughness: 0.9 })];
+    const glassy = std(0xdfe8ee, { roughness: 0.05, transparent: true, opacity: 0.5 });
+    const red = std(0xb01818, { roughness: 0.6, side: THREE.DoubleSide });
+    const white = std(0xf7f7f4, { roughness: 0.9, side: THREE.DoubleSide });
+    for (let i = 0; i < 46; i++) {
+      const z = -26 + Math.random() * 54;
+      const x = (Math.random() - 0.5) * 3.6;
+      const y = 0.45 + Math.random() * 0.4;
+      switch (i % 6) {
+        case 0:
+          add(mag, mags[i % 4], x, y, z, true);
+          break;
+        case 1:
+          add(tumbler, glassy, x, y, z);
+          break;
+        case 2:
+          add(napkin, white, x, y, z, true);
+          break;
+        case 3:
+          add(card, i % 12 === 3 ? red : white, x, y, z, true);
+          break;
+        case 4:
+          add(cushion, cushions[i % 3], x, y, z, true);
+          break;
+        default:
+          add(headset, black, x, y, z);
+      }
+    }
     // Books on the credenza and the study's desk
     for (let i = 0; i < 4; i++) add(book, books[i], -2.5, 0.83 + i * 0.03, 3.8 + (i % 2) * 0.1);
     for (let i = 0; i < 3; i++) add(book, books[(i + 1) % 4], 2.35, 0.77 + i * 0.03, 13.0);
@@ -529,10 +585,106 @@ export class Level19Scene extends CombatScene<Level19Data> {
     }
   }
 
-  /** Into the dive: negative g. The dead and everything loose lift off the floor and go up to the ceiling. */
+  /** Paper everywhere: off every desk and table the length of the plane, for the dive to lift. */
+  private buildPaperStorm(): void {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xf5f3ee, roughness: 0.9, side: THREE.DoubleSide });
+    const ruled = new THREE.MeshStandardMaterial({ color: 0xe8edf6, roughness: 0.9, side: THREE.DoubleSide });
+    const sheet = new THREE.PlaneGeometry(0.21, 0.297);
+    for (let i = 0; i < 70; i++) {
+      const p = new THREE.Mesh(sheet, i % 4 ? mat : ruled);
+      p.rotation.set(-Math.PI / 2, 0, Math.random() * Math.PI);
+      p.position.set((Math.random() - 0.5) * 4.2, 0.03 + Math.random() * 0.02, -27 + Math.random() * 55);
+      this.scene.add(p);
+      this.fliers.push({ o: p, v: new THREE.Vector3(), spin: new THREE.Vector3(), light: true });
+    }
+  }
+
+  /**
+   * The control columns as solids, so the captain's weight lands on his and
+   * doesn't go through it. And the pilots' seats as what they are to a body
+   * (a pan and a back), not the tall blocks that keep the player out of
+   * them — a pilot dying in one starts inside that block, and it threw him
+   * up out of the seat.
+   */
+  private buildYokeSolids(): void {
+    for (const s of this.level.pilotSeats) {
+      for (const b of [...this.world.bodies]) {
+        if (b.type !== CANNON.Body.STATIC || b.shapes.length !== 1 || !(b.shapes[0] instanceof CANNON.Box)) continue;
+        const h = (b.shapes[0] as CANNON.Box).halfExtents;
+        if (Math.abs(b.position.x - s.x) < 0.05 && Math.abs(b.position.z - (s.z + 0.075)) < 0.05 && Math.abs(h.y - 0.65) < 0.02) this.world.removeBody(b);
+      }
+      const seat = new CANNON.Body({ type: CANNON.Body.STATIC });
+      seat.addShape(new CANNON.Box(new CANNON.Vec3(0.27, 0.21, 0.27)), new CANNON.Vec3(0, 0.21, 0));
+      seat.addShape(new CANNON.Box(new CANNON.Vec3(0.27, 0.36, 0.06)), new CANNON.Vec3(0, 0.82, 0.38));
+      seat.position.set(s.x, 0, s.z);
+      this.world.addBody(seat);
+    }
+    for (const y of this.level.yokes) {
+      const b = new CANNON.Body({ type: CANNON.Body.STATIC });
+      b.addShape(new CANNON.Box(new CANNON.Vec3(0.2, 0.1, 0.06)), new CANNON.Vec3(0, 0.68, 0));
+      b.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.31, 0.05)), new CANNON.Vec3(0, 0.31, 0));
+      b.position.set(y.position.x, y.position.y, y.position.z);
+      this.world.addBody(b);
+    }
+  }
+
+  /** The bar's bottles: each one shootable, in pieces when it's hit. */
+  private buildBottles(): void {
+    const L = this.level;
+    for (const b of L.barBottles) {
+      L.shootables.push(b);
+      b.userData.onShot = (at: THREE.Vector3, dir: THREE.Vector3): void => this.breakBottle(b, at, dir);
+    }
+  }
+
+  private breakBottle(b: THREE.Mesh, at: THREE.Vector3, dir: THREE.Vector3): void {
+    if (!b.visible) return;
+    b.visible = false;
+    const d = at.distanceTo(this.player.position);
+    this.particles.glassShards(at, dir, 0);
+    this.particles.glassShards(at, Level19Scene._a.set(-dir.x, 0.6, -dir.z), 0);
+    // What was in it, everywhere
+    const hsl = { h: 0, s: 0, l: 0 };
+    (b.material as THREE.MeshStandardMaterial).color.getHSL(hsl);
+    this.particles.bloodSpray(at, dir, false, 0, hsl.h === 0.995 ? 0.99 : hsl.h);
+    this.ctx.audio.glassShatter(d);
+    this.ctx.bus.emit(Events.Sound, { position: at.clone(), radius: 14, kind: 'glass' });
+  }
+
+  /**
+   * Into the dive: as near nothing as makes no difference. The dead and
+   * everything loose come up off the floor and drift about the cabin — not
+   * up through the roof, not pinned to it: floating, turning, wandering in
+   * the air the plane's falling through.
+   */
   private weightless(): void {
-    this.world.gravity.set(0, 3.2, -1.4);
+    this.world.gravity.set(0, 0.3, -0.5);
+    this.floating = true;
     for (const b of this.world.bodies) if (b.mass > 0) b.wakeUp();
+  }
+
+  /** A step of the drift: each body pulled gently toward the middle of the cabin's height, stirred by the air, slowed by it. */
+  private floatBodies(dt: number): void {
+    if (!this.floating || !(dt > 0)) return;
+    this.floatT += dt;
+    const t = this.floatT;
+    const f = new CANNON.Vec3();
+    for (const b of this.world.bodies) {
+      if (b.type !== CANNON.Body.DYNAMIC || b.mass <= 0) continue;
+      b.wakeUp();
+      const m = b.mass;
+      const k = b.id * 1.37;
+      // Where it wants to be: somewhere between knee and head height, wandering
+      const want = 1.15 + 0.55 * Math.sin(t * 0.45 + k);
+      f.set(Math.sin(t * 0.8 + k * 2.1) * 1.6 * m, ((want - b.position.y) * 2.4 + Math.sin(t * 1.3 + k) * 0.8) * m, Math.cos(t * 0.6 + k * 0.7) * 1.4 * m);
+      b.applyForce(f, b.position);
+      // Air: it doesn't build up speed, it drifts
+      const drag = Math.exp(-dt * 0.9);
+      b.velocity.scale(drag, b.velocity);
+      b.angularVelocity.scale(Math.exp(-dt * 0.4), b.angularVelocity);
+      // A slow tumble of its own
+      if (b.angularVelocity.lengthSquared() < 0.3) b.angularVelocity.set(Math.sin(k) * 0.6, Math.cos(k) * 0.6, Math.sin(k * 1.7) * 0.6);
+    }
   }
 
   // ================================================================ beats
@@ -635,15 +787,102 @@ export class Level19Scene extends CombatScene<Level19Data> {
       this.copilot.faceToward(this.player.position, dt, 4);
       this.copilot.setWalk(this.copilot.position.z > P_COCKPIT - 1.5 ? 0.25 : 0);
     }
-    if (!this.copilot.alive && this.captain.alive && !this.captainUp) {
-      this.captainUp = true;
-      this.captain.setSitting(false);
-      this.captain.setHandsUp(true);
+    // The first officer down: the captain stays where he is, hands on the controls, flying her — and says so
+    if (!this.copilot.alive && this.captain.alive && !this.captainPleaded) {
+      this.captainPleaded = true;
       this.captain.setScared();
-      this.say('CAPTAIN', 'Whoa — whoa! If you do me, who is going to fly the—', 3.5);
+      this.say('CAPTAIN', 'Easy — easy! I am the one flying this thing! You shoot me, we ALL go down!', 4);
     }
-    if (this.captain.alive && !this.captain.beingExecuted && this.captainUp) this.captain.faceToward(this.player.position, dt, 3);
-    if (!this.copilot.alive && !this.captain.alive) this.startDive();
+    if (this.captain.alive) this.captain.setHeadLook(this.captainPleaded ? this.player.camera.getWorldPosition(Level19Scene._b) : null);
+  }
+
+  /**
+   * The captain shot in his seat: he goes forward over the controls. The
+   * next second and a half is recorded as it happens, then shown again
+   * from the right-hand seat, slow — his weight going onto the column,
+   * the column going forward — and the nose goes down.
+   */
+  private startSlump(): void {
+    this.phase = 'slump';
+    this.t = 0;
+    this.slumpFrames = [];
+    this.slumpReplay = -1;
+    this.yokeHit = -1;
+    this.yokeAngle = 0;
+    this.setObjective('');
+    this.hud.setPrompt(null);
+    // Over onto the column in front of him
+    this.captain.launch(V(0, 0.3, -2.4));
+  }
+
+  private updateSlump(dt: number): void {
+    const L = this.level;
+    const yokes = L.yokes;
+    const parts = RAG_PARTS.map((n) => this.captain.ragdollPart(n));
+    if (this.slumpReplay < 0) {
+      // Live: his weight coming forward; on the column, it goes over with him
+      this.t += dt;
+      const yoke = yokes[0];
+      const top = Level19Scene._a.set(yoke.position.x, yoke.position.y + 0.66, yoke.position.z);
+      const torso = this.captain.ragdollPart('torso');
+      const head = this.captain.ragdollPart('head');
+      const near = (b: CANNON.Body | null): boolean => !!b && Math.hypot(b.position.x - top.x, b.position.y - top.y, b.position.z - top.z) < 0.42;
+      if (this.yokeHit < 0 && (near(torso) || near(head) || this.t > 0.55)) {
+        this.yokeHit = this.slumpFrames.length;
+        this.ctx.audio.bodyThud(1.2);
+        this.ctx.audio.punchImpact(false);
+      }
+      if (this.yokeHit >= 0) this.yokeAngle = Math.min(0.5, this.yokeAngle + dt * 2.6);
+      for (const y of yokes) y.rotation.x = -this.yokeAngle;
+      this.slumpFrames.push({ parts: parts.map((b) => (b ? [b.position.x, b.position.y, b.position.z, b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w] : [])), yoke: this.yokeAngle });
+      if (this.t >= SLUMP_LIVE) {
+        // The replay: from the right-hand seat, slow
+        this.slumpReplay = 0;
+        this.useCut = true;
+        this.cinema(true);
+        this.player.cinematic = true;
+        // From up by the glareshield on the right, looking back across the columns at him
+        const seat = L.pilotSeats[0];
+        this.cutCam.fov = 52;
+        this.cutCam.aspect = window.innerWidth / window.innerHeight;
+        this.cutCam.updateProjectionMatrix();
+        this.cutCam.position.set(seat.x + 1.0, 1.32, seat.z - 1.15);
+        this.cutCam.lookAt(seat.x, 0.85, seat.z - 0.35);
+      }
+      return;
+    }
+    // Playing it back
+    this.slumpReplay += dt * REPLAY_RATE;
+    const i = Math.min(this.slumpFrames.length - 1, Math.floor(this.slumpReplay * 60));
+    const fr = this.slumpFrames[i];
+    parts.forEach((b, k) => {
+      const s = fr.parts[k];
+      if (!b || !s || s.length < 7) return;
+      b.position.set(s[0], s[1], s[2]);
+      b.quaternion.set(s[3], s[4], s[5], s[6]);
+      b.velocity.set(0, 0, 0);
+      b.angularVelocity.set(0, 0, 0);
+    });
+    for (const y of yokes) y.rotation.x = -fr.yoke;
+    // The thump onto the column, again, and the autopilot letting go
+    if (i === this.yokeHit && this.yokeHit >= 0) {
+      this.yokeHit = -2;
+      this.ctx.audio.bodyThud(1.2);
+      for (const [d, k] of [[0, 0], [260, 1], [520, 2]] as const) window.setTimeout(() => this.ctx.audio.uiBeep(k !== 1), d);
+    }
+    // A slow push in on him as it plays
+    const seat = L.pilotSeats[0];
+    this.cutCam.position.lerp(Level19Scene._a.set(seat.x + 0.75, 1.24, seat.z - 1.05), Math.min(1, dt * 0.6));
+    this.cutCam.lookAt(seat.x, 0.85, seat.z - 0.35);
+    if (this.slumpReplay * 60 >= this.slumpFrames.length + 18) {
+      // Back to his eyes, and down she goes
+      this.useCut = false;
+      this.cinema(false);
+      this.player.cinematic = false;
+      for (const y of yokes) y.rotation.x = -0.5;
+      for (const b of parts) b?.wakeUp();
+      this.startDive();
+    }
   }
 
   /** Nobody at the controls: she drops her nose. */
@@ -1047,6 +1286,9 @@ export class Level19Scene extends CombatScene<Level19Data> {
       case 'pilots':
         this.updatePilots(dt);
         break;
+      case 'slump':
+        this.updateSlump(dt);
+        break;
       case 'dive':
         this.updateDive(dt);
         break;
@@ -1079,6 +1321,8 @@ export class Level19Scene extends CombatScene<Level19Data> {
     if (this.wind > 0 && !p.cinematic && p.alive) {
       const to = Level19Scene._a.copy(this.level.aftDoor.at).sub(p.position).setY(0);
       const d = to.length();
+      // Down the suite's corridor it can only blow along it: not sideways into the galley doorway's edge
+      if (p.position.z < P_GALLEY + 0.5) to.x = 0;
       const pull = (this.wind * 2.6) / (1 + d * 0.3);
       to.normalize().multiplyScalar(pull);
       p.boost.x = to.x;
@@ -1115,6 +1359,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
       this.subT -= dt;
       if (this.subT <= 0) this.subtitle.style.opacity = '0';
     }
+    this.floatBodies(dt);
     this.world.step(1 / 60, dt, 3);
     this.particles.update(dt);
     this.flashPool.update(dt);
@@ -1135,7 +1380,12 @@ export class Level19Scene extends CombatScene<Level19Data> {
       this.setObjective('THE BOSS ISN\'T HERE — TRY THE FLIGHT DECK');
     }
     if (this.phase === 'play' && !this.knocked) {
-      const near = Math.abs(p.x - L.cockpitDoor.at.x) < 0.9 && Math.abs(p.z - L.cockpitDoor.at.z) < 0.9;
+      // Stood at it, and looking at it (not round at the lavatory door beside it)
+      const cam = this.player.camera;
+      const eye = cam.getWorldPosition(Level19Scene._a);
+      const toDoor = Level19Scene._b.set(0, 1.3, P_COCKPIT).sub(eye).normalize();
+      const facing = cam.getWorldDirection(new THREE.Vector3()).dot(toDoor) > 0.75;
+      const near = facing && Math.abs(p.x - L.cockpitDoor.at.x) < 0.9 && Math.abs(p.z - L.cockpitDoor.at.z) < 0.9;
       this.hud.setPrompt(near ? '[ E ] KNOCK' : null);
       if (near && this.ctx.input.wasPressed('KeyE')) this.knock();
     }
@@ -1257,9 +1507,15 @@ export class Level19Scene extends CombatScene<Level19Data> {
         f.v.addScaledVector(to.normalize(), pull * dt);
         if (f.light && Math.random() < dt * 3) f.spin.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
       }
-      // Negative g in the dive: everything drifts up off the floor to the
-      // ceiling, the light things wandering as they go
-      f.v.y += dt * (f.light ? 1.4 + Math.sin(this.t * 3 + o.id) * 0.8 : 3.0);
+      // Next to no g in the dive: everything comes up off the floor and drifts
+      // about the cabin, each thing wandering its own way through the air
+      if (this.floating) {
+        const k = o.id * 1.7;
+        const want = 1.15 + 0.6 * Math.sin(this.floatT * 0.5 + k);
+        f.v.y += dt * ((want - o.position.y) * 1.8 + Math.sin(this.floatT * 1.4 + k) * (f.light ? 0.9 : 0.4));
+        f.v.x += dt * Math.sin(this.floatT * 0.9 + k * 2.3) * (f.light ? 0.9 : 0.5);
+        f.v.z += dt * Math.cos(this.floatT * 0.7 + k) * (f.light ? 0.8 : 0.4);
+      }
       if (f.light && Math.random() < dt * 1.5) f.spin.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
       f.v.multiplyScalar(1 - dt * (f.light ? 1.2 : 0.4));
       o.position.addScaledVector(f.v, dt);
@@ -1302,7 +1558,11 @@ export class Level19Scene extends CombatScene<Level19Data> {
     opts: { wound?: boolean; keepWeapon?: boolean } = {}
   ): void {
     if (!enemy.alive) return;
+    // The captain, shot at the controls: he goes over from where he sits (not stood up first)
+    const captainAtControls = enemy === this.captain && this.phase === 'pilots';
+    if (captainAtControls) enemy.ragdollFromPose = true;
     enemy.die(point, dir, this.world, hitPart === 'head' ? 'head' : 'torso', impulseScale, opts);
+    if (captainAtControls) this.startSlump();
     const g = this.guards.find((x) => x.e === enemy);
     if (!g) return;
     g.ai.dispose();

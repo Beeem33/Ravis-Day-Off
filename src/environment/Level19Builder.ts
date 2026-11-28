@@ -76,6 +76,10 @@ export interface Level19Data {
   guards: GuardSpawn[];
   /** The two pilots' seats: where each one's hips go, facing forward. */
   pilotSeats: THREE.Vector3[];
+  /** Each pilot's control column (left seat, right seat): pivots at the floor; rotation.x forward is nose down. */
+  yokes: THREE.Group[];
+  /** The bottles on the bar and its back shelves, each its own mesh: they can be shot. */
+  barBottles: THREE.Mesh[];
   /** The cockpit door: its leaf on a hinge (on the left of the frame), and the collider it blocks with. */
   cockpitDoor: { pivot: THREE.Group; collider: Collider; at: THREE.Vector3 };
   /** The aft door: a plug that moves in, then swings out and forward on its arm. */
@@ -423,6 +427,8 @@ export class Level19Builder {
   private colliders: Collider[] = [];
   private occluders: THREE.Object3D[] = [];
   private loose: THREE.Object3D[] = [];
+  private yokes: THREE.Group[] = [];
+  private barBottles: THREE.Mesh[] = [];
   private cabinLights: THREE.PointLight[] = [];
   private alarmLights: THREE.PointLight[] = [];
 
@@ -508,6 +514,8 @@ export class Level19Builder {
       ],
       guards: this.guards(),
       pilotSeats: cockpit.seats,
+      yokes: this.yokes,
+      barBottles: this.barBottles,
       cockpitDoor: cockpit.door,
       aftDoor,
       chutes: locker.chutes,
@@ -736,16 +744,18 @@ export class Level19Builder {
     for (const side of [-1, 1] as const) {
       const x = side * HW;
       const sx = side * (HW + T / 2);
-      // Windows: every 1.05 m, where the wall allows
+      // Windows: fewer than an airliner's and bigger, every 1.6 m where the wall allows
       const wins: number[] = [];
-      for (let z = Z_AFT - 1.3; z > P_COCKPIT; z -= 1.05) if (!Level19Builder.noWindow(side, z)) wins.push(z);
+      for (let z = Z_AFT - 1.5; z > P_COCKPIT; z -= 1.6) if (!Level19Builder.noWindow(side, z)) wins.push(z);
       const W0 = 0.95;
       const W1 = 1.55;
-      const HALF = 0.19;
+      const HALF = 0.25;
       // Spans to build solid, as [z0, z1], with the door left open on the left
+      // (only a span the door actually falls in is split round it: split every span, and the
+      // pieces between the windows each grew into a strip from there to the door, over every window)
       const spans = (z0: number, z1: number, door: boolean): [number, number][] => {
-        if (!(door && side === -1)) return [[z0, z1]];
-        return [[z0, DOOR.z0], [DOOR.z1, z1]];
+        if (!(door && side === -1) || z1 <= DOOR.z0 || z0 >= DOOR.z1) return [[z0, z1]];
+        return ([[z0, DOOR.z0], [DOOR.z1, z1]] as [number, number][]).filter(([a, b]) => b > a);
       };
       for (const [a, b] of spans(P_COCKPIT, Z_AFT, true)) {
         this.box(T, W0, b - a, sx, 0, (a + b) / 2, M.lining, { surface: 'metal' });
@@ -798,22 +808,22 @@ export class Level19Builder {
       }
       // Each window: a moulded bezel round an oval, and a short tunnel out through the skin
       const bezelShape = new THREE.Shape();
-      bezelShape.moveTo(-0.27, -0.36);
-      bezelShape.lineTo(0.27, -0.36);
-      bezelShape.lineTo(0.27, 0.36);
-      bezelShape.lineTo(-0.27, 0.36);
-      bezelShape.lineTo(-0.27, -0.36);
+      bezelShape.moveTo(-0.33, -0.4);
+      bezelShape.lineTo(0.33, -0.4);
+      bezelShape.lineTo(0.33, 0.4);
+      bezelShape.lineTo(-0.33, 0.4);
+      bezelShape.lineTo(-0.33, -0.4);
       const hole = new THREE.Path();
-      hole.absellipse(0, 0, 0.155, 0.225, 0, Math.PI * 2, true, 0);
+      hole.absellipse(0, 0, 0.21, 0.285, 0, Math.PI * 2, true, 0);
       bezelShape.holes.push(hole);
       const bezelGeo = new THREE.ShapeGeometry(bezelShape, 24);
       const bezelMat = new THREE.MeshStandardMaterial({ color: 0xd6ccb9, roughness: 0.5, side: THREE.DoubleSide });
       // A dark rubber seal round the oval
       const ring = new THREE.RingGeometry(1, 1.12, 32);
-      ring.scale(0.155, 0.225, 1);
+      ring.scale(0.21, 0.285, 1);
       const tunnelGeo = new THREE.CylinderGeometry(1, 1, 0.16, 24, 1, true);
       tunnelGeo.rotateZ(Math.PI / 2);
-      tunnelGeo.scale(1, 0.225, 0.155);
+      tunnelGeo.scale(1, 0.285, 0.21);
       for (const z of wins) {
         const bz = new THREE.Mesh(bezelGeo, bezelMat);
         bz.position.set(x - side * 0.005, 1.25, z);
@@ -826,9 +836,6 @@ export class Level19Builder {
         const tn = new THREE.Mesh(tunnelGeo, M.tunnel);
         tn.position.set(x + side * 0.08, 1.25, z);
         this.trim.add(tn);
-        // The blind, half down: a little pull at its edge
-        const blind = this.box(0.01, 0.13, 0.3, x + side * 0.03, 1.37, z, M.plastic, { trim: true });
-        void blind;
       }
     }
   }
@@ -857,7 +864,8 @@ export class Level19Builder {
 
   private partitions(): void {
     const M = this.M;
-    this.bulkhead(P_GALLEY, M.walnut);
+    // (the galley's doorway as wide as the corridor that runs into it: no corner to catch on running for the door)
+    this.bulkhead(P_GALLEY, M.walnut, { door: 2 * CX - T });
     this.bulkhead(P_SUITE, M.walnut);
     this.bulkhead(P_CONF, M.walnut);
     this.bulkhead(P_LOUNGE, M.walnut);
@@ -1075,15 +1083,30 @@ export class Level19Builder {
     const r = rng(31);
     const bottleCols = [0x6a3a10, 0x2b5a2a, 0xe8e0c0, 0x7a1020, 0x3a3a60, 0xc08a30];
     const bottleMats = bottleCols.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.85 }));
+    // Each bottle its own mesh (a lathed body and neck), left out of the fold: they can be shot to pieces
+    const bottle = (x: number, y: number, z: number, h: number, mat: THREE.Material): void => {
+      const pts = [
+        new THREE.Vector2(0.0, 0),
+        new THREE.Vector2(0.038, 0),
+        new THREE.Vector2(0.04, 0.01),
+        new THREE.Vector2(0.04, h * 0.72),
+        new THREE.Vector2(0.03, h * 0.8),
+        new THREE.Vector2(0.014, h * 0.9),
+        new THREE.Vector2(0.013, h),
+        new THREE.Vector2(0.0, h)
+      ];
+      const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 10), mat);
+      m.position.set(x, y, z);
+      m.userData.surface = 'glass';
+      this.group.add(m);
+      this.barBottles.push(m);
+    };
     for (const y of [0.95, 1.45]) {
       this.box(0.28, 0.025, 5.0, 2.42, y, -9.6, M.walnut, { trim: true });
-      for (let z = -11.9; z < -7.3; z += 0.16 + r() * 0.06) {
-        const m = bottleMats[Math.floor(r() * bottleMats.length)];
-        const h = 0.24 + r() * 0.12;
-        this.cyl(0.035, 0.04, h, 2.38, y + 0.025, z, m, 8, { trim: true });
-        this.cyl(0.012, 0.03, 0.08, 2.38, y + 0.025 + h, z, m, 6, { trim: true });
-      }
+      for (let z = -11.9; z < -7.3; z += 0.16 + r() * 0.06) bottle(2.38, y + 0.025, z, 0.32 + r() * 0.12, bottleMats[Math.floor(r() * bottleMats.length)]);
     }
+    // And a few out on the bar top, open
+    for (const [z, k] of [[-11.4, 0], [-10.6, 3], [-9.7, 5], [-8.0, 2]] as [number, number][]) bottle(barX - 0.45, 1.105, z, 0.34, bottleMats[k]);
     // Bar stools
     for (let i = 0; i < 4; i++) {
       const z = -11.2 + i * 1.2;
@@ -1094,7 +1117,7 @@ export class Level19Builder {
     this.loose.push(this.glass(barX - 0.5, 1.13, -8.4), this.glass(barX - 0.45, 1.13, -10.2), this.glass(barX - 0.55, 1.13, -11.0));
     // An ice bucket and champagne
     this.cyl(0.11, 0.09, 0.22, barX - 0.5, 1.13, -9.0, M.steel, 14, { trim: true });
-    this.cyl(0.04, 0.04, 0.3, barX - 0.5, 1.2, -9.0, bottleMats[1], 10, { trim: true });
+    bottle(barX - 0.5, 1.2, -9.0, 0.34, bottleMats[1]);
 
     // ---- Right, forward: the boss's own corner. Two club chairs and his,
     // bigger, gold-legged, facing down the cabin, the cigar still going
@@ -1239,6 +1262,33 @@ export class Level19Builder {
     }
     // A coffee on the glareshield
     this.cyl(0.04, 0.035, 0.1, 0.8, 1.17, Z_NOSE + 0.7, M.linen, 10, { trim: true });
+    // The control columns, one in front of each seat: a post up from the floor and the yoke's horns on it.
+    // Their own objects (not folded): they move — pushed forward, she noses down
+    this.yokes = seats.map((s) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(s.x, 0.12, s.z - 0.62);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.62, 10), M.black);
+      post.position.y = 0.31;
+      pivot.add(post);
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.05), M.black);
+      bar.position.y = 0.66;
+      pivot.add(bar);
+      for (const sx of [-1, 1]) {
+        const horn = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.06), M.black);
+        horn.position.set(sx * 0.16, 0.73, 0);
+        horn.rotation.z = sx * 0.2;
+        pivot.add(horn);
+      }
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 12), M.steel);
+      hub.rotation.x = Math.PI / 2;
+      hub.position.set(0, 0.66, 0.03);
+      pivot.add(hub);
+      this.group.add(pivot);
+      return pivot;
+    });
+    // The ceilings, as solids, for whatever floats up to them in the dive: the cabin's, and the cockpit's lower one
+    this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(-HW, CEIL - 0.03, P_COCKPIT), new THREE.Vector3(HW, CEIL + 0.6, Z_AFT)) });
+    this.colliders.push({ box: new THREE.Box3(new THREE.Vector3(-HW, CEIL - 0.25, Z_NOSE), new THREE.Vector3(HW, CEIL + 0.6, P_COCKPIT)) });
     return { seats, door: { pivot, collider, at: new THREE.Vector3(0, 0, z + 0.6) } };
   }
 

@@ -143,6 +143,8 @@ export class TermsComputer {
 
   // ---- the desktop
   private wins: Win[] = [];
+  /** Each ad pop-up's own screaming bird, looping until that one is closed. */
+  private adNoise = new Map<Win, { stop(): void }>();
   private selectedIcon = '';
   private startOpen = false;
   private ctxMenu: { x: number; y: number } | null = null;
@@ -242,6 +244,8 @@ export class TermsComputer {
   }
 
   dispose(): void {
+    for (const n of this.adNoise.values()) n.stop();
+    this.adNoise.clear();
     this.release();
     this.texture.dispose();
     this.material.dispose();
@@ -354,7 +358,7 @@ export class TermsComputer {
       const d = fileDef(app);
       const n = this.wins.length;
       this.viewers.set(app, viewerFor(app));
-      this.wins.push({
+      const win: Win = {
         app,
         x: d.x ?? Math.max(0, (W - d.w) / 2 + (n % 4) * 26 - 39),
         y: d.y ?? Math.max(0, Math.min(H - TASK_H - d.h, 30 + (n % 4) * 22)),
@@ -362,7 +366,10 @@ export class TermsComputer {
         h: Math.min(d.h, H - TASK_H),
         min: false,
         max: false
-      });
+      };
+      this.wins.push(win);
+      // Every pop-up ad screams, on a loop, until it's closed: a screen full of them is a din
+      if (isAd(app)) this.adNoise.set(win, this.audio.sampleLoop('audio/bird-scream.mp3', 0.4));
       this.audio.mouseClick();
       return;
     }
@@ -397,6 +404,8 @@ export class TermsComputer {
 
   private close(w: Win): void {
     this.wins = this.wins.filter((o) => o !== w);
+    this.adNoise.get(w)?.stop();
+    this.adNoise.delete(w);
     if (w.app === 'chrome') this.typing = false;
   }
 

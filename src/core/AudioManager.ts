@@ -237,6 +237,63 @@ export class AudioManager {
     if (this.ctx) this.musicBus.gain.value = v;
   }
 
+  // ---------------------------------------------------------------- samples
+
+  /** Decoded sample files, by URL: each fetched and decoded once. */
+  private samples = new Map<string, Promise<AudioBuffer | null>>();
+
+  private sample(url: string): Promise<AudioBuffer | null> {
+    const ctx = this.ctx;
+    if (!ctx) return Promise.resolve(null);
+    let p = this.samples.get(url);
+    if (!p) {
+      p = fetch(`${import.meta.env.BASE_URL}${url}`)
+        .then((r) => r.arrayBuffer())
+        .then((b) => ctx.decodeAudioData(b))
+        .catch(() => null);
+      this.samples.set(url, p);
+    }
+    return p;
+  }
+
+  /**
+   * A sample file looping on the effects bus until stop(): each call its own
+   * voice, starting somewhere random in the clip and pitched a shade up or
+   * down, so a pile of them together is a racket rather than one sound
+   * played loud. If the file is still loading, the voice starts when it
+   * arrives (unless it was stopped first).
+   */
+  sampleLoop(url: string, gain = 0.5): { stop(): void } {
+    const ctx = this.ctx;
+    let src: AudioBufferSourceNode | null = null;
+    let out: GainNode | null = null;
+    let stopped = false;
+    if (ctx) {
+      void this.sample(url).then((buf) => {
+        if (!buf || stopped) return;
+        src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        src.playbackRate.value = 0.92 + Math.random() * 0.16;
+        out = ctx.createGain();
+        out.gain.value = gain;
+        src.connect(out).connect(this.sfxBus);
+        src.start(0, Math.random() * buf.duration);
+      });
+    }
+    return {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        if (!ctx || !src || !out) return;
+        // A few milliseconds' fade, so it stops without a click
+        const now = ctx.currentTime;
+        out.gain.setTargetAtTime(0, now, 0.015);
+        src.stop(now + 0.1);
+      }
+    };
+  }
+
   // ---------------------------------------------------------------- helpers
 
   private noise(

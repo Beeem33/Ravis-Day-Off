@@ -90,7 +90,8 @@ const SLOWMO_SCALE = 0.3;
  * 102.8 BPM; 16.536 s is the crash the beat comes in on, 65.571 s is
  * exactly 21 bars on, the last beat before it drops out.
  */
-const STREET_SONG = { url: 'audio/street.mp3', loopStart: 16.536, loopEnd: 65.571 };
+/** The drive's song: in 23 s, and round from there to the end (public/audio; kept out of the repo — a licensed track). */
+const STREET_SONG = { url: 'audio/street-camaro.mp3', loopStart: 23, loopEnd: 0, startAt: 23 };
 /** Out of the window: how far round to his left he can turn to aim (back along the car), past the usual look. */
 const LEAN_LOOK_BACK = 0.75;
 /** The window pistol up on his sights: how far out from his eye, and how far its sight line sits above its grip (the group's origin). */
@@ -593,7 +594,7 @@ export class StreetScene implements GameScene {
     this.engine = audio.engineLoop();
     this.tyres = audio.tyreSlideLoop();
     // The song, from the moment he pulls out
-    audio.startTrackMusic(STREET_SONG.url, STREET_SONG.loopStart, STREET_SONG.loopEnd);
+    audio.startTrackMusic(STREET_SONG.url, STREET_SONG.loopStart, STREET_SONG.loopEnd, 0.6, 0, STREET_SONG.startAt);
 
     this.placeCast();
     if (this.checkpoint >= 1) this.startDrive(true);

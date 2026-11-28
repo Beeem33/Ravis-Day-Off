@@ -3950,9 +3950,10 @@ export class AudioManager {
    * smooth in the decoded copy: the last few milliseconds before
    * `loopEnd` fade into the ones just before `loopStart`, so what plays
    * into the jump is what played into that point the first time. Calling
-   * it while the same song's going does nothing.
+   * it while the same song's going does nothing. `startAt` skips into the
+   * song that far (seconds) the first time through.
    */
-  startTrackMusic(url: string, loopStart: number, loopEnd: number, level = 0.6, fadeIn = 0): void {
+  startTrackMusic(url: string, loopStart: number, loopEnd: number, level = 0.6, fadeIn = 0, startAt = 0): void {
     if (!this.ctx) return;
     const ctx = this.ctx;
     if (ctx.state === 'suspended') void ctx.resume();
@@ -4004,7 +4005,7 @@ export class AudioManager {
           out.gain.setValueAtTime(0, now);
           out.gain.linearRampToValueAtTime(level, now + fadeIn);
         }
-        src.start();
+        src.start(0, Math.min(startAt, Math.max(0, buf.duration - 0.05)));
         t.src = src;
       })
       .catch((err) => console.warn('[music] could not load', url, err));

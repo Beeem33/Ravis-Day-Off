@@ -1410,7 +1410,8 @@ export class Level19SkyScene implements GameScene {
     // Across in front of him, so he sees it coming the whole way, its line a few metres off his: a near thing unless he steers into it
     const ang = this.yaw + Math.PI / 2 + (Math.random() - 0.5) * 0.9 + (Math.random() < 0.5 ? Math.PI : 0);
     const dir = V(-Math.sin(ang), 0, -Math.cos(ang));
-    P.addScaledVector(V(-dir.z, 0, dir.x), (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 5));
+    // Its line far enough off his that the wingtip, not the fuselage, is what goes past: a wingspan's half and a few metres more
+    P.addScaledVector(V(-dir.z, 0, dir.x), (Math.random() < 0.5 ? -1 : 1) * (a.span / 2 + 4 + Math.random() * 5));
     a.group.rotation.y = Math.atan2(-dir.x, -dir.z);
     // Jets draw a faint trail behind each engine; the turboprop doesn't
     if (kind === 'liner') {
@@ -1739,6 +1740,7 @@ export class Level19SkyScene implements GameScene {
     this.pt = 0;
     this.hud.hide();
     this.warn('');
+    this.setObjective('');
     this.altEl.style.opacity = '0';
     this.letterbox.classList.remove('open');
     for (const d of this.divers) d.mark.style.display = 'none';

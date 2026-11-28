@@ -4,7 +4,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GameContext } from '../main';
 import { Events } from '../core/EventBus';
 import { Level19Builder, type Level19Data, type GuardSpawn, parachutePack, HW, DOOR, P_COCKPIT, P_CONF, P_GALLEY } from '../environment/Level19Builder';
-import { CombatScene } from './CombatScene';
+import { CombatScene, type TakedownArms } from './CombatScene';
+import { NeckStabViewmodel } from '../entities/NeckStabViewmodel';
 import { BloodDecalSystem } from '../fx/BloodDecalSystem';
 import { ParticleManager } from '../fx/ParticleManager';
 import { MuzzleFlashPool } from '../fx/MuzzleFlashPool';
@@ -179,6 +180,18 @@ export class Level19Scene extends CombatScene<Level19Data> {
   private static _a = new THREE.Vector3();
   private static _b = new THREE.Vector3();
 
+  // ---- the plane's other F kill: a hand on his face, the knife in his neck
+  private neckVm!: NeckStabViewmodel;
+  /** How often F is the neck rather than the usual knife (0..1). */
+  neckOdds = 0.5;
+  /** After the yank: the neck still pumping, a spurt at a time. */
+  private gush: { e: Enemy; t: number; n: number } | null = null;
+  private static readonly GUSH = [0.18, 0.42, 0.68, 0.95, 1.25, 1.6, 2.0];
+  private static _c = new THREE.Vector3();
+  private static _d = new THREE.Vector3();
+  private static _q = new THREE.Quaternion();
+  private static _eu = new THREE.Euler();
+
   constructor(ctx: GameContext, private from = 0) {
     super(ctx);
     this.checkpoint = from;
@@ -223,6 +236,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
       else if (e === 'toss') this.dropCan(this.drink.tossPose());
     };
     this.setupTakedown();
+    this.setupNeckStab();
     this.arsenal = new Arsenal(
       {
         player: this.player,
@@ -1330,6 +1344,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     }
     p.update(dt, this.level.colliders);
     this.holdTakedown();
+    this.trackNeck();
     this.applyShake();
 
     this.arsenal.updateViewmodels(dt, aiming);
@@ -1361,6 +1376,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     }
     this.floatBodies(dt);
     this.world.step(1 / 60, dt, 3);
+    this.updateGush(dt);
     this.particles.update(dt);
     this.flashPool.update(dt);
     this.decals.update(dt);
@@ -1409,7 +1425,8 @@ export class Level19Scene extends CombatScene<Level19Data> {
         continue;
       }
       // A man at his post stands it, looking about, until something's up
-      const post = g.spawn.zone === 0 && g.ai.state === 'patrol';
+      // (not once he's in Ravi's hands: then he turns to face him, and this would turn him back)
+      const post = g.spawn.zone === 0 && g.ai.state === 'patrol' && !g.e.beingExecuted;
       if (post) {
         g.look += dt;
         g.e.yaw = g.spawn.yaw + Math.sin(g.look * 0.45) * 0.7;
@@ -1594,6 +1611,130 @@ export class Level19Scene extends CombatScene<Level19Data> {
 
   protected onTakedownStart(victim: Enemy): void {
     this.guards.find((x) => x.e === victim)?.ai.dispose();
+  }
+
+  // ============================================================ the neck stab
+
+  /** Half the time on the plane, F is the neck instead. */
+  protected beginTakedownArms(victim: Enemy): TakedownArms {
+    if (Math.random() >= this.neckOdds) return super.beginTakedownArms(victim);
+    this.neckVm.start();
+    this.leanHeadOf(victim, true);
+    return this.neckVm;
+  }
+
+  private setupNeckStab(): void {
+    const { audio } = this.ctx;
+    const vm = new NeckStabViewmodel(this.player.camera);
+    this.neckVm = vm;
+    vm.onEvent = (e) => {
+      const victim = this.tdVictim;
+      if (e === 'grab') {
+        if (victim) audio.enemyGrunt('strain');
+      } else if (e === 'draw') {
+        audio.knifeDraw();
+      } else if (e === 'stab') {
+        if (victim && victim.alive) {
+          victim.stabbed();
+          audio.knifeStab();
+          audio.enemyScream(0.35);
+          // A spit of it round the blade, out of the side of his neck and back at Ravi
+          const wound = vm.woundWorld(new THREE.Vector3());
+          const f = this.player.forwardDir();
+          const side = new THREE.Vector3(f.z, 0.55, -f.x).addScaledVector(f, -0.15).normalize();
+          const floor = this.surfaceBelow(wound, 3);
+          this.particles.bloodSpray(wound, side, false, floor ? floor.point.y + 0.02 : -1, this.bloodHue);
+        }
+      } else if (e === 'yank') {
+        if (victim && victim.alive) {
+          const wound = vm.woundWorld(new THREE.Vector3());
+          const dir = vm.yankDir(new THREE.Vector3());
+          this.leanHeadOf(victim, false);
+          this.killEnemy(victim, wound, dir, true, false, 'head', 0.25, { wound: false });
+          // He goes with the blade for an instant — head and shoulders wrenched after it — and then he's just weight
+          const head = victim.ragdollPart('head');
+          const torso = victim.ragdollPart('torso');
+          // (sideways with the blade, and away: the hand coming off his face shoves him off Ravi)
+          const fw = this.player.forwardDir();
+          const rx = -fw.z * 1.3 + fw.x * 0.8;
+          const rz = fw.x * 1.3 + fw.z * 0.8;
+          head?.velocity.set(head.velocity.x + rx, head.velocity.y + 0.3, head.velocity.z + rz);
+          torso?.velocity.set(torso.velocity.x + fw.x * 1.5 - fw.z * 0.3, torso.velocity.y, torso.velocity.z + fw.z * 1.5 + fw.x * 0.3);
+          if (torso) torso.angularVelocity.y += (Math.random() < 0.5 ? -1 : 1) * 1.2;
+          audio.knifeStab();
+          audio.fleshHit();
+          audio.enemyGrunt('oof');
+          // Out of the side of his neck it came from, dragged after the blade
+          const f = this.player.forwardDir();
+          this.spatter(wound, new THREE.Vector3(f.z, 0.25, -f.x).addScaledVector(dir, 0.55).normalize(), true);
+          this.gush = { e: victim, t: 0, n: 0 };
+        }
+      } else if (e === 'done') {
+        this.tdVictim = null;
+        this.tdArms = null;
+        this.player.cinematic = false;
+      }
+    };
+  }
+
+  /**
+   * The hand on his face shoving his head over, chin up, the right side of
+   * his neck opened to the knife. The model is posed off the rig inside
+   * Enemy.update, straight after the rig is animated, so the lean has to go
+   * in between the two: his own animate() is wrapped for the takedown, and
+   * the lean added to whatever it left the head doing. Turned about the base
+   * of the neck, so the head tips on it rather than sliding off the collar.
+   */
+  private leanHeadOf(e: Enemy, on: boolean): void {
+    const x = e as unknown as { animate(dt: number): void; head: THREE.Mesh; fold: number };
+    if (!on) {
+      delete (x as Partial<typeof x>).animate;
+      return;
+    }
+    const animate = Object.getPrototypeOf(e).animate as (dt: number) => void;
+    x.animate = (dt: number) => {
+      // A blade in the neck doesn't double him over the way one in the gut does: he stiffens,
+      // barely hunched, and so goes over backwards at the yank rather than on top of Ravi
+      if (x.fold > 0.15) x.fold = 0.15;
+      animate.call(e, dt);
+      const k = this.tdArms === this.neckVm && this.tdVictim === e ? this.neckVm.shove : 0;
+      if (k <= 0) return;
+      const h = x.head;
+      const before = Level19Scene._c.set(0, -0.15, 0).applyQuaternion(h.quaternion).add(h.position);
+      h.quaternion.multiply(Level19Scene._q.setFromEuler(Level19Scene._eu.set(0.2 * k, 0.32 * k, 0.45 * k)));
+      const after = Level19Scene._d.set(0, -0.15, 0).applyQuaternion(h.quaternion).add(h.position);
+      h.position.add(before).sub(after);
+    };
+  }
+
+  /** Each frame of a neck stab, after the hold: where his temple and the side of his neck are now. */
+  private trackNeck(): void {
+    const e = this.tdVictim;
+    if (!e || !e.alive || this.tdArms !== this.neckVm) return;
+    const h = (e as unknown as { head: THREE.Mesh }).head;
+    h.updateWorldMatrix(true, false);
+    this.neckVm.track(h.localToWorld(Level19Scene._c.set(0.13, 0.02, -0.01)), h.localToWorld(Level19Scene._d.set(0.055, -0.1, -0.04)));
+  }
+
+  /** The neck after the knife's out: spurts, weaker each time, from wherever his head has got to. */
+  private updateGush(dt: number): void {
+    const g = this.gush;
+    if (!g) return;
+    g.t += dt;
+    const at = Level19Scene.GUSH;
+    if (g.n >= at.length) {
+      this.gush = null;
+      return;
+    }
+    if (g.t < at[g.n]) return;
+    const head = g.e.ragdollPart('head');
+    g.n++;
+    if (!head) return;
+    const q = Level19Scene._q.set(head.quaternion.x, head.quaternion.y, head.quaternion.z, head.quaternion.w);
+    const pos = Level19Scene._c.set(0.058, -0.125, -0.025).applyQuaternion(q).add(Level19Scene._d.set(head.position.x, head.position.y, head.position.z));
+    const dir = new THREE.Vector3(1, 0.35, -0.3).applyQuaternion(q).normalize();
+    const floor = this.surfaceBelow(pos, 3);
+    this.particles.bloodSpray(pos.clone(), dir, g.n <= 2, floor ? floor.point.y + 0.02 : -1, this.bloodHue);
   }
 
   render(renderer: THREE.WebGLRenderer): void {

@@ -414,6 +414,482 @@ function metreUVs(g: THREE.BoxGeometry, w: number, h: number, d: number): void {
   }
 }
 
+// ================================================================ the jokes
+
+const HAND_FONT = '"Comic Sans MS", "Segoe Print", "Bradley Hand", cursive';
+
+/** The boss as his portraits have him: the cap, the beard, a smile he's very pleased with. */
+function bossFace(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  g.fillStyle = '#d9a57c';
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.ellipse(x + s * r * 0.95, y + r * 0.05, r * 0.18, r * 0.26, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.beginPath();
+  g.ellipse(x, y, r, r * 1.12, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#4a2e1c';
+  g.beginPath();
+  g.ellipse(x, y + r * 0.42, r * 0.98, r * 0.72, 0, 0, Math.PI);
+  g.fill();
+  g.lineCap = 'round';
+  g.strokeStyle = '#8a3026';
+  g.lineWidth = r * 0.1;
+  g.beginPath();
+  g.arc(x + r * 0.1, y + r * 0.36, r * 0.3, 0.25, Math.PI - 0.7);
+  g.stroke();
+  g.fillStyle = '#1a1a1a';
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.arc(x + s * r * 0.36, y - r * 0.06, r * 0.08, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.strokeStyle = '#3a2416';
+  g.lineWidth = r * 0.1;
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(x + s * r * 0.18, y - r * 0.25);
+    g.lineTo(x + s * r * 0.55, y - r * (s > 0 ? 0.38 : 0.3));
+    g.stroke();
+  }
+  g.strokeStyle = '#b07a55';
+  g.lineWidth = r * 0.07;
+  g.beginPath();
+  g.moveTo(x, y);
+  g.lineTo(x - r * 0.08, y + r * 0.2);
+  g.lineTo(x + r * 0.06, y + r * 0.22);
+  g.stroke();
+  // The cap: crown, band, peak and its gold badge
+  g.fillStyle = '#1c2741';
+  g.beginPath();
+  g.ellipse(x, y - r * 0.55, r * 1.02, r * 0.62, 0, Math.PI, Math.PI * 2);
+  g.fill();
+  g.fillRect(x - r * 1.02, y - r * 0.62, r * 2.04, r * 0.16);
+  g.beginPath();
+  g.ellipse(x + r * 0.2, y - r * 0.48, r * 0.95, r * 0.15, 0, 0, Math.PI);
+  g.fill();
+  g.fillStyle = '#c9a24a';
+  g.fillRect(x - r * 0.15, y - r * 0.98, r * 0.3, r * 0.2);
+}
+
+/** A dark suit's shoulders, a white collar and a gold tie, under a face at (x, y) of size r. */
+function bossSuit(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  g.fillStyle = '#20232b';
+  g.beginPath();
+  g.ellipse(x, y + r * 2.6, r * 1.9, r * 1.5, 0, Math.PI, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#f2f2ee';
+  g.beginPath();
+  g.moveTo(x - r * 0.45, y + r * 1.15);
+  g.lineTo(x + r * 0.45, y + r * 1.15);
+  g.lineTo(x, y + r * 1.9);
+  g.fill();
+  g.fillStyle = '#c9a24a';
+  g.beginPath();
+  g.moveTo(x - r * 0.12, y + r * 1.2);
+  g.lineTo(x + r * 0.12, y + r * 1.2);
+  g.lineTo(x + r * 0.16, y + r * 2.0);
+  g.lineTo(x, y + r * 2.2);
+  g.lineTo(x - r * 0.16, y + r * 2.0);
+  g.fill();
+}
+
+/** Ravi, as a photo on somebody's wall: brown, short black hair, a worried look, his blue shirt. */
+function raviFace(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  g.fillStyle = '#7fa6d6';
+  g.beginPath();
+  g.ellipse(x, y + r * 2.5, r * 1.8, r * 1.4, 0, Math.PI, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#8a5c3b';
+  g.fillRect(x - r * 0.3, y + r * 0.8, r * 0.6, r * 0.5);
+  g.beginPath();
+  g.ellipse(x, y, r * 0.9, r * 1.08, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#141010';
+  g.beginPath();
+  g.ellipse(x, y - r * 0.55, r * 0.92, r * 0.55, 0, Math.PI, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#1a1a1a';
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.arc(x + s * r * 0.33, y - r * 0.02, r * 0.08, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.strokeStyle = '#1a1210';
+  g.lineWidth = r * 0.09;
+  g.lineCap = 'round';
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(x + s * r * 0.15, y - r * 0.3);
+    g.lineTo(x + s * r * 0.5, y - r * 0.22);
+    g.stroke();
+  }
+  g.strokeStyle = '#4a2a1a';
+  g.beginPath();
+  g.arc(x, y + r * 0.62, r * 0.22, Math.PI + 0.5, Math.PI * 2 - 0.5);
+  g.stroke();
+}
+
+/** A gilt-framed portrait of the boss for the corridor, with its little brass caption. */
+function portraitCanvas(kind: 'baby' | 'golf' | 'board' | 'nap', caption: string): HTMLCanvasElement {
+  return canvas(256, 320, (g) => {
+    const bg: Record<typeof kind, [string, string]> = { baby: ['#bcd8f0', '#e8f2fb'], golf: ['#8fc4ef', '#4e9a3c'], board: ['#5a1420', '#2a0a10'], nap: ['#e9dcc0', '#c9b48e'] };
+    const gr = g.createLinearGradient(0, 0, 0, 270);
+    gr.addColorStop(0, bg[kind][0]);
+    gr.addColorStop(1, bg[kind][1]);
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 256, 270);
+    if (kind === 'baby') {
+      bossSuit(g, 128, 120, 30);
+      bossFace(g, 128, 120, 46);
+      // A rattle, gold, with a gavel's head
+      g.fillStyle = '#c9a24a';
+      g.fillRect(196, 150, 8, 70);
+      g.fillRect(182, 140, 36, 18);
+    } else if (kind === 'golf') {
+      bossSuit(g, 84, 118, 30);
+      bossFace(g, 84, 118, 30);
+      // A trophy bigger than he is
+      g.fillStyle = '#e0b648';
+      g.beginPath();
+      g.moveTo(150, 40);
+      g.lineTo(232, 40);
+      g.quadraticCurveTo(230, 150, 191, 170);
+      g.quadraticCurveTo(152, 150, 150, 40);
+      g.fill();
+      g.fillRect(183, 168, 16, 50);
+      g.fillRect(160, 215, 62, 22);
+      g.strokeStyle = '#e0b648';
+      g.lineWidth = 8;
+      for (const s of [-1, 1]) {
+        g.beginPath();
+        g.arc(191 + s * 46, 80, 22, s > 0 ? -1.4 : Math.PI - 1.6, s > 0 ? 1.6 : Math.PI + 1.4);
+        g.stroke();
+      }
+      g.fillStyle = '#7a5a18';
+      g.font = 'bold 26px Georgia';
+      g.textAlign = 'center';
+      g.fillText('#1', 191, 110);
+    } else if (kind === 'board') {
+      // A meeting with the board: him, and him again, shaking his own hand
+      for (const x of [72, 184]) {
+        bossSuit(g, x, 110, 26);
+        bossFace(g, x, 110, 28);
+      }
+      g.strokeStyle = '#20232b';
+      g.lineWidth = 16;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(96, 180);
+      g.lineTo(116, 204);
+      g.moveTo(160, 180);
+      g.lineTo(140, 204);
+      g.stroke();
+      g.fillStyle = '#d9a57c';
+      g.beginPath();
+      g.ellipse(128, 205, 20, 12, 0, 0, Math.PI * 2);
+      g.fill();
+    } else {
+      // Hard at work: face down on the desk, out cold
+      g.fillStyle = '#5a3a20';
+      g.fillRect(0, 190, 256, 80);
+      bossSuit(g, 120, 140, 30);
+      g.save();
+      g.translate(128, 150);
+      g.rotate(1.2);
+      bossFace(g, 0, 0, 34);
+      g.restore();
+      g.fillStyle = '#3a3a3a';
+      g.font = 'bold 34px ' + HAND_FONT;
+      g.fillText('z', 176, 90);
+      g.font = 'bold 44px ' + HAND_FONT;
+      g.fillText('Z', 198, 60);
+    }
+    g.fillStyle = '#e8d9a8';
+    g.fillRect(0, 270, 256, 50);
+    g.fillStyle = '#3a2a10';
+    g.font = 'bold 17px Georgia';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const words = caption.split('|');
+    words.forEach((w, i) => g.fillText(w, 128, 295 + (i - (words.length - 1) / 2) * 19));
+  });
+}
+
+/** Paper with lines of print on it: a notice, a certificate, the rules. */
+function noticeCanvas(title: string, lines: string[], o: { w?: number; h?: number; bg?: string; fg?: string; accent?: string; hand?: boolean } = {}): HTMLCanvasElement {
+  const w = o.w ?? 384;
+  const h = o.h ?? 512;
+  return canvas(w, h, (g) => {
+    g.fillStyle = o.bg ?? '#f4ecd6';
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = o.accent ?? '#9a7a30';
+    g.lineWidth = 6;
+    g.strokeRect(12, 12, w - 24, h - 24);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = o.accent ?? '#7a1a1a';
+    g.font = `bold ${Math.round(w / 11)}px ${o.hand ? HAND_FONT : 'Georgia'}`;
+    g.fillText(title, w / 2, h * 0.14);
+    g.fillStyle = o.fg ?? '#222';
+    const size = Math.min(Math.round(w / 15), Math.floor((h * 0.74) / lines.length) - 6);
+    g.font = `${o.hand ? '' : 'bold '}${size}px ${o.hand ? HAND_FONT : 'Arial, Helvetica, sans-serif'}`;
+    const top = h * 0.26;
+    const step = (h * 0.68) / lines.length;
+    lines.forEach((l, i) => g.fillText(l, w / 2, top + step * (i + 0.5)));
+  });
+}
+
+/** The conference room's whiteboard: the plan, in marker. */
+function whiteboardCanvas(): HTMLCanvasElement {
+  return canvas(512, 320, (g) => {
+    g.fillStyle = '#f6f8f6';
+    g.fillRect(0, 0, 512, 320);
+    g.lineCap = 'round';
+    g.fillStyle = '#1d3f9a';
+    g.font = 'bold 34px ' + HAND_FONT;
+    g.fillText('OPERATION: FIND RAVI', 22, 48);
+    g.fillStyle = '#222';
+    g.font = '27px ' + HAND_FONT;
+    g.fillText('1. Find Ravi', 34, 98);
+    g.fillText('2. ???', 34, 140);
+    g.fillText('3. Bonuses', 34, 182);
+    g.strokeStyle = '#d02020';
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(58, 174);
+    g.lineTo(168, 174);
+    g.stroke();
+    g.fillStyle = '#d02020';
+    g.fillText('(cancelled)', 178, 184);
+    g.fillStyle = '#1a7a2a';
+    g.fillText('Morale:', 34, 240);
+    // A graph of it: down
+    g.strokeStyle = '#1a7a2a';
+    g.beginPath();
+    g.moveTo(150, 222);
+    g.lineTo(190, 236);
+    g.lineTo(220, 232);
+    g.lineTo(270, 290);
+    g.stroke();
+    // A stick man with a knife, circled, and "HIM"
+    g.strokeStyle = '#222';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(410, 120, 16, 0, Math.PI * 2);
+    g.moveTo(410, 136);
+    g.lineTo(410, 186);
+    g.moveTo(410, 150);
+    g.lineTo(384, 170);
+    g.moveTo(410, 150);
+    g.lineTo(440, 140);
+    g.moveTo(410, 186);
+    g.lineTo(392, 222);
+    g.moveTo(410, 186);
+    g.lineTo(428, 222);
+    g.stroke();
+    g.strokeStyle = '#d02020';
+    g.beginPath();
+    g.ellipse(410, 165, 58, 82, 0, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = '#d02020';
+    g.font = 'bold 30px ' + HAND_FONT;
+    g.fillText('HIM', 382, 286);
+    g.fillStyle = '#555';
+    g.font = '18px ' + HAND_FONT;
+    g.fillText('do NOT wipe — Boss', 300, 312);
+  });
+}
+
+/** A wanted poster for Ravi: the reward is insulting. */
+function wantedCanvas(): HTMLCanvasElement {
+  return canvas(256, 340, (g) => {
+    g.fillStyle = '#e9d7a8';
+    g.fillRect(0, 0, 256, 340);
+    g.fillStyle = '#3a2410';
+    g.textAlign = 'center';
+    g.font = 'bold 50px Georgia';
+    g.fillText('WANTED', 128, 58);
+    g.fillStyle = '#bfd3ea';
+    g.fillRect(48, 76, 160, 150);
+    raviFace(g, 128, 140, 40);
+    g.fillStyle = '#3a2410';
+    g.font = 'bold 30px Georgia';
+    g.fillText('RAVI', 128, 262);
+    g.font = 'bold 17px Georgia';
+    g.fillText('REWARD: $5', 128, 292);
+    g.font = 'italic 15px Georgia';
+    g.fillText('(negotiable)', 128, 316);
+  });
+}
+
+/** One of those posters: a big word, a picture, a line of wisdom. This one's a shark. */
+function ambitionCanvas(): HTMLCanvasElement {
+  return canvas(320, 400, (g) => {
+    g.fillStyle = '#060606';
+    g.fillRect(0, 0, 320, 400);
+    const gr = g.createLinearGradient(0, 30, 0, 270);
+    gr.addColorStop(0, '#2e6ea8');
+    gr.addColorStop(1, '#0a2846');
+    g.fillStyle = gr;
+    g.fillRect(30, 30, 260, 240);
+    g.strokeStyle = '#d8d8d8';
+    g.lineWidth = 2;
+    g.strokeRect(30, 30, 260, 240);
+    // The fin, and the little boat it's going for
+    g.fillStyle = '#5a6874';
+    g.beginPath();
+    g.moveTo(120, 200);
+    g.quadraticCurveTo(150, 120, 196, 106);
+    g.quadraticCurveTo(180, 150, 200, 200);
+    g.fill();
+    g.fillStyle = '#c94a2a';
+    g.fillRect(232, 186, 40, 10);
+    g.fillStyle = '#ffffff';
+    g.fillRect(250, 168, 3, 18);
+    g.strokeStyle = '#9cc4e4';
+    g.beginPath();
+    g.moveTo(30, 200);
+    g.lineTo(290, 200);
+    g.stroke();
+    g.fillStyle = '#f0f0f0';
+    g.textAlign = 'center';
+    g.font = '34px Georgia';
+    g.fillText('A M B I T I O N', 160, 318);
+    g.font = 'italic 15px Georgia';
+    g.fillText('Eat your colleagues', 160, 350);
+    g.fillText('before they eat you.', 160, 370);
+  });
+}
+
+/** A dartboard's face. */
+function dartboardCanvas(): HTMLCanvasElement {
+  return canvas(256, 256, (g) => {
+    const c = 128;
+    g.fillStyle = '#111';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 20; i++) {
+      const a0 = (i / 20) * Math.PI * 2 - Math.PI / 20;
+      const a1 = a0 + Math.PI / 10;
+      for (const [r0, r1, cols] of [[0, 120, ['#151515', '#efe3c4']], [70, 78, ['#c02020', '#1a7a2a']], [112, 120, ['#c02020', '#1a7a2a']]] as [number, number, string[]][]) {
+        g.fillStyle = cols[i % 2];
+        g.beginPath();
+        g.arc(c, c, r1, a0, a1);
+        g.arc(c, c, r0, a1, a0, true);
+        g.fill();
+      }
+    }
+    g.fillStyle = '#1a7a2a';
+    g.beginPath();
+    g.arc(c, c, 14, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#c02020';
+    g.beginPath();
+    g.arc(c, c, 6, 0, Math.PI * 2);
+    g.fill();
+  });
+}
+
+/** Ravi's photo, pinned up for the darts, his name on it in red marker. */
+function raviPhotoCanvas(): HTMLCanvasElement {
+  return canvas(128, 160, (g) => {
+    g.fillStyle = '#f4f4f0';
+    g.fillRect(0, 0, 128, 160);
+    g.fillStyle = '#bcd0e6';
+    g.fillRect(8, 8, 112, 112);
+    raviFace(g, 64, 62, 26);
+    g.fillStyle = '#d01818';
+    g.font = 'bold 26px ' + HAND_FONT;
+    g.textAlign = 'center';
+    g.fillText('RAVI', 64, 148);
+  });
+}
+
+/** A lit sign: glowing letters on nothing, for an additive plane. */
+function neonCanvas(lines: string[], color: string, w = 512, h = 128): HTMLCanvasElement {
+  return canvas(w, h, (g) => {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, w, h);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const size = Math.floor((h - 16) / lines.length);
+    g.font = `bold ${Math.floor(size * 0.78)}px "Brush Script MT", "Segoe Script", ${HAND_FONT}`;
+    for (const [blur, col] of [[24, color], [10, color], [0, '#fff4fb']] as [number, string][]) {
+      g.shadowColor = color;
+      g.shadowBlur = blur;
+      g.fillStyle = col;
+      lines.forEach((l, i) => g.fillText(l, w / 2, 8 + size * (i + 0.5)));
+    }
+  });
+}
+
+/** signCanvas, but the lettering shrinks to fit the width when the words are long. */
+function fitSign(lines: string[], bg = '#14213d', fg = '#f2e6c8', w = 512, h = 128): HTMLCanvasElement {
+  return canvas(w, h, (g) => {
+    g.fillStyle = bg;
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#c9a75a';
+    g.lineWidth = 4;
+    g.strokeRect(6, 6, w - 12, h - 12);
+    g.fillStyle = fg;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const size = Math.floor((h - 30) / lines.length);
+    const font = (px: number): string => `bold ${px}px Arial, Helvetica, sans-serif`;
+    let px = Math.floor(size * 0.72);
+    g.font = font(px);
+    const widest = Math.max(...lines.map((l) => g.measureText(l).width));
+    if (widest > w - 36) px = Math.floor((px * (w - 36)) / widest);
+    g.font = font(px);
+    lines.forEach((l, i) => g.fillText(l, w / 2, 15 + size * (i + 0.5)));
+  });
+}
+
+/** A yellow sticky note in biro. */
+function stickyCanvas(lines: string[]): HTMLCanvasElement {
+  return canvas(128, 128, (g) => {
+    g.fillStyle = '#f7e86a';
+    g.fillRect(0, 0, 128, 128);
+    g.fillStyle = '#e8d84a';
+    g.fillRect(0, 0, 128, 14);
+    g.fillStyle = '#1a2a6a';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const size = Math.min(22, Math.floor(100 / lines.length) - 2);
+    g.font = `${size}px ${HAND_FONT}`;
+    lines.forEach((l, i) => g.fillText(l, 64, 22 + ((i + 0.5) * 100) / lines.length));
+  });
+}
+
+/** Text round a mug: white china, one line in black. */
+function mugCanvas(text: string): HTMLCanvasElement {
+  return canvas(256, 64, (g) => {
+    g.fillStyle = '#fbfbf8';
+    g.fillRect(0, 0, 256, 64);
+    g.fillStyle = '#1a1a1a';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = 'bold 15px Arial';
+    g.fillText(text, 64, 32);
+    g.fillText(text, 192, 32);
+  });
+}
+
+/** The pips on a die (the same three on every face, nobody's counting). */
+function diceCanvas(): HTMLCanvasElement {
+  return canvas(64, 64, (g) => {
+    g.fillStyle = '#f6f2ff';
+    g.fillRect(0, 0, 64, 64);
+    g.fillStyle = '#c01a6a';
+    for (const [x, y] of [[16, 16], [32, 32], [48, 48]]) {
+      g.beginPath();
+      g.arc(x, y, 6, 0, Math.PI * 2);
+      g.fill();
+    }
+  });
+}
+
 // ================================================================ the builder
 
 type Mat = THREE.Material;
@@ -469,6 +945,7 @@ export class Level19Builder {
     const cockpit = this.cockpit();
     const aftDoor = this.aftDoor();
     const locker = this.locker();
+    this.decor();
     this.lights();
 
     // Fold: every static mesh into one per material. Boxes and cylinders
@@ -1215,6 +1692,10 @@ export class Level19Builder {
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.015, 0.01), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2a1a, emissiveIntensity: 1.5 }));
     lamp.position.set(dw - 0.14, 1.34, 0.056);
     pivot.add(lamp);
+    // And a word for whoever knocks
+    const knockSign = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.2), new THREE.MeshStandardMaterial({ map: tex(fitSign(['PILOTS ONLY', 'KNOCK FOR COFFEE'], '#f2f2ee', '#14213d', 384, 220), 1, 1), roughness: 0.6 }));
+    knockSign.position.set(dw / 2, 1.62, 0.037);
+    pivot.add(knockSign);
     this.group.add(pivot);
     const collider = this.block(-dw / 2, 0, z - 0.06, dw / 2, 2.0, z + 0.06);
     // A sign over it
@@ -1379,6 +1860,260 @@ export class Level19Builder {
       chutes.push(p);
     }
     return { chutes, at: new THREE.Vector3(fx - 0.75, 0, lz), doors };
+  }
+
+  // -------------------------------------------------------------- decor
+
+  /**
+   * The finish, and the jokes. Nothing here moves a wall or a doorway or
+   * anything anyone takes cover behind: pictures and signs on the walls,
+   * small things on surfaces that were already there, a putting green laid
+   * flat on the lounge rug, skirting, the air vents. The few props that
+   * stand on the floor (a gold lavatory, a shredder) are tucked into corners
+   * nobody walks through.
+   */
+  private decor(): void {
+    const M = this.M;
+    const matOf = (c: HTMLCanvasElement, glow = 0): THREE.MeshStandardMaterial =>
+      glow > 0
+        ? new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveMap: tex(c, 1, 1), emissiveIntensity: glow })
+        : new THREE.MeshStandardMaterial({ map: tex(c, 1, 1), roughness: 0.6 });
+    /** A framed picture hung on a wall: (x, y, z) its centre on the wall's face, facing along ry (0 is +Z). */
+    const picture = (w: number, h: number, x: number, y: number, z: number, ry: number, c: HTMLCanvasElement, frame: Mat = M.gold, glow = 0): void => {
+      const nx = Math.sin(ry);
+      const nz = Math.cos(ry);
+      this.box(w + 0.07, h + 0.07, 0.022, x + nx * 0.012, y - (h + 0.07) / 2, z + nz * 0.012, frame, { trim: true, ry });
+      this.plane(w, h, x + nx * 0.025, y, z + nz * 0.025, matOf(c, glow), ry);
+    };
+    /** A sign straight on a wall, no frame. */
+    const sign = (w: number, h: number, x: number, y: number, z: number, ry: number, c: HTMLCanvasElement, glow = 0): THREE.Mesh =>
+      this.plane(w, h, x + Math.sin(ry) * 0.012, y, z + Math.cos(ry) * 0.012, matOf(c, glow), ry);
+    const FACE = T * 0.75; // half a bulkhead's thickness
+    const brass = new THREE.MeshStandardMaterial({ color: 0xb08a3a, metalness: 0.9, roughness: 0.35 });
+    const darkWood = new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.6 });
+
+    // ---- All down the cabin: walnut skirting, and the air vents and reading lights in the shoulders
+    for (const side of [-1, 1] as const) {
+      const runs: [number, number][] = side === -1 ? [[P_COCKPIT, DOOR.z0], [DOOR.z1, Z_AFT]] : [[P_COCKPIT, Z_AFT]];
+      for (const [a, b] of runs) this.box(0.03, 0.11, b - a, side * (HW - 0.015), 0, (a + b) / 2, M.walnut, { trim: true });
+      for (let z = Z_AFT - 2.0; z > P_COCKPIT + 0.5; z -= 1.6) {
+        const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.025, 12), M.steel);
+        vent.position.set(side * 1.9, CEIL - 0.01, z);
+        this.trim.add(vent);
+        const lamp = new THREE.Mesh(new THREE.CircleGeometry(0.025, 10), M.warmLed);
+        lamp.rotation.x = Math.PI / 2;
+        lamp.position.set(side * 1.9, CEIL - 0.024, z + 0.09);
+        this.trim.add(lamp);
+      }
+    }
+
+    // ---- The aft galley: the crew's notices by the jump seats, notes on the ovens, the cake
+    picture(0.62, 0.62 * 1.333, -1.6, 1.68, P_GALLEY + FACE, 0,
+      noticeCanvas('IN AN EMERGENCY', ['1. SAVE THE BOSS', '2. SAVE HIS CIGARS', '3. SAVE HIS GOLF CLUBS', '4. THERE IS NO STEP 4'], { bg: '#f2f2ee', accent: '#b01818' }), M.black);
+    picture(0.62, 0.62 * 1.333, 1.6, 1.68, P_GALLEY + FACE, 0,
+      noticeCanvas('STAFF NOTICE', ['SMILING IS MANDATORY', 'BREAKS ARE A MYTH', 'BREATHING IS A', 'PRIVILEGE, NOT A RIGHT', '— MANAGEMENT'], { bg: '#f2f2ee', accent: '#1c2741' }), M.black);
+    const back = Z_AFT - 0.4;
+    sign(0.15, 0.15, -0.45, 1.86, back - 0.13, Math.PI, stickyCanvas(['DO NOT', 'MICROWAVE', 'FISH', '— the Boss'])).rotation.z = 0.08;
+    sign(0.15, 0.15, 0.5, 1.84, back - 0.13, Math.PI, stickyCanvas(['WHO ATE', 'MY YOGHURT??', '— Karen'])).rotation.z = -0.1;
+    sign(0.15, 0.15, 1.32, 1.66, back - 0.13, Math.PI, stickyCanvas(['Pilots:', 'decaf ONLY.', 'Trust me.'])).rotation.z = 0.05;
+    // A cake on the counter, his name on it, and the card that came with it
+    const icing = new THREE.MeshStandardMaterial({ color: 0xfdf6ee, roughness: 0.7 });
+    const pink = new THREE.MeshStandardMaterial({ color: 0xe86aa0, roughness: 0.6 });
+    this.cyl(0.14, 0.14, 0.1, 0.45, 0.99, back - 0.24, icing, 20, { trim: true });
+    this.cyl(0.142, 0.142, 0.018, 0.45, 1.06, back - 0.24, pink, 20, { trim: true });
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      this.cyl(0.005, 0.005, 0.05, 0.45 + Math.cos(a) * 0.08, 1.09, back - 0.24 + Math.sin(a) * 0.08, M.linen, 6, { trim: true });
+    }
+    const card = this.plane(0.16, 0.11, 0.75, 1.05, back - 0.25, matOf(noticeCanvas('HAPPY B\'DAY BOSS', ['from: everyone', '(attendance', 'was mandatory)'], { w: 256, h: 176, hand: true, accent: '#c0306a' })), Math.PI);
+    card.rotation.x = -0.25;
+    // An extinguisher in the corner by the bulkhead
+    const red = new THREE.MeshStandardMaterial({ color: 0xb8141a, roughness: 0.4, metalness: 0.2 });
+    this.cyl(0.07, 0.07, 0.42, -HW + 0.1, 0.25, P_GALLEY + 0.3, red, 14, { trim: true });
+    this.cyl(0.02, 0.03, 0.08, -HW + 0.1, 0.67, P_GALLEY + 0.3, M.black, 8, { trim: true });
+
+    // ---- The suite's corridor: him, in gilt, all the way down, and floor lights along the walls
+    const corridor: [number, number, HTMLCanvasElement][] = [
+      [-1, 11.5, portraitCanvas('baby', 'AGE 2|ALREADY IN CHARGE')],
+      [-1, 14.5, portraitCanvas('golf', 'CLUB CHAMPION|(ONLY ENTRANT)')],
+      [-1, 17.6, portraitCanvas('nap', 'HARD AT WORK')],
+      [1, 11.5, noticeCanvas('THE RULES', ['1. THE BOSS IS', 'ALWAYS RIGHT', '2. SEE RULE 1', '3. SEE RULE 1'], { w: 256, h: 320 })],
+      [1, 14.5, portraitCanvas('board', 'MEETING WITH|THE BOARD')],
+      [1, 20.4, noticeCanvas('CERTIFICATE', ['WORLD\'S GREATEST', 'BOSS', '', 'awarded by:', 'THE BOSS'], { w: 256, h: 320, bg: '#fbf5e2' })]
+    ];
+    for (const [s, z, c] of corridor) picture(0.42, 0.525, s * (CX - T / 2), 1.42, z, -s * Math.PI / 2, c);
+    for (const s of [-1, 1]) this.box(0.02, 0.006, Z_AFT - P_SUITE - 7.2, s * (CX - T / 2 - 0.02), 0.012, (P_SUITE + P_GALLEY) / 2, M.warmLed, { trim: true });
+
+    // ---- The bedroom: a teddy on his pillows (loose: it floats in the dive, like everything else)
+    const fur = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 1 });
+    const teddy = new THREE.Group();
+    const ball = (r: number, x: number, y: number, z: number, m: Mat = fur): void => {
+      const b = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), m);
+      b.position.set(x, y, z);
+      teddy.add(b);
+    };
+    ball(0.075, 0, 0.07, 0);
+    ball(0.058, 0, 0.18, -0.01);
+    for (const s of [-1, 1]) {
+      ball(0.022, s * 0.045, 0.23, -0.01);
+      ball(0.028, s * 0.07, 0.1, -0.03);
+      ball(0.03, s * 0.045, 0.02, -0.06);
+    }
+    ball(0.024, 0, 0.17, -0.06, new THREE.MeshStandardMaterial({ color: 0xd8b088, roughness: 1 }));
+    ball(0.008, 0, 0.18, -0.083, M.black);
+    for (const s of [-1, 1]) ball(0.007, s * 0.022, 0.2, -0.057, M.black);
+    const bow = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.012), new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.6, roughness: 0.4 }));
+    bow.position.set(0, 0.125, -0.055);
+    teddy.add(bow);
+    teddy.position.set(-2.1, 0.62, 17.3);
+    teddy.rotation.y = Math.PI + 0.25;
+    this.group.add(teddy);
+    this.loose.push(teddy);
+    // ---- The bathroom: a gold lavatory, and a word about it
+    this.cyl(0.12, 0.15, 0.36, -2.4, 0, 8.62, M.gold, 16);
+    this.cyl(0.2, 0.15, 0.08, -2.4, 0.36, 8.62, M.gold, 18);
+    this.cyl(0.21, 0.21, 0.025, -2.4, 0.44, 8.62, M.linen, 18, { trim: true });
+    this.box(0.42, 0.4, 0.16, -2.4, 0.42, 8.19, M.gold, {});
+    this.box(0.06, 0.02, 0.03, -2.25, 0.84, 8.19, M.linen, { trim: true });
+    this.block(-2.62, 0, P_SUITE + FACE, -2.18, 0.82, 8.84);
+    picture(0.5, 0.3, -1.55, 1.45, P_SUITE + FACE, 0, noticeCanvas('PLEASE NOTE', ['THIS LAVATORY COST', 'MORE THAN YOUR HOUSE', 'FLUSH WITH RESPECT'], { w: 384, h: 230, bg: '#141414', fg: '#e8cf80', accent: '#c9a24a' }), M.gold);
+    // ---- The guest room, and what it's for
+    sign(0.56, 0.16, 1.9, 0.82, 21.45 - 0.06, Math.PI, fitSign(['GUEST ROOM', '(NO GUESTS)'], '#5a1420', '#f7e3b0', 384, 110));
+    // ---- The study: the shredder, busy
+    this.box(0.42, 0.56, 0.3, 2.45, 0, 14.95, M.black, { collide: true, surface: 'metal' });
+    this.box(0.36, 0.06, 0.22, 2.45, 0.56, 14.95, M.steel, { trim: true });
+    const r = rng(77);
+    for (let i = 0; i < 9; i++) this.box(0.012, 0.08 + r() * 0.06, 0.004, 2.32 + i * 0.03, 0.6, 14.92 + (r() - 0.5) * 0.08, M.linen, { trim: true, rz: (r() - 0.5) * 0.5 });
+    sign(0.13, 0.13, 2.45, 0.4, 14.95 - 0.151, Math.PI, stickyCanvas(['EVIDENCE', 'GOES', 'HERE →']));
+
+    // ---- The conference room: the plan on the whiteboard, his wanted man, a poster, everyone's place cards
+    const wbz = P_SUITE - FACE;
+    this.box(1.42, 0.92, 0.03, -1.75, 0.98, wbz - 0.015, M.steel, { trim: true });
+    sign(1.34, 0.84, -1.75, 1.44, wbz - 0.03, Math.PI, whiteboardCanvas());
+    this.box(0.5, 0.03, 0.06, -1.75, 0.95, wbz - 0.05, M.steel, { trim: true });
+    picture(0.44, 0.585, 1.6, 1.45, wbz, Math.PI, wantedCanvas(), darkWood);
+    picture(0.62, 0.775, -1.7, 1.42, P_CONF + FACE, 0, ambitionCanvas(), M.black);
+    for (let i = 0; i < 6; i++) {
+      const z = -1.4 + i * 1.12;
+      for (const s of [-1, 1]) {
+        const n = i * 2 + (s < 0 ? 1 : 2);
+        this.box(0.17, 0.065, 0.006, s * 0.22, 0.79, z, M.linen, { trim: true, ry: s * Math.PI / 2 });
+        this.plane(0.16, 0.06, s * 0.224, 0.8225, z, matOf(fitSign([`YES-MAN #${n}`], '#fdfbf4', '#1c2741', 256, 96)), s * Math.PI / 2);
+      }
+    }
+    // Over the doorways: what the rooms are
+    sign(0.95, 0.22, 0, 2.22, P_SUITE - FACE, Math.PI, fitSign(['PRIVATE SUITE', 'DO NOT DISTURB']));
+    sign(0.95, 0.22, 0, 2.22, P_CONF + FACE, 0, fitSign(['NO BAD NEWS', 'PAST THIS POINT'], '#5a1420', '#f7e3b0'));
+    sign(0.95, 0.22, 0, 2.22, P_CONF - FACE, Math.PI, fitSign(['THE BOARDROOM']));
+
+    // ---- The lounge
+    // His dartboard, Ravi's photo pinned to it, and the darts in Ravi
+    const dz = P_CONF - FACE;
+    this.cyl(0.24, 0.24, 0.04, -1.55, 1.42, dz - 0.02, new THREE.MeshStandardMaterial({ map: tex(dartboardCanvas(), 1, 1), roughness: 0.8 }), 32, { trim: true, rx: -Math.PI / 2 });
+    const photo = this.plane(0.15, 0.19, -1.5, 1.47, dz - 0.047, matOf(raviPhotoCanvas()), Math.PI);
+    photo.rotation.z = 0.12;
+    for (const [px, py, a] of [[-1.47, 1.5, 0.2], [-1.53, 1.44, -0.3], [-1.46, 1.41, 0.5]] as const) {
+      const dart = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.006, 0.11, 6), M.steel);
+      dart.rotation.set(Math.PI / 2 - 0.25, a, 0);
+      dart.position.set(px, py + 0.01, dz - 0.1);
+      this.trim.add(dart);
+      const flight = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.002), new THREE.MeshStandardMaterial({ color: 0xd02020, side: THREE.DoubleSide }));
+      flight.position.set(px + Math.sin(a) * 0.05, py + 0.025, dz - 0.15);
+      flight.rotation.y = a;
+      this.trim.add(flight);
+    }
+    sign(0.5, 0.34, 1.7, 1.7, dz, Math.PI, noticeCanvas('NO SMOKING', ['(except the Boss)'], { w: 300, h: 204, bg: '#f4f4f0', accent: '#c01818', hand: true }));
+    // A neon over the bar's back wall
+    const neon = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.8, 0.24),
+      new THREE.MeshBasicMaterial({ map: tex(neonCanvas(['Happy Hour 24/7'], '#ff3fa8'), 1, 1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    neon.position.set(2.425, 2.03, -9.6);
+    neon.rotation.y = -Math.PI / 2;
+    this.trim.add(neon);
+    // A tip jar on the bar, and whose tips they are
+    this.cyl(0.055, 0.05, 0.14, 1.35, 1.13, -7.55, M.glass, 14, { trim: true });
+    for (let i = 0; i < 4; i++) this.box(0.05, 0.004, 0.03, 1.35 + (i - 1.5) * 0.012, 1.14 + i * 0.012, -7.55, new THREE.MeshStandardMaterial({ color: 0x7ab87a }), { trim: true, ry: i });
+    this.plane(0.09, 0.05, 1.295, 1.2, -7.55, matOf(fitSign(['TIPS', '(for the Boss)'], '#fdfbf4', '#1c2741', 192, 108)), -Math.PI / 2);
+    // A mirror ball, because it's his plane
+    const discoMat = new THREE.MeshStandardMaterial({ color: 0xdfe4ea, metalness: 1, roughness: 0.15, flatShading: true });
+    const disco = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 10), discoMat);
+    disco.position.set(0, CEIL - 0.34, -13.4);
+    this.trim.add(disco);
+    this.cyl(0.004, 0.004, 0.2, 0, CEIL - 0.2, -13.4, M.steel, 6, { trim: true });
+    // The boss's putting green, flat on the rug between the sofas: a hole, a flag, balls, his putter against the wall
+    const green = new THREE.MeshStandardMaterial({ color: 0x2f7a32, roughness: 0.95 });
+    this.box(1.3, 0.008, 3.4, -1.85, 0.013, -13.2, green, { trim: true });
+    const cup = new THREE.Mesh(new THREE.CircleGeometry(0.055, 16), M.black);
+    cup.rotation.x = -Math.PI / 2;
+    cup.position.set(-2.2, 0.0225, -14.5);
+    this.trim.add(cup);
+    this.cyl(0.006, 0.006, 0.75, -2.2, 0.02, -14.5, M.linen, 6, { trim: true });
+    const flag = this.plane(0.2, 0.13, -2.1, 0.69, -14.5, matOf(fitSign(['18'], '#c01818', '#ffffff', 128, 84)), 0);
+    (flag.material as THREE.Material).side = THREE.DoubleSide;
+    for (const [bx, bz] of [[-1.45, -12.05], [-1.6, -12.3], [-1.32, -11.85]] as const) {
+      const golfBall = new THREE.Mesh(new THREE.SphereGeometry(0.021, 10, 8), M.linen);
+      golfBall.position.set(bx, 0.042, bz);
+      this.group.add(golfBall);
+      this.loose.push(golfBall);
+    }
+    this.cyl(0.007, 0.007, 0.86, -HW + 0.1, 0, -11.25, M.steel, 6, { trim: true, rz: -0.16 });
+    this.box(0.1, 0.03, 0.025, -HW + 0.06, 0.0, -11.25, M.black, { trim: true });
+    const stake = this.plane(0.26, 0.16, -1.24, 0.22, -14.95, matOf(fitSign(['PAR 1', 'HE NEVER MISSES'], '#1a4a1c', '#f2e6c8', 256, 160)), Math.PI / 2);
+    stake.rotation.x = -0.2;
+    this.cyl(0.005, 0.005, 0.18, -1.24, 0.013, -14.95, M.walnut, 6, { trim: true });
+    // His mug, on his table by the cigar
+    const mug = new THREE.Group();
+    const mugBody = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.038, 0.09, 16), new THREE.MeshStandardMaterial({ map: tex(mugCanvas('WORLD\'S BEST BOSS'), 1, 1), roughness: 0.3 }));
+    mugBody.position.y = 0.045;
+    mug.add(mugBody);
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.007, 6, 12), M.linen);
+    handle.position.set(0.045, 0.048, 0);
+    mug.add(handle);
+    mug.position.set(2.02, 0.46, -17.22);
+    mug.rotation.y = 2.2;
+    this.group.add(mug);
+    this.loose.push(mug);
+    // A brass plate on the bust's plinth, and the club he's founded
+    this.plane(0.36, 0.1, 2.3, 0.78, -21.35 + 0.255, matOf(fitSign(['THE BOSS, IN SOLID GOLD', '(he paid for it himself)'], '#3a2a10', '#f2d68a', 384, 108)), 0);
+    picture(0.6, 0.3, 1.2, 1.55, P_LOUNGE + FACE, 0, noticeCanvas('MILE HIGH CLUB', ['FOUNDING MEMBER:', 'THE BOSS', 'MEMBERS: 1'], { w: 384, h: 192, bg: '#1c1208', fg: '#f2d68a', accent: '#c9a24a' }), brass);
+
+    // ---- Forward: the crew's menu, and a word on the flight deck's door (that one's on the door itself, in cockpit())
+    picture(0.86, 0.4, -2.3, 1.86, -25.0, Math.PI / 2, noticeCanvas('IN-FLIGHT MENU', ['Caviar ......... the Boss', 'Lobster ........ the Boss', 'Champagne ..... the Boss', 'Tap water ........ staff'], { w: 512, h: 238, bg: '#14181e', fg: '#e8e2d0', accent: '#c9a24a' }), darkWood);
+
+    // ---- The cockpit: dice off the overhead, a nodding boss on the glareshield, the password, the manual
+    const diceMat = new THREE.MeshStandardMaterial({ map: tex(diceCanvas(), 1, 1), roughness: 0.9 });
+    for (const [dx, drop] of [[0.12, 0.22], [0.2, 0.27]] as const) {
+      this.cyl(0.002, 0.002, drop, dx, CEIL - 0.2 - drop, Z_NOSE + 0.85, M.black, 4, { trim: true });
+      const die = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.055), diceMat);
+      die.position.set(dx, CEIL - 0.2 - drop - 0.03, Z_NOSE + 0.85);
+      die.rotation.set(0.3, dx * 4, 0.2);
+      this.trim.add(die);
+    }
+    const nod = new THREE.Group();
+    const nbody = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.07, 10), new THREE.MeshStandardMaterial({ color: 0x20232b }));
+    nbody.position.y = 0.035;
+    nod.add(nbody);
+    const nhead = new THREE.Mesh(new THREE.SphereGeometry(0.038, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd9a57c }));
+    nhead.position.y = 0.105;
+    nhead.scale.set(1, 1.1, 1);
+    nod.add(nhead);
+    const beard = new THREE.Mesh(new THREE.SphereGeometry(0.036, 12, 8, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.45), new THREE.MeshStandardMaterial({ color: 0x4a2e1c }));
+    beard.position.y = 0.105;
+    beard.rotation.x = 0.35;
+    nod.add(beard);
+    const ncap = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.45), M.navy);
+    ncap.position.y = 0.112;
+    nod.add(ncap);
+    nod.position.set(-0.85, 1.22, Z_NOSE + 0.45);
+    nod.rotation.y = 0.3;
+    this.trim.add(nod);
+    const note = this.plane(0.075, 0.075, 0.62, 0.95, Z_NOSE + 0.905, matOf(stickyCanvas(['PASSWORD:', 'boss123'])), 0);
+    note.rotation.x = -0.25;
+    note.rotation.z = -0.08;
+    this.box(0.17, 0.03, 0.24, 0.0, 0.7, Z_NOSE + 1.95, new THREE.MeshStandardMaterial({ color: 0xf2c81a, roughness: 0.7 }), { trim: true, ry: 0.15 });
+    const book = this.plane(0.16, 0.23, 0.0, 0.732, Z_NOSE + 1.95, matOf(noticeCanvas('FLYING', ['FOR BEGINNERS', '', 'CH.1: WHICH END', 'IS THE FRONT?'], { w: 256, h: 368, bg: '#f2c81a', fg: '#1a1a1a', accent: '#1a1a1a' })), 0);
+    book.rotation.set(-Math.PI / 2, 0, 0.15);
   }
 
   // -------------------------------------------------------------- furniture

@@ -17,6 +17,24 @@ import { TakedownViewmodel } from '../entities/TakedownViewmodel';
 import { RaviRagdoll, type GunKind } from '../entities/RaviRagdoll';
 
 /**
+ * What a takedown's arms have to do for the scene to drive them: the knife
+ * (TakedownViewmodel), or a level's own (the plane's neck stab). The scene
+ * walks Ravi to `standOff`, aims him at `aimHeight` up the man (1.32 if it
+ * doesn't say), and hands the two of them to each other every frame.
+ */
+export interface TakedownArms {
+  readonly standOff: number;
+  readonly cinema: number;
+  readonly aimHeight?: number;
+  gap: number;
+  update(dt: number): void;
+  abort(): void;
+  applyJolt(camera: THREE.Camera): void;
+  holdPoints(a: THREE.Vector3, b: THREE.Vector3, knife: THREE.Vector3, knife2: THREE.Vector3): void;
+  aimAt(belly: THREE.Vector3, head: THREE.Vector3): void;
+}
+
+/**
  * cannon's sweep-and-prune with its early exit put back. Its own loop asks
  * whether a pair could collide at all (not both static, not both asleep)
  * before it asks whether they overlap along the sorted axis — so a pair that
@@ -457,6 +475,8 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
    */
   protected tdVm: TakedownViewmodel | null = null;
   protected tdVictim: Enemy | null = null;
+  /** The arms doing the one under way: tdVm, or whatever beginTakedownArms() picked instead. */
+  protected tdArms: TakedownArms | null = null;
 
   protected setupTakedown(): void {
     const { audio } = this.ctx;
@@ -500,9 +520,16 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
         }
       } else if (e === 'done') {
         this.tdVictim = null;
+        this.tdArms = null;
         this.player.cinematic = false;
       }
     };
+  }
+
+  /** Start the arms for a takedown on `victim`: the knife, unless the level has another way of doing it. */
+  protected beginTakedownArms(_victim: Enemy): TakedownArms {
+    this.tdVm!.start();
+    return this.tdVm!;
   }
 
   /** Nearest living one of `candidates` close enough, and ahead of Ravi, to grab. */
@@ -543,23 +570,25 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
       this.player.aiming = false;
       this.onTakedownStart(target);
       target.beginExecution(this.world);
-      vm.start();
+      this.tdArms = this.beginTakedownArms(target);
     }
+    const arms: TakedownArms = this.tdArms ?? vm;
     const victim = this.tdVictim;
     if (victim) {
       if (!this.player.alive) {
-        vm.abort();
+        arms.abort();
         this.tdVictim = null;
+        this.tdArms = null;
         this.player.cinematic = false;
       } else {
         // He wrenches round to face Ravi; Ravi is pulled into grappling range
         // and the view drags onto him
         victim.faceToward(this.player.position, dt, 12);
         const away = this.player.position.clone().sub(victim.position).setY(0).normalize();
-        const anchor = victim.position.clone().addScaledVector(away, vm.standOff);
+        const anchor = victim.position.clone().addScaledVector(away, arms.standOff);
         anchor.y = this.player.position.y;
         this.player.position.lerp(anchor, Math.min(1, dt * 6));
-        const dir = victim.position.clone().add(new THREE.Vector3(0, 1.32, 0)).sub(this.player.eyePosition());
+        const dir = victim.position.clone().add(new THREE.Vector3(0, arms.aimHeight ?? 1.32, 0)).sub(this.player.eyePosition());
         let dYaw = Math.atan2(-dir.x, -dir.z) - this.player.yaw;
         while (dYaw > Math.PI) dYaw -= Math.PI * 2;
         while (dYaw < -Math.PI) dYaw += Math.PI * 2;
@@ -568,7 +597,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
         this.player.pitch += (Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) - this.player.pitch) * k;
       }
     }
-    vm.update(dt);
+    arms.update(dt);
     return target;
   }
 
@@ -582,12 +611,14 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
 
   /** After player.update(): the two of them in touch for the frame. */
   protected holdTakedown(): void {
-    if (this.tdVm && this.tdVictim) this.holdOn(this.tdVm, this.tdVictim);
+    const arms = this.tdArms ?? this.tdVm;
+    if (arms && this.tdVictim) this.holdOn(arms, this.tdVictim);
   }
 
   /** How far into the takedown's longer lens and letterbox (0..1). */
   protected get takedownCinema(): number {
-    return this.tdVm ? this.tdVm.cinema : 0;
+    const arms = this.tdArms ?? this.tdVm;
+    return arms ? arms.cinema : 0;
   }
 
   /**
@@ -617,7 +648,7 @@ export abstract class CombatScene<L extends CombatLevel> implements GameScene {
    * after player.update(): the arms ride the camera, and the camera only
    * settles for the frame there.
    */
-  protected holdOn(vm: TakedownViewmodel, victim: Enemy): void {
+  protected holdOn(vm: TakedownArms, victim: Enemy): void {
     const { _holdA: a, _holdB: b, _holdK: k, _holdK2: k2 } = CombatScene;
     vm.applyJolt(this.player.camera);
     vm.gap =Math.hypot(this.player.position.x - victim.position.x, this.player.position.z - victim.position.z);

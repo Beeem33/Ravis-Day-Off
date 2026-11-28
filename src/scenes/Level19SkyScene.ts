@@ -12,6 +12,7 @@ import { Enemy } from '../entities/Enemy';
 import { RaviVisual, RaviRig, FirstPersonArms, grip, elbowToward, type Grip, type HandShape } from '../entities/RaviVisual';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { EmoteViewmodel } from '../entities/EmoteViewmodel';
+import { JetCrashPath, CrashFx } from '../environment/Level19Crash';
 import { Arsenal } from '../entities/Arsenal';
 import { pistolProp } from '../entities/RaviRagdoll';
 import { armWithAK } from '../entities/AkModel';
@@ -223,6 +224,14 @@ export class Level19SkyScene implements GameScene {
   private decks: CloudDeck[] = [];
   private birds!: Birds;
   private jet!: Aircraft;
+  /** The jet's way down into an island, and the fire and smoke it leaves there. */
+  private crashPath!: JetCrashPath;
+  private crashFx!: CrashFx;
+  private crashed = false;
+  private lastJetT = 0;
+  /** Scene time the boom of it reaches him (−1: none coming), and Ravi's word on it. */
+  private boomAt = -1;
+  private crashLineAt = -1;
   private jetSound: Crossing['sound'] | null = null;
   private crossings: Crossing[] = [];
   private particles!: ParticleManager;
@@ -477,6 +486,11 @@ export class Level19SkyScene implements GameScene {
     leaf.position.set(D.x - 0.42, D.y + 0.25, D.z - 1.0);
     leaf.rotation.y = 0.5;
     this.jet.group.add(leaf);
+    // Where it's going: round onto an island a few kilometres off, and into its hill (never the one he lands on)
+    const door = D.clone().applyEuler(new THREE.Euler(-0.2, 0, 0, 'YXZ'));
+    this.crashPath = new JetCrashPath(V(-door.x, Y_DOOR - door.y, -door.z), ISLANDS.slice(1));
+    this.crashFx = new CrashFx();
+    this.scene.add(this.crashFx.group);
   }
 
   /** The aft left door, in the jet's frame. */
@@ -485,15 +499,42 @@ export class Level19SkyScene implements GameScene {
   /** Where the jet is `tt` seconds after he left it: going away nose-down, faster and steeper. */
   private poseJet(tt: number): void {
     const g = this.jet.group;
-    const pitch = -0.2 - Math.min(0.4, tt * 0.03);
-    const roll = Math.sin(tt * 0.3) * 0.08 + tt * 0.01;
-    g.rotation.set(pitch, 0, roll, 'YXZ');
-    // Along −Z and down, with the speed building as the nose drops
-    const s = 88 * tt + 1.2 * tt * tt;
-    const sink = 3.2 * tt * tt;
-    const door = Level19SkyScene.DOOR.clone().applyEuler(new THREE.Euler(-0.2, 0, 0, 'YXZ'));
-    g.position.set(-door.x, Y_DOOR - door.y - sink, -door.z - s);
-    g.visible = g.position.y > 30;
+    const dt = Math.max(0, tt - this.lastJetT);
+    this.lastJetT = tt;
+    const P = this.crashPath;
+    if (tt >= P.Ti) {
+      g.visible = false;
+      if (!this.crashed) this.jetDown(tt);
+      return;
+    }
+    // Away nose-down, faster and steeper, swinging round onto the island it'll go into
+    P.pose(tt, g.position, g.rotation);
+    g.visible = true;
+    // Smoking, once it's well away from him: a black line drawn down the sky to where it goes in
+    const k = smooth((tt - 9) / 6);
+    if (k > 0 && dt > 0) {
+      g.updateMatrixWorld(true);
+      this.crashFx.trail(dt, g.localToWorld(Level19SkyScene._c.set(0, 2, 22)), k);
+    }
+  }
+
+  /** It goes in. Seen from a few kilometres: the fireball, then the column; the boom comes after, at the speed of sound. */
+  private jetDown(tt: number): void {
+    this.crashed = true;
+    this.jetSound?.stop();
+    this.jetSound = null;
+    const at = this.crashPath.impact;
+    const late = tt - this.crashPath.Ti;
+    const h = this.ctx.engine.renderer.domElement.height;
+    if (late > 1.5) {
+      // (a checkpoint retry: it went in a while ago, and it's been burning since)
+      this.crashFx.burnFor(at, late, this.camera, h);
+      return;
+    }
+    this.crashFx.ignite(at);
+    const dist = at.distanceTo(this.pos);
+    this.boomAt = this.time + Math.min(9, dist / 343);
+    this.crashLineAt = this.time + 2.2;
   }
 
   private buildBoss(): void {
@@ -2303,6 +2344,18 @@ export class Level19SkyScene implements GameScene {
     // The mouse, once a frame: the fall turns his head with it
     const md = input.consumeMouseDelta();
     this.mouse.set(md.dx, md.dy);
+    // The jet's fire and smoke, out there on its island, for as long as he's up to see it
+    this.crashFx.update(dt, this.camera, this.ctx.engine.renderer.domElement.height);
+    if (this.boomAt > 0 && this.time >= this.boomAt) {
+      this.boomAt = -1;
+      // Far off: a deep thump and a long roll of it
+      this.ctx.audio.explosion(700);
+      window.setTimeout(() => this.ctx.audio.explosion(900), 180);
+    }
+    if (this.crashLineAt > 0 && this.time >= this.crashLineAt) {
+      this.crashLineAt = -1;
+      if (this.phase === 'fall') this.say('RAVI', 'Was that— that was the plane. That was the WHOLE plane.', RAVI, 3);
+    }
     switch (this.phase) {
       case 'exit':
         this.updateExit(dt);

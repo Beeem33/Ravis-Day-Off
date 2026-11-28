@@ -90,7 +90,7 @@ const SLOWMO_SCALE = 0.3;
  * 102.8 BPM; 16.536 s is the crash the beat comes in on, 65.571 s is
  * exactly 21 bars on, the last beat before it drops out.
  */
-/** The drive's song: in 23 s, and round from there to the end (public/audio; kept out of the repo — a licensed track). */
+/** The drive's song: in 23 s, and round from there to the end (public/audio). */
 const STREET_SONG = { url: 'audio/street-camaro.mp3', loopStart: 23, loopEnd: 0, startAt: 23 };
 /** Out of the window: how far round to his left he can turn to aim (back along the car), past the usual look. */
 const LEAN_LOOK_BACK = 0.75;

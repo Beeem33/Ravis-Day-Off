@@ -6,6 +6,3 @@ dist/
 sim/out/
 .shots/
 
-# Licensed song kept local only (public repo)
-public/audio/freefall.mp3
-public/audio/street-camaro.mp3

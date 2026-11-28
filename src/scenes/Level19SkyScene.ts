@@ -70,7 +70,7 @@ const EXIT = 5;
 export const FALL_SECONDS = 63;
 /** Retry from here (fall seconds) once he's got this far. */
 const CHECKPOINT_T = 31;
-/** The freefall song (public/audio; kept out of the repo — it's a licensed track). */
+/** The freefall song (public/audio). */
 const FREEFALL_SONG = 'audio/freefall.mp3';
 /** Black between the sea and the beach (on from the black of the hit itself). */
 const BLACK_SECONDS = 3;

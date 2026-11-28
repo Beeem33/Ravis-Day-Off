@@ -145,38 +145,164 @@ export function raviUnderCanopy(rig: RaviRig, t: number, swing: number): void {
   rig.apply();
 }
 
-/**
- * Somebody else in the box position (an Enemy: body frame faces −Z, his
- * right on +X): hands out level with his head, elbows out, legs apart. The
- * legs are the rig's own, straight — at twenty metres nobody can tell.
- */
-export function enemyFreefall(e: Enemy, t: number, steer = 0): void {
-  const fl = Math.sin(t * 9) * 0.015;
-  e.setWalk(0);
-  e.pose = {
-    handR: V(0.52, 1.7 + fl - steer * 0.08, 0.08),
-    handL: V(-0.52, 1.7 - fl + steer * 0.08, 0.08),
-    elbow: V(1, -0.15, 0.45),
-    head: new THREE.Euler(-0.55, 0, 0),
-    stance: 0.7,
-    curl: 0.1
-  };
+// ================================================================ somebody else in the air
+
+/** The joints of an Enemy's own rig (it keeps them private; the pose below sets them after its own animation). */
+interface EnemyJoints {
+  armL: THREE.Object3D;
+  armR: THREE.Object3D;
+  foreL: THREE.Object3D;
+  foreR: THREE.Object3D;
+  legL: THREE.Object3D;
+  legR: THREE.Object3D;
+  shinL: THREE.Object3D;
+  shinR: THREE.Object3D;
+  torso: THREE.Object3D;
+  head: THREE.Object3D;
 }
 
-/** Holding a pistol out at someone, the other arm out for balance. */
-export function enemyFreefallAim(e: Enemy, t: number, aimBody: THREE.Vector3): void {
-  const fl = Math.sin(t * 9) * 0.015;
-  e.setWalk(0);
-  const a = aimBody.clone().normalize();
-  const sh = V(0.2, 1.42, 0);
-  e.pose = {
-    handR: sh.clone().addScaledVector(a, 0.52),
-    handL: V(-0.52, 1.7 - fl, 0.08),
-    elbow: V(1, -0.2, 0.4),
-    head: new THREE.Euler(-0.5, 0, 0),
-    stance: 0.7,
-    curl: 1
-  };
+const _bx = new THREE.Vector3();
+const _by = new THREE.Vector3();
+const _bz = new THREE.Vector3();
+const _bm = new THREE.Matrix4();
+const _bp = new THREE.Vector3();
+
+/**
+ * An upper limb's turn in the body's frame: the bone (which hangs down its
+ * −Y at rest) laid along `dir`, turned about itself so the joint below it
+ * folds toward `fold` — an arm's forearm folds toward the bone's −Z, a
+ * leg's shin toward its +Z (`shinSide`).
+ */
+function limbQ(dir: THREE.Vector3, fold: THREE.Vector3, shinSide: boolean, out: THREE.Quaternion): THREE.Quaternion {
+  _by.copy(dir).normalize().negate();
+  _bp.copy(fold).addScaledVector(_by, -fold.dot(_by));
+  if (_bp.lengthSq() < 1e-6) _bp.set(0, 0, 1).addScaledVector(_by, -_by.z);
+  _bp.normalize();
+  _bz.copy(_bp);
+  if (!shinSide) _bz.negate();
+  _bx.crossVectors(_by, _bz).normalize();
+  _bz.crossVectors(_bx, _by);
+  return out.setFromRotationMatrix(_bm.makeBasis(_bx, _by, _bz));
+}
+
+/** Three sines at odd rates: a flutter that never quite repeats. */
+function flutter(t: number, seed: number, amp: number): number {
+  return (Math.sin(t * 7.3 + seed) * 0.5 + Math.sin(t * 13.1 + seed * 2.7) * 0.3 + Math.sin(t * 2.1 + seed * 0.7) * 0.6) * amp;
+}
+
+/**
+ * How somebody else is lying on the air, joint by joint: the Enemy rig
+ * animates as it always does, and then this lays every limb over the top
+ * of it before the model is posed from the rig (it hooks the Enemy's own
+ * animate step, so the hitman model, the pistol in the hand and the face
+ * all follow as they do anywhere else).
+ *
+ *  - arch: belly to earth, back arched, arms in the W — upper arms out and
+ *    forward, elbows bent so the forearms point up past the head — knees
+ *    bent and the shins up into the wind, everything fluttering.
+ *  - aim (0..1, blended): the right arm comes round and out straight at
+ *    `aim` (body frame), the left stays in the W for balance.
+ *  - limp (0..1): shot. Nothing held: the arms and legs trail up into the
+ *    wind whichever way he's turning over, flopping, the head lolling.
+ *  - hang: under a canopy, hands up on the toggles, legs dangling.
+ *
+ * Body frame: an Enemy faces −Z, so face down on the wind −Z is the ground
+ * and +Z the sky; +Y runs up through his head, +X is his right.
+ */
+export class DiverPose {
+  aim = new THREE.Vector3(0, 0, -1);
+  aimK = 0;
+  limp = 0;
+  hang = 0;
+  /** -1..1: a turn, banking the limbs into it. */
+  steer = 0;
+  private t = Math.random() * 20;
+  private seed = Math.random() * 10;
+  private j: EnemyJoints;
+  private qa = new THREE.Quaternion();
+  private qb = new THREE.Quaternion();
+  private up = new THREE.Vector3();
+
+  constructor(private e: Enemy) {
+    this.j = e as unknown as EnemyJoints;
+    e.pose = null;
+    e.setWalk(0);
+    e.setAiming(false);
+    const host = e as unknown as { animate(dt: number): void };
+    const own = host.animate.bind(e);
+    host.animate = (dt: number): void => {
+      own(dt);
+      this.t += dt;
+      this.apply();
+    };
+  }
+
+  private arm(side: 1 | -1, out: THREE.Quaternion): number {
+    const t = this.t;
+    const s = this.seed + (side > 0 ? 0 : 3.1);
+    const st = this.steer * side;
+    // The W: out to the side and a little forward of the shoulders, up off the line of the back
+    const dir = V(side * 0.8, 0.42 + st * 0.12 + flutter(t, s, 0.04), 0.3 + flutter(t, s + 1, 0.05));
+    limbQ(dir, V(0, 1, 0.15), false, out);
+    return 1.45 + flutter(t, s + 2, 0.08);
+  }
+
+  private apply(): void {
+    const j = this.j;
+    const t = this.t;
+    // World up in his own frame: where a limp limb trails to
+    this.e.root.updateMatrixWorld();
+    this.up.set(0, 1, 0).applyQuaternion(this.qb.copy(this.e.root.quaternion).invert());
+    for (const side of [1, -1] as const) {
+      const armJ = side > 0 ? j.armR : j.armL;
+      const foreJ = side > 0 ? j.foreR : j.foreL;
+      const legJ = side > 0 ? j.legR : j.legL;
+      const shinJ = side > 0 ? j.shinR : j.shinL;
+      const s = this.seed + (side > 0 ? 0 : 3.1);
+      let bend = this.arm(side, this.qa);
+      if (this.hang > 0) {
+        // Up on the toggles
+        limbQ(V(side * 0.28, 1, 0.08), V(0, 0, -1), false, this.qb);
+        this.qa.slerp(this.qb, this.hang);
+        bend = THREE.MathUtils.lerp(bend, 0.35, this.hang);
+      }
+      if (side > 0 && this.aimK > 0) {
+        limbQ(this.aim, V(0, 1, -0.4), false, this.qb);
+        this.qa.slerp(this.qb, this.aimK);
+        bend = THREE.MathUtils.lerp(bend, 0.12, this.aimK);
+      }
+      if (this.limp > 0) {
+        const d = this.up.clone().multiplyScalar(0.9).add(V(side * 0.55, 0.25, 0)).add(V(flutter(t * 1.6, s, 0.5), flutter(t * 1.4, s + 5, 0.5), flutter(t * 1.5, s + 9, 0.5)));
+        limbQ(d, V(flutter(t, s + 4, 1), 1, flutter(t, s + 6, 1)), false, this.qb);
+        this.qa.slerp(this.qb, this.limp);
+        bend = THREE.MathUtils.lerp(bend, 0.5 + Math.abs(flutter(t * 1.3, s + 7, 0.6)), this.limp);
+      }
+      armJ.quaternion.copy(this.qa);
+      foreJ.rotation.set(bend, 0, 0);
+      // Legs: in line with the body and apart, up off it with the arch, knees bent so the shins stand up into the wind
+      const st = this.steer * side;
+      limbQ(V(side * 0.3, -0.93, 0.2 + st * 0.08 + flutter(t, s + 8, 0.03)), V(0, 0, 1), true, this.qa);
+      let knee = 1.45 - st * 0.3 + flutter(t, s + 10, 0.1);
+      if (this.hang > 0) {
+        limbQ(V(side * 0.1, -1, -0.12 + flutter(t * 0.6, s, 0.05)), V(0, 0, 1), true, this.qb);
+        this.qa.slerp(this.qb, this.hang);
+        knee = THREE.MathUtils.lerp(knee, 0.25 + flutter(t * 0.5, s, 0.1), this.hang);
+      }
+      if (this.limp > 0) {
+        const d = this.up.clone().multiplyScalar(0.5).add(V(side * 0.25, -1, 0)).add(V(flutter(t * 1.2, s + 11, 0.35), 0, flutter(t * 1.1, s + 12, 0.35)));
+        limbQ(d, V(0, 0, 1), true, this.qb);
+        this.qa.slerp(this.qb, this.limp);
+        knee = THREE.MathUtils.lerp(knee, 0.4 + Math.abs(flutter(t * 1.2, s + 13, 0.6)), this.limp);
+      }
+      legJ.quaternion.copy(this.qa);
+      shinJ.rotation.set(-knee, 0, 0);
+    }
+    // The chest arched back, the head up looking where he's going; slack when shot
+    const arch = (1 - this.hang) * (1 - this.limp);
+    // (+x tips the chest and the face up off the ground, toward where he's going)
+    j.torso.rotation.x = 0.16 * arch + flutter(t, this.seed + 14, 0.02);
+    j.head.rotation.set(0.8 * arch + flutter(t * 1.4, this.seed + 15, 0.4) * this.limp - 0.1 * this.hang, flutter(t * 0.9, this.seed + 16, 0.5) * this.limp, 0);
+  }
 }
 
 /** Face down on the sand, dragging himself along by his fingers: `k` 0..1 through one pull. */

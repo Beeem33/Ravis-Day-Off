@@ -1488,7 +1488,12 @@ export class StreetScene implements GameScene {
     // the window, the brakes now and then), and the moment Ravi gets by him, into his bumper or his side.
     // He's got the legs for it: well behind (off the shoulder from a standstill, or held back by
     // traffic) he's flat out and then some
-    if (this.copChasing) {
+    // Off the highway at the exit: the cop doesn't follow — on he goes down the highway, and that's the last of him
+    if (this.copChasing && this.cop.mode === 'chase' && p.at.road !== 'highway' && p.at.road !== 'city' && p.at.road !== 'onramp' && this.cop.car.at.road === 'highway') {
+      this.cop.mode = 'cruise';
+      this.cop.cutIn(0);
+    }
+    if (this.copChasing && this.cop.mode === 'chase') {
       const behind = this.net.routeS(p.at) - this.net.routeS(this.cop.car.at);
       const t = this.cop.car.tune;
       // (well beyond anything the Civic can do: Ravi can't simply outrun him)
@@ -1505,7 +1510,7 @@ export class StreetScene implements GameScene {
         this.copMan.pose(pose);
       }
     }
-    if (this.copChasing) {
+    if (this.copChasing && this.cop.mode === 'chase') {
       this.copSurging = 0;
       // Hardly a moment between one thing and the next: mostly out in front of him holding him up,
       // otherwise up his tail into his bumper, or alongside and into his side
@@ -1591,7 +1596,7 @@ export class StreetScene implements GameScene {
       return;
     }
     // ---- Pulled over
-    if (this.copChasing && Math.abs(p.speed) < 2.5 && p.position.distanceTo(this.cop.car.position) < 9) this.bustT += dt;
+    if (this.copChasing && this.cop.mode === 'chase' && Math.abs(p.speed) < 2.5 && p.position.distanceTo(this.cop.car.position) < 9) this.bustT += dt;
     else this.bustT = Math.max(0, this.bustT - dt * 2);
     if (this.bustT > 2.5) {
       this.fail('BUSTED');
@@ -2040,9 +2045,11 @@ export class StreetScene implements GameScene {
     this.civicV = Math.max(16, ravi.speed);
     const face = StreetScene.tmpA.copy(stop).sub(A(384, 60));
     this.civicEndYaw = Math.atan2(-face.x, -face.z);
-    // The cop rides the Civic's line, a way behind it
-    this.copPathS = -Math.min(45, Math.max(18, ravi.position.distanceTo(this.cop.car.position)));
-    this.copV = this.civicV;
+    // The cop isn't in this: he carried on down the highway when Ravi came off it
+    this.police.group.visible = false;
+    this.copChasing = false;
+    this.siren?.stop();
+    this.siren = null;
     this.jetSound = this.ctx.audio.jetEngine();
   }
 
@@ -2094,7 +2101,7 @@ export class StreetScene implements GameScene {
       this.copPathS = this.civicPathS - 30;
     }
 
-    // ---- The Civic and the cop, behind him
+    // ---- The Civic (the cop's long gone: on down the highway)
     const civicLeft = this.civicPathLen - this.civicPathS;
     if (this.civicStoppedAt < 0) {
       const vStop = Math.sqrt(2 * 8 * Math.max(0, civicLeft));
@@ -2106,17 +2113,6 @@ export class StreetScene implements GameScene {
       }
     }
     this.carOnPath(this.civicRig, this.civicPath, this.civicPathS, this.civicStoppedAt < 0 ? this.civicV : 0, dt, civicLeft < 22 && this.civicStoppedAt < 0, 0, this.civicEndYaw, 14);
-    const copEnd = this.civicPathLen - 12;
-    const copLeft = copEnd - this.copPathS;
-    this.copV = Math.min(Math.max(this.copV, 18), Math.sqrt(2 * 8 * Math.max(0, copLeft)));
-    if (copLeft > 0.1) this.copPathS += this.copV * dt;
-    if (this.copPathS >= 0) {
-      this.carOnPath(this.police, this.civicPath, Math.min(this.copPathS, copEnd), copLeft > 0.1 ? this.copV : 0, dt, copLeft < 20 && copLeft > 0.1, 2.6);
-    } else {
-      const back = Math.min(this.copPathS, 0);
-      const dir = StreetScene.tmpB.copy(this.civicPath[1] ?? this.civicPath[0]).sub(this.civicPath[0]).normalize();
-      this.police.group.position.copy(this.civicPath[0]).addScaledVector(dir, back);
-    }
 
     // ---- Out of the car and up the stair
     if (this.bossStoppedAt >= 0 && this.bossOnFoot < 0 && t - this.bossStoppedAt > 0.45) this.leaveCar();

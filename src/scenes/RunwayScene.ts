@@ -54,21 +54,21 @@ const JET_AT: [number, number] = [430.5, 30];
 const JET_ROLLED = 60;
 const JET_V0 = 30;
 /**
- * The van's run, all of it in front of Ravi's windscreen: in off the apron
- * from his left, through the boss's two men, through the gate's boom, and
- * straight at him through the security team — then hard on the brakes and
- * round to its left, skidding to a stop broadside across his front right
- * with its side door facing him.
+ * The van's run: up the approach road from behind him, flat out, past the
+ * Civic down its left side (his side: right past his window), then hard
+ * round to the right across his nose — straight through everyone stood in
+ * front of the car shooting at it — and on the brakes, sliding to a stop
+ * just beyond them, broadside, its side door to him. Control points: the
+ * van runs a smooth curve through them (smoothApt).
  */
 const VAN_RUN: [number, number][] = [
-  [466, 4], [446, 20], [432, 31], [421.5, 40.2], [414.6, 47.3], [406, 55.5], [400, 59.3], [396.2, 59.7],
-  [393.6, 60.0], [391.7, 61.3], [390.7, 63.4], [390.4, 66.0], [390.35, 68.6]
+  [292, 56.8], [330, 56.2], [362, 55.9], [378, 55.8], [386, 55.9], [389.6, 56.6], [392.0, 58.2],
+  [393.2, 60.6], [393.5, 63.4], [393.5, 66.2], [393.5, 68.8]
 ];
+/** Where along the run, past the Civic, the gunmen end up stood (metres on from level with his car), and how far off its line. */
+const GUNMEN_ON_RUN: [number, number][] = [[3.0, -0.5], [4.6, 0.55], [6.3, -0.3], [7.9, 0.6], [9.6, -0.45], [11.2, 0.4]];
 /** Where the boom is across its path. */
 const GATE_AT: [number, number] = [398, 59.5];
-/** Where the security team and the two men walk up to as they close in on the car, all of them in the van's way. */
-const OFFICER_TO: [number, number][] = [[396.0, 59.0], [394.0, 60.9], [392.5, 59.2], [391.3, 62.2]];
-const GUARD_TO: [number, number][] = [[414.5, 47.6], [421.0, 40.5]];
 /**
  * Out of the van and round him, van frame (its door on +X): Ravi stood back
  * from the door facing it, and his coworkers in an arc between him and it,
@@ -76,8 +76,8 @@ const GUARD_TO: [number, number][] = [[414.5, 47.6], [421.0, 40.5]];
  */
 const RAVI_OFF: [number, number] = [2.95, 0];
 const CREW_OFF: [number, number][] = [[1.5, 0], [1.82, -1.13], [1.82, 1.13], [2.65, -1.67], [2.65, 1.67], [0.62, -1.15], [0.62, 1.15]];
-/** The way out: on round to its left and back down the approach road, the way they all came in. */
-const VAN_AWAY: [number, number][] = [[390.35, 68.6], [390.1, 71.4], [388.3, 73.5], [384.5, 74.3], [376, 73.2], [360, 70], [330, 68], [280, 67]];
+/** The way out: on a little, round to its left in one long easy sweep, and back down the approach road the way they all came in. */
+const VAN_AWAY: [number, number][] = [[393.5, 68.8], [393.5, 72], [392.6, 75.6], [390.2, 78.4], [386.6, 80.0], [381.5, 80.4], [372, 79.0], [358, 74.5], [340, 70.0], [310, 68.0], [270, 67.0]];
 /** Tyre marks the van can lay as it slides. */
 const SKID_MARKS = 220;
 /** The montage: down the highway, in its middle lane, as the sun goes down. */
@@ -378,6 +378,12 @@ export class RunwayScene implements GameScene {
     return pts.map(([a, b]) => this.apt(a, b));
   }
 
+  /** A smooth curve through airfield points, as a dense path (no corners for a car to snap round). */
+  private smoothApt(pts: [number, number][], step = 0.5): THREE.Vector3[] {
+    const curve = new THREE.CatmullRomCurve3(this.aptPath(pts), false, 'centripetal');
+    return curve.getSpacedPoints(Math.max(8, Math.ceil(curve.getLength() / step)));
+  }
+
   /** A point in the jet's frame at the start of its run (nose −Z, its left −X), on the ground. */
   private jetLocal(x: number, z: number, out = new THREE.Vector3()): THREE.Vector3 {
     const c = Math.cos(this.jetYaw);
@@ -417,7 +423,6 @@ export class RunwayScene implements GameScene {
       this.scene.add(e.root);
       this.guards.push(e);
       this.startAt.set(e, e.position.clone());
-      this.closeAt.set(e, this.apt(...GUARD_TO[i]));
       this.fireCd.set(e, 0.2 + i * 0.4);
     }
     // The security team, across the gate
@@ -429,7 +434,6 @@ export class RunwayScene implements GameScene {
       this.scene.add(e.root);
       this.officers.push(e);
       this.startAt.set(e, e.position.clone());
-      this.closeAt.set(e, this.apt(...OFFICER_TO[i]));
       this.fireCd.set(e, 0.6 + Math.random());
     }
     // The Civic, stopped short of the gate, its nose to it
@@ -437,10 +441,23 @@ export class RunwayScene implements GameScene {
     this.civicRig.group.position.copy(civicAt);
     this.civicRig.group.rotation.y = faceFrom(civicAt, this.apt(CIVIC_AT[0] + 20, CIVIC_AT[1]));
 
-    // The van's run, and where on it things happen
-    const run = this.aptPath(VAN_RUN);
-    for (const e of [...this.officers, ...this.guards]) this.hitS.set(e, this.sOnPath(run, this.closeAt.get(e)!));
-    this.gateS = this.sOnPath(run, this.apt(...GATE_AT));
+    // The van's run, and where on it things happen: everyone shooting at him ends up stood in front of
+    // the car right across the line it'll come round on (they close in on him, it comes round through them)
+    const run = this.smoothApt(VAN_RUN);
+    const level = this.sOnPath(run, civicAt);
+    const gunmen = [...this.officers, ...this.guards];
+    gunmen.forEach((e, i) => {
+      const [ahead, off] = GUNMEN_ON_RUN[i % GUNMEN_ON_RUN.length];
+      const at = new THREE.Vector3();
+      const dir = new THREE.Vector3();
+      alongPath(run, level + ahead, at, dir);
+      at.add(new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(off)).setY(0);
+      this.closeAt.set(e, at);
+      this.hitS.set(e, level + ahead);
+    });
+    // (where it turns in across his front: the brakes and the slide from here)
+    this.gateS = level;
+    this.vanBox = this.makeVanBox();
     this.vanPath = run;
     this.vanLen = pathLength(run);
     this.vanS = 0;
@@ -798,7 +815,8 @@ export class RunwayScene implements GameScene {
       e.speaking = (e === this.sanjay && talking === 'SANJAY') || (e === this.dev && talking === 'DEV');
       e.update(dts);
     }
-    this.world.step(1 / 60, dts, 3);
+    // (fine steps: the van's going through them fast, and they have to land on it, not fall through it)
+    this.world.step(1 / 240, dts, 12);
     this.dialogue.update(dt);
     this.updateCamera(dt);
     if (this.badgeRoot.visible) this.badgeArms.update();
@@ -834,7 +852,7 @@ export class RunwayScene implements GameScene {
     // The van, on its way in off the apron: flat out at the boom, on the brakes through the security team, round, stopped
     if (t > 6.4 && !this.vanMoving) {
       const g = this.gateS;
-      this.startVan(this.vanPath, 26, (s, left) => (s < g - 12 ? 26 : s < g ? THREE.MathUtils.lerp(26, 15, (s - g + 12) / 12) : Math.min(15, Math.sqrt(2 * 9 * Math.max(0, left)))), 6, 13);
+      this.startVan(this.vanPath, 30, (s, left) => (s < g - 16 ? 30 : s < g ? THREE.MathUtils.lerp(30, 15, (s - g + 16) / 16) : Math.min(15, Math.sqrt(2 * 9 * Math.max(0, left)))), 6, 13);
     }
     if (t > 6.6 && t - dt <= 6.6) this.ctx.audio.horn(80);
     if (t > 7.3 && t - dt <= 7.3) this.ctx.audio.horn(60);
@@ -857,8 +875,8 @@ export class RunwayScene implements GameScene {
         this.particles.tyreSmoke(p, RunwayScene.tmpA.set(0, 0.4, 0), k * Math.min(1, this.vanV / 10));
       }
     }
-    // The gate's boom, straight through it: both halves thrown up and bent back off their hinges
-    if (!this.gateDown && this.vanS > this.gateS - this.van.length / 2) {
+    // (the gate's boom: it doesn't come that way any more)
+    if (!this.gateDown && this.vanS > 1e9) {
       this.gateDown = true;
       this.gateT = 0;
       // Out of the pair's group, which would otherwise hold them level together, so each can go its own way
@@ -884,7 +902,11 @@ export class RunwayScene implements GameScene {
     if (this.vanStoppedAt >= 0 && t - this.vanStoppedAt > 0.7) this.setBeat('exit');
   }
 
-  /** Anyone in the van's footprint goes under it: thrown, and a ragdoll from there. */
+  /**
+   * Anyone in the van's way: taken off their feet by its front and folded
+   * up onto the bonnet, into the screen, and off again as it brakes — on
+   * down the tarmac a few feet away.
+   */
   private runOver(): void {
     const v = this.van;
     v.group.updateMatrixWorld(true);
@@ -895,10 +917,10 @@ export class RunwayScene implements GameScene {
       if (Math.abs(p.x) > v.width / 2 + 0.3 || Math.abs(p.z) > v.length / 2 + 0.2) continue;
       const hitAt = e.position.clone().setY(1.0);
       const dir = this.vanVel.clone().normalize();
-      e.die(hitAt, dir, this.world, 'torso', 1.5);
-      // Off the corner they were caught by, more out to the side than on ahead of it (it's coming at him)
-      const side = new THREE.Vector3(1, 0, 0).applyQuaternion(v.group.quaternion).multiplyScalar(Math.sign(p.x || (Math.random() - 0.5)) * 5.5);
-      e.launch(this.vanVel.clone().multiplyScalar(0.45).add(side).setY(4.5 + Math.random() * 1.8));
+      e.die(hitAt, dir, this.world, 'torso', 0.3, { wound: false });
+      // Legs swept with the bumper, the top half left behind: up onto the bonnet
+      // (a van's front is tall: up off his feet over the top of it, the van coming on under him onto its bonnet)
+      e.runOver(this.vanVel, 2.4 + Math.random() * 0.8, 0.75, [0.7, 0.62]);
       const d = this.camera.position.distanceTo(hitAt);
       this.ctx.audio.bodyThud(d);
       this.ctx.audio.carCrash(d, false);
@@ -1106,7 +1128,7 @@ export class RunwayScene implements GameScene {
   private updateLeave(): void {
     const t = this.beatT;
     if (t < 0.05 && !this.vanMoving) {
-      this.startVan(this.aptPath(VAN_AWAY), 0, (s) => Math.min(28, 4 + s * 0.9), 4.5, 14, false);
+      this.startVan(this.smoothApt(VAN_AWAY), 0, (s) => Math.min(26, 3 + s * 0.55), 3.2, 14, false);
       this.vanEngine?.setGain(1);
       this.ctx.audio.tyreSqueal(0.6, 14);
     }
@@ -1610,7 +1632,7 @@ export class RunwayScene implements GameScene {
       const q = new THREE.Quaternion();
       const e = new THREE.Euler();
       let n = 0;
-      for (const [a, b] of [...OFFICER_TO, [394.5, 49], [395.3, 55.2], [394.5, 61.4], [395.3, 67.6]] as [number, number][]) {
+      for (const [a, b] of [[389.5, 57.5], [391.5, 59.5], [392.8, 62], [393, 64.5], [394.5, 49], [395.3, 55.2], [394.5, 61.4], [395.3, 67.6]] as [number, number][]) {
         for (let i = 0; i < 10 && n < 90; i++, n++) {
           const p = this.apt(a + (Math.random() - 0.3) * 2.2, b + (Math.random() - 0.5) * 2.2).setY(0.007);
           q.setFromEuler(e.set(Math.PI / 2, Math.random() * Math.PI * 2, 0, 'YXZ'));
@@ -1771,6 +1793,26 @@ export class RunwayScene implements GameScene {
    * each point (`left` metres from the end), getting there no harder than
    * `accel` and `brake` allow; with `stops`, it comes to rest at the end.
    */
+  /**
+   * The van as the run-down land on it: a box from the road up to its
+   * bonnet, the raked screen as a plate, and the cab and load bay above
+   * (van frame: nose −Z). Kinematic: it goes where the van goes.
+   */
+  private makeVanBox(): CANNON.Body {
+    const b = new CANNON.Body({ type: CANNON.Body.KINEMATIC });
+    const L = this.van.length;
+    const W = this.van.width;
+    b.addShape(new CANNON.Box(new CANNON.Vec3(W / 2, 0.72, L / 2)), new CANNON.Vec3(0, 0.74, 0));
+    const tilt = new CANNON.Quaternion();
+    tilt.setFromEuler(0.5, 0, 0);
+    b.addShape(new CANNON.Box(new CANNON.Vec3(W / 2 - 0.05, 0.99, 0.08)), new CANNON.Vec3(0, 2.28, -2.72), tilt);
+    b.addShape(new CANNON.Box(new CANNON.Vec3(W / 2, 0.85, 3.28)), new CANNON.Vec3(0, 2.3, 1.03));
+    this.world.addBody(b);
+    return b;
+  }
+
+  private vanBox: CANNON.Body | null = null;
+
   private startVan(path: THREE.Vector3[], v0: number, want: (s: number, left: number) => number, accel: number, brake: number, stops = true): void {
     this.vanPath = path;
     this.vanLen = pathLength(path);
@@ -1806,6 +1848,14 @@ export class RunwayScene implements GameScene {
     this.vanOnPath(this.vanV, dt, this.vanV < v0 - 0.05 && this.vanV > 1);
     if (dt > 0) this.vanVel.subVectors(this.van.group.position, this.vanPrev).divideScalar(dt);
     this.vanPrev.copy(this.van.group.position);
+    // Its box in the ragdolls' world, riding along with it
+    const box = this.vanBox;
+    if (box) {
+      const g = this.van.group;
+      box.position.set(g.position.x, g.position.y, g.position.z);
+      box.quaternion.setFromEuler(0, g.rotation.y, 0);
+      box.velocity.set(this.vanVel.x, 0, this.vanVel.z);
+    }
     this.vanEngine?.setSpeed(this.vanV, this.vanV > v0 ? 0.95 : 0.25);
     this.vanEngine?.setGain(Math.max(0.15, 1 - this.camera.position.distanceTo(this.van.group.position) / 90));
   }
@@ -1817,7 +1867,8 @@ export class RunwayScene implements GameScene {
     alongPath(this.vanPath, this.vanS, g.position, dir);
     const yaw = Math.atan2(-dir.x, -dir.z);
     const turn = dt > 0 ? wrapAngle(yaw - g.rotation.y) : 0;
-    g.rotation.y = dt > 0 ? g.rotation.y + turn * Math.min(1, dt * 7) : yaw;
+    // (the path's smooth: it follows it closely, a touch behind)
+    g.rotation.y = dt > 0 ? g.rotation.y + turn * Math.min(1, dt * 12) : yaw;
     for (const w of this.van.wheels) w.rotation.x -= (v * dt) / 0.39;
     const b = this.van.body;
     const k = Math.min(1, dt * 6);
@@ -2031,8 +2082,13 @@ export class RunwayScene implements GameScene {
         // a little behind it, and back a touch as it comes at him
         key = 'pov-van';
         this.eye.copy(this.seatEye(RunwayScene.tmpA));
+        // Coming up from behind him he doesn't see it till it's alongside, out of his window: eyes front-left
+        // till then, then after it as it goes by and round through them
+        const local = civic.worldToLocal(RunwayScene.tmpA.copy(vp));
+        const seen = smooth(clamp01((-local.z + 6) / 6));
         const tgt = RunwayScene.tmpC.copy(vp).setY(vp.y + 1.3);
-        tgt.lerp(fromCar(-0.37, 1.0, -12), 0.18);
+        tgt.lerp(fromCar(-1.6, 1.0, -12), 0.18);
+        tgt.lerp(fromCar(-2.4, 1.0, -10), 1 - seen);
         this.aim(tgt, dt, false, 3.2);
         fov = 66 + 6 * smooth(clamp01((this.vanS - this.gateS + 6) / 8));
         break;

@@ -3142,10 +3142,12 @@ export class Enemy {
    * straight after die(), with the car's velocity). `up` how hard he's
    * lifted (m/s).
    */
-  runOver(v: THREE.Vector3, up: number): void {
+  runOver(v: THREE.Vector3, up: number, lift = 0, keep = [1.0, 0.78] as [number, number]): void {
     for (const [name, body] of this.ragdollByName) {
+      // (picked up off his feet first, if the front that hits him is a tall one)
+      body.position.y += lift;
       const low = name.startsWith('leg') || name.startsWith('shin') || name.startsWith('pelvis') || name.startsWith('hip');
-      const k = low ? 1.0 : 0.78;
+      const k = low ? keep[0] : keep[1];
       body.wakeUp();
       body.velocity.set(v.x * k, low ? up * 0.7 : up, v.z * k);
     }

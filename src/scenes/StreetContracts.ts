@@ -316,6 +316,6 @@ export interface IBossDriver {
 export interface ICopDriver {
   readonly car: ICar;
   /** 'parked' on the shoulder; 'launch' pulling out (for the cutscene); 'chase'. */
-  mode: 'parked' | 'launch' | 'chase';
+  mode: 'parked' | 'launch' | 'chase' | 'cruise';
   update(dt: number, ravi: ICar, traffic: ITraffic): void;
 }

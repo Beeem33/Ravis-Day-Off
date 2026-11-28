@@ -569,7 +569,7 @@ export class BossDriver extends RouteDriver implements IBossDriver {
  * boss), and if Ravi slows right down he closes in and bumps him.
  */
 export class CopDriver extends RouteDriver implements ICopDriver {
-  mode: 'parked' | 'launch' | 'chase' = 'parked';
+  mode: 'parked' | 'launch' | 'chase' | 'cruise' = 'parked';
   gapMin = 25;
   gapMax = 60;
   /** Has the launch got him into a lane, up to speed (the scene can switch to 'chase'). */
@@ -829,9 +829,19 @@ export class CopDriver extends RouteDriver implements ICopDriver {
       me.update(dt, PARKED);
       return;
     }
-    // Follows Ravi off at the exit; if Ravi misses it, so does he
-    const ex = this.net.roads.exit.from;
-    this.takeExit = !(ravi.at.road === 'highway' && ex && ravi.at.s > ex.s + 30);
+    // He never takes the exit: Ravi off it, he's carried on down the highway
+    this.takeExit = false;
+    if (this.mode === 'cruise') {
+      // Lost him: on down the highway, lights still going, round the traffic
+      this.inFront = false;
+      this.gather(traffic, [boss ?? null]);
+      this.vRef = 36;
+      this.pickLine(dt, 0);
+      const v = this.followLimit(Math.min(36, this.cornerLimit()));
+      this.vWant = v;
+      this.driveTo(dt, v);
+      return;
+    }
     if (this.mode === 'launch') {
       this.gather(traffic, [ravi, boss ?? null], 80);
       // Into the nearest proper lane, then whichever has room

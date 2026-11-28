@@ -661,8 +661,10 @@ export class HitmanVisual {
       return { hair: STAFF_STYLES[(i * 3 + 1) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
     }
     if (outfit === 'security') {
-      // Under a peaked cap, the same
-      return { hair: STAFF_STYLES[(i * 5 + 2) % STAFF_STYLES.length], skin: SKIN_TONES[tone], hairColor, tie: 0, outfit };
+      // Under a peaked cap, the same; the airport's team (and the highway patrol) are white men
+      const fair = i % 2;
+      const fairHair = HAIR_FOR_SKIN[fair];
+      return { hair: STAFF_STYLES[(i * 5 + 2) % STAFF_STYLES.length], skin: SKIN_TONES[fair], hairColor: fairHair[(i * 7 + 2) % fairHair.length], tie: 0, outfit };
     }
     return {
       hair: STYLE_ORDER[(i * 5 + 3) % STYLE_ORDER.length],

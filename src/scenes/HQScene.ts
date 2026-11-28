@@ -102,6 +102,8 @@ const SECTION_B_Z = -96;
 const DEATH_HOLD = 2500;
 /** How far out in front of the fight's front line the Collective's men come in. */
 const SPAWN_AHEAD = 18;
+/** How far up the lot from the front of the crew the Collective hold their line (they fight from there, not down at the van). */
+const HOLD_AHEAD = 9;
 /** Ravi's flashlight, on (candela). */
 const TORCH_ON = 28;
 /** The arrival's beats (seconds). */
@@ -1982,17 +1984,23 @@ export class HQScene extends CombatScene<HQData> {
   private updateAgents(dt: number): void {
     const next = this.waveQueue.shift();
     if (next) this.spawnAgent(next);
+    // Their line: between the crew and the building, a little up the lot from the furthest forward of
+    // them. They come up to it and fight from it; they don't come down the lot past it to the van
+    const holdZ = this.frontZ() - HOLD_AHEAD;
+    const p = this.player.position;
     for (const a of this.agents) {
       const e = a.e;
-      // Pressing in: every few seconds, those out of sight of him are told where he is now
+      // Pressing in: every few seconds, those out of sight of him are told where he is now — as far as their line
       if (e.alive && a.ai && !this.cutscene && this.player.alive) {
         a.push -= dt;
         if (a.push <= 0) {
           a.push = 3.5 + Math.random() * 2.5;
-          if (e.position.distanceTo(this.player.position) > 15) a.ai.alert(this.player.position);
+          if (e.position.distanceTo(p) > 15) a.ai.alert(V(p.x, p.y, Math.min(p.z, holdZ - 4)));
         }
       }
       if (e.alive && a.ai && !this.cutsceneFreeze) a.ai.update(dt);
+      // Over the line (chasing, or the line's come up past him): back up the lot to it, at a walk
+      if (e.alive && a.ai && e.position.z > holdZ) e.position.z -= Math.min(e.position.z - holdZ, 3 * dt);
       e.update(dt);
       if (!e.alive && e.settled && !a.pooled) {
         a.pooled = true;

@@ -5,3 +5,6 @@ dist/
 .DS_Store
 sim/out/
 .shots/
+
+# Licensed song kept local only (public repo)
+public/audio/freefall.mp3

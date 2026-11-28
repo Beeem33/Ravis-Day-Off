@@ -70,6 +70,8 @@ const EXIT = 5;
 export const FALL_SECONDS = 63;
 /** Retry from here (fall seconds) once he's got this far. */
 const CHECKPOINT_T = 31;
+/** The freefall song (public/audio; kept out of the repo — it's a licensed track). */
+const FREEFALL_SONG = 'audio/freefall.mp3';
 /** Black between the sea and the beach (on from the black of the hit itself). */
 const BLACK_SECONDS = 3;
 /** Steering: how fast he tracks across the sky (A, D, S), and head-down in the pencil (W). */
@@ -938,6 +940,8 @@ export class Level19SkyScene implements GameScene {
     this.poseJet(0);
     this.jetSound = this.ctx.audio.jetEngine();
     this.jetSound.setThrust(1);
+    // Out the door: the song kicks in, and plays him all the way down to the pull
+    this.ctx.audio.startTrackMusic(FREEFALL_SONG, 0, 0, 0.55, 0.15);
   }
 
   private updateExit(dt: number): void {
@@ -1003,7 +1007,7 @@ export class Level19SkyScene implements GameScene {
     this.altEl.style.opacity = '1';
     this.setObjective(T > 0 ? 'CHECKPOINT — STAY ALIVE TILL THE PULL' : 'AFTER HIM — STAY ALIVE TILL THE PULL');
     this.ctx.input.requestPointerLock();
-    this.ctx.audio.startTrackMusic('audio/street.mp3', 0, 0, 0.42, 2);
+    this.ctx.audio.startTrackMusic(FREEFALL_SONG, 0, 0, 0.55, 0.15);
   }
 
   private updateFall(dt: number): void {
@@ -1766,7 +1770,6 @@ export class Level19SkyScene implements GameScene {
     this.birdMarks.clear();
     this.bossMark.style.display = 'none';
     this.ctx.input.exitPointerLock();
-    this.ctx.audio.stopTrackMusic(1.5);
     this.ctx.audio.velcro();
     this.ctx.audio.kickWhoosh();
     this.pullCam.copy(this.camera.position);
@@ -1905,7 +1908,11 @@ export class Level19SkyScene implements GameScene {
     const yaw = this.pullYaw + wrapAngle(spin - this.pullYaw) * up + Math.sin(p * 0.8) * 0.1 * up * (1 - fall);
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.set(pitch, yaw, Math.sin(p * 1.6) * 0.04 + fall * Math.sin(p * 3) * 0.12);
-    if (p > 0.15 && p - dt <= 0.15) this.shake = 1.4;
+    if (p > 0.15 && p - dt <= 0.15) {
+      this.shake = 1.4;
+      // The canopy catches: the song goes with the wind
+      this.ctx.audio.stopTrackMusic(3);
+    }
     this.shake = Math.max(this.shake, p > RIP ? 0.45 : p > 4 ? 0.25 : 0.1);
     this.applyShake(dt);
     if (p > 0.35 && p - dt <= 0.35) {

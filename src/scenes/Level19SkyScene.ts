@@ -11,6 +11,7 @@ import { ParticleManager } from '../fx/ParticleManager';
 import { Enemy } from '../entities/Enemy';
 import { RaviVisual, RaviRig, FirstPersonArms, grip, elbowToward, type Grip, type HandShape } from '../entities/RaviVisual';
 import { DrinkViewmodel } from '../entities/DrinkViewmodel';
+import { EmoteViewmodel } from '../entities/EmoteViewmodel';
 import { Arsenal } from '../entities/Arsenal';
 import { pistolProp } from '../entities/RaviRagdoll';
 import { armWithAK } from '../entities/AkModel';
@@ -59,13 +60,15 @@ type Phase = 'exit' | 'fall' | 'pull' | 'splash' | 'black' | 'beach' | 'dead';
 
 const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
 
+/** The tumble out of the door was 5 s; it's drawn out this much longer now (and the door raised to match, so the fall below it is the same). */
+const EXIT_STRETCH = 1.5;
 /** Where he leaves the door. */
-const Y_DOOR = 4000;
+const Y_DOOR = 4000 + 54 * 5 * (EXIT_STRETCH - 1);
 /** Terminal velocity, belly to earth, and how quickly he gets to it. */
 const FALL_V = 54;
 const FALL_TAU = 1.8;
 /** The tumble out of the door, before the fall is his. */
-const EXIT = 5;
+const EXIT = 5 * EXIT_STRETCH;
 /** The fall itself, from control to the pull. */
 export const FALL_SECONDS = 63;
 /** Retry from here (fall seconds) once he's got this far. */
@@ -258,6 +261,9 @@ export class Level19SkyScene implements GameScene {
   private armGrip!: Grip;
   /** Deadbull on G, as on foot. */
   private drink!: DrinkViewmodel;
+  /** T: the finger, with his left hand (the right's got the pistol); the wind arm tucks away while it's up. */
+  private emote!: EmoteViewmodel;
+  private flipK = 0;
   /** The left arm back out from the gun after a reload (0..1, 1 when it's out), and where its hand started. */
   private armBack = 1;
   private armFrom = new THREE.Vector3();
@@ -788,6 +794,7 @@ export class Level19SkyScene implements GameScene {
     this.arms = new FirstPersonArms(cam, cam).set('l', this.armAnchor, this.armGrip);
     // A Deadbull, on G: both hands off the gun, three seconds, full health
     this.drink = new DrinkViewmodel(cam);
+    this.emote = new EmoteViewmodel(cam);
     this.drink.onEvent = (e, i) => {
       if (e === 'crack') audio.canCrack();
       else if (e === 'gulp') audio.gulp(i);
@@ -867,8 +874,11 @@ export class Level19SkyScene implements GameScene {
     }
     this.wasReloading = reloading;
     this.armBack = Math.min(1, this.armBack + dt / 0.4);
-    const fetch = reloading ? Math.min(1, vm.reloadT / 0.26) : 0;
-    this.layArm(flail, pk, fetch, handOver);
+    // The finger: the wind arm goes down out of shot as the other comes up with it
+    this.flipK += ((this.emote.engaged ? 1 : 0) - this.flipK) * Math.min(1, dt * 14);
+    const fetch = Math.max(reloading ? Math.min(1, vm.reloadT / 0.26) : 0, this.flipK);
+    this.layArm(flail, pk, fetch, handOver || this.flipK > 0.6);
+    this.emote.update(dt, p);
     this.drink.update(dt, p);
   }
 
@@ -948,13 +958,15 @@ export class Level19SkyScene implements GameScene {
   }
 
   private updateExit(dt: number): void {
-    const tt = this.tt;
+    // (the choreography runs on its own clock, drawn out; the jet and his drop stay on the real one)
+    const tt = this.tt / EXIT_STRETCH;
+    const realT = this.tt;
     // Off the door with the jet's speed, the air taking it off him; down, faster and faster
     this.hv.multiplyScalar(Math.exp(-dt / 1.15));
     this.pos.x += this.hv.x * dt;
     this.pos.z += this.hv.z * dt;
-    this.pos.y = yAt(tt);
-    this.poseJet(tt);
+    this.pos.y = yAt(realT);
+    this.poseJet(realT);
     this.jetSound?.setDistance(this.jet.group.position.distanceTo(this.pos));
     this.bossPos.copy(this.pos).add(this.bossRel);
     this.bodyQ.copy(diverQuat(V(0, 0, -1), 0, 0, 'ravi', new THREE.Quaternion()));
@@ -983,9 +995,9 @@ export class Level19SkyScene implements GameScene {
     // The world's camera follows his eyes (the markers and the sky read it)
     this.syncCamera();
     this.wind?.set(0.45 + 0.5 * smooth(tt / 2.5));
-    if (this.pt > 0.9 && this.pt - dt <= 0.9) this.say('RAVI', 'Arms out. Arms out. Like the card in the seat pocket.', RAVI, 2.6);
-    if (tt > 3.6 && tt - dt <= 3.6) this.say('RAVI', 'There. That speck. That’s him.', RAVI, 2.2);
-    if (tt >= EXIT) this.startFall(0);
+    if (this.pt > 0.9 * EXIT_STRETCH && this.pt - dt <= 0.9 * EXIT_STRETCH) this.say('RAVI', 'Arms out. Arms out. Like the card in the seat pocket.', RAVI, 2.6);
+    if (realT > 3.6 * EXIT_STRETCH && realT - dt <= 3.6 * EXIT_STRETCH) this.say('RAVI', 'There. That speck. That’s him.', RAVI, 2.2);
+    if (realT >= EXIT) this.startFall(0);
   }
 
   // ================================================================ 2. the fall
@@ -1060,6 +1072,9 @@ export class Level19SkyScene implements GameScene {
     // ---- the pistol: the same as on foot, put away while he's pencilled in
     if (input.wasPressed('KeyG') && !tumbling && pk < 0.2 && !this.arsenal.reloading && this.hp < MAX_HP + 1) this.drink.start();
     const busy = pk > 0.35 || tumbling || this.drink.engaged;
+    // T: the finger, left-handed. Down again on T, or for a reload, the can, the dive or a tumble
+    if (input.wasPressed('KeyT') && input.pointerLocked && !busy && !this.arsenal.reloading) this.emote.toggle();
+    if (busy || this.arsenal.reloading) this.emote.cancel();
     const aiming = input.rightHeld && input.pointerLocked && !busy && !this.arsenal.reloading;
     this.drive(dt, look, flail, busy, aiming);
     this.syncCamera();
@@ -1768,6 +1783,8 @@ export class Level19SkyScene implements GameScene {
 
   private startPull(): void {
     this.drink.abort();
+    this.emote.cancel();
+    this.emote.root.visible = false;
     this.phase = 'pull';
     this.pt = 0;
     this.hud.hide();

@@ -556,28 +556,38 @@ export class Level19Scene extends CombatScene<Level19Data> {
     const glassy = std(0xdfe8ee, { roughness: 0.05, transparent: true, opacity: 0.5 });
     const red = std(0xb01818, { roughness: 0.6, side: THREE.DoubleSide });
     const white = std(0xf7f7f4, { roughness: 0.9, side: THREE.DoubleSide });
+    // On the floor where they've slid to, not hanging in the air: the dive is what lifts them
+    const flat = (): void => {
+      const o = this.fliers[this.fliers.length - 1].o;
+      o.rotation.set(-Math.PI / 2, 0, Math.random() * Math.PI * 2);
+    };
     for (let i = 0; i < 46; i++) {
-      const z = -26 + Math.random() * 54;
-      const x = (Math.random() - 0.5) * 3.6;
-      const y = 0.45 + Math.random() * 0.4;
+      let z = -26 + Math.random() * 54;
+      let x = (Math.random() - 0.5) * 3.6;
+      // (clear of the suite's corridor walls and of every bulkhead)
+      if (z > 8 && z < 23.5 && Math.abs(Math.abs(x) - 0.72) < 0.2) x = Math.sign(x || 1) * 0.4;
+      for (const b of [23.5, 8, -6, -22]) if (Math.abs(z - b) < 0.25) z = b + 0.4;
       switch (i % 6) {
         case 0:
-          add(mag, mags[i % 4], x, y, z, true);
+          add(mag, mags[i % 4], x, 0.006, z, true);
           break;
         case 1:
-          add(tumbler, glassy, x, y, z);
+          add(tumbler, glassy, x, 0.045, z);
           break;
         case 2:
-          add(napkin, white, x, y, z, true);
+          add(napkin, white, x, 0.004, z, true);
+          flat();
           break;
         case 3:
-          add(card, i % 12 === 3 ? red : white, x, y, z, true);
+          add(card, i % 12 === 3 ? red : white, x, 0.004, z, true);
+          flat();
           break;
         case 4:
-          add(cushion, cushions[i % 3], x, y, z, true);
+          add(cushion, cushions[i % 3], x, 0.06, z, true);
           break;
         default:
-          add(headset, black, x, y, z);
+          add(headset, black, x, 0.012, z);
+          flat();
       }
     }
     // Books on the credenza and the study's desk
@@ -850,18 +860,10 @@ export class Level19Scene extends CombatScene<Level19Data> {
       for (const y of yokes) y.rotation.x = -this.yokeAngle;
       this.slumpFrames.push({ parts: parts.map((b) => (b ? [b.position.x, b.position.y, b.position.z, b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w] : [])), yoke: this.yokeAngle });
       if (this.t >= SLUMP_LIVE) {
-        // The replay: from the right-hand seat, slow
-        this.slumpReplay = 0;
-        this.useCut = true;
-        this.cinema(true);
-        this.player.cinematic = true;
-        // From up by the glareshield on the right, looking back across the columns at him
-        const seat = L.pilotSeats[0];
-        this.cutCam.fov = 52;
-        this.cutCam.aspect = window.innerWidth / window.innerHeight;
-        this.cutCam.updateProjectionMatrix();
-        this.cutCam.position.set(seat.x + 1.0, 1.32, seat.z - 1.15);
-        this.cutCam.lookAt(seat.x, 0.85, seat.z - 0.35);
+        // No replay: the autopilot lets go, and down she goes, all from his eyes
+        for (const [d, k] of [[0, 0], [260, 1], [520, 2]] as const) window.setTimeout(() => this.ctx.audio.uiBeep(k !== 1), d);
+        for (const y of yokes) y.rotation.x = -0.5;
+        this.startDive();
       }
       return;
     }
@@ -1713,7 +1715,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     if (!e || !e.alive || this.tdArms !== this.neckVm) return;
     const h = (e as unknown as { head: THREE.Mesh }).head;
     h.updateWorldMatrix(true, false);
-    this.neckVm.track(h.localToWorld(Level19Scene._c.set(0.13, 0.02, -0.01)), h.localToWorld(Level19Scene._d.set(0.055, -0.1, -0.04)));
+    this.neckVm.track(h.localToWorld(Level19Scene._c.set(0.13, 0.02, -0.01)), h.localToWorld(Level19Scene._d.set(0.078, -0.11, 0.005)));
   }
 
   /** The neck after the knife's out: spurts, weaker each time, from wherever his head has got to. */
@@ -1731,7 +1733,7 @@ export class Level19Scene extends CombatScene<Level19Data> {
     g.n++;
     if (!head) return;
     const q = Level19Scene._q.set(head.quaternion.x, head.quaternion.y, head.quaternion.z, head.quaternion.w);
-    const pos = Level19Scene._c.set(0.058, -0.125, -0.025).applyQuaternion(q).add(Level19Scene._d.set(head.position.x, head.position.y, head.position.z));
+    const pos = Level19Scene._c.set(0.078, -0.125, 0.005).applyQuaternion(q).add(Level19Scene._d.set(head.position.x, head.position.y, head.position.z));
     const dir = new THREE.Vector3(1, 0.35, -0.3).applyQuaternion(q).normalize();
     const floor = this.surfaceBelow(pos, 3);
     this.particles.bloodSpray(pos.clone(), dir, g.n <= 2, floor ? floor.point.y + 0.02 : -1, this.bloodHue);

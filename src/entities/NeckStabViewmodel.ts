@@ -70,7 +70,7 @@ export class NeckStabViewmodel {
   /** Ravi's right shoulder, roughly, in the arms' space: what the thrust drives from. */
   private static readonly SHOULDER = new THREE.Vector3(0.42, -0.24, -0.12);
   /** Knife's frame to the point on the blade that sits at the skin when it's in: the rest (about 9cm) is in him. */
-  private static readonly SKIN = new THREE.Vector3(0, -0.055, -0.47);
+  private static readonly SKIN = new THREE.Vector3(0, -0.055, -0.315);
 
   constructor(camera: THREE.PerspectiveCamera) {
     camera.add(this.root);
@@ -95,28 +95,37 @@ export class NeckStabViewmodel {
     }
 
     // The same bowie as the other takedown
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.035, 0.11), wood);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.032, 0.1), wood);
     this.knife.add(handle);
     const pommel = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.04, 0.018), darkSteel);
     pommel.position.set(0, 0, 0.06);
     this.knife.add(pommel);
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.085, 0.014), darkSteel);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.06, 0.012), darkSteel);
     guard.position.set(0, 0, -0.06);
     this.knife.add(guard);
+    // (a smaller knife than the other takedown's bowie: the blade's parts scaled down from the guard)
+    const bladeG = new THREE.Group();
+    bladeG.position.set(0, 0, -0.06);
+    bladeG.scale.set(0.85, 0.75, 0.6);
+    this.knife.add(bladeG);
+    const at = (m: THREE.Mesh): void => {
+      m.position.z += 0.06;
+      bladeG.add(m);
+    };
     const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.055, 0.38), steel);
     blade.position.set(0, 0.005, -0.255);
-    this.knife.add(blade);
+    at(blade);
     const tip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.034, 0.09), steel);
     tip.position.set(0, -0.005, -0.485);
     tip.rotation.x = -0.16;
-    this.knife.add(tip);
+    at(tip);
     const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.0095, 0.009, 0.33), darkSteel);
     fuller.position.set(0, 0.02, -0.24);
-    this.knife.add(fuller);
+    at(fuller);
     this.blood = new THREE.Mesh(new THREE.BoxGeometry(0.0105, 0.058, 0.17), gore);
     this.blood.position.set(0, 0.004, -0.43);
     this.blood.visible = false;
-    this.knife.add(this.blood);
+    at(this.blood);
     this.knife.position.set(0, -0.055, -0.025);
     this.armR.add(this.knife);
 

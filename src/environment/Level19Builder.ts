@@ -1441,11 +1441,10 @@ export class Level19Builder {
     this.cyl(0.015, 0.015, 0.2, -2.68, 0.85, 10.6, M.gold, 8, { trim: true });
     this.box(0.02, 0.8, 1.0, -2.78, 1.1, 10.6, M.glass, { trim: true });
 
-    // ---- The guest room: a smaller bed, an armchair
+    // ---- The guest room: a smaller bed (no armchair: it sat in the doorway)
     this.box(1.3, 0.42, 2.0, 1.9, 0, 20.4, M.walnut, { collide: true });
     this.box(1.26, 0.2, 1.92, 1.9, 0.42, 20.4, M.linen, { trim: true });
     this.box(1.36, 1.0, 0.12, 1.9, 0, 21.45, M.leather, { collide: true });
-    this.sofa(1.95, 16.4, Math.PI, 1, M.leather);
     // ---- The study: a desk under the windows, a chair, a safe
     this.box(0.7, 0.75, 1.6, 2.35, 0, 12.4, M.walnut, { collide: true });
     this.box(0.5, 0.03, 0.35, 2.4, 0.75, 12.0, M.black, { trim: true });
@@ -1455,8 +1454,13 @@ export class Level19Builder {
     // A rug down the corridor
     this.box(0.9, 0.012, z1 - z0 - 0.6, 0, 0.001, (z0 + z1) / 2, M.navy, { trim: true });
     // Little sconces on the corridor walls
+    // (none where a doorway is: there's no wall there to hang it on)
+    const doorsOn = { [-1]: [21.4, 9.4], [1]: [17, 9.8] } as Record<number, number[]>;
     for (let z = 10; z < 23; z += 3) {
-      for (const s of [-1, 1]) this.box(0.04, 0.22, 0.1, s * (CX - 0.08), 1.6, z, M.warmLed, { trim: true });
+      for (const s of [-1, 1]) {
+        if (doorsOn[s].some((d) => Math.abs(z - d) < 0.65)) continue;
+        this.box(0.04, 0.22, 0.1, s * (CX - 0.08), 1.6, z, M.warmLed, { trim: true });
+      }
     }
 
     // Where the boss hides (in the wardrobe's shadow), and his run from there

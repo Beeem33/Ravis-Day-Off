@@ -476,20 +476,26 @@ export class CloudDeck {
         void main() {
           vec4 mv = modelViewMatrix * vec4(aOffset, 1.0);
           float size = aInfo.x;
-          // Upright to the world, not to the camera: the puff's up is the sky's up as it lies on the screen
-          // (so it doesn't roll round with the view). Looking straight down, where up is no direction on the
-          // screen, it's held to a fixed bearing instead — the same one whichever way he turns
-          vec2 upS = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xy;
-          vec2 northS = (viewMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xy;
-          float lu = length(upS);
-          vec2 n = length(northS) > 1e-4 ? normalize(northS) : vec2(0.0, 1.0);
-          vec2 ax = lu > 1e-4 ? mix(n, upS / lu, smoothstep(0.12, 0.4, lu)) : n;
-          ax = length(ax) > 1e-4 ? normalize(ax) : vec2(0.0, 1.0);
+          // Turned by the world, never by the view. Each puff's up is worked out in the world from where it is
+          // relative to his eye — the sky's up, as seen along the line to it — plus a little of its own fixed
+          // bearing on the ground (which takes over looking straight down onto it, where up is no direction).
+          // None of that depends on which way his head is turned, so turning, looking round or rolling never
+          // turns a cloud: it only changes as he actually moves past it.
+          vec3 wp = (modelMatrix * vec4(aOffset, 1.0)).xyz;
+          vec3 ray = normalize(wp - cameraPosition);
+          vec3 upPerp = vec3(0.0, 1.0, 0.0) - ray * ray.y;
+          float ang = aInfo.z * 6.2832;
+          vec3 own = vec3(cos(ang), 0.0, sin(ang));
+          vec3 wUp = upPerp + (own - ray * dot(own, ray)) * 0.18;
+          vec2 ax = (viewMatrix * vec4(wUp, 0.0)).xy;
+          ax = length(ax) > 1e-5 ? normalize(ax) : vec2(0.0, 1.0);
           vec2 rx = vec2(ax.y, -ax.x);
           mv.xy += (rx * position.x + ax * position.y) * size;
+          // (lit from above: seen from over it, it's the top he sees, not one side lit and one in shade)
+          float side = length(upPerp);
           vec2 tile = vec2(mod(aInfo.y, 2.0), floor(aInfo.y / 2.0)) * 0.5;
           vUv = tile + uv * 0.5;
-          vShade = clamp((aOffset.y - uBase) / uThick + 0.55, 0.0, 1.0) * 0.6 + aInfo.z * 0.25 + position.y * 0.35;
+          vShade = clamp((aOffset.y - uBase) / uThick + 0.55, 0.0, 1.0) * 0.6 + aInfo.z * 0.25 + position.y * 0.35 * side + (1.0 - side) * 0.2;
           float d = -mv.z;
           vDist = length(mv.xyz);
           // Gone as the lens comes into it, back when it is behind

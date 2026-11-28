@@ -675,8 +675,16 @@ export class Level19Scene extends CombatScene<Level19Data> {
     const run = L.bossRun;
     const len = pathLength(run);
     const cam = this.cutCam;
+    // A slow push in from by the carts; once he's at the door and turned to
+    // face in, round in front of him, the open door and the sky behind him
     cam.position.lerpVectors(V(1.75, 1.62, 28.75), V(1.15, 1.52, 27.7), smooth(s / 6));
-    cam.lookAt(V(-2.2, 1.1, 25.5));
+    const look = V(-2.2, 1.1, 25.5);
+    const front = this.doorShotAt > 0 ? smooth((s - this.doorShotAt - 1.5) / 1.1) : 0;
+    if (front > 0) {
+      cam.position.lerp(V(0.35, 1.45, 25.95), front);
+      look.lerp(V(-2.05, 1.25, 25.6), front);
+    }
+    cam.lookAt(look);
     const j = 0.006 * (1 + this.wind * 3);
     cam.position.x += (Math.random() - 0.5) * j;
     cam.position.y += (Math.random() - 0.5) * j;
@@ -696,42 +704,62 @@ export class Level19Scene extends CombatScene<Level19Data> {
       return;
     }
     if (this.doorOpen === 0) this.openAftDoor(false);
-    if (u > 1.9 && u < 3.4) b.faceToward(cam.position, dt, 6);
-    if (u > 2.3 && u < 3.4) b.setMiddleFingers(true, true);
-    if (u >= 3.4 && u < 3.9) {
-      // Round to face the door
-      b.setMiddleFingers(false, false);
-      b.faceToward(V(-HW - 3, 0, b.position.z), dt, 9);
+    const zc = (DOOR.z0 + DOOR.z1) / 2;
+    if (u > 1.9) {
+      // Square in the doorway, his back to the sky, facing into the cabin:
+      // both middle fingers up for whoever's watching, and he keeps them up
+      b.position.z += (zc - b.position.z) * Math.min(1, dt * 6);
+      if (!this.bossGone) b.faceToward(V(HW, 0, zc), dt, 6);
     }
-    if (u >= 3.9) {
-      // Two strides to the sill and out through the middle of the opening,
-      // tipping forward head first once his feet are off it
+    if (u > 2.3) {
+      // Both hands come up either side of his face and give it to the cabin, pumping
+      const a = smooth((u - 2.3) / 0.35);
+      const pump = Math.sin(u * 10) * 0.045 * a;
+      const P = this.flipPose;
+      P.handL!.set(-0.2, 0.9, -0.15).lerp(Level19Scene._a.set(-0.42, 1.62 + pump, -0.3), a);
+      P.handR!.set(0.2, 0.9, -0.15).lerp(Level19Scene._a.set(0.42, 1.62 - pump, -0.3), a);
+      P.lean = 0.04 * Math.sin(u * 5) * a;
+      b.freeHands = true;
+      b.pose = P;
+      b.setMiddleFingers(a > 0.6, a > 0.6);
+    }
+    if (u >= 3.6) {
+      // And out backwards: a lean back, a little hop off the sill, and he
+      // tips over away from the plane, fingers up all the way
       if (!this.bossGone) {
         this.bossGone = true;
         this.ctx.audio.kickWhoosh();
         this.bossLeap = b.position.x;
         b.root.rotation.order = 'YXZ';
       }
-      const w = u - 3.9;
-      const zc = (DOOR.z0 + DOOR.z1) / 2;
-      b.position.z += (zc - b.position.z) * Math.min(1, dt * 8);
-      b.position.x = Math.max(-HW - 2.2, this.bossLeap - w * 2.6);
-      const off = b.position.x < -HW - 0.3;
-      if (off) {
-        this.bossDrop += dt * 22;
-        b.position.y -= this.bossDrop * dt;
+      const w = u - 3.6;
+      b.setWalk(0);
+      b.position.x = this.bossLeap - (w < 0.35 ? w * 0.4 : 0.14 + (w - 0.35) * 2.4 + (w - 0.35) * (w - 0.35) * 2);
+      if (w > 0.35) {
+        const h = w - 0.35;
+        // A hop up off the sill, then gone
+        b.position.y = 0.35 * h * 4 - 0.5 * 26 * h * h;
       }
-      b.setWalk(off ? 0 : 1);
-      b.root.rotation.x = -Math.min(1.35, Math.max(0, w - 0.35) * 2.4);
+      b.root.rotation.x = Math.min(0.25, w * 0.7) + Math.max(0, w - 0.35) * 2.6;
     }
     if (b.position.y < -3) b.root.visible = false;
-    if (u > 5.2) {
+    if (u > 5.0) {
       b.root.visible = false;
       this.endReveal();
     }
   }
   private bossLeap = 0;
-  private bossDrop = 0;
+  /** Both hands up either side of his face, the backs of them to the camera, fists with the middle fingers up. */
+  private flipPose: NonNullable<Enemy['pose']> = {
+    handL: new THREE.Vector3(),
+    handR: new THREE.Vector3(),
+    palmL: new THREE.Vector3(0, 0, 1),
+    thumbL: new THREE.Vector3(-1, 0, 0),
+    palmR: new THREE.Vector3(0, 0, 1),
+    thumbR: new THREE.Vector3(1, 0, 0),
+    curl: 1,
+    lean: 0
+  };
   private doorShotAt = 0;
 
   private endReveal(): void {

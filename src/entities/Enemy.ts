@@ -2438,7 +2438,7 @@ export class Enemy {
         }
       }
       // A cutscene's hand target (working a knot, say) goes where it asked
-      if (this.boss && this.pose?.handR && this.pose?.handL) {
+      if (this.boss && !this.freeHands && this.pose?.handR && this.pose?.handL) {
         // His chin on his fists: under his own chin, wherever the model
         // has put it — the rig's head is not where the model's is
         R.w = L.w = 1;
@@ -2558,6 +2558,13 @@ export class Enemy {
   private flinchK = 0;
 
   /** Hit, but not hard enough to drop him: a pained face for a moment. */
+  /**
+   * The boss's two placed hands go where the pose puts them, like anyone's,
+   * instead of to his chin (his fists-under-the-chin pose is otherwise what
+   * a boss with both hands placed is doing).
+   */
+  freeHands = false;
+
   /** Middle fingers up out of his fists (left, right): the finger, one hand or both. */
   setMiddleFingers(left: boolean, right: boolean): void {
     if (!this.hitman) return;

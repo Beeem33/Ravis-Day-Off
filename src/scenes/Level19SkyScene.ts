@@ -106,6 +106,8 @@ interface Diver {
   burst: number;
   burstT: number;
   deadT: number;
+  /** Shot: his yell, for as long as the blood's coming out of him. */
+  yell?: { set(distance: number): void; stop(): void } | null;
   /** How his body lies on the air. */
   pose: DiverPose;
   spin: THREE.Vector3;
@@ -416,6 +418,7 @@ export class Level19SkyScene implements GameScene {
     this.ui.remove();
     this.wind?.stop();
     this.scream?.stop();
+    for (const d of this.divers) d.yell?.stop();
     this.surf?.stop();
     this.under?.stop();
     this.jetSound?.stop();
@@ -1263,7 +1266,10 @@ export class Level19SkyScene implements GameScene {
     d.spin.set(wild(), wild() * 0.7, wild());
     d.e.hideWeapon();
     audio.killConfirm();
-    audio.enemyScream(0.6);
+    // He yells the whole time it's pumping out of him (stopped when the blood stops)
+    d.yell?.stop();
+    d.yell = audio.fallScream();
+    d.yell.set(Math.min(40, d.e.root.getWorldPosition(Level19SkyScene._c).distanceTo(this.camera.position)) / 5);
     this.downed++;
     this.hud.setCounter('FBI DOWN', this.downed);
   }
@@ -1523,6 +1529,11 @@ export class Level19SkyScene implements GameScene {
             const dirB = Level19SkyScene._b.copy(up).add(V((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5)).normalize();
             this.particles.bloodSpray(neck, dirB, true, -1e5);
           }
+          // (heard all the way: he goes off on the wind fast, so the falloff is eased right down)
+          d.yell?.set(Math.min(40, e.root.getWorldPosition(Level19SkyScene._c).distanceTo(this.camera.position)) / 5);
+        } else if (d.yell) {
+          d.yell.stop();
+          d.yell = null;
         }
         pose.aimK = Math.max(0, pose.aimK - dt * 6);
         d.rel.addScaledVector(d.vel, dt);

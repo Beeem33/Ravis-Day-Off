@@ -488,7 +488,7 @@ export class Level19SkyScene implements GameScene {
     this.jet.group.add(leaf);
     // Where it's going: round onto an island a few kilometres off, and into its hill (never the one he lands on)
     const door = D.clone().applyEuler(new THREE.Euler(-0.2, 0, 0, 'YXZ'));
-    this.crashPath = new JetCrashPath(V(-door.x, Y_DOOR - door.y, -door.z), ISLANDS.slice(1));
+    this.crashPath = new JetCrashPath(V(-door.x, Y_DOOR - door.y, -door.z), ISLANDS.slice(1), EXIT + 6);
     this.crashFx = new CrashFx();
     this.scene.add(this.crashFx.group);
   }
@@ -511,7 +511,7 @@ export class Level19SkyScene implements GameScene {
     P.pose(tt, g.position, g.rotation);
     g.visible = true;
     // Smoking, once it's well away from him: a black line drawn down the sky to where it goes in
-    const k = smooth((tt - 9) / 6);
+    const k = smooth((tt - 3) / 3);
     if (k > 0 && dt > 0) {
       g.updateMatrixWorld(true);
       this.crashFx.trail(dt, g.localToWorld(Level19SkyScene._c.set(0, 2, 22)), k);

@@ -35,14 +35,23 @@ export class JetCrashPath {
   private total = 0;
   private static readonly N = 256;
 
-  /** `start`: the jet's origin as he leaves the door, with it heading −Z. */
-  constructor(start: THREE.Vector3, sites: IslandSite[]) {
-    // An island ahead or off to the side, a few kilometres off: never one behind (it couldn't turn round)
-    const ok = sites.filter((s) => {
-      const d = Math.hypot(s.x - start.x, s.z - start.z);
-      return d > 3500 && d < 6500 && s.z < start.z - 1000;
+  /** Its acceleration along the way (m/s²): what gets it there at `arriveAt`. */
+  private acc = 0;
+
+  /**
+   * `start`: the jet's origin as he leaves the door, heading −Z (the way he faces when the fall is
+   * his). `arriveAt`: seconds after the door that it goes in.
+   */
+  constructor(start: THREE.Vector3, sites: IslandSite[], arriveAt: number) {
+    // An island out in front of him, where he's looking as the fall starts: within 40° of straight ahead
+    const ahead = sites.filter((s) => {
+      const dx = s.x - start.x;
+      const dz = s.z - start.z;
+      const d = Math.hypot(dx, dz);
+      return d > 3000 && d < 8000 && -dz / d > Math.cos(THREE.MathUtils.degToRad(40));
     });
-    const pool = ok.length ? ok : sites;
+    const dAhead = (s: IslandSite): number => Math.hypot(s.x - start.x, s.z - (start.z - 5000));
+    const pool = ahead.length ? ahead : [...sites].sort((a, b) => dAhead(a) - dAhead(b)).slice(0, 1);
     this.site = pool[Math.floor(Math.random() * pool.length)];
     const s = this.site;
     this.p0 = new THREE.Vector2(start.x, start.z);
@@ -64,8 +73,9 @@ export class JetCrashPath {
       this.cum.push(this.total);
       prev = p;
     }
-    // When it gets there: 88 m/s at the door, building 2.4 m/s every second
-    this.Ti = (-88 + Math.sqrt(88 * 88 + 4 * 1.2 * this.total)) / (2 * 1.2);
+    // It gets there when it's told to: 88 m/s at the door, building all the way down (it's diving)
+    this.Ti = arriveAt;
+    this.acc = Math.max(0, (this.total - 88 * arriveAt) / (arriveAt * arriveAt));
     this.impact = V(this.p2.x, hitY, this.p2.y);
   }
 
@@ -98,7 +108,7 @@ export class JetCrashPath {
   /** Where the jet is, and how it's lying, `tt` seconds after the door. */
   pose(tt: number, pos: THREE.Vector3, rot: THREE.Euler): void {
     const t = Math.min(tt, this.Ti);
-    const dist = 88 * t + 1.2 * t * t;
+    const dist = 88 * t + this.acc * t * t;
     const u = this.uAt(dist);
     const p = this.bez(u, new THREE.Vector2());
     const k = t / this.Ti;
@@ -106,7 +116,7 @@ export class JetCrashPath {
     pos.set(p.x, y, p.y);
     // Nose down along the way it's going down, steeper and steeper
     const vy = (2 * (this.y0 - this.impact.y) * t) / (this.Ti * this.Ti);
-    const vh = 88 + 2.4 * t;
+    const vh = 88 + 2 * this.acc * t;
     const pitch = Math.min(-0.2 - Math.min(0.4, t * 0.03), -Math.atan2(vy, vh) - 0.04);
     // Banked into the turn (yaw going +: turning left, left wing down)
     const yaw = this.yawAt(u);

@@ -152,18 +152,39 @@ export function ocean(shoals: THREE.Vector4[]): THREE.Mesh {
         for (int i = 0; i < 12; i++) {
           vec4 s = uShoals[i];
           if (s.w <= 0.0) continue;
-          float d = length(p - s.xy);
+          vec2 q = p - s.xy;
+          // Not rings: the shallows go out further off the bays and the points, broken up along their edge
+          float ang = atan(q.y, q.x);
+          float wob = 1.0 + 0.55 * (vnoise(vec2(cos(ang), sin(ang)) * 1.9 + float(i) * 3.7) - 0.5) + 0.35 * (vnoise(p * 0.004 + float(i)) - 0.5);
+          float d = length(q) / wob;
           sh = max(sh, 1.0 - smoothstep(s.z, s.w, d));
         }
-        vec3 body = mix(uDeep, uShallow, sh * 0.85);
-        vec3 col = mix(body, uSky, fres);
+        // The deep: a little darker and lighter in great slow patches, so it isn't one flat blue
+        vec3 deep = uDeep * (0.85 + 0.3 * vnoise(p * 0.0007 + 3.0));
+        vec3 body = mix(deep, uShallow, smoothstep(0.0, 0.9, sh) * 0.85);
+        // Over sand, close in: pale turquoise, the bottom showing; darker where there's reef or weed
+        float sandy = smoothstep(0.62, 0.98, sh);
+        float reef = smoothstep(0.55, 0.72, vnoise(p * 0.018 + 11.0)) * smoothstep(0.3, 0.8, sh) * (1.0 - sandy * 0.6);
+        body = mix(body, vec3(0.52, 0.86, 0.78), sandy * 0.55);
+        body *= 1.0 - 0.32 * reef;
+        // Light through the shallows, shimmering on the bottom
+        float caus = pow(abs(sin(vnoise(p * 0.12 + uTime * 0.25) * 9.0 + vnoise(p * 0.07 - uTime * 0.2) * 7.0)), 6.0);
+        body += vec3(0.18, 0.24, 0.2) * caus * sandy * near;
+        // The sky in it: the haze at the horizon going up into deeper blue
         vec3 r = reflect(-v, n);
-        float spec = pow(max(dot(r, uSun), 0.0), 220.0);
-        col += vec3(1.0, 0.95, 0.82) * spec * 2.4;
+        vec3 skyC = mix(uHaze, uSky * 0.95, pow(clamp(r.y, 0.0, 1.0), 0.45));
+        vec3 col = mix(body, skyC, fres);
+        float spec = pow(max(dot(r, uSun), 0.0), 220.0) * 2.4 + pow(max(dot(r, uSun), 0.0), 40.0) * 0.22;
+        col += vec3(1.0, 0.95, 0.82) * spec;
+        // Surf: white water breaking along the shore, rolling in
+        float surf = smoothstep(0.95, 0.99, sh) * (1.0 - smoothstep(0.993, 1.0, sh) * 0.4);
+        float roll = 0.5 + 0.5 * sin(sh * 90.0 - uTime * 1.6 + vnoise(p * 0.05) * 6.0);
+        surf *= smoothstep(0.35, 0.85, roll * vnoise(p * 0.09 + uTime * 0.15) * 1.6);
+        col = mix(col, vec3(0.95, 0.97, 0.98), surf * 0.6);
         // Whitecaps: little broken streaks of white on the open sea, for a sense of how far down it is
         float caps = vnoise(p * vec2(0.16, 0.08) + vec2(uTime * 0.03, 0.0)) * vnoise(p * 0.03 - uTime * 0.01);
         caps = smoothstep(0.6, 0.72, caps) * (1.0 - sh * (1.0 - near * 0.6)) * (1.0 - smoothstep(500.0, 2500.0, dist));
-        col = mix(col, vec3(0.93, 0.96, 0.98), caps * 0.22);
+        col = mix(col, vec3(0.93, 0.96, 0.98), caps * 0.22 * (1.0 - sandy));
         col = haze(col, dist);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -196,11 +217,21 @@ export function islandHeight(s: IslandSite, x: number, z: number): number {
   const dx = x - s.x;
   const dz = z - s.z;
   const a = Math.atan2(dz, dx);
-  const wob = 1 + 0.28 * fbm(Math.cos(a) * 1.7 + s.seed, Math.sin(a) * 1.7 - s.seed, 3);
+  const ca = Math.cos(a);
+  const sa = Math.sin(a);
+  // The coast: big bays and points, and a finer crinkle along it
+  const wob = 1 + 0.28 * fbm(ca * 1.7 + s.seed, sa * 1.7 - s.seed, 3) + 0.07 * fbm(ca * 6.3 + s.seed * 3, sa * 6.3 - s.seed, 2);
   const k = Math.hypot(dx, dz) / (s.r * wob);
   if (k > 1.25) return -4;
-  const hill = Math.pow(Math.max(0, 1 - k), 1.6) * s.h * (0.75 + 0.5 * fbm(dx / 180 + s.seed, dz / 180, 4));
-  const beach = (1 - THREE.MathUtils.smoothstep(k, 0.86, 1.05)) * 3.2;
+  // How much beach each stretch of the coast has: wide strands round the bays, none where a headland
+  // comes right down to the water
+  const bw = THREE.MathUtils.clamp(0.5 + 1.1 * fbm(ca * 2.6 - s.seed * 1.7, sa * 2.6 + s.seed, 3), 0, 1);
+  const headland = 1 + (1 - bw) * 1.8 * THREE.MathUtils.smoothstep(k, 0.55, 0.97);
+  const hill = Math.pow(Math.max(0, 1 - k), 1.6) * s.h * (0.75 + 0.5 * fbm(dx / 180 + s.seed, dz / 180, 4)) * headland;
+  const k0 = 0.97 - 0.22 * bw;
+  // The sand: a strand of it, humped into low dunes at the back
+  const dune = 1 + 0.35 * fbm(dx / 40 + s.seed, dz / 40 - s.seed, 2);
+  const beach = (1 - THREE.MathUtils.smoothstep(k, k0, 1.05)) * (2.0 + 1.6 * bw) * dune;
   return Math.max(hill, beach) - THREE.MathUtils.smoothstep(k, 0.98, 1.2) * 6;
 }
 
@@ -210,13 +241,16 @@ export function islandHeight(s: IslandSite, x: number, z: number): number {
  * vertex coloured and flat shaded, so its folds read from four kilometres.
  */
 export function islandMesh(s: IslandSite, fine = false, far = false): THREE.Mesh {
-  const rings = fine ? 44 : far ? 12 : 22;
-  const segs = fine ? 180 : far ? 40 : 72;
+  const rings = fine ? 70 : far ? 12 : 40;
+  const segs = fine ? 300 : far ? 40 : 170;
   const pos: number[] = [];
   const col: number[] = [];
   const idx: number[] = [];
-  const sand = new THREE.Color(0xe9dcb4);
-  const wet = new THREE.Color(0xbfae84);
+  const sand = new THREE.Color(0xeee2bd);
+  const gold = new THREE.Color(0xdcc690);
+  const wet = new THREE.Color(0xb3a27a);
+  const scrub = new THREE.Color(0x8a9a52);
+  const shallowC = new THREE.Color(0x47c4b8);
   const green = new THREE.Color(0x3f8a3a);
   const dark = new THREE.Color(0x225f2b);
   const rock = new THREE.Color(0x857a6a);
@@ -234,21 +268,44 @@ export function islandMesh(s: IslandSite, fine = false, far = false): THREE.Mesh
       const y = islandHeight(s, x, z);
       pos.push(x, y, z);
       const n = fbm(x / 60, z / 60, 2) * 0.5 + 0.5;
-      if (y < 0.4) c.copy(wet);
-      else if (y < 3.6) c.copy(sand).lerp(wet, 0.15 * n);
-      else if (y > s.h * 0.78) c.copy(rock).lerp(dark, 0.3 * n);
-      else c.copy(green).lerp(dark, THREE.MathUtils.clamp(y / (s.h * 0.7) + n * 0.4 - 0.2, 0, 1));
+      // Fine grain: the sand's ripples and drifts, scrub and trees breaking into the back of the beach
+      const fine = fbm(x / 13 + s.seed, z / 13, 2) * 0.5 + 0.5;
+      const edge = 3.4 + (fine - 0.5) * 2.6 + (n - 0.5) * 1.5;
+      const dx = x - s.x;
+      const dz = z - s.z;
+      const aa = Math.atan2(dz, dx);
+      const bw = THREE.MathUtils.clamp(0.5 + 1.1 * fbm(Math.cos(aa) * 2.6 - s.seed * 1.7, Math.sin(aa) * 2.6 + s.seed, 3), 0, 1);
+      // Sand: pale where it's dry, golden in drifts, darker in a line where the tide's been; rock on the points
+      const sandC = new THREE.Color().copy(sand).lerp(gold, THREE.MathUtils.clamp(fine * 1.3 - 0.35, 0, 1) * 0.7);
+      if (y < 1.2) sandC.lerp(wet, 0.45 * (1 - Math.max(0, y) / 1.2));
+      // (rocky where the headlands come down to the water, fading into the sand either side)
+      sandC.lerp(rock, (1 - THREE.MathUtils.smoothstep(bw, 0.08, 0.32)) * (0.45 + 0.3 * fine));
+      // The land: scrub at its foot, green going darker up the hill, bare rock on top
+      const landC = new THREE.Color();
+      if (y > s.h * 0.78) landC.copy(rock).lerp(dark, 0.3 * n);
+      else landC.copy(green).lerp(dark, THREE.MathUtils.clamp(y / (s.h * 0.7) + n * 0.4 - 0.2 + (fine - 0.5) * 0.3, 0, 1));
+      landC.lerp(scrub, 0.45 * (1 - THREE.MathUtils.smoothstep(y, edge, edge + 2.5)) * fine);
+      // One into the other over a metre or so, not a step
+      c.copy(sandC).lerp(landC, THREE.MathUtils.smoothstep(y, edge - 0.5, edge + 0.6));
+      // Under the water: what shows (the island is drawn a hair in front of the sea) is the shallows, not sand
+      if (y < 0.15) c.lerp(shallowC, THREE.MathUtils.smoothstep(-y, -0.15, 1.2));
       col.push(c.r, c.g, c.b);
     }
   }
-  for (let j = 0; j < segs; j++) idx.push(0, 1 + ((j + 1) % segs), 1 + j);
+  // (only the land: a triangle wholly under the sea is left out — drawn in front of the sea, it was a disc of sand round every island)
+  const dry = (a: number, b: number, c2: number): boolean => pos[a * 3 + 1] > -0.6 || pos[b * 3 + 1] > -0.6 || pos[c2 * 3 + 1] > -0.6;
+  const tri = (a: number, b: number, c2: number): void => {
+    if (dry(a, b, c2)) idx.push(a, b, c2);
+  };
+  for (let j = 0; j < segs; j++) tri(0, 1 + ((j + 1) % segs), 1 + j);
   for (let i = 1; i < rings; i++) {
     for (let j = 0; j < segs; j++) {
       const a = 1 + (i - 1) * segs + j;
       const b = 1 + (i - 1) * segs + ((j + 1) % segs);
       const cc = 1 + i * segs + j;
       const d = 1 + i * segs + ((j + 1) % segs);
-      idx.push(a, b, cc, b, d, cc);
+      tri(a, b, cc);
+      tri(b, d, cc);
     }
   }
   const g = new THREE.BufferGeometry();
@@ -419,7 +476,17 @@ export class CloudDeck {
         void main() {
           vec4 mv = modelViewMatrix * vec4(aOffset, 1.0);
           float size = aInfo.x;
-          mv.xy += position.xy * size;
+          // Upright to the world, not to the camera: the puff's up is the sky's up as it lies on the screen
+          // (so it doesn't roll round with the view). Looking straight down, where up is no direction on the
+          // screen, it's held to a fixed bearing instead — the same one whichever way he turns
+          vec2 upS = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xy;
+          vec2 northS = (viewMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xy;
+          float lu = length(upS);
+          vec2 n = length(northS) > 1e-4 ? normalize(northS) : vec2(0.0, 1.0);
+          vec2 ax = lu > 1e-4 ? mix(n, upS / lu, smoothstep(0.12, 0.4, lu)) : n;
+          ax = length(ax) > 1e-4 ? normalize(ax) : vec2(0.0, 1.0);
+          vec2 rx = vec2(ax.y, -ax.x);
+          mv.xy += (rx * position.x + ax * position.y) * size;
           vec2 tile = vec2(mod(aInfo.y, 2.0), floor(aInfo.y / 2.0)) * 0.5;
           vUv = tile + uv * 0.5;
           vShade = clamp((aOffset.y - uBase) / uThick + 0.55, 0.0, 1.0) * 0.6 + aInfo.z * 0.25 + position.y * 0.35;
@@ -637,18 +704,32 @@ export function aircraft(o: { length: number; radius: number; span: number; live
   const engL = props ? R * 2.0 : R * 1.75;
   for (const side of [1, -1]) {
     const x = side * S * (props ? 0.2 : 0.18);
-    const y = props ? wy - engR * 0.2 : wy - engR * 1.25;
-    const z = wingZ - chord * (props ? 0.55 : 0.45) + (props ? 0 : S * 0.2 * 0.18 * 0);
+    // The wing where the engine hangs: it's swept back and set up at a dihedral, so at this station its
+    // leading edge is well aft of the root's and its underside higher — hang the engine from there
+    const along = Math.abs(x) - R * 0.5;
+    const f = along / (S / 2 - R * 0.5);
+    const c = chord * (1 - f * (props ? 0.4 : 0.7));
+    const le = wingZ - c * 0.25 + (props ? 0 : f * S * 0.2);
+    const under = wy + along * (props ? -0.02 : 0.09);
+    // Jets: slung under it on a pylon, the intake out ahead of the leading edge, the exhaust under the wing.
+    // Props: on the wing, the spinner out in front
+    const y = props ? under - engR * 0.2 : under - engR - 0.35;
+    const zc = props ? le - engL * 0.2 : le + c * 0.22 - engL * 0.42;
     const nac = new THREE.CylinderGeometry(engR * (props ? 0.6 : 0.82), engR, engL, 20, 1, false);
     nac.rotateX(Math.PI / 2);
-    nac.translate(x, y, z + engL * 0.3);
+    nac.translate(x, y, zc);
     engParts.push(nac);
     if (!props) {
-      const py = new THREE.BoxGeometry(0.35, engR * 0.9, engL * 0.6);
-      py.translate(x, y + engR * 0.8, z + engL * 0.45);
+      // The pylon: from the top of the nacelle up into the wing, back along under it
+      const top = y + engR * 0.75;
+      const ph = under + 0.3 - top;
+      const pl = engL * 0.5 + c * 0.3;
+      const py = new THREE.BoxGeometry(0.4, ph, pl);
+      py.translate(x, top + ph / 2, zc + pl / 2 - engL * 0.05);
       engParts.push(py);
     }
-    exhausts.push(new THREE.Vector3(x, y, z + engL * 0.8));
+    const z = zc - engL * 0.3;
+    exhausts.push(new THREE.Vector3(x, y, zc + engL * 0.5));
     if (props) {
       const hub = new THREE.Group();
       hub.position.set(x, y, z - engL * 0.22);

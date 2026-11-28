@@ -145,6 +145,31 @@ export function raviUnderCanopy(rig: RaviRig, t: number, swing: number): void {
   rig.apply();
 }
 
+/** Fingers spread wide, reaching. */
+const SPLAY: HandShape = { fingers: [[4, 6, 3], [3, 5, 3], [5, 7, 4], [7, 9, 5]], thumb: [0.05, 0.1, 0.1], spread: 16 };
+
+/**
+ * Nothing over him and the sea coming up: both arms thrown out past his head
+ * toward it, hands open and spread, as if he could catch himself on it —
+ * shaking with the wind. Call after the freefall pose (it takes the arms).
+ */
+export function raviBrace(rig: RaviRig, t: number): void {
+  for (const side of ['l', 'r'] as Side[]) {
+    const sx = side === 'l' ? 1 : -1;
+    const S = rig.at(`upperarm_${side}`);
+    const j = Math.sin(t * 23 + sx) * 0.03;
+    // Arms straight out from the shoulder toward the sea (model up, past his head), a little apart and
+    // in front, so they're there in front of his eyes; the elbow just off locked
+    const dir = V(sx * (-0.12 + j), 1, 0.12 + j + Math.sin(t * 17) * 0.02).normalize();
+    const W = S.clone().addScaledVector(dir, 0.56);
+    const along = dir.clone().add(V(0, 0, 0.15)).normalize();
+    const palm = V(0, 1, 0).addScaledVector(along, -along.y).normalize();
+    const elbow = dir.clone().negate().add(V(sx * 0.25, 0, -0.08)).normalize();
+    rig.reach(side, W, along, palm, elbow, S, 0.5, false).hand(side, SPLAY);
+  }
+  rig.apply();
+}
+
 // ================================================================ somebody else in the air
 
 /** The joints of an Enemy's own rig (it keeps them private; the pose below sets them after its own animation). */
@@ -213,6 +238,8 @@ export class DiverPose {
   aim = new THREE.Vector3(0, 0, -1);
   aimK = 0;
   limp = 0;
+  /** 0..1: limp and then some — every limb flung about (a dead man cartwheeling on the wind). */
+  thrash = 0;
   hang = 0;
   /** -1..1: a turn, banking the limbs into it. */
   steer = 0;
@@ -272,7 +299,10 @@ export class DiverPose {
         bend = THREE.MathUtils.lerp(bend, 0.12, this.aimK);
       }
       if (this.limp > 0) {
-        const d = this.up.clone().multiplyScalar(0.9).add(V(side * 0.55, 0.25, 0)).add(V(flutter(t * 1.6, s, 0.5), flutter(t * 1.4, s + 5, 0.5), flutter(t * 1.5, s + 9, 0.5)));
+        // (thrashing: wilder, and a lot faster)
+        const wa = 0.5 + 1.3 * this.thrash;
+        const ws = 1 + 3 * this.thrash;
+        const d = this.up.clone().multiplyScalar(0.9 - 0.6 * this.thrash).add(V(side * 0.55, 0.25, 0)).add(V(flutter(t * 1.6 * ws, s, wa), flutter(t * 1.4 * ws, s + 5, wa), flutter(t * 1.5 * ws, s + 9, wa)));
         limbQ(d, V(flutter(t, s + 4, 1), 1, flutter(t, s + 6, 1)), false, this.qb);
         this.qa.slerp(this.qb, this.limp);
         bend = THREE.MathUtils.lerp(bend, 0.5 + Math.abs(flutter(t * 1.3, s + 7, 0.6)), this.limp);
@@ -289,7 +319,9 @@ export class DiverPose {
         knee = THREE.MathUtils.lerp(knee, 0.25 + flutter(t * 0.5, s, 0.1), this.hang);
       }
       if (this.limp > 0) {
-        const d = this.up.clone().multiplyScalar(0.5).add(V(side * 0.25, -1, 0)).add(V(flutter(t * 1.2, s + 11, 0.35), 0, flutter(t * 1.1, s + 12, 0.35)));
+        const la = 0.35 + 1.0 * this.thrash;
+        const ls = 1 + 2.5 * this.thrash;
+        const d = this.up.clone().multiplyScalar(0.5).add(V(side * 0.25, -1, 0)).add(V(flutter(t * 1.2 * ls, s + 11, la), flutter(t * 1.3 * ls, s + 17, la * 0.6), flutter(t * 1.1 * ls, s + 12, la)));
         limbQ(d, V(0, 0, 1), true, this.qb);
         this.qa.slerp(this.qb, this.limp);
         knee = THREE.MathUtils.lerp(knee, 0.4 + Math.abs(flutter(t * 1.2, s + 13, 0.6)), this.limp);

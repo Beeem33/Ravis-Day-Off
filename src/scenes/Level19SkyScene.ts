@@ -14,7 +14,7 @@ import { DrinkViewmodel } from '../entities/DrinkViewmodel';
 import { Arsenal } from '../entities/Arsenal';
 import { pistolProp } from '../entities/RaviRagdoll';
 import { armWithAK } from '../entities/AkModel';
-import { diverQuat, raviFreefall, raviUnderCanopy, enemyCrawl, DiverPose } from '../entities/Skydiver';
+import { diverQuat, raviFreefall, raviUnderCanopy, raviBrace, enemyCrawl, DiverPose } from '../entities/Skydiver';
 import {
   skyDome, ocean, islandMesh, ISLANDS, farIslands, CloudDeck, CanopyRip, Birds, type Flock, bossWidebody, airliner, turboprop, exhaustTrail,
   type Aircraft, canopy, type Canopy, chutePack, letterPatch, HAZE, HAZE_DENSITY, SUN_DIR
@@ -70,8 +70,8 @@ const EXIT = 5;
 export const FALL_SECONDS = 63;
 /** Retry from here (fall seconds) once he's got this far. */
 const CHECKPOINT_T = 31;
-/** Black between the sea and the beach. */
-const BLACK_SECONDS = 5;
+/** Black between the sea and the beach (on from the black of the hit itself). */
+const BLACK_SECONDS = 3;
 /** Steering: how fast he tracks across the sky (A, D, S), and head-down in the pencil (W). */
 const TRACK = 15;
 const DIVE = 30;
@@ -413,6 +413,7 @@ export class Level19SkyScene implements GameScene {
     this.dialogue.destroy();
     this.ui.remove();
     this.wind?.stop();
+    this.scream?.stop();
     this.surf?.stop();
     this.under?.stop();
     this.jetSound?.stop();
@@ -1252,9 +1253,10 @@ export class Level19SkyScene implements GameScene {
     const { audio } = this.ctx;
     d.state = 'dead';
     d.deadT = 0;
-    // Shot through, the arch goes: he flips over and drops out of it, up and away from Ravi as the air takes him
-    d.vel.copy(dir).setY(0).normalize().multiplyScalar(4).add(V(0, 7, 0));
-    d.spin.set(Math.random() * 3 - 1.5, Math.random() * 2 - 1, Math.random() * 3 - 1.5);
+    // Shot through, the arch goes: he flips over and drops out of it, tumbling wildly, up and away from Ravi as the air takes him
+    d.vel.copy(dir).setY(0).normalize().multiplyScalar(4).add(V(0, 6, 0));
+    const wild = (): number => (Math.random() < 0.5 ? -1 : 1) * (4.5 + Math.random() * 5);
+    d.spin.set(wild(), wild() * 0.7, wild());
     d.e.hideWeapon();
     audio.killConfirm();
     audio.enemyScream(0.6);
@@ -1503,9 +1505,21 @@ export class Level19SkyScene implements GameScene {
       const e = d.e;
       const pose = d.pose;
       if (d.state === 'dead') {
-        // Limp: nothing holding him flat, turning over, the air taking him up and away
+        // Dead on the wind: nothing holding him flat, cartwheeling, every limb thrown about, and the
+        // blood out of his neck in a jet the air drags up and away behind him
         d.deadT += dt;
         pose.limp = Math.min(1, pose.limp + dt * 4);
+        pose.thrash = Math.max(0.25, 1 - d.deadT / 5);
+        if (d.deadT < 4) {
+          const beat = 0.55 + 0.45 * Math.max(0, Math.sin(d.deadT * 11));
+          const neck = e.chest.getWorldPosition(Level19SkyScene._c).addScaledVector(Level19SkyScene._a.set(0, 1, 0).applyQuaternion(d.q), 0.34);
+          const up = Level19SkyScene._a.set(0, 1, 0).applyQuaternion(d.q);
+          const n = Math.ceil(5 * beat * (1 - d.deadT / 5));
+          for (let k = 0; k < n; k++) {
+            const dirB = Level19SkyScene._b.copy(up).add(V((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5)).normalize();
+            this.particles.bloodSpray(neck, dirB, true, -1e5);
+          }
+        }
         pose.aimK = Math.max(0, pose.aimK - dt * 6);
         d.rel.addScaledVector(d.vel, dt);
         d.vel.y += 3.5 * dt;
@@ -1538,8 +1552,8 @@ export class Level19SkyScene implements GameScene {
         }
         continue;
       }
-      // Anybody still up after fifteen seconds or so pulls and is gone
-      if (d.t > 15 + (d.dist % 3) && d.burst <= 0 && d.glint <= 0) {
+      // They stay on him till one of them's dead; only when the fall's over do the ones still up pull and go
+      if (this.phase !== 'fall' && this.phase !== 'exit' && d.burst <= 0 && d.glint <= 0) {
         d.state = 'leave';
         d.deadT = 0;
         d.vel.set(d.rel.x * 0.1, 10, d.rel.z * 0.1);
@@ -1733,6 +1747,9 @@ export class Level19SkyScene implements GameScene {
   private pullYaw = 0;
   private pullPitch = -0.95;
   private rip: CanopyRip | null = null;
+  /** His harness's risers, from his shoulders up to his fists on the lines; and his scream, going in. */
+  private straps: THREE.Mesh[] = [];
+  private scream: { set(distance: number): void; stop(): void } | null = null;
 
   private startPull(): void {
     this.drink.abort();
@@ -1773,6 +1790,15 @@ export class Level19SkyScene implements GameScene {
     this.chute.setOpen(0);
     this.scene.add(this.chute.group);
     this.toNearPass(this.chute.group);
+    // The risers: webbing from the harness at his shoulders up to where he holds the lines
+    const web = new THREE.MeshStandardMaterial({ color: 0x1a1f2a, roughness: 0.8 });
+    for (let i = 0; i < 2; i++) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1, 0.012), web);
+      m.visible = false;
+      this.scene.add(m);
+      this.toNearPass(m);
+      this.straps.push(m);
+    }
     // The island he'll wash up on: put where he'll see its beach as he comes down
     const head = V(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const s = ISLANDS[0];
@@ -1796,7 +1822,7 @@ export class Level19SkyScene implements GameScene {
     const DROP = Level19SkyScene.DROP_AT;
     // How fast he's coming down: the jolt off terminal, a moment of hanging under it, and then
     // nothing over him at all — head-down, faster than he's gone all day
-    const v = track([[0, FALL_V], [0.9, 13], [3.8, 17], [RIP, 19], [RIP + 0.6, 30], [DROP + 0.5, 60], [DROP + 1.5, 78]], p);
+    const v = track([[0, FALL_V], [0.9, 13], [3.8, 17], [RIP, 19], [RIP + 0.6, 32], [DROP + 0.4, 68], [DROP + 1.2, 92]], p);
     this.pos.y -= v * dt;
     const head = V(-Math.sin(this.pullYaw), 0, -Math.cos(this.pullYaw));
     this.pos.addScaledVector(head, 6 * dt);
@@ -1842,18 +1868,39 @@ export class Level19SkyScene implements GameScene {
       const dive = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, new THREE.Vector3().crossVectors(x, y)));
       this.bodyQ.copy(hang).slerp(dive, fall);
       this.poseRavi({ x: 0, y: 0 }, 1);
+      // Both arms out at the sea, as if he could catch himself on it
+      raviBrace(this.rig, this.time);
+      if (!this.scream) {
+        this.scream = this.ctx.audio.fallScream();
+        this.scream.set(0);
+      }
     }
     this.pistol.visible = p < 0.5;
-    // The risers come off his shoulders: the canopy's origin a little over his head
-    const headAt = this.rig.bones.get('neck_01')!.getWorldPosition(new THREE.Vector3());
-    // A ram-air wing flies a little ahead of the man under it
+    // The lines come down into his fists: the canopy hangs from his hands, the risers on down to his shoulders
+    this.rig.root.updateMatrixWorld(true);
+    const hl = this.rig.bones.get('hand_l')!.getWorldPosition(new THREE.Vector3());
+    const hr = this.rig.bones.get('hand_r')!.getWorldPosition(new THREE.Vector3());
     const ahead = V(-Math.sin(spin), 0, -Math.cos(spin));
-    if (!this.rip || p - RIP < 0.8) this.chute.group.position.set(headAt.x, this.rig.root.position.y + 1.55, headAt.z).addScaledVector(ahead, 0.9 * up);
+    const held = !this.rip || p - RIP < 0.8;
+    if (held) this.chute.group.position.copy(hl).add(hr).multiplyScalar(0.5).add(V(0, 0.06, 0)).addScaledVector(ahead, 0.12 * up);
+    const strapsOn = held && fall <= 0 && p > 0.35;
+    for (const [i, side] of (['l', 'r'] as const).entries()) {
+      const m = this.straps[i];
+      m.visible = strapsOn;
+      if (!strapsOn) continue;
+      const hand = side === 'l' ? hl : hr;
+      const sh = this.rig.bones.get(`upperarm_${side}`)!.getWorldPosition(new THREE.Vector3());
+      const d = hand.clone().sub(sh);
+      const len = d.length();
+      m.position.copy(sh).addScaledVector(d, 0.5);
+      m.scale.set(1, Math.max(0.05, len), 1);
+      m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+    }
     // Camera: his own eyes all the way — the jolt as it opens, his head yanked up to it, a long look
     // as it goes to pieces, then over and straight down at the sea coming up, face first into it
     const headPos = this.rig.bones.get('head')!.getWorldPosition(Level19SkyScene._a);
     const face = V(-Math.sin(spin), 0, -Math.cos(spin));
-    this.camera.position.copy(headPos).add(V(0, 0.1 * (1 - fall) - 0.18 * fall, 0)).addScaledVector(face, 0.16 * up * (1 - fall));
+    this.camera.position.copy(headPos).add(V(0, 0.1 * (1 - fall) - 0.1 * fall, 0)).addScaledVector(face, 0.16 * up * (1 - fall));
     const pitch = track([[0, this.pullPitch], [0.2, this.pullPitch - 0.25], [1.0, 1.36], [RIP, 1.47], [DROP, 1.4], [DROP + 0.8, -1.55]], p);
     const yaw = this.pullYaw + wrapAngle(spin - this.pullYaw) * up + Math.sin(p * 0.8) * 0.1 * up * (1 - fall);
     this.camera.rotation.order = 'YXZ';
@@ -1897,27 +1944,32 @@ export class Level19SkyScene implements GameScene {
     this.phase = 'splash';
     this.pt = 0;
     const { audio } = this.ctx;
+    // Into the sea at ninety metres a second: the crack of it, and then nothing — black, straight away
     audio.splash(true);
+    audio.splash(false);
     audio.bodyThud(0);
+    this.scream?.stop();
+    this.scream = null;
+    for (const m of this.straps) m.visible = false;
     this.wind?.stop();
     this.wind = null;
     this.under = audio.underwaterLoop();
     this.under.set(1);
-    this.droplets.emit(V(this.pos.x, 0.5, this.pos.z), V(0, 9, 0), 9, 260, 1.6);
     this.whiteEl.style.transition = 'none';
-    this.whiteEl.style.opacity = '0.95';
+    this.whiteEl.style.opacity = '0';
+    this.waterEl.style.opacity = '0';
+    this.fadeEl.style.transition = 'none';
+    this.fadeEl.style.opacity = '1';
     this.captionEl.style.opacity = '0';
   }
 
   private updateSplash(dt: number): void {
     const p = this.pt;
-    // Under: the white of the hit, then the blue closing over, then nothing
-    this.whiteEl.style.opacity = String(Math.max(0, 0.95 - p * 5));
-    this.waterEl.style.opacity = String(smooth(p / 0.3));
-    this.fadeEl.style.opacity = String(smooth((p - 1.1) / 0.6));
-    this.camera.position.y -= Math.max(0, 8 - p * 10) * dt;
-    this.droplets.update(dt, 9.8, 0.4);
-    if (p >= 1.75) this.startBlack();
+    // Black from the hit; the sea going on over him a moment in the dark, then the long black
+    this.fadeEl.style.opacity = '1';
+    this.under?.set(Math.max(0, 1 - p / 2));
+    void dt;
+    if (p >= 2.0) this.startBlack();
   }
 
   // ================================================================ 4. black

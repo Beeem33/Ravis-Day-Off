@@ -3966,8 +3966,12 @@ export class AudioManager {
     this.track = t;
     let load = this.tracks.get(url);
     if (!load) {
-      load = fetch(`${import.meta.env.BASE_URL}${url}`)
-        .then((r) => r.arrayBuffer())
+      // (no-cache: a song that 404'd before it was uploaded mustn't stay missing from the browser's cache)
+      load = fetch(`${import.meta.env.BASE_URL}${url}`, { cache: 'no-cache' })
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.arrayBuffer();
+        })
         .then((b) => ctx.decodeAudioData(b))
         .then((buf) => {
           // The seam: the tail into the loop's end crossfaded with what led into its start
@@ -4008,7 +4012,11 @@ export class AudioManager {
         src.start(0, Math.min(startAt, Math.max(0, buf.duration - 0.05)));
         t.src = src;
       })
-      .catch((err) => console.warn('[music] could not load', url, err));
+      .catch((err) => {
+        // Forget the failed load, so the next time the song's wanted it's fetched again
+        if (this.tracks.get(url) === load) this.tracks.delete(url);
+        console.warn('[music] could not load', url, err);
+      });
   }
 
   /** Fades the looping song out over `fadeSeconds` and lets it go. Safe to call when nothing's playing. */

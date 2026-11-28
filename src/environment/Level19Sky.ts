@@ -141,6 +141,10 @@ export function ocean(shoals: THREE.Vector4[]): THREE.Mesh {
                + (vec2(vnoise(p * 0.004), vnoise(p * 0.004 + 7.3)) - 0.5) * 0.06
                + wave(p, normalize(vec2(0.8, -0.7)), 0.11, 0.12 * f3, 2.6)
                + wave(p, normalize(vec2(-0.9, -0.2)), 0.31, 0.035 * f4, 4.1);
+        // Close to, the chop: small broken ripples on the swell, so the sea has a scale as it comes up
+        float near = 1.0 - smoothstep(25.0, 450.0, dist);
+        g += (vec2(vnoise(p * 0.35 + uTime * 0.35), vnoise(p * 0.35 + 17.0 - uTime * 0.3)) - 0.5) * 0.55 * near;
+        g += (vec2(vnoise(p * 1.4 - uTime * 0.6), vnoise(p * 1.4 + 5.0 + uTime * 0.5)) - 0.5) * 0.35 * near;
         vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
         // Shallow water over the reefs, fading out to the deep
@@ -158,7 +162,7 @@ export function ocean(shoals: THREE.Vector4[]): THREE.Mesh {
         col += vec3(1.0, 0.95, 0.82) * spec * 2.4;
         // Whitecaps: little broken streaks of white on the open sea, for a sense of how far down it is
         float caps = vnoise(p * vec2(0.16, 0.08) + vec2(uTime * 0.03, 0.0)) * vnoise(p * 0.03 - uTime * 0.01);
-        caps = smoothstep(0.6, 0.72, caps) * (1.0 - sh) * (1.0 - smoothstep(500.0, 2500.0, dist));
+        caps = smoothstep(0.6, 0.72, caps) * (1.0 - sh * (1.0 - near * 0.6)) * (1.0 - smoothstep(500.0, 2500.0, dist));
         col = mix(col, vec3(0.93, 0.96, 0.98), caps * 0.22);
         col = haze(col, dist);
         gl_FragColor = vec4(col, 1.0);
@@ -948,6 +952,8 @@ export interface Canopy {
   risers: [THREE.Vector3, THREE.Vector3];
   /** 0 a bundle .. 1 open. */
   setOpen(k: number): void;
+  /** Torn away: the wing (replaced by its pieces) and the lines (gone slack) stay hidden. */
+  state: { ripped: boolean; slack: boolean };
 }
 
 export function canopy(o: { span: number; chord: number; rise: number; colours: number[]; holes?: { u: number; v: number; r: number }[] }): Canopy {
@@ -1035,6 +1041,7 @@ export function canopy(o: { span: number; chord: number; rise: number; colours: 
     tatters.push(t);
     group.add(t);
   }
+  const state = { ripped: false, slack: false };
   const shapeAt = (u: number, v: number, k: number, out: THREE.Vector3): THREE.Vector3 => {
     // u 0..1 across the span, v 0..1 leading edge to trailing; k how open
     const x = (u - 0.5) * span * (0.18 + 0.82 * k);
@@ -1076,10 +1083,11 @@ export function canopy(o: { span: number; chord: number; rise: number; colours: 
       t.position.copy(tmp);
       t.visible = k > 0.5;
     }
-    wing.visible = lines.visible = k > 0.02;
+    wing.visible = !state.ripped && k > 0.02;
+    lines.visible = !state.slack && k > 0.02;
   };
   setOpen(1);
-  return { group, wing, lines, tatters, risers, setOpen };
+  return { group, wing, lines, tatters, risers, setOpen, state };
 }
 
 /** The pack on a jumper's back, the pilot chute's handle at the bottom of it. */
@@ -1118,101 +1126,119 @@ export function letterPatch(text: string, w: number, h: number): THREE.Mesh {
   return m;
 }
 
-// ================================================================ the rush of it
-
 /**
- * Speed lines: a few hundred short streaks of air hung off the camera,
- * each tearing past him the way the air is — up from below at terminal
- * velocity, back from ahead as he tracks — drawn as a line its own speed
- * long, bright at the head and gone at the tail. They wrap round a box in
- * front of the lens, so the rush never thins. Brighter, longer and more of
- * them in a dive.
+ * A canopy torn apart by the wind: its cells ripped off one after another,
+ * each a panel of the same fabric (holes and all) cut out of the wing where
+ * it was, left behind in the air as he drops away from it — flapping,
+ * turning over, crumpling as it goes. The lines go slack with the first.
+ *
+ *   const rip = new CanopyRip(canopy, scene);   // at the moment it goes
+ *   rip.update(dt, k);                         // k: seconds since
+ *   rip.torn                                   // how many have gone (for the sound)
  */
-export class WindStreaks {
-  private lines: THREE.LineSegments;
-  private pos: Float32Array;
-  private seg: Float32Array;
-  private mat: THREE.LineBasicMaterial;
-  private static readonly N = 260;
-  private static readonly BOX = new THREE.Vector3(9, 9, 26);
-  private q = new THREE.Quaternion();
-  private v = new THREE.Vector3();
+export class CanopyRip {
+  private panels: { mesh: THREE.Mesh; base: Float32Array; at: number; vel: THREE.Vector3; spin: THREE.Vector3; gone: boolean; seed: number }[] = [];
+  torn = 0;
 
-  constructor(private camera: THREE.Camera) {
-    const N = WindStreaks.N;
-    this.pos = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) this.respawn(i, true);
-    this.seg = new Float32Array(N * 6);
-    const col = new Float32Array(N * 6);
-    for (let i = 0; i < N; i++) col.set([1, 1, 1, 0, 0, 0], i * 6);
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.seg, 3));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    this.mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
-    this.lines = new THREE.LineSegments(g, this.mat);
-    this.lines.frustumCulled = false;
-    this.lines.renderOrder = 5;
-    camera.add(this.lines);
-  }
-
-  private respawn(i: number, anywhere: boolean, from?: THREE.Vector3): void {
-    const B = WindStreaks.BOX;
-    let x = (Math.random() * 2 - 1) * B.x;
-    let y = (Math.random() * 2 - 1) * B.y;
-    let z = -1.5 - Math.random() * B.z;
-    if (!anywhere && from) {
-      // Back in on the side the air comes from
-      const ax = Math.abs(from.x) / B.x;
-      const ay = Math.abs(from.y) / B.y;
-      const az = Math.abs(from.z) / (B.z * 0.5);
-      if (ax >= ay && ax >= az) x = -Math.sign(from.x) * B.x;
-      else if (ay >= az) y = -Math.sign(from.y) * B.y;
-      else z = from.z > 0 ? -1.5 - B.z : -1.5;
-    }
-    this.pos[i * 3] = x;
-    this.pos[i * 3 + 1] = y;
-    this.pos[i * 3 + 2] = z;
-  }
-
-  set visible(on: boolean) {
-    this.lines.visible = on;
-  }
-
-  /** `hv` his horizontal velocity (world), `fall` how fast he's dropping, `dive` 0..1, `k` overall strength. */
-  update(dt: number, hv: THREE.Vector3, fall: number, dive: number, k: number): void {
-    const N = WindStreaks.N;
-    const B = WindStreaks.BOX;
-    // The air past him, world: up from below, and against the way he's tracking — then into the camera's frame
-    this.q.copy(this.camera.quaternion).invert();
-    const v = this.v.set(-hv.x, fall * (1 + dive * 0.5), -hv.z).applyQuaternion(this.q);
-    const len = 0.022 + dive * 0.03;
-    const shown = Math.round(N * (0.55 + 0.45 * dive));
-    for (let i = 0; i < N; i++) {
-      let x = this.pos[i * 3] + v.x * dt;
-      let y = this.pos[i * 3 + 1] + v.y * dt;
-      let z = this.pos[i * 3 + 2] + v.z * dt;
-      if (Math.abs(x) > B.x || Math.abs(y) > B.y || z > -1.5 || z < -1.5 - B.z) {
-        this.respawn(i, false, v);
-        x = this.pos[i * 3];
-        y = this.pos[i * 3 + 1];
-        z = this.pos[i * 3 + 2];
+  constructor(private c: Canopy, private scene: THREE.Scene, layer = 0) {
+    const src = c.wing.geometry as THREE.BufferGeometry;
+    const pos = src.getAttribute('position') as THREE.BufferAttribute;
+    const uv = src.getAttribute('uv') as THREE.BufferAttribute;
+    const nx = 29;
+    const ny = 9;
+    const cells = 7;
+    const per = (nx - 1) / cells;
+    c.group.updateMatrixWorld(true);
+    const order = [3, 1, 5, 0, 6, 2, 4];
+    // The wing is the panels now: each stays with him till it goes
+    c.state.ripped = true;
+    c.wing.visible = false;
+    for (let cell = 0; cell < cells; cell++) {
+      const cols = per + 1;
+      const p = new Float32Array(cols * ny * 3);
+      const u = new Float32Array(cols * ny * 2);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < cols; i++) {
+          const s = j * nx + cell * per + i;
+          const d = j * cols + i;
+          p.set([pos.getX(s), pos.getY(s), pos.getZ(s)], d * 3);
+          u.set([uv.getX(s), uv.getY(s)], d * 2);
+        }
       }
-      this.pos[i * 3] = x;
-      this.pos[i * 3 + 1] = y;
-      this.pos[i * 3 + 2] = z;
-      const o = i * 6;
-      if (i >= shown) {
-        this.seg.fill(0, o, o + 6);
+      const idx: number[] = [];
+      for (let j = 0; j < ny - 1; j++) {
+        for (let i = 0; i < cols - 1; i++) {
+          const a = j * cols + i;
+          idx.push(a, a + cols, a + 1, a + 1, a + cols, a + cols + 1);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(u, 2));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, c.wing.material);
+      mesh.frustumCulled = false;
+      mesh.layers.set(layer);
+      // Into the world where the wing is: from here on it's the air's, not his
+      mesh.matrix.copy(c.wing.matrixWorld);
+      mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      scene.add(mesh);
+      const side = (cell + 0.5) / cells - 0.5;
+      this.panels.push({
+        mesh,
+        base: p.slice(),
+        at: order.indexOf(cell) * 0.11 + Math.random() * 0.05,
+        vel: new THREE.Vector3(side * 14 + (Math.random() - 0.5) * 4, 2 + Math.random() * 4, (Math.random() - 0.5) * 6).applyQuaternion(mesh.quaternion),
+        spin: new THREE.Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 6),
+        gone: false,
+        seed: Math.random() * 10
+      });
+    }
+  }
+
+  update(dt: number, k: number): void {
+    this.c.wing.updateMatrixWorld(true);
+    for (const pn of this.panels) {
+      if (k < pn.at) {
+        // Still on: riding the canopy over him, straining
+        pn.mesh.matrix.copy(this.c.wing.matrixWorld);
+        pn.mesh.matrix.decompose(pn.mesh.position, pn.mesh.quaternion, pn.mesh.scale);
         continue;
       }
-      this.seg[o] = x;
-      this.seg[o + 1] = y;
-      this.seg[o + 2] = z;
-      this.seg[o + 3] = x - v.x * len;
-      this.seg[o + 4] = y - v.y * len;
-      this.seg[o + 5] = z - v.z * len;
+      if (!pn.gone) {
+        pn.gone = true;
+        this.torn++;
+        if (this.torn === 1) {
+          this.c.state.slack = true;
+          this.c.lines.visible = false;
+        }
+      }
+      const a = k - pn.at;
+      pn.vel.multiplyScalar(1 - Math.min(1, dt * 0.6));
+      pn.mesh.position.addScaledVector(pn.vel, dt);
+      pn.mesh.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pn.spin.x * dt, pn.spin.y * dt, pn.spin.z * dt)));
+      // Flapping: waves down the panel, harder as it goes, crumpling in on itself
+      const p = pn.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const crumple = Math.min(0.6, a * 0.35);
+      for (let v = 0; v < p.count; v++) {
+        const bx = pn.base[v * 3];
+        const by = pn.base[v * 3 + 1];
+        const bz = pn.base[v * 3 + 2];
+        const w = Math.sin(bz * 2.2 + a * 17 + pn.seed) * 0.35 * Math.min(1, a * 3) + Math.sin(bx * 3 + a * 11) * 0.15;
+        p.setXYZ(v, bx * (1 - crumple * 0.6), by + w, bz * (1 - crumple));
+      }
+      p.needsUpdate = true;
+      pn.mesh.geometry.computeVertexNormals();
     }
-    (this.lines.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
-    this.mat.opacity = (0.09 + 0.28 * dive) * k;
+  }
+
+  /** Every panel gone: whatever is left of the wing over him is nothing. */
+  get done(): boolean {
+    return this.panels.every((p) => p.gone);
+  }
+
+  dispose(): void {
+    for (const pn of this.panels) this.scene.remove(pn.mesh);
   }
 }

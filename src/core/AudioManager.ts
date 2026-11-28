@@ -5877,4 +5877,22 @@ export class AudioManager {
       }
     };
   }
+
+  /**
+   * Nylon tearing in a gale (Level 19's canopy): a fast crackle of small
+   * snaps climbing in pitch as the rip runs, over a loud flap. `big` for the
+   * first, the one that takes half the wing.
+   */
+  fabricRip(big = false): void {
+    if (!this.ctx) return;
+    const out = this.place(this.ctx, 0, big ? 0.55 : 0.35, 0.1);
+    const n = big ? 26 : 14;
+    const len = big ? 0.55 : 0.3;
+    for (let i = 0; i < n; i++) {
+      const u = i / n;
+      this.burst(out, { at: u * len + Math.random() * 0.02, D: 0.025 + Math.random() * 0.02, type: 'bandpass', f: 900 + u * 2600 + Math.random() * 600, q: 3, gain: 0.25 + Math.random() * 0.2, attack: 0.001 });
+    }
+    // The cloth whipping as it goes
+    this.burst(out, { D: len + 0.25, type: 'lowpass', f: 700, f1: 160, gain: big ? 0.5 : 0.3, attack: 0.01, rate: 0.6 });
+  }
 }

@@ -1368,6 +1368,7 @@ export class Level19SkyScene implements GameScene {
     this.toNearPass(this.rig.root);
     this.toNearPass(this.pistol);
     this.camera.position.addScaledVector(V(0, 1, 0), 1.2);
+    this.headless(false);
     this.rig.root.visible = true;
     this.pistol.visible = true;
     this.ctx.audio.stopTrackMusic(0.5);
@@ -1937,7 +1938,17 @@ export class Level19SkyScene implements GameScene {
   private static readonly RIP_AT = 4.9;
   private static readonly DROP_AT = 5.9;
 
+  /**
+   * His own head, gone, while it's his eyes the camera is in (the canopy and the drop): from in there the
+   * camera's inside his skull, and what it sees is the backs of his own eyes and teeth. Back for anything
+   * seen from outside him.
+   */
+  private headless(on: boolean): void {
+    this.rig.bones.get('head')!.scale.setScalar(on ? 0.001 : 1);
+  }
+
   private updatePull(dt: number): void {
+    this.headless(true);
     const p = this.pt;
     const RIP = Level19SkyScene.RIP_AT;
     const DROP = Level19SkyScene.DROP_AT;
@@ -2066,6 +2077,7 @@ export class Level19SkyScene implements GameScene {
   // ================================================================ the sea
 
   private startSplash(): void {
+    this.headless(false);
     this.phase = 'splash';
     this.pt = 0;
     const { audio } = this.ctx;

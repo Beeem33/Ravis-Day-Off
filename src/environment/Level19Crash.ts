@@ -246,8 +246,10 @@ class PointCloud {
 
 export class CrashFx {
   readonly group = new THREE.Group();
-  private smoke = new PointCloud(900, false);
-  private fire = new PointCloud(260, true);
+  private smoke = new PointCloud(500, false);
+  /** The plume off the wreck: its own pool, because it climbs (the trail down the sky doesn't). */
+  private plume = new PointCloud(700, false);
+  private fire = new PointCloud(200, true);
   private trailT = 0;
   private columnT = 0;
   /** Seconds since it went in (−1: not yet). */
@@ -256,7 +258,7 @@ export class CrashFx {
   private static _c = new THREE.Color();
 
   constructor() {
-    this.group.add(this.smoke.points, this.fire.points);
+    this.group.add(this.smoke.points, this.plume.points, this.fire.points);
   }
 
   /** Black smoke off the jet on its way down (`from`: its tail, world). */
@@ -280,34 +282,37 @@ export class CrashFx {
       const c = CrashFx._c.setRGB(1.0, 0.32 + hot * 0.38, 0.06 + hot * 0.16);
       this.fire.spawn(p, dir.multiplyScalar(sp), 2.6 + Math.random() * 3.2, 120, 420 + Math.random() * 380, 0.6, c);
     }
-    // And the first of the smoke, rolling out of it
-    for (let i = 0; i < 80; i++) {
-      const dir = V(Math.random() - 0.5, Math.random() * 0.6 + 0.2, Math.random() - 0.5).normalize();
-      const c = CrashFx._c.setRGB(0.12, 0.11, 0.1);
-      this.smoke.spawn(p, dir.multiplyScalar(50 + Math.random() * 110), 35 + Math.random() * 20, 200, 700 + Math.random() * 400, 0.9, c);
+    // And a puff of smoke out of it, small: the plume takes over from there
+    for (let i = 0; i < 14; i++) {
+      const dir = V(Math.random() - 0.5, Math.random() * 0.6 + 0.3, Math.random() - 0.5).normalize();
+      const c = CrashFx._c.setRGB(0.14, 0.13, 0.12);
+      this.plume.spawn(p, dir.multiplyScalar(20 + Math.random() * 30), 10 + Math.random() * 6, 60, 160 + Math.random() * 60, 0.7, c);
     }
   }
 
   update(dt: number, camera: THREE.PerspectiveCamera, height: number): void {
     if (this.burning >= 0) {
       this.burning += dt;
-      // The column: it keeps coming, thick and black at the bottom, going grey and spreading as it climbs
+      // The plume: one narrow line of black smoke going straight up off the wreck into the sky,
+      // widening only a little as it climbs, leaning a touch with the wind
       this.columnT -= dt;
       while (this.columnT <= 0) {
-        this.columnT += 0.09;
-        const c = CrashFx._c.setRGB(0.1 + Math.random() * 0.05, 0.095, 0.09);
-        const p = this.at.clone().add(V((Math.random() - 0.5) * 200, 20, (Math.random() - 0.5) * 200));
-        this.smoke.spawn(p, V((Math.random() - 0.5) * 12 + 8, 55 + Math.random() * 35, (Math.random() - 0.5) * 12), 50, 200, 800 + Math.random() * 450, 0.85, c);
+        this.columnT += 0.1;
+        const c = CrashFx._c.setRGB(0.12 + Math.random() * 0.04, 0.115, 0.11);
+        const p = this.at.clone().add(V((Math.random() - 0.5) * 24, 8, (Math.random() - 0.5) * 24));
+        this.plume.spawn(p, V((Math.random() - 0.5) * 3 + 2, 25 + Math.random() * 8, (Math.random() - 0.5) * 3), 45, 45, 120 + Math.random() * 60, 0.75, c);
       }
-      // Fire still going at the foot of it
-      if (Math.random() < dt * 14) {
+      // A little fire still going at the foot of it
+      if (Math.random() < dt * 8) {
         const c = CrashFx._c.setRGB(1.0, 0.5 + Math.random() * 0.3, 0.15);
-        const p = this.at.clone().add(V((Math.random() - 0.5) * 240, 10, (Math.random() - 0.5) * 240));
-        this.fire.spawn(p, V(0, 25 + Math.random() * 30, 0), 1.6 + Math.random(), 120, 260, 0.55, c);
+        const p = this.at.clone().add(V((Math.random() - 0.5) * 40, 6, (Math.random() - 0.5) * 40));
+        this.fire.spawn(p, V(0, 15 + Math.random() * 10, 0), 1.2 + Math.random(), 40, 80, 0.5, c);
       }
     }
     // (smoke slows in the air and lifts; the fireball's rush dies fast and it rises on its heat)
-    this.smoke.update(dt, camera, height, 0.35, 1.5);
+    this.smoke.update(dt, camera, height, 0.35, 0);
+    // (the plume keeps climbing on the fire's heat: it doesn't stall and spread out)
+    this.plume.update(dt, camera, height, 0.4, 11);
     this.fire.update(dt, camera, height, 1.6, 12);
   }
 

@@ -68,7 +68,7 @@ export function skyDome(): THREE.Mesh {
         float s = max(dot(d, uSun), 0.0);
         col += vec3(1.0, 0.86, 0.62) * pow(s, 6.0) * 0.18 * (1.0 - clamp(up, 0.0, 1.0));
         col += vec3(1.0, 0.95, 0.85) * (pow(s, 64.0) * 0.55 + pow(s, 900.0) * 6.0);
-        if (up < 0.0) col = mix(col, uHorizon * 0.96, clamp(-up * 6.0, 0.0, 1.0));
+        if (up < 0.0) col = mix(col, uHorizon, clamp(-up * 6.0, 0.0, 1.0));
         gl_FragColor = vec4(col * uBright, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -158,8 +158,8 @@ export function ocean(shoals: THREE.Vector4[]): THREE.Mesh {
         col += vec3(1.0, 0.95, 0.82) * spec * 2.4;
         // Whitecaps: little broken streaks of white on the open sea, for a sense of how far down it is
         float caps = vnoise(p * vec2(0.16, 0.08) + vec2(uTime * 0.03, 0.0)) * vnoise(p * 0.03 - uTime * 0.01);
-        caps = smoothstep(0.55, 0.68, caps) * (1.0 - sh) * (1.0 - smoothstep(500.0, 2500.0, dist));
-        col = mix(col, vec3(0.93, 0.96, 0.98), caps * 0.3);
+        caps = smoothstep(0.6, 0.72, caps) * (1.0 - sh) * (1.0 - smoothstep(500.0, 2500.0, dist));
+        col = mix(col, vec3(0.93, 0.96, 0.98), caps * 0.22);
         col = haze(col, dist);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -167,7 +167,7 @@ export function ocean(shoals: THREE.Vector4[]): THREE.Mesh {
       }
     `
   });
-  const geo = new THREE.PlaneGeometry(90000, 90000, 1, 1);
+  const geo = new THREE.PlaneGeometry(200000, 200000, 1, 1);
   geo.rotateX(-Math.PI / 2);
   const m = new THREE.Mesh(geo, mat);
   m.frustumCulled = false;
@@ -205,9 +205,9 @@ export function islandHeight(s: IslandSite, x: number, z: number): number {
  * and darker green up the hill, bare rock on the top of the tall ones —
  * vertex coloured and flat shaded, so its folds read from four kilometres.
  */
-export function islandMesh(s: IslandSite, fine = false): THREE.Mesh {
-  const rings = fine ? 44 : 22;
-  const segs = fine ? 180 : 72;
+export function islandMesh(s: IslandSite, fine = false, far = false): THREE.Mesh {
+  const rings = fine ? 44 : far ? 12 : 22;
+  const segs = fine ? 180 : far ? 40 : 72;
   const pos: number[] = [];
   const col: number[] = [];
   const idx: number[] = [];
@@ -270,6 +270,27 @@ export const ISLANDS: IslandSite[] = [
   { x: 7600, z: -9800, r: 1500, h: 600, seed: 6.6 },
   { x: -8200, z: -8600, r: 1300, h: 520, seed: 8.1 }
 ];
+
+/**
+ * The rest of the archipelago, out to the horizon: islands every few
+ * kilometres in every direction, so wherever he looks from four kilometres
+ * up there is more of it going away into the haze, not a sea that stops.
+ */
+export function farIslands(): IslandSite[] {
+  const out: IslandSite[] = [];
+  let s = 4242;
+  const rnd = (): number => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+  for (let i = 0; i < 46; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = 9000 + Math.pow(rnd(), 0.8) * 26000;
+    const r = 300 + Math.pow(rnd(), 2) * 2600;
+    out.push({ x: Math.cos(a) * d, z: Math.sin(a) * d - 3000, r, h: r * (0.15 + rnd() * 0.35), seed: rnd() * 10 });
+  }
+  return out;
+}
 
 // ================================================================ clouds
 
@@ -340,17 +361,23 @@ export class CloudDeck {
       s = (s * 9301 + 49297) % 233280;
       return s / 233280;
     };
-    // Clustered: puffs gathered round a few hundred centres, not sprinkled evenly
-    const centres: [number, number, number][] = [];
+    // Clustered: puffs gathered round centres, not sprinkled evenly. The centres thin out with
+    // distance — thick round the fall, scattered and bigger out toward the horizon, where the
+    // haze takes them — so the deck has no edge anywhere you can see. `spread` is how far the
+    // thick of it reaches; it goes on, thinning, to eight times that.
+    const centres: [number, number, number, number][] = [];
     const nc = Math.max(8, Math.floor(count / 16));
+    const far = spread * 8;
     for (let i = 0; i < nc; i++) {
-      let x = 0;
-      let z = 0;
+      let r = 0;
+      let a = 0;
       do {
-        x = (rnd() * 2 - 1) * spread;
-        z = (rnd() * 2 - 1) * spread;
-      } while (this.hole > 0 && Math.hypot(x, z) < this.hole);
-      centres.push([x, z, 160 + rnd() * 420]);
+        r = far * Math.pow(rnd(), 1.9);
+        a = rnd() * Math.PI * 2;
+      } while (this.hole > 0 && r < this.hole);
+      // Further out, each cluster stands for more sky: bigger, so the coverage holds up
+      const sc = 1 + Math.max(0, r - spread) / (spread * 1.2);
+      centres.push([Math.cos(a) * r, Math.sin(a) * r, (160 + rnd() * 420) * sc, sc]);
     }
     for (let i = 0; i < count; i++) {
       const c = centres[i % nc];
@@ -359,7 +386,7 @@ export class CloudDeck {
       off[i * 3] = c[0] + Math.cos(a) * r;
       off[i * 3 + 1] = y + (rnd() - 0.35) * thick * (1 - (r / c[2]) * 0.6);
       off[i * 3 + 2] = c[1] + Math.sin(a) * r;
-      info[i * 3] = (150 + rnd() * 260) * (0.6 + 0.6 * (1 - r / c[2])); // size
+      info[i * 3] = (150 + rnd() * 260) * (0.6 + 0.6 * (1 - r / c[2])) * c[3]; // size
       info[i * 3 + 1] = Math.floor(rnd() * 4); // which of the four puffs
       info[i * 3 + 2] = rnd(); // shade jitter
     }
@@ -1089,4 +1116,103 @@ export function letterPatch(text: string, w: number, h: number): THREE.Mesh {
   t.colorSpace = THREE.SRGBColorSpace;
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 0.7, emissive: 0x3a2e00, emissiveMap: t, polygonOffset: true, polygonOffsetFactor: -2 }));
   return m;
+}
+
+// ================================================================ the rush of it
+
+/**
+ * Speed lines: a few hundred short streaks of air hung off the camera,
+ * each tearing past him the way the air is — up from below at terminal
+ * velocity, back from ahead as he tracks — drawn as a line its own speed
+ * long, bright at the head and gone at the tail. They wrap round a box in
+ * front of the lens, so the rush never thins. Brighter, longer and more of
+ * them in a dive.
+ */
+export class WindStreaks {
+  private lines: THREE.LineSegments;
+  private pos: Float32Array;
+  private seg: Float32Array;
+  private mat: THREE.LineBasicMaterial;
+  private static readonly N = 260;
+  private static readonly BOX = new THREE.Vector3(9, 9, 26);
+  private q = new THREE.Quaternion();
+  private v = new THREE.Vector3();
+
+  constructor(private camera: THREE.Camera) {
+    const N = WindStreaks.N;
+    this.pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) this.respawn(i, true);
+    this.seg = new Float32Array(N * 6);
+    const col = new Float32Array(N * 6);
+    for (let i = 0; i < N; i++) col.set([1, 1, 1, 0, 0, 0], i * 6);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(this.seg, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    this.mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.lines = new THREE.LineSegments(g, this.mat);
+    this.lines.frustumCulled = false;
+    this.lines.renderOrder = 5;
+    camera.add(this.lines);
+  }
+
+  private respawn(i: number, anywhere: boolean, from?: THREE.Vector3): void {
+    const B = WindStreaks.BOX;
+    let x = (Math.random() * 2 - 1) * B.x;
+    let y = (Math.random() * 2 - 1) * B.y;
+    let z = -1.5 - Math.random() * B.z;
+    if (!anywhere && from) {
+      // Back in on the side the air comes from
+      const ax = Math.abs(from.x) / B.x;
+      const ay = Math.abs(from.y) / B.y;
+      const az = Math.abs(from.z) / (B.z * 0.5);
+      if (ax >= ay && ax >= az) x = -Math.sign(from.x) * B.x;
+      else if (ay >= az) y = -Math.sign(from.y) * B.y;
+      else z = from.z > 0 ? -1.5 - B.z : -1.5;
+    }
+    this.pos[i * 3] = x;
+    this.pos[i * 3 + 1] = y;
+    this.pos[i * 3 + 2] = z;
+  }
+
+  set visible(on: boolean) {
+    this.lines.visible = on;
+  }
+
+  /** `hv` his horizontal velocity (world), `fall` how fast he's dropping, `dive` 0..1, `k` overall strength. */
+  update(dt: number, hv: THREE.Vector3, fall: number, dive: number, k: number): void {
+    const N = WindStreaks.N;
+    const B = WindStreaks.BOX;
+    // The air past him, world: up from below, and against the way he's tracking — then into the camera's frame
+    this.q.copy(this.camera.quaternion).invert();
+    const v = this.v.set(-hv.x, fall * (1 + dive * 0.5), -hv.z).applyQuaternion(this.q);
+    const len = 0.022 + dive * 0.03;
+    const shown = Math.round(N * (0.55 + 0.45 * dive));
+    for (let i = 0; i < N; i++) {
+      let x = this.pos[i * 3] + v.x * dt;
+      let y = this.pos[i * 3 + 1] + v.y * dt;
+      let z = this.pos[i * 3 + 2] + v.z * dt;
+      if (Math.abs(x) > B.x || Math.abs(y) > B.y || z > -1.5 || z < -1.5 - B.z) {
+        this.respawn(i, false, v);
+        x = this.pos[i * 3];
+        y = this.pos[i * 3 + 1];
+        z = this.pos[i * 3 + 2];
+      }
+      this.pos[i * 3] = x;
+      this.pos[i * 3 + 1] = y;
+      this.pos[i * 3 + 2] = z;
+      const o = i * 6;
+      if (i >= shown) {
+        this.seg.fill(0, o, o + 6);
+        continue;
+      }
+      this.seg[o] = x;
+      this.seg[o + 1] = y;
+      this.seg[o + 2] = z;
+      this.seg[o + 3] = x - v.x * len;
+      this.seg[o + 4] = y - v.y * len;
+      this.seg[o + 5] = z - v.z * len;
+    }
+    (this.lines.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    this.mat.opacity = (0.09 + 0.28 * dive) * k;
+  }
 }

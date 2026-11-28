@@ -5700,8 +5700,8 @@ export class AudioManager {
    * slow gusts so it never settles into a drone. set(k) 0..1 (k is roughly
    * how fast he is falling, as a share of flat out); stop() fades it.
    */
-  windLoop(): { set(k: number): void; stop(): void } {
-    const idle = { set: (): void => {}, stop: (): void => {} };
+  windLoop(): { set(k: number): void; setRush(k: number): void; stop(): void } {
+    const idle = { set: (): void => {}, setRush: (): void => {}, stop: (): void => {} };
     if (!this.ctx) return idle;
     const ctx = this.ctx;
     const out = ctx.createGain();
@@ -5709,6 +5709,7 @@ export class AudioManager {
     out.connect(this.sfxBus);
     const srcs: AudioBufferSourceNode[] = [];
     const gusts: OscillatorNode[] = [];
+    const filters: [BiquadFilterNode, number][] = [];
     const layer = (type: BiquadFilterType, f: number, q: number, g: number, rate: number, gustHz: number): void => {
       const src = ctx.createBufferSource();
       src.buffer = this.noiseBuffer;
@@ -5734,6 +5735,7 @@ export class AudioManager {
       lfo.start();
       srcs.push(src);
       gusts.push(lfo);
+      filters.push([flt, f]);
     };
     layer('lowpass', 160, 0.8, 0.5, 0.45, 0.23);
     layer('bandpass', 700, 0.5, 0.22, 0.8, 0.37);
@@ -5743,6 +5745,12 @@ export class AudioManager {
       set: (k: number) => {
         if (!alive) return;
         out.gain.setTargetAtTime(Math.max(0, fin(k, 0)) * 0.9, ctx.currentTime, 0.25);
+      },
+      // Faster: the whole roar opens up, brighter and higher
+      setRush: (k: number) => {
+        if (!alive) return;
+        const r = 1 + Math.max(0, Math.min(1, fin(k, 0))) * 1.4;
+        for (const [f, base] of filters) f.frequency.setTargetAtTime(base * r, ctx.currentTime, 0.3);
       },
       stop: () => {
         if (!alive) return;

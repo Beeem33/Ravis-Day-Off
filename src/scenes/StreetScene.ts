@@ -328,6 +328,7 @@ export class StreetScene implements GameScene {
   private clinkCd = 0;
   private roadblock: Roadblock | null = null;
   private roadblockDone = false;
+  private rbPassed = false;
   /** Where the officers he runs down go: the road, and his car as a box they land on and come off. */
   private runWorld: CANNON.World | null = null;
   private runCar: CANNON.Body | null = null;
@@ -1314,6 +1315,8 @@ export class StreetScene implements GameScene {
     this.updateRifle(dt);
     this.updateHands(dt);
     this.updateRamp(dt);
+    // Up a ramp, his wheels are off the road: the cars beside it only stand as high as their roofs
+    this.player.lift = this.ramp && this.onRamp > 0 ? this.onRamp * this.ramp.height : 0;
     this.checkNearMisses(dt);
     this.updateOil(dt);
     this.updateRoadblock(dt);
@@ -1441,8 +1444,14 @@ export class StreetScene implements GameScene {
     if (t > 5.0) this.startDrive(false);
   }
 
+  /** The road ahead given back its traffic after a cutscene cleared it (well up the road, while he wasn't looking). */
+  private refillAhead(from = 150): void {
+    this.traffic.refill(this.net.routeS(this.player.at), from, 450, [this.player, this.boss.car, this.cop.car]);
+  }
+
   /** Hands on the wheel. */
   private startDrive(fromCheckpoint: boolean): void {
+    this.refillAhead();
     this.phase = 'drive';
     this.phaseT = 0;
     this.shot = 'chase';
@@ -1882,6 +1891,8 @@ export class StreetScene implements GameScene {
       this.police.radar.show(null, false);
     }
     if (t > GOES + 2.3) {
+      // (the stretch cleared for him to pull out: its traffic back, up the road)
+      this.refillAhead(140);
       this.phase = 'drive';
       this.phaseT = 0;
       this.shot = 'chase';
@@ -3226,13 +3237,19 @@ export class StreetScene implements GameScene {
     if (p.at.road === 'highway' && p.at.s < rb.s + 20) {
       for (const c of this.traffic.cars) {
         if (c.wrecked || c.at.road !== 'highway' || Math.abs(c.at.d - rb.openD) > 1.6) continue;
-        if (c.at.s > p.at.s + 90 && c.at.s < rb.s + 14) this.traffic.clear('highway', c.at.s - 0.05, c.at.s + 0.05);
+        if (c.at.s > p.at.s + 90 && c.at.s < p.at.s + 250 && c.at.s < rb.s + 14) this.traffic.clear('highway', c.at.s - 0.05, c.at.s + 0.05);
       }
+    }
+    // Through it: the road on from it given its traffic back (the queues behind it hold everything up)
+    if (!this.rbPassed && p.at.road === 'highway' && p.at.s > rb.s + 15) {
+      this.rbPassed = true;
+      this.refillAhead(170);
     }
     // Well past it: it's behind him for good
     if (!this.roadblockDone && (p.at.road !== 'highway' || p.at.s > rb.s + 260)) {
       this.roadblockDone = true;
       this.traffic.laneLock = null;
+      this.refillAhead(200);
       this.boss.hazards = [];
       this.cop.hazards = [];
     }

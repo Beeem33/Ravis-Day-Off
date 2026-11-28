@@ -64,6 +64,8 @@ export interface TrafficCarState extends TrafficCar {
   mass: number;
   /** +1 / −1 along its road while in lane; 0 once wrecked. */
   dir: 1 | -1 | 0;
+  /** Its roof's height off the road (m). */
+  height: number;
 }
 
 const KINDS: readonly TrafficKind[] = ['sedan', 'hatch', 'suv', 'pickup', 'tanker'];
@@ -82,6 +84,7 @@ class TCar implements TrafficCarState {
   wrecked = false;
   halfLength = 2.3;
   halfWidth = 0.9;
+  height = 1.5;
   vel = new THREE.Vector3();
   spin = 0;
   mass = 1300;
@@ -357,6 +360,34 @@ export class Traffic implements ITraffic {
     if (!c || !c.active) return;
     c.position.x += dx;
     c.position.z += dz;
+  }
+
+  /**
+   * Put cars back on a stretch that's been cleared (for a cutscene, say):
+   * every lane from `ahead0` to `ahead1` route metres on from `R0`, at the
+   * road's usual spacing, round whatever's still there. For a moment the
+   * player isn't looking (it pops them in), and well up the road.
+   */
+  refill(R0: number, ahead0: number, ahead1: number, others: ICar[]): void {
+    for (const L of this.lanes) {
+      if (!(L.gapMin < Infinity)) continue;
+      const base = this.net.routeBase(L.road);
+      const len = this.net.roads[L.road].length;
+      const end = Math.min(R0 + ahead1, base + len - 4);
+      let R = Math.max(R0 + ahead0, base + 4) + this.rng() * L.gapMin;
+      while (R < end && this.free.length) {
+        let near = false;
+        for (const c of this.pool) {
+          if (c.active && !c.wrecked && c.lane === L.idx && Math.abs(c.R - R) < L.gapMin * 0.7) {
+            near = true;
+            break;
+          }
+        }
+        if (!near) this.spawn(L, R - base, others);
+        R += 4.8 + L.gapMin + (L.gapMax - L.gapMin) * this.rng();
+      }
+    }
+    this.rebuildList();
   }
 
   clear(road: RoadId, s0: number, s1: number): void {
@@ -995,6 +1026,7 @@ export class Traffic implements ITraffic {
     c.kind = kind;
     c.halfLength = spec.length / 2;
     c.halfWidth = spec.width / 2;
+    c.height = spec.height;
     c.mass = spec.mass;
     c.colour.setHex(CAR_COLOURS[Math.floor(this.rng() * CAR_COLOURS.length)]);
     c.lane = L.idx;

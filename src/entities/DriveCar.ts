@@ -134,6 +134,8 @@ export class DriveCar implements ICar {
   blockers: StreetBlocker[] = [];
   /** On oil (0..1): the tyres can't hold the road — sideways grip, cornering, drive and brakes all mostly gone. */
   slick = 0;
+  /** How far its wheels are above the road it's on (up a ramp): what's lower than that, it goes over. */
+  lift = 0;
   /** Who this is, to the others' onImpact. */
   role: CarRole;
   readonly tune: Full;
@@ -761,6 +763,8 @@ export function collideTraffic(a: DriveCar, traffic: Traffic): number {
   for (let i = 0; i < list.length; i++) {
     const t = list[i];
     if (Math.abs(t.position.y - a.position.y) > 2.5) continue;
+    // Up a ramp beside it, above its roof: over it, not into it (its box only goes as high as the car)
+    if (a.lift > t.height - 0.1) continue;
     const dx = t.position.x - a.position.x;
     const dz = t.position.z - a.position.z;
     const R = Ra + Math.hypot(t.halfLength, t.halfWidth);
